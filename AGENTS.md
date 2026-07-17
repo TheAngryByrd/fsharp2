@@ -10,4 +10,4 @@ Use the default labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-
 
 ### Domain docs
 
-This is a single-context repo with root `CONTEXT.md` and `docs/adr/`. See `.agents/domain.md`.
+This is a single-context repo with root `CONTEXT.md` and `.agents/docs/adr/`. See `.agents/domain.md`.

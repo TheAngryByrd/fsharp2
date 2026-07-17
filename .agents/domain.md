@@ -1,6 +1,6 @@
 # Domain Docs
 
-Before exploring, read `CONTEXT.md` at the repo root when it exists and read ADRs in `docs/adr/` that touch the area being explored.
+Before exploring, read `CONTEXT.md` at the repo root when it exists and read ADRs in `.agents/docs/adr/` that touch the area being explored.
 
 If these files do not exist, proceed silently. The domain-modeling skill creates them lazily when needed.
 
@@ -9,7 +9,7 @@ If these files do not exist, proceed silently. The domain-modeling skill creates
 Single-context repo:
 
 - `CONTEXT.md`
-- `docs/adr/`
+- `.agents/docs/adr/`
 - `src/`
 
 Use the glossary vocabulary from `CONTEXT.md` when naming domain concepts. If an output conflicts with an ADR, call out that conflict explicitly rather than silently overriding it.
