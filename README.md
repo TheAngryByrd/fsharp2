@@ -23,7 +23,7 @@ fsharp2 | [![NuGet Badge](https://buildstats.info/nuget/fsharp2)](https://www.nu
 
 Make sure the following **requirements** are installed on your system:
 
-- [dotnet SDK](https://www.microsoft.com/net/download/core) 6.0 or higher
+- [dotnet SDK](https://www.microsoft.com/net/download/core) 10.0 or higher
 
 or
 
@@ -56,7 +56,7 @@ The bin of your library should look similar to:
 $ tree src/fsharp2/bin/
 src/fsharp2/bin/
 └── Debug
-    └── net8.0
+    └── net10.0
         ├── fsharp2.deps.json
         ├── fsharp2.dll
         ├── fsharp2.pdb
