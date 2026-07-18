@@ -1,0 +1,3 @@
+module NegativeDiagnostics
+
+let value = )

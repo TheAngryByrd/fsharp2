@@ -7,6 +7,8 @@
     </PropertyGroup>
     <ItemGroup>
         <ProjectReference Include="../../src/fsharp2/fsharp2.fsproj" />
+        <ProjectReference Include="../../src/fsc2.Prototype/fsc2.Prototype.fsproj" ReferenceOutputAssembly="false" />
+        <ProjectReference Include="../FSharp2.Prototype.Consumer/FSharp2.Prototype.Consumer.csproj" ReferenceOutputAssembly="false" />
     </ItemGroup>
     <ItemGroup>
         <PackageReference Include="Microsoft.NET.Test.Sdk" />
@@ -15,6 +17,7 @@
         <PackageReference Include="altcover" />
     </ItemGroup>
     <ItemGroup>
+        <Compile Include="CompilerTargetTests.fs" />
         <Compile Include="Tests.fs" />
         <Compile Include="Main.fs" />
     </ItemGroup>

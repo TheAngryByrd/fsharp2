@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>FSharp2.Compiler.Prototype.Core</AssemblyName>
+    <RootNamespace>FSharp2.Compiler</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsAotCompatible>true</IsAotCompatible>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="FSharp.Core" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../fsc2.Prototype/Model.fs" Link="Model.fs" />
+    <Compile Include="../fsc2.Prototype/Diagnostics.fs" Link="Diagnostics.fs" />
+    <Compile Include="../fsc2.Prototype/CommandLine.fs" Link="CommandLine.fs" />
+    <Compile Include="../fsc2.Prototype/Frontend.fs" Link="Frontend.fs" />
+    <Compile Include="../fsc2.Prototype/CompilerService.fs" Link="CompilerService.fs" />
+    <Compile Include="../fsc2.Prototype/Linker.fs" Link="Linker.fs" />
+    <Compile Include="../fsc2.Prototype/ServiceHost.fs" Link="ServiceHost.fs" />
+    <Compile Include="CompilerHost.fs" />
+  </ItemGroup>
+</Project>
