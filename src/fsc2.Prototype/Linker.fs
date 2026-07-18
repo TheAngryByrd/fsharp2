@@ -18,6 +18,44 @@ type internal LinkedArtifacts = {
 with
     override _.ToString() = "LinkedArtifacts"
 
+[<Sealed>]
+type private PrototypeNativeResourceSection(payload: byte array) =
+    inherit ResourceSectionBuilder()
+
+    override _.Serialize(builder: BlobBuilder, location: SectionLocation) =
+        if builder.Count <> 0 then
+            invalidOp "the native resource section must start empty"
+
+        let writeDirectory () =
+            builder.WriteUInt32(0u)
+            builder.WriteUInt32(0u)
+            builder.WriteUInt16(0us)
+            builder.WriteUInt16(0us)
+            builder.WriteUInt16(0us)
+            builder.WriteUInt16(1us)
+
+        let directoryFlag = 0x80000000u
+        let typeDirectoryOffset = 24u
+        let nameDirectoryOffset = 48u
+        let dataEntryOffset = 72u
+        let payloadOffset = 88
+
+        writeDirectory ()
+        builder.WriteUInt32(10u)
+        builder.WriteUInt32(directoryFlag ||| typeDirectoryOffset)
+        writeDirectory ()
+        builder.WriteUInt32(1u)
+        builder.WriteUInt32(directoryFlag ||| nameDirectoryOffset)
+        writeDirectory ()
+        builder.WriteUInt32(0u)
+        builder.WriteUInt32(dataEntryOffset)
+        builder.WriteUInt32(uint32 (location.RelativeVirtualAddress + payloadOffset))
+        builder.WriteUInt32(uint32 payload.Length)
+        builder.WriteUInt32(0u)
+        builder.WriteUInt32(0u)
+        builder.WriteBytes(payload)
+        builder.Align(4)
+
 module internal Linker =
     let private sha256DocumentHashAlgorithm =
         Guid("8829d00f-11b8-4213-878b-770e8597ac16")
@@ -27,6 +65,34 @@ module internal Linker =
     let private sourceLinkKind = Guid("cc110556-a091-4d38-9fec-25ab9a351a6a")
 
     let private immutableBytes (bytes: byte array) = ImmutableArray.CreateRange<byte>(bytes)
+
+    let private addManagedResource
+        (metadata: MetadataBuilder)
+        (resource: ManagedResourceInput option)
+        =
+        match resource with
+        | None -> Unchecked.defaultof<BlobBuilder>
+        | Some resource ->
+            let stream = BlobBuilder()
+            let offset = uint32 stream.Count
+            stream.WriteInt32(resource.Data.Length)
+            stream.WriteBytes(resource.Data)
+
+            let attributes =
+                if resource.IsPublic then
+                    ManifestResourceAttributes.Public
+                else
+                    ManifestResourceAttributes.Private
+
+            metadata.AddManifestResource(
+                attributes,
+                metadata.GetOrAddString(resource.LogicalName),
+                Unchecked.defaultof<EntityHandle>,
+                offset
+            )
+            |> ignore
+
+            stream
 
     let private contentId (captureDigest: byte array -> unit) (blobs: IEnumerable<Blob>) =
         use hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256)
@@ -50,7 +116,8 @@ module internal Linker =
             | LoadInt32 value -> instructions.LoadConstantI4(value)
             | Return -> instructions.OpCode(ILOpCode.Ret)
 
-        stream.AddMethodBody(instructions, maxStack = 1)
+        let codeSize = code.Count
+        stream.AddMethodBody(instructions, maxStack = 1), codeSize
 
     let private encodeSignature () =
         let signature = BlobBuilder()
@@ -96,10 +163,11 @@ module internal Linker =
             invalidOp "the first linker tracer supports exactly one method fragment"
 
         let methodFragment = symbolic.Methods.Head
+        let strongName = StrongName.createPlan invocation.StrongNameMode invocation.StrongNameKey
         let metadata = MetadataBuilder()
         let ilStream = BlobBuilder()
         let methodBodies = MethodBodyStreamEncoder(ilStream)
-        let bodyOffset = encodeMethodBody methodBodies methodFragment
+        let bodyOffset, methodCodeSize = encodeMethodBody methodBodies methodFragment
         let signature = encodeSignature ()
 
         let publicKeyToken =
@@ -150,13 +218,20 @@ module internal Linker =
         )
         |> ignore
 
+        let assemblyPublicKey =
+            if strongName.PublicKey.Length = 0 then
+                Unchecked.defaultof<BlobHandle>
+            else
+                strongName.PublicKey
+                |> metadata.GetOrAddBlob
+
         metadata.AddAssembly(
             metadata.GetOrAddString(symbolic.AssemblyName),
             Version(1, 0, 0, 0),
             Unchecked.defaultof<StringHandle>,
-            Unchecked.defaultof<BlobHandle>,
-            enum<AssemblyFlags> 0,
-            AssemblyHashAlgorithm.Sha256
+            assemblyPublicKey,
+            StrongName.assemblyFlags strongName,
+            StrongName.assemblyHashAlgorithm strongName
         )
         |> ignore
 
@@ -199,8 +274,7 @@ module internal Linker =
         let pdbMetadata = MetadataBuilder()
 
         let documentName =
-            methodFragment.DocumentPath
-            |> Path.GetFileName
+            invocation.DebugDocumentPath
             |> pdbMetadata.GetOrAddDocumentName
 
         let document =
@@ -217,6 +291,31 @@ module internal Linker =
             |> pdbMetadata.GetOrAddBlob
 
         pdbMetadata.AddMethodDebugInformation(document, sequencePoints)
+        |> ignore
+
+        let systemNamespace = pdbMetadata.GetOrAddBlobUTF8("System", false)
+        let importDefinitions = BlobBuilder()
+
+        importDefinitions.WriteCompressedInteger(int ImportDefinitionKind.ImportNamespace)
+
+        systemNamespace
+        |> MetadataTokens.GetHeapOffset
+        |> importDefinitions.WriteCompressedInteger
+
+        let importScope =
+            pdbMetadata.AddImportScope(
+                Unchecked.defaultof<ImportScopeHandle>,
+                pdbMetadata.GetOrAddBlob(importDefinitions)
+            )
+
+        pdbMetadata.AddLocalScope(
+            firstMethod,
+            importScope,
+            Unchecked.defaultof<LocalVariableHandle>,
+            Unchecked.defaultof<LocalConstantHandle>,
+            0,
+            methodCodeSize
+        )
         |> ignore
 
         if invocation.SourceLinkJson.Length > 0 then
@@ -251,7 +350,15 @@ module internal Linker =
         debugDirectory.AddPdbChecksumEntry("SHA256", immutableBytes pdbDigest)
         debugDirectory.AddReproducibleEntry()
 
+        let managedResources = addManagedResource metadata invocation.ManagedResource
         let metadataRoot = MetadataRootBuilder(metadata)
+
+        let nativeResources =
+            if invocation.NativeResourceData.Length = 0 then
+                Unchecked.defaultof<ResourceSectionBuilder>
+            else
+                PrototypeNativeResourceSection(invocation.NativeResourceData)
+                :> ResourceSectionBuilder
 
         let deterministicIdProvider =
             Func<IEnumerable<Blob>, BlobContentId>(fun blobs -> contentId ignore blobs)
@@ -261,8 +368,11 @@ module internal Linker =
                 PEHeaderBuilder.CreateLibraryHeader(),
                 metadataRoot,
                 ilStream,
+                managedResources = managedResources,
+                nativeResources = nativeResources,
                 debugDirectoryBuilder = debugDirectory,
-                strongNameSignatureSize = 0,
+                strongNameSignatureSize = strongName.SignatureSize,
+                flags = StrongName.corFlags strongName,
                 deterministicIdProvider = deterministicIdProvider
             )
 
@@ -270,6 +380,7 @@ module internal Linker =
         let peId = peBuilder.Serialize(peBlob)
         let mvidWriter = reservedMvid.CreateWriter()
         mvidWriter.WriteGuid(peId.Guid)
+        StrongName.sign peBuilder peBlob strongName
 
         {
             Implementation = peBlob.ToArray()
@@ -300,16 +411,68 @@ module internal Linker =
             + nonce
             + ".tmp"
 
+        let backupAssembly =
+            invocation.AssemblyPath
+            + ".fsc2-"
+            + nonce
+            + ".backup"
+
+        let backupPdb =
+            invocation.PdbPath
+            + ".fsc2-"
+            + nonce
+            + ".backup"
+
+        let deleteIfPresent path =
+            if File.Exists(path) then
+                File.Delete(path)
+
+        let mutable assemblyBackedUp = false
+        let mutable pdbBackedUp = false
+        let mutable assemblyPublished = false
+        let mutable pdbPublished = false
+
         try
             File.WriteAllBytes(temporaryAssembly, artifacts.Implementation)
             File.WriteAllBytes(temporaryPdb, artifacts.PortablePdb)
-            File.Move(temporaryPdb, invocation.PdbPath, true)
-            File.Move(temporaryAssembly, invocation.AssemblyPath, true)
-        with _ ->
-            if File.Exists(temporaryAssembly) then
-                File.Delete(temporaryAssembly)
 
-            if File.Exists(temporaryPdb) then
-                File.Delete(temporaryPdb)
+            if File.Exists(invocation.AssemblyPath) then
+                File.Move(invocation.AssemblyPath, backupAssembly)
+                assemblyBackedUp <- true
+
+            if File.Exists(invocation.PdbPath) then
+                File.Move(invocation.PdbPath, backupPdb)
+                pdbBackedUp <- true
+
+            File.Move(temporaryPdb, invocation.PdbPath)
+            pdbPublished <- true
+            File.Move(temporaryAssembly, invocation.AssemblyPath)
+            assemblyPublished <- true
+
+            try
+                deleteIfPresent backupAssembly
+                deleteIfPresent backupPdb
+            with _ ->
+                // The requested artifact set is already complete. A backup
+                // cleanup failure must not roll back successfully published
+                // outputs into a partial set.
+                ()
+        with _ ->
+            if assemblyPublished then
+                deleteIfPresent invocation.AssemblyPath
+
+            if pdbPublished then
+                deleteIfPresent invocation.PdbPath
+
+            if assemblyBackedUp then
+                File.Move(backupAssembly, invocation.AssemblyPath, true)
+
+            if pdbBackedUp then
+                File.Move(backupPdb, invocation.PdbPath, true)
+
+            deleteIfPresent temporaryAssembly
+            deleteIfPresent temporaryPdb
+            deleteIfPresent backupAssembly
+            deleteIfPresent backupPdb
 
             reraise ()

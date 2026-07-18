@@ -38,6 +38,29 @@ type internal SourceInput =
 
     override _.ToString() = "SourceInput"
 
+type internal ManagedResourceInput = {
+    LogicalName: string
+    IsPublic: bool
+    Data: byte array
+}
+
+with
+    override _.ToString() = "ManagedResourceInput"
+
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal StrongNameMode =
+    | Unsigned
+    | DelaySign
+    | PublicSign
+    | FullSign
+
+    override this.ToString() =
+        match this with
+        | Unsigned -> "Unsigned"
+        | DelaySign -> "DelaySign"
+        | PublicSign -> "PublicSign"
+        | FullSign -> "FullSign"
+
 type internal CompilerInvocation = {
     AssemblyPath: string
     PdbPath: string
@@ -45,6 +68,11 @@ type internal CompilerInvocation = {
     Deterministic: bool
     PortablePdb: bool
     SourceLinkJson: byte array
+    DebugDocumentPath: string
+    ManagedResource: ManagedResourceInput option
+    NativeResourceData: byte array
+    StrongNameMode: StrongNameMode
+    StrongNameKey: byte array
     FullPaths: bool
     FlatErrors: bool
     Utf8Output: bool

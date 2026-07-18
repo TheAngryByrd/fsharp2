@@ -1,7 +1,6 @@
 namespace FSharp2.Compiler
 
 open System
-open System.Diagnostics
 open System.IO
 open System.IO.Pipes
 open System.Text
@@ -14,10 +13,34 @@ module internal ServiceHost =
     let private ProtocolMagic = 0x46533250
 
     [<Literal>]
-    let private ProtocolVersion = 4
+    let private ProtocolVersion = 7
 
     [<Literal>]
     let private CompileCommand = 1uy
+
+    let private writeBytes (writer: BinaryWriter) (bytes: byte array) =
+        writer.Write(bytes.Length)
+        writer.Write(bytes)
+
+    let private readBytes (reader: BinaryReader) =
+        reader.ReadBytes(reader.ReadInt32())
+
+    let private writeStrongNameMode (writer: BinaryWriter) mode =
+        writer.Write(
+            match mode with
+            | Unsigned -> 0uy
+            | DelaySign -> 1uy
+            | PublicSign -> 2uy
+            | FullSign -> 3uy
+        )
+
+    let private readStrongNameMode (reader: BinaryReader) =
+        match reader.ReadByte() with
+        | 0uy -> Unsigned
+        | 1uy -> DelaySign
+        | 2uy -> PublicSign
+        | 3uy -> FullSign
+        | _ -> raise (InvalidDataException("invalid strong-name mode"))
 
     let private writeResponse (writer: BinaryWriter) response =
         writer.Write(ProtocolMagic)
@@ -119,66 +142,6 @@ module internal ServiceHost =
         Emitted = false
     }
 
-    let private elapsedMicroseconds started =
-        Stopwatch.GetElapsedTime(started).Ticks
-        / 10L
-
-    let private compile
-        (service: CompilerService)
-        (invocation: CompilerInvocation)
-        (source: SourceInput)
-        =
-        let compileStarted = Stopwatch.GetTimestamp()
-        let assemblyName = Path.GetFileNameWithoutExtension(invocation.AssemblyPath)
-
-        match service.Compile(assemblyName, source) with
-        | Error diagnostic -> {
-            failure (DiagnosticFormatter.format invocation diagnostic) with
-                CompileElapsedMicroseconds = elapsedMicroseconds compileStarted
-          }
-        | Ok query ->
-            try
-                let linkStarted = Stopwatch.GetTimestamp()
-                let artifacts = Linker.link invocation query.SymbolicAssembly
-                let linkElapsedMicroseconds = elapsedMicroseconds linkStarted
-                let publishStarted = Stopwatch.GetTimestamp()
-                Linker.publishTransactionally invocation artifacts
-                let publishElapsedMicroseconds = elapsedMicroseconds publishStarted
-
-                {
-                    ExitCode = 0
-                    Error = String.Empty
-                    ServiceProcessId = Environment.ProcessId
-                    QuerySchema = query.QuerySchema
-                    NodeKind = query.NodeKind
-                    ContentFingerprint = query.ContentFingerprint
-                    PreviousContentFingerprint = query.PreviousContentFingerprint
-                    InvalidationReason = query.InvalidationReason
-                    ParseKey = query.ParseKey
-                    CheckKey = query.CheckKey
-                    LowerKey = query.LowerKey
-                    DependencyCount = query.DependencyCount
-                    ParseDecision = query.ParseDecision
-                    CheckDecision = query.CheckDecision
-                    LowerDecision = query.LowerDecision
-                    ParseElapsedMicroseconds = query.ParseElapsedMicroseconds
-                    CheckElapsedMicroseconds = query.CheckElapsedMicroseconds
-                    LowerElapsedMicroseconds = query.LowerElapsedMicroseconds
-                    LinkElapsedMicroseconds = linkElapsedMicroseconds
-                    PublishElapsedMicroseconds = publishElapsedMicroseconds
-                    CompileElapsedMicroseconds = elapsedMicroseconds compileStarted
-                    ExportFingerprint = query.SymbolicAssembly.PublicFingerprint
-                    FragmentHash = query.SymbolicAssembly.Methods.Head.ContentHash
-                    Emitted = true
-                }
-            with ex -> {
-                failure (
-                    "FSC2P9999: "
-                    + ex.Message
-                ) with
-                    CompileElapsedMicroseconds = elapsedMicroseconds compileStarted
-            }
-
     let runServer pipeName =
         let service = CompilerService()
 
@@ -225,7 +188,21 @@ module internal ServiceHost =
                 then
                     writeResponse writer (failure "FSC2P2003: unsupported compiler service command")
                 else
-                    let sourceLinkJson = reader.ReadBytes(reader.ReadInt32())
+                    let sourceLinkJson = readBytes reader
+
+                    let managedResource =
+                        if reader.ReadBoolean() then
+                            Some {
+                                LogicalName = reader.ReadString()
+                                IsPublic = reader.ReadBoolean()
+                                Data = readBytes reader
+                            }
+                        else
+                            None
+
+                    let nativeResourceData = readBytes reader
+                    let strongNameMode = readStrongNameMode reader
+                    let strongNameKey = readBytes reader
 
                     let invocation = {
                         AssemblyPath = reader.ReadString()
@@ -234,6 +211,11 @@ module internal ServiceHost =
                         Deterministic = reader.ReadBoolean()
                         PortablePdb = reader.ReadBoolean()
                         SourceLinkJson = sourceLinkJson
+                        DebugDocumentPath = reader.ReadString()
+                        ManagedResource = managedResource
+                        NativeResourceData = nativeResourceData
+                        StrongNameMode = strongNameMode
+                        StrongNameKey = strongNameKey
                         FullPaths = reader.ReadBoolean()
                         FlatErrors = reader.ReadBoolean()
                         Utf8Output = reader.ReadBoolean()
@@ -247,7 +229,7 @@ module internal ServiceHost =
                     }
 
                     source
-                    |> compile service invocation
+                    |> CompilationPipeline.compile service invocation
                     |> writeResponse writer
             with ex ->
                 if server.IsConnected then
@@ -272,13 +254,25 @@ module internal ServiceHost =
         writer.Write(ProtocolMagic)
         writer.Write(ProtocolVersion)
         writer.Write(CompileCommand)
-        writer.Write(invocation.SourceLinkJson.Length)
-        writer.Write(invocation.SourceLinkJson)
+        writeBytes writer invocation.SourceLinkJson
+
+        match invocation.ManagedResource with
+        | Some resource ->
+            writer.Write(true)
+            writer.Write(resource.LogicalName)
+            writer.Write(resource.IsPublic)
+            writeBytes writer resource.Data
+        | None -> writer.Write(false)
+
+        writeBytes writer invocation.NativeResourceData
+        writeStrongNameMode writer invocation.StrongNameMode
+        writeBytes writer invocation.StrongNameKey
         writer.Write(invocation.AssemblyPath)
         writer.Write(invocation.PdbPath)
         writer.Write(source.Path)
         writer.Write(invocation.Deterministic)
         writer.Write(invocation.PortablePdb)
+        writer.Write(invocation.DebugDocumentPath)
         writer.Write(invocation.FullPaths)
         writer.Write(invocation.FlatErrors)
         writer.Write(invocation.Utf8Output)

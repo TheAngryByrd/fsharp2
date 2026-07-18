@@ -1,8 +1,8 @@
 namespace FSharp2.Compiler
 
 open System
-open System.Diagnostics
 open System.IO
+open System.Security.Cryptography
 
 module CompilerHost =
     let private writeTrace (path: string) (response: ServiceCompilationResponse) =
@@ -62,76 +62,9 @@ module CompilerHost =
             |]
         )
 
-    let private elapsedMicroseconds started =
-        Stopwatch.GetElapsedTime(started).Ticks
-        / 10L
-
     let private compileLocally (invocation: CompilerInvocation) (source: SourceInput) =
-        let compileStarted = Stopwatch.GetTimestamp()
-        let assemblyName = Path.GetFileNameWithoutExtension(invocation.AssemblyPath)
         let service = CompilerService()
-
-        match service.Compile(assemblyName, source) with
-        | Error diagnostic -> {
-            ExitCode = 1
-            Error = DiagnosticFormatter.format invocation diagnostic
-            ServiceProcessId = Environment.ProcessId
-            QuerySchema = 1
-            NodeKind = "source"
-            ContentFingerprint = String.Empty
-            PreviousContentFingerprint = String.Empty
-            InvalidationReason = "bypass"
-            ParseKey = String.Empty
-            CheckKey = String.Empty
-            LowerKey = String.Empty
-            DependencyCount = 0
-            ParseDecision = "miss"
-            CheckDecision = "bypass"
-            LowerDecision = "bypass"
-            ParseElapsedMicroseconds = 0L
-            CheckElapsedMicroseconds = 0L
-            LowerElapsedMicroseconds = 0L
-            LinkElapsedMicroseconds = 0L
-            PublishElapsedMicroseconds = 0L
-            CompileElapsedMicroseconds = elapsedMicroseconds compileStarted
-            ExportFingerprint = String.Empty
-            FragmentHash = String.Empty
-            Emitted = false
-          }
-        | Ok query ->
-            let linkStarted = Stopwatch.GetTimestamp()
-            let artifacts = Linker.link invocation query.SymbolicAssembly
-            let linkElapsedMicroseconds = elapsedMicroseconds linkStarted
-            let publishStarted = Stopwatch.GetTimestamp()
-            Linker.publishTransactionally invocation artifacts
-            let publishElapsedMicroseconds = elapsedMicroseconds publishStarted
-
-            {
-                ExitCode = 0
-                Error = String.Empty
-                ServiceProcessId = Environment.ProcessId
-                QuerySchema = query.QuerySchema
-                NodeKind = query.NodeKind
-                ContentFingerprint = query.ContentFingerprint
-                PreviousContentFingerprint = query.PreviousContentFingerprint
-                InvalidationReason = query.InvalidationReason
-                ParseKey = query.ParseKey
-                CheckKey = query.CheckKey
-                LowerKey = query.LowerKey
-                DependencyCount = query.DependencyCount
-                ParseDecision = query.ParseDecision
-                CheckDecision = query.CheckDecision
-                LowerDecision = query.LowerDecision
-                ParseElapsedMicroseconds = query.ParseElapsedMicroseconds
-                CheckElapsedMicroseconds = query.CheckElapsedMicroseconds
-                LowerElapsedMicroseconds = query.LowerElapsedMicroseconds
-                LinkElapsedMicroseconds = linkElapsedMicroseconds
-                PublishElapsedMicroseconds = publishElapsedMicroseconds
-                CompileElapsedMicroseconds = elapsedMicroseconds compileStarted
-                ExportFingerprint = query.SymbolicAssembly.PublicFingerprint
-                FragmentHash = query.SymbolicAssembly.Methods.Head.ContentHash
-                Emitted = true
-            }
+        CompilationPipeline.compile service invocation source
 
     let private runCompilation (arguments: string array) =
         match CommandLine.parse arguments with
@@ -151,24 +84,21 @@ module CompilerHost =
             }
 
             let response =
-                match invocation.ServerName with
-                | Some pipeName -> ServiceHost.compileRemote pipeName invocation source
-                | None -> compileLocally invocation source
+                try
+                    match invocation.ServerName with
+                    | Some pipeName -> ServiceHost.compileRemote pipeName invocation source
+                    | None -> compileLocally invocation source
+                finally
+                    if invocation.StrongNameKey.Length > 0 then
+                        CryptographicOperations.ZeroMemory(invocation.StrongNameKey.AsSpan())
 
             invocation.TracePath
             |> Option.iter (fun path -> writeTrace path response)
 
-            if response.ExitCode = 0 then
-                Console.Out.WriteLine(
-                    "emitted="
-                    + invocation.AssemblyPath
-                )
-
-                Console.Out.WriteLine(
-                    "pdb="
-                    + invocation.PdbPath
-                )
-            else
+            if
+                response.ExitCode
+                <> 0
+            then
                 Console.Error.WriteLine(response.Error)
 
             response.ExitCode

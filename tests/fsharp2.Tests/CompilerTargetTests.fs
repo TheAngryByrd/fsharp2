@@ -8,6 +8,7 @@ open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open System.Reflection.PortableExecutable
 open System.Runtime.InteropServices
+open System.Security.Cryptography
 open System.Text
 open Expecto
 
@@ -16,6 +17,14 @@ module CompilerTargetTests =
         ExitCode: int
         StandardOutput: string
         StandardError: string
+    }
+
+    type private StrongNameArtifact = {
+        Image: byte array
+        PublicKey: byte array
+        CorFlags: CorFlags
+        SignatureOffset: int
+        Signature: byte array
     }
 
     let private repositoryRoot =
@@ -194,6 +203,175 @@ module CompilerTargetTests =
         )
         |> Map.ofArray
 
+    let private rvaToFileOffset (headers: PEHeaders) relativeVirtualAddress =
+        headers.SectionHeaders
+        |> Seq.find (fun section ->
+            let size = max section.VirtualSize section.SizeOfRawData
+
+            relativeVirtualAddress
+            >= section.VirtualAddress
+            && relativeVirtualAddress < section.VirtualAddress
+                                        + size
+        )
+        |> fun section ->
+            relativeVirtualAddress
+            - section.VirtualAddress
+            + section.PointerToRawData
+
+    let private readStrongNameArtifact path =
+        let image = File.ReadAllBytes(path)
+        use stream = new MemoryStream(image, false)
+        use pe = new PEReader(stream)
+        let metadata = pe.GetMetadataReader()
+        let assembly = metadata.GetAssemblyDefinition()
+        let directory = pe.PEHeaders.CorHeader.StrongNameSignatureDirectory
+
+        let signatureOffset, signature =
+            if directory.Size = 0 then
+                0, Array.empty
+            else
+                let offset = rvaToFileOffset pe.PEHeaders directory.RelativeVirtualAddress
+
+                offset,
+                image.[offset .. offset
+                                 + directory.Size
+                                 - 1]
+
+        {
+            Image = image
+            PublicKey = metadata.GetBlobBytes(assembly.PublicKey)
+            CorFlags = pe.PEHeaders.CorHeader.Flags
+            SignatureOffset = signatureOffset
+            Signature = signature
+        }
+
+    let private verifyStrongNameSignature (rsa: RSA) artifact =
+        let image = Array.copy artifact.Image
+        Array.Clear(image, artifact.SignatureOffset, artifact.Signature.Length)
+
+        let peHeaderOffset = BitConverter.ToInt32(image, 0x3c)
+
+        let optionalHeaderOffset =
+            peHeaderOffset
+            + 24
+
+        let optionalHeaderMagic = BitConverter.ToUInt16(image, optionalHeaderOffset)
+
+        let dataDirectoriesOffset =
+            if optionalHeaderMagic = 0x20bus then
+                optionalHeaderOffset
+                + 112
+            else
+                optionalHeaderOffset
+                + 96
+
+        Array.Clear(
+            image,
+            optionalHeaderOffset
+            + 64,
+            4
+        )
+
+        Array.Clear(
+            image,
+            dataDirectoriesOffset
+            + 32,
+            8
+        )
+
+        let optionalHeaderSize =
+            int (
+                BitConverter.ToUInt16(
+                    image,
+                    peHeaderOffset
+                    + 20
+                )
+            )
+
+        let sectionCount =
+            int (
+                BitConverter.ToUInt16(
+                    image,
+                    peHeaderOffset
+                    + 6
+                )
+            )
+
+        let sectionTableOffset =
+            optionalHeaderOffset
+            + optionalHeaderSize
+
+        let peHeadersSize =
+            sectionTableOffset
+            + sectionCount
+              * 40
+
+        let firstSectionOffset =
+            BitConverter.ToInt32(
+                image,
+                sectionTableOffset
+                + 20
+            )
+
+        use hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA1)
+        hash.AppendData(image.AsSpan(0, peHeadersSize))
+
+        hash.AppendData(
+            image.AsSpan(
+                firstSectionOffset,
+                artifact.SignatureOffset
+                - firstSectionOffset
+            )
+        )
+
+        let signatureEnd =
+            artifact.SignatureOffset
+            + artifact.Signature.Length
+
+        hash.AppendData(image.AsSpan(signatureEnd))
+        let digest = hash.GetHashAndReset()
+        let signature = Array.rev artifact.Signature
+
+        rsa.VerifyHash(digest, signature, HashAlgorithmName.SHA1, RSASignaturePadding.Pkcs1)
+
+    let private writeCapiPrivateKey path (parameters: RSAParameters) =
+        let writeLittleEndian (writer: BinaryWriter) (bytes: byte array) =
+            writer.Write(Array.rev bytes)
+
+        let exponent =
+            parameters.Exponent
+            |> Array.fold
+                (fun value part ->
+                    (value
+                     <<< 8)
+                    ||| uint32 part
+                )
+                0u
+
+        use stream = File.Create(path)
+        use writer = new BinaryWriter(stream)
+        writer.Write(0x07uy)
+        writer.Write(0x02uy)
+        writer.Write(0us)
+        writer.Write(0x00002400u)
+        writer.Write(0x32415352u)
+
+        writer.Write(
+            uint32 (
+                parameters.Modulus.Length
+                * 8
+            )
+        )
+
+        writer.Write(exponent)
+        writeLittleEndian writer parameters.Modulus
+        writeLittleEndian writer parameters.P
+        writeLittleEndian writer parameters.Q
+        writeLittleEndian writer parameters.DP
+        writeLittleEndian writer parameters.DQ
+        writeLittleEndian writer parameters.InverseQ
+        writeLittleEndian writer parameters.D
+
     [<Tests>]
     let tests =
         testList "Compiler Target Invocation" [
@@ -232,6 +410,11 @@ module CompilerTargetTests =
                     let result = invokeFsc2 root responsePath
 
                     Expect.equal result.ExitCode 0 result.StandardError
+
+                    Expect.equal
+                        result.StandardOutput
+                        String.Empty
+                        "successful compilation should be silent"
 
                     Expect.isTrue
                         (File.Exists outputPath)
@@ -434,6 +617,7 @@ module CompilerTargetTests =
                             "--target:library"
                             "--deterministic+"
                             "--debug:portable"
+                            $"--pathmap:{root}=/mapped"
                             $"--sourcelink:{sourceLinkPath}"
                             $"--out:{outputPath}"
                             $"--pdb:{pdbPath}"
@@ -447,6 +631,47 @@ module CompilerTargetTests =
                     use pdbStream = File.OpenRead(pdbPath)
                     use pdbProvider = MetadataReaderProvider.FromPortablePdbStream(pdbStream)
                     let pdb = pdbProvider.GetMetadataReader()
+
+                    let document =
+                        pdb.Documents
+                        |> Seq.exactlyOne
+                        |> pdb.GetDocument
+
+                    Expect.equal
+                        (pdb.GetString(document.Name))
+                        "/mapped/Tracer.fs"
+                        "the document path should honor the requested path map"
+
+                    let importScopeHandle =
+                        pdb.ImportScopes
+                        |> Seq.exactlyOne
+
+                    let importScope = pdb.GetImportScope(importScopeHandle)
+
+                    let importDefinition =
+                        importScope.GetImports()
+                        |> Seq.exactlyOne
+
+                    Expect.equal
+                        importDefinition.Kind
+                        ImportDefinitionKind.ImportNamespace
+                        "the PDB should encode the imported namespace kind"
+
+                    Expect.equal
+                        (pdb.GetBlobBytes(importDefinition.TargetNamespace)
+                         |> Encoding.UTF8.GetString)
+                        "System"
+                        "the PDB should preserve the imported namespace"
+
+                    let localScope =
+                        pdb.LocalScopes
+                        |> Seq.exactlyOne
+                        |> pdb.GetLocalScope
+
+                    Expect.equal
+                        localScope.ImportScope
+                        importScopeHandle
+                        "the method scope should reference the encoded imports"
 
                     let customDebugInformation =
                         pdb.CustomDebugInformation
@@ -475,6 +700,407 @@ module CompilerTargetTests =
                          |> Encoding.UTF8.GetString)
                         sourceLinkJson
                         "the SourceLink payload should be preserved exactly"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "emits managed and harness-native resources"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-prototype",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "Tracer.fs")
+                    let managedResourcePath = Path.Combine(root, "payload.bin")
+                    let nativeResourcePath = Path.Combine(root, "native.bin")
+                    let outputPath = Path.Combine(root, "Tracer.dll")
+                    let pdbPath = Path.Combine(root, "Tracer.pdb")
+                    let responsePath = Path.Combine(root, "compile.rsp")
+
+                    let managedPayload = [|
+                        0x46uy
+                        0x53uy
+                        0x32uy
+                        0x4duy
+                    |]
+
+                    let nativePayload = [|
+                        0x46uy
+                        0x53uy
+                        0x32uy
+                        0x4euy
+                    |]
+
+                    File.WriteAllText(sourcePath, "module Tracer\nlet answer () = 42\n")
+                    File.WriteAllBytes(managedResourcePath, managedPayload)
+                    File.WriteAllBytes(nativeResourcePath, nativePayload)
+
+                    File.WriteAllLines(
+                        responsePath,
+                        [|
+                            "--target:library"
+                            "--deterministic+"
+                            "--debug:portable"
+                            $"--resource:{managedResourcePath},Tracer.Payload,public"
+                            $"--fsharp2-native-resource:{nativeResourcePath}"
+                            $"--out:{outputPath}"
+                            $"--pdb:{pdbPath}"
+                            sourcePath
+                        |]
+                    )
+
+                    let result = invokeFsc2 root responsePath
+                    Expect.equal result.ExitCode 0 result.StandardError
+
+                    use stream = File.OpenRead(outputPath)
+                    use pe = new PEReader(stream)
+                    let metadata = pe.GetMetadataReader()
+
+                    let resource =
+                        metadata.ManifestResources
+                        |> Seq.exactlyOne
+                        |> metadata.GetManifestResource
+
+                    Expect.equal
+                        (metadata.GetString(resource.Name))
+                        "Tracer.Payload"
+                        "the managed resource should retain its logical name"
+
+                    Expect.equal
+                        resource.Attributes
+                        ManifestResourceAttributes.Public
+                        "the managed resource should retain its visibility"
+
+                    Expect.isTrue
+                        resource.Implementation.IsNil
+                        "the managed resource should be embedded"
+
+                    let managedDirectory = pe.PEHeaders.CorHeader.ResourcesDirectory
+
+                    let managedSection =
+                        pe
+                            .GetSectionData(managedDirectory.RelativeVirtualAddress)
+                            .GetContent(0, managedDirectory.Size)
+                        |> Seq.toArray
+
+                    Expect.equal
+                        (BitConverter.ToInt32(managedSection, int resource.Offset))
+                        managedPayload.Length
+                        "the managed stream should prefix the payload length"
+
+                    Expect.sequenceEqual
+                        managedSection.[int resource.Offset
+                                        + 4 .. int resource.Offset
+                                               + 3
+                                               + managedPayload.Length]
+                        managedPayload
+                        "the managed payload should be preserved exactly"
+
+                    let nativeDirectory = pe.PEHeaders.PEHeader.ResourceTableDirectory
+
+                    let nativeSection =
+                        pe
+                            .GetSectionData(nativeDirectory.RelativeVirtualAddress)
+                            .GetContent(0, nativeDirectory.Size)
+                        |> Seq.toArray
+
+                    let readUInt32 offset =
+                        BitConverter.ToUInt32(nativeSection, offset)
+
+                    Expect.equal (readUInt32 16) 10u "the native resource type should be RCDATA"
+
+                    let typeDirectoryOffset =
+                        int (
+                            readUInt32 20
+                            &&& 0x7fffffffu
+                        )
+
+                    Expect.equal
+                        (readUInt32 (
+                            typeDirectoryOffset
+                            + 16
+                        ))
+                        1u
+                        "the native resource should use the harness name id"
+
+                    let nameDirectoryOffset =
+                        int (
+                            readUInt32 (
+                                typeDirectoryOffset
+                                + 20
+                            )
+                            &&& 0x7fffffffu
+                        )
+
+                    Expect.equal
+                        (readUInt32 (
+                            nameDirectoryOffset
+                            + 16
+                        ))
+                        0u
+                        "the native resource should use the neutral language id"
+
+                    let dataEntryOffset =
+                        int (
+                            readUInt32 (
+                                nameDirectoryOffset
+                                + 20
+                            )
+                            &&& 0x7fffffffu
+                        )
+
+                    let payloadOffset =
+                        int (readUInt32 dataEntryOffset)
+                        - nativeDirectory.RelativeVirtualAddress
+
+                    let payloadLength =
+                        int (
+                            readUInt32 (
+                                dataEntryOffset
+                                + 4
+                            )
+                        )
+
+                    Expect.sequenceEqual
+                        nativeSection.[payloadOffset .. payloadOffset
+                                                        + payloadLength
+                                                        - 1]
+                        nativePayload
+                        "the native payload should be preserved exactly"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "emits unsigned, delay-signed, public-signed, and fully signed assemblies"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-prototype",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "Tracer.fs")
+                    let keyPath = Path.Combine(root, "Tracer.snk")
+                    File.WriteAllText(sourcePath, "module Tracer\nlet answer () = 42\n")
+
+                    use rsa = RSA.Create()
+                    rsa.KeySize <- 2048
+                    writeCapiPrivateKey keyPath (rsa.ExportParameters(true))
+
+                    let compile name extraArguments =
+                        let outputPath =
+                            Path.Combine(
+                                root,
+                                name
+                                + ".dll"
+                            )
+
+                        let pdbPath =
+                            Path.Combine(
+                                root,
+                                name
+                                + ".pdb"
+                            )
+
+                        let responsePath =
+                            Path.Combine(
+                                root,
+                                name
+                                + ".rsp"
+                            )
+
+                        let arguments =
+                            [|
+                                "--target:library"
+                                "--deterministic+"
+                                "--debug:portable"
+                                $"--out:{outputPath}"
+                                $"--pdb:{pdbPath}"
+                            |]
+                            |> Array.append (Array.ofList extraArguments)
+                            |> Array.append [| sourcePath |]
+
+                        File.WriteAllLines(responsePath, arguments)
+                        let result = invokeFsc2 root responsePath
+                        Expect.equal result.ExitCode 0 result.StandardError
+                        outputPath
+
+                    let unsignedPath = compile "unsigned" []
+
+                    let delayPath =
+                        compile "delay" [
+                            $"--keyfile:{keyPath}"
+                            "--delaysign+"
+                        ]
+
+                    let publicPath =
+                        compile "public" [
+                            $"--keyfile:{keyPath}"
+                            "--publicsign+"
+                        ]
+
+                    let fullPath = compile "full" [ $"--keyfile:{keyPath}" ]
+                    let firstFullImage = File.ReadAllBytes(fullPath)
+                    let fullRepeatPath = compile "full" [ $"--keyfile:{keyPath}" ]
+                    let unsigned = readStrongNameArtifact unsignedPath
+                    let delay = readStrongNameArtifact delayPath
+                    let publicSigned = readStrongNameArtifact publicPath
+                    let full = readStrongNameArtifact fullPath
+
+                    Expect.isEmpty
+                        unsigned.PublicKey
+                        "unsigned output should not carry a public key"
+
+                    Expect.isEmpty
+                        unsigned.Signature
+                        "unsigned output should not reserve a signature"
+
+                    for artifact in
+                        [
+                            delay
+                            publicSigned
+                            full
+                        ] do
+                        Expect.isGreaterThan
+                            artifact.PublicKey.Length
+                            0
+                            "signed modes should carry the complete CLR public key"
+
+                        Expect.equal
+                            artifact.Signature.Length
+                            256
+                            "signed modes should reserve the key modulus size"
+
+                    Expect.sequenceEqual
+                        delay.PublicKey
+                        full.PublicKey
+                        "delay and full signing should use the same assembly identity"
+
+                    Expect.sequenceEqual
+                        publicSigned.PublicKey
+                        full.PublicKey
+                        "public and full signing should use the same assembly identity"
+
+                    Expect.isTrue
+                        (delay.Signature
+                         |> Array.forall ((=) 0uy))
+                        "delay signing should leave the signature slot zeroed"
+
+                    Expect.isTrue
+                        (publicSigned.Signature
+                         |> Array.forall ((=) 0uy))
+                        "public signing should leave the signature slot zeroed"
+
+                    Expect.isTrue
+                        (full.Signature
+                         |> Array.exists ((<>) 0uy))
+                        "full signing should populate the signature slot"
+
+                    Expect.isFalse
+                        (delay.CorFlags.HasFlag(CorFlags.StrongNameSigned))
+                        "delay signing should leave the strong-name flag clear"
+
+                    Expect.isTrue
+                        (publicSigned.CorFlags.HasFlag(CorFlags.StrongNameSigned))
+                        "public signing should set the strong-name flag"
+
+                    Expect.isTrue
+                        (full.CorFlags.HasFlag(CorFlags.StrongNameSigned))
+                        "full signing should set the strong-name flag"
+
+                    Expect.isTrue
+                        (verifyStrongNameSignature rsa full)
+                        "the full strong-name signature should verify with the key"
+
+                    Expect.sequenceEqual
+                        firstFullImage
+                        (File.ReadAllBytes(fullRepeatPath))
+                        "full signing should remain deterministic"
+
+                    let consumer = invokeConsumer root fullPath 42
+                    Expect.equal consumer.ExitCode 0 consumer.StandardError
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "a late publish failure restores the previous artifact set"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-prototype",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "Tracer.fs")
+                    let outputPath = Path.Combine(root, "Tracer.dll")
+                    let pdbPath = Path.Combine(root, "Tracer.pdb")
+                    let responsePath = Path.Combine(root, "compile.rsp")
+
+                    let originalPdb = [|
+                        0x46uy
+                        0x53uy
+                        0x32uy
+                    |]
+
+                    File.WriteAllText(sourcePath, "module Tracer\nlet answer () = 42\n")
+
+                    Directory.CreateDirectory(outputPath)
+                    |> ignore
+
+                    File.WriteAllBytes(pdbPath, originalPdb)
+
+                    File.WriteAllLines(
+                        responsePath,
+                        [|
+                            "--target:library"
+                            "--deterministic+"
+                            "--debug:portable"
+                            $"--out:{outputPath}"
+                            $"--pdb:{pdbPath}"
+                            sourcePath
+                        |]
+                    )
+
+                    let result = invokeFsc2 root responsePath
+                    Expect.equal result.ExitCode 1 "the invalid final assembly target should fail"
+
+                    Expect.stringContains
+                        result.StandardError
+                        "FSC2P9999"
+                        "the publish failure should be explicit"
+
+                    Expect.isTrue
+                        (Directory.Exists outputPath)
+                        "the pre-existing target directory should remain"
+
+                    Expect.sequenceEqual
+                        (File.ReadAllBytes(pdbPath))
+                        originalPdb
+                        "the previous PDB should be restored when assembly publication fails"
+
+                    let transactionFiles =
+                        Directory.GetFiles(root)
+                        |> Array.filter (fun path ->
+                            path.Contains(".fsc2-", StringComparison.Ordinal)
+                        )
+
+                    Expect.isEmpty
+                        transactionFiles
+                        "failed publication should clean temporary and backup files"
                 finally
                     Directory.Delete(root, true)
 
@@ -513,6 +1139,7 @@ module CompilerTargetTests =
                             "--target:library"
                             "--deterministic+"
                             "--debug:portable"
+                            $"--pathmap:{root}=/mapped"
                             $"--sourcelink:{sourceLinkPath}"
                             $"--fsharp2-trace:{tracePath}"
                             $"--out:{outputPath}"
@@ -656,6 +1283,124 @@ module CompilerTargetTests =
                         "TypeMismatch"
                         "(3,18): error FS0001: This expression was expected to have type\u001d    'int'    \u001dbut here has type\u001d    'string'"
                 finally
+                    Directory.Delete(root, true)
+
+            testCase
+                "standalone and service failures expose equivalent diagnostics and trace decisions"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-prototype",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                let pipeName =
+                    "fsharp2-"
+                    + Guid.NewGuid().ToString("N")
+
+                use service = startCompilerService root pipeName
+
+                let compile name serverName =
+                    let sourcePath =
+                        Path.Combine(
+                            repositoryRoot,
+                            "tests",
+                            "FSharp2.Prototype.Diagnostics",
+                            "UnexpectedToken.fs"
+                        )
+
+                    let responsePath =
+                        Path.Combine(
+                            root,
+                            name
+                            + ".rsp"
+                        )
+
+                    let tracePath =
+                        Path.Combine(
+                            root,
+                            name
+                            + ".trace"
+                        )
+
+                    let outputPath =
+                        Path.Combine(
+                            root,
+                            name
+                            + ".dll"
+                        )
+
+                    let pdbPath =
+                        Path.Combine(
+                            root,
+                            name
+                            + ".pdb"
+                        )
+
+                    let arguments = ResizeArray<string>()
+
+                    serverName
+                    |> Option.iter (fun value -> arguments.Add($"--fsharp2-server:{value}"))
+
+                    for argument in
+                        [
+                            "--nologo"
+                            "--target:library"
+                            "--fullpaths"
+                            "--flaterrors"
+                            "--utf8output"
+                            "--deterministic+"
+                            "--debug:portable"
+                            $"--fsharp2-trace:{tracePath}"
+                            $"--out:{outputPath}"
+                            $"--pdb:{pdbPath}"
+                            sourcePath
+                        ] do
+                        arguments.Add(argument)
+
+                    File.WriteAllLines(responsePath, arguments)
+                    invokeFsc2 root responsePath, readTrace tracePath
+
+                try
+                    let standalone, standaloneTrace = compile "standalone" None
+                    let remote, remoteTrace = compile "remote" (Some pipeName)
+
+                    Expect.equal remote.ExitCode standalone.ExitCode "failure exits should agree"
+
+                    Expect.equal
+                        remote.StandardOutput
+                        standalone.StandardOutput
+                        "failure stdout should agree"
+
+                    Expect.equal
+                        remote.StandardError
+                        standalone.StandardError
+                        "failure stderr should agree"
+
+                    for field in
+                        [
+                            "nodeKind"
+                            "invalidationReason"
+                            "parse"
+                            "check"
+                            "lower"
+                            "emitted"
+                        ] do
+                        Expect.equal
+                            remoteTrace.[field]
+                            standaloneTrace.[field]
+                            $"failure trace field '{field}' should agree across execution paths"
+                finally
+                    if not service.HasExited then
+                        service.Kill(true)
+
+                        service.WaitForExit(10_000)
+                        |> ignore
+
                     Directory.Delete(root, true)
 
             testCase "persistent service rechecks edits and reuses identical semantic queries"
