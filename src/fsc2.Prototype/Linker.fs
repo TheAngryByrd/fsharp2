@@ -155,15 +155,42 @@ module internal Linker =
         sequencePoints.WriteCompressedInteger(range.Start.Column)
         sequencePoints
 
-    let link (invocation: CompilerInvocation) (symbolic: SymbolicAssembly) =
+    let private linkWithStrongName
+        (invocation: CompilerInvocation)
+        (symbolic: SymbolicAssembly)
+        (strongName: StrongNamePlan)
+        =
         if
-            symbolic.Methods.Length
+            symbolic.Module.Types.Length
             <> 1
         then
-            invalidOp "the first linker tracer supports exactly one method fragment"
+            invalidOp "the first linker tracer supports exactly one symbolic type fragment"
 
-        let methodFragment = symbolic.Methods.Head
-        let strongName = StrongName.createPlan invocation.StrongNameMode invocation.StrongNameKey
+        let typeFragment = symbolic.Module.Types.Head
+
+        if
+            typeFragment.Methods.Length
+            <> 1
+        then
+            invalidOp "the first linker tracer supports exactly one symbolic method fragment"
+
+        let methodFragment = typeFragment.Methods.Head
+
+        if
+            symbolic.SchemaVersion <> symbolic.Module.SchemaVersion
+            || symbolic.SchemaVersion <> typeFragment.SchemaVersion
+            || symbolic.SchemaVersion <> methodFragment.SchemaVersion
+        then
+            invalidOp "the symbolic emission graph uses inconsistent schema versions"
+
+        if
+            String.IsNullOrWhiteSpace(symbolic.StableId)
+            || String.IsNullOrWhiteSpace(symbolic.Module.StableId)
+            || String.IsNullOrWhiteSpace(typeFragment.StableId)
+            || String.IsNullOrWhiteSpace(methodFragment.StableId)
+        then
+            invalidOp "the symbolic emission graph contains an empty stable identity"
+
         let metadata = MetadataBuilder()
         let ilStream = BlobBuilder()
         let methodBodies = MethodBodyStreamEncoder(ilStream)
@@ -208,10 +235,7 @@ module internal Linker =
 
         metadata.AddModule(
             0,
-            metadata.GetOrAddString(
-                symbolic.AssemblyName
-                + ".dll"
-            ),
+            metadata.GetOrAddString(symbolic.Module.Name),
             reservedMvid.Handle,
             Unchecked.defaultof<GuidHandle>,
             Unchecked.defaultof<GuidHandle>
@@ -250,8 +274,11 @@ module internal Linker =
             ||| TypeAttributes.Abstract
             ||| TypeAttributes.Sealed
             ||| TypeAttributes.BeforeFieldInit,
-            Unchecked.defaultof<StringHandle>,
-            metadata.GetOrAddString(symbolic.ModuleName),
+            (if String.IsNullOrEmpty(typeFragment.Namespace) then
+                 Unchecked.defaultof<StringHandle>
+             else
+                 metadata.GetOrAddString(typeFragment.Namespace)),
+            metadata.GetOrAddString(typeFragment.Name),
             systemObject,
             firstField,
             firstMethod
@@ -386,6 +413,14 @@ module internal Linker =
             Implementation = peBlob.ToArray()
             PortablePdb = pdbBlob.ToArray()
         }
+
+    let link (invocation: CompilerInvocation) (symbolic: SymbolicAssembly) =
+        let strongName = StrongName.createPlan invocation.StrongNameMode invocation.StrongNameKey
+
+        try
+            linkWithStrongName invocation symbolic strongName
+        finally
+            StrongName.clearPlan strongName
 
     let publishTransactionally invocation artifacts =
         let outputDirectory = Path.GetDirectoryName(invocation.AssemblyPath)

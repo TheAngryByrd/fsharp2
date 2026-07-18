@@ -109,7 +109,6 @@ with
 
 type internal ParsedModule = {
     Name: string
-    Path: string
     SourceChecksum: ImmutableArray<byte>
     ContentFingerprint: string
     Declarations: ParsedDeclaration list
@@ -142,7 +141,6 @@ with
 
 type internal TypedModule = {
     Name: string
-    Path: string
     SourceChecksum: ImmutableArray<byte>
     ContentFingerprint: string
     Declarations: TypedDeclaration list
@@ -167,7 +165,6 @@ type internal SymbolicMethodFragment = {
     Instructions: SymbolicInstruction list
     DependencyIds: string list
     ContentHash: string
-    DocumentPath: string
     DocumentChecksum: ImmutableArray<byte>
     Range: SourceRange
 }
@@ -175,12 +172,33 @@ type internal SymbolicMethodFragment = {
 with
     override _.ToString() = "SymbolicMethodFragment"
 
+type internal SymbolicTypeFragment = {
+    SchemaVersion: int
+    StableId: string
+    Namespace: string
+    Name: string
+    Methods: SymbolicMethodFragment list
+}
+
+with
+    override _.ToString() = "SymbolicTypeFragment"
+
+type internal SymbolicModuleFragment = {
+    SchemaVersion: int
+    StableId: string
+    Name: string
+    Types: SymbolicTypeFragment list
+}
+
+with
+    override _.ToString() = "SymbolicModuleFragment"
+
 type internal SymbolicAssembly = {
     SchemaVersion: int
+    StableId: string
     AssemblyName: string
-    ModuleName: string
     PublicFingerprint: string
-    Methods: SymbolicMethodFragment list
+    Module: SymbolicModuleFragment
 }
 
 with

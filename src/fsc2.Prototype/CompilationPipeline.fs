@@ -84,7 +84,8 @@ module internal CompilationPipeline =
                     PublishElapsedMicroseconds = publishElapsedMicroseconds
                     CompileElapsedMicroseconds = elapsedMicroseconds compileStarted
                     ExportFingerprint = query.SymbolicAssembly.PublicFingerprint
-                    FragmentHash = query.SymbolicAssembly.Methods.Head.ContentHash
+                    FragmentHash =
+                        query.SymbolicAssembly.Module.Types.Head.Methods.Head.ContentHash
                     Emitted = true
                 }
             with ex ->

@@ -158,6 +158,11 @@ module internal StrongName =
                 PrivateKey = retainedPrivateKey
             }
 
+    let clearPlan plan =
+        match plan.PrivateKey with
+        | Some parameters -> clearPrivateKey parameters
+        | None -> ()
+
     let assemblyFlags plan =
         if plan.Mode = Unsigned then
             enum<AssemblyFlags> 0
@@ -204,5 +209,5 @@ module internal StrongName =
                     )
                 )
             finally
-                clearPrivateKey parameters
+                clearPlan plan
         | _ -> ()

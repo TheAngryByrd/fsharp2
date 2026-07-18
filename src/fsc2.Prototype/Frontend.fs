@@ -245,7 +245,6 @@ module internal Frontend =
                         | Ok() ->
                             Ok {
                                 Name = moduleName
-                                Path = source.Path
                                 SourceChecksum =
                                     sourceChecksum
                                     |> ImmutableArray.CreateRange<byte>

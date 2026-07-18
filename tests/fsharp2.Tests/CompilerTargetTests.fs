@@ -1403,6 +1403,89 @@ module CompilerTargetTests =
 
                     Directory.Delete(root, true)
 
+            testCase "persistent service cache reuse keeps diagnostic paths request-local"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-prototype",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                let firstRoot = Path.Combine(root, "first")
+                let secondRoot = Path.Combine(root, "second")
+
+                Directory.CreateDirectory(firstRoot)
+                |> ignore
+
+                Directory.CreateDirectory(secondRoot)
+                |> ignore
+
+                let pipeName =
+                    "fsharp2-"
+                    + Guid.NewGuid().ToString("N")
+
+                use service = startCompilerService root pipeName
+
+                let compile sourceRoot =
+                    let sourcePath = Path.Combine(sourceRoot, "TypeMismatch.fs")
+                    let outputPath = Path.Combine(sourceRoot, "TypeMismatch.dll")
+                    let pdbPath = Path.Combine(sourceRoot, "TypeMismatch.pdb")
+                    let responsePath = Path.Combine(sourceRoot, "compile.rsp")
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "module NegativeDiagnostics\n\nlet value: int = \"text\"\n"
+                    )
+
+                    File.WriteAllLines(
+                        responsePath,
+                        [|
+                            $"--fsharp2-server:{pipeName}"
+                            "--nologo"
+                            "--target:library"
+                            "--fullpaths"
+                            "--flaterrors"
+                            "--utf8output"
+                            "--deterministic+"
+                            "--debug:portable"
+                            $"--out:{outputPath}"
+                            $"--pdb:{pdbPath}"
+                            sourcePath
+                        |]
+                    )
+
+                    sourcePath, invokeFsc2 sourceRoot responsePath
+
+                try
+                    let firstSourcePath, first = compile firstRoot
+                    let secondSourcePath, second = compile secondRoot
+
+                    Expect.equal first.ExitCode 1 "the first semantic failure should be reported"
+                    Expect.equal second.ExitCode 1 "the reused semantic failure should be reported"
+
+                    Expect.stringContains
+                        first.StandardError
+                        firstSourcePath
+                        "the first request should use its own physical source path"
+
+                    Expect.stringContains
+                        second.StandardError
+                        secondSourcePath
+                        "the second request should rebind diagnostics to its physical source path"
+
+                    Expect.isFalse
+                        (second.StandardError.Contains(firstSourcePath, StringComparison.Ordinal))
+                        "root-neutral cached syntax must not leak the first request path"
+                finally
+                    if not service.HasExited then
+                        service.Kill(true)
+
+                        service.WaitForExit(10_000)
+                        |> ignore
+
+                    Directory.Delete(root, true)
+
             testCase "persistent service rechecks edits and reuses identical semantic queries"
             <| fun _ ->
                 let root =
@@ -1464,6 +1547,24 @@ module CompilerTargetTests =
                     let baseline = compile 42 "baseline"
                     let edited = compile 43 "edited"
                     let replay = compile 43 "replay"
+
+                    let servicePid = baseline.["servicePid"]
+
+                    Expect.notEqual
+                        servicePid
+                        (Environment.ProcessId.ToString())
+                        "warm requests should be handled outside the compiler client process"
+
+                    for traceName, trace in
+                        [
+                            "baseline", baseline
+                            "edited", edited
+                            "replay", replay
+                        ] do
+                        Expect.equal
+                            trace.["servicePid"]
+                            servicePid
+                            $"the {traceName} request should be handled by the retained compiler service"
 
                     Expect.equal
                         baseline.["querySchema"]

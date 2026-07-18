@@ -67,7 +67,7 @@ type internal CompilerService() =
                 parseCache.Add(key, parsed)
                 Ok(parsed, key)
 
-    let check (parsed: ParsedModule) =
+    let check (sourcePath: string) (parsed: ParsedModule) =
         let key =
             Fingerprint.text (
                 querySchema.ToString()
@@ -103,7 +103,7 @@ type internal CompilerService() =
                                     "but here has type"
                                     "    'string'"
                                 ]
-                        Path = Some parsed.Path
+                        Path = Some sourcePath
                         Range = Some declaration.BodyRange
                     }
                 | _, IntegerLiteral value ->
@@ -130,7 +130,7 @@ type internal CompilerService() =
                     Error {
                         Code = "FSC2P1001"
                         Message = "string-valued declarations are not yet supported by the prototype"
-                        Path = Some parsed.Path
+                        Path = Some sourcePath
                         Range = Some declaration.BodyRange
                     }
 
@@ -147,7 +147,6 @@ type internal CompilerService() =
             | Ok declarations ->
                 let typed = {
                     Name = parsed.Name
-                    Path = parsed.Path
                     SourceChecksum = parsed.SourceChecksum
                     ContentFingerprint = parsed.ContentFingerprint
                     Declarations = declarations
@@ -162,15 +161,22 @@ type internal CompilerService() =
                 Ok(typed, key)
 
     let lower (assemblyName: string) (typed: TypedModule) =
-        let implementationFingerprint =
+        let declarationsWithContentHashes =
             typed.Declarations
             |> List.map (fun declaration ->
-                match declaration.Body with
-                | TypedIntegerLiteral value ->
-                    declaration.StableId
-                    + "="
-                    + value.ToString()
+                let implementation =
+                    match declaration.Body with
+                    | TypedIntegerLiteral value ->
+                        declaration.StableId
+                        + "="
+                        + value.ToString()
+
+                declaration, Fingerprint.text implementation
             )
+
+        let implementationFingerprint =
+            declarationsWithContentHashes
+            |> List.map snd
             |> String.concat "|"
             |> Fingerprint.text
 
@@ -195,9 +201,27 @@ type internal CompilerService() =
                 lowerMisses
                 + 1
 
+            let assemblyStableId =
+                "assembly:"
+                + assemblyName
+
+            let moduleName =
+                assemblyName
+                + ".dll"
+
+            let moduleStableId =
+                assemblyStableId
+                + "/module:"
+                + moduleName
+
+            let typeStableId =
+                moduleStableId
+                + "/type:"
+                + typed.Name
+
             let methods =
-                typed.Declarations
-                |> List.map (fun declaration ->
+                declarationsWithContentHashes
+                |> List.map (fun (declaration, contentHash) ->
                     let instructions =
                         match declaration.Body with
                         | TypedIntegerLiteral value -> [
@@ -205,30 +229,41 @@ type internal CompilerService() =
                             Return
                           ]
 
-                    let contentHash =
-                        implementationFingerprint
-                        |> Fingerprint.text
-
                     {
-                        SchemaVersion = 1
-                        StableId = declaration.StableId
+                        SchemaVersion = querySchema
+                        StableId =
+                            typeStableId
+                            + "/method:"
+                            + declaration.StableId
                         Name = declaration.Name
                         ReturnType = declaration.ReturnType
                         Instructions = instructions
                         DependencyIds = []
                         ContentHash = contentHash
-                        DocumentPath = typed.Path
                         DocumentChecksum = typed.SourceChecksum
                         Range = declaration.Range
                     }
                 )
 
-            let symbolic = {
-                SchemaVersion = 1
+            let symbolic: SymbolicAssembly = {
+                SchemaVersion = querySchema
+                StableId = assemblyStableId
                 AssemblyName = assemblyName
-                ModuleName = typed.Name
                 PublicFingerprint = typed.ExportFingerprint
-                Methods = methods
+                Module = {
+                    SchemaVersion = querySchema
+                    StableId = moduleStableId
+                    Name = moduleName
+                    Types = [
+                        {
+                            SchemaVersion = querySchema
+                            StableId = typeStableId
+                            Namespace = String.Empty
+                            Name = typed.Name
+                            Methods = methods
+                        }
+                    ]
+                }
             }
 
             lowerCache.Add(key, symbolic)
@@ -259,7 +294,7 @@ type internal CompilerService() =
             let parseElapsedMicroseconds = elapsedMicroseconds parseStarted
             let checkStarted = Stopwatch.GetTimestamp()
 
-            match check parsed with
+            match check source.Path parsed with
             | Error diagnostic -> Error diagnostic
             | Ok(typed, checkKey) ->
                 let checkElapsedMicroseconds = elapsedMicroseconds checkStarted
@@ -288,8 +323,13 @@ type internal CompilerService() =
                     CheckKey = checkKey
                     LowerKey = lowerKey
                     DependencyCount =
-                        symbolic.Methods
-                        |> List.sumBy (fun methodFragment -> methodFragment.DependencyIds.Length)
+                        symbolic.Module.Types
+                        |> List.sumBy (fun typeFragment ->
+                            typeFragment.Methods
+                            |> List.sumBy (fun methodFragment ->
+                                methodFragment.DependencyIds.Length
+                            )
+                        )
                     ParseDecision = if parseHits > before.ParseHits then "hit" else "miss"
                     CheckDecision = if checkHits > before.CheckHits then "hit" else "miss"
                     LowerDecision = if lowerHits > before.LowerHits then "hit" else "miss"
