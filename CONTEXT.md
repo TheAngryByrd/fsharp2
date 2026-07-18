@@ -24,6 +24,10 @@ _Avoid_: Cached build
 Equivalence in the compiler behavior and build artifacts observable by source programs, build tooling, debuggers, and consumers, without requiring byte-identical output.
 _Avoid_: Binary identity
 
+**FS Diagnostic Compatibility**:
+Behavioral equivalence across the complete `FSxxxx` error and warning surface of the Compatibility Oracle, including occurrence, code, effective severity, message, source range, ordering, stream, suppression, promotion, and exit behavior.
+_Avoid_: Representative diagnostics, error-code coverage, similar messages
+
 **Compatibility Oracle**:
 The compiler shipped in the latest .NET 10 SDK, whose observable behavior resolves compatibility questions not settled by the written F# specification.
 _Avoid_: Reference implementation
@@ -31,6 +35,10 @@ _Avoid_: Reference implementation
 **Experimental Vertical Milestone**:
 An opt-in release that performs the complete compilation path for a declared compatibility envelope that is narrower than the final destination.
 _Avoid_: Partial compiler
+
+**IcedTasks Compatibility Corpus**:
+The pinned IcedTasks library source and unchanged tests used as FSharp2's first real-world corpus. Compatibility Oracle and FSharp2 producer lanes differ only in compiler selection; harness-owned probes fill declared coverage gaps, and reversible source edits exist only as isolated incremental-compilation inputs.
+_Avoid_: IcedTasks fixture, reduced IcedTasks slice, patched IcedTasks
 
 **Compatibility Gate**:
 The evidence threshold that must be met before the replacement compiler target is presented as drop-in compatible rather than experimental.
