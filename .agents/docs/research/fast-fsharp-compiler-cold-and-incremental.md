@@ -21,7 +21,7 @@ The repository defines a Compiler Target Invocation separately from a whole solu
 
 [ADR 0020](../adr/0020-use-the-complete-icedtasks-corpus-for-the-first-milestone.md) applies these distinctions to the complete pinned IcedTasks corpus. It requires the warm lane to distinguish an implementation-only edit from a consumer-visible middle-of-order edit; the follow-on warm-edit decision owns the exact reversible changes and cache-evidence contract.
 
-The clean-room and NativeAOT constraints matter. The official compiler may be an oracle in tests, but it cannot be the production implementation or a runtime-loaded dependency. A production cache therefore needs a closed, versioned schema and metadata readers that do not load arbitrary target assemblies into the compiler host.
+The independent, source-informed implementation and NativeAOT constraints matter. Contributors may study the official compiler as the Compatibility Oracle, but FSharp2 cannot copy or reuse its production implementation or load it as a runtime dependency. A production cache therefore needs a closed, versioned schema and metadata readers that do not load arbitrary target assemblies into the compiler host.
 
 ## Evidence from primary sources
 
