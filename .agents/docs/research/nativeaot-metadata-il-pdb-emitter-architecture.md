@@ -26,7 +26,7 @@ The final linker:
 6. applies deterministic identities, requested signing, native resources, and checksums; and
 7. validates and atomically publishes the complete requested artifact set.
 
-This is the best correctness architecture available from the evidence. It uses the ECMA-335 implementation maintained with .NET, keeps the production dependency closure small, needs no target-assembly loading or runtime code generation, and leaves FSharp2—not a serializer library—in control of declaration-level fragment identity. It is **not** a claim that direct SRM emission is already measured fastest. No primary source contains an apples-to-apples FSharp2/IcedTasks benchmark. Final-link throughput, allocation strategy, branch shrinking, pooling, parallel encoding, token-neutral byte reuse, and any C# kernel remain benchmark questions under ADRs 0007 and 0017.
+This is the best correctness architecture available from the evidence. It uses the ECMA-335 implementation maintained with .NET, keeps the production dependency closure small, needs no target-assembly loading or runtime code generation, and leaves FSharp2—not a serializer library—in control of declaration-level fragment identity. It is **not** a claim that direct SRM emission is already measured fastest. No primary source contains an apples-to-apples FSharp2/IcedTasks benchmark. [Issue #8][issue-8] owns the first end-to-end measured result, and [issue #12][issue-12] owns the repeatable performance runner and regression governance. Until those gates produce representative evidence, public SRM is the selected correctness baseline rather than a declared throughput winner. Final-link throughput, allocation strategy, branch shrinking, pooling, parallel encoding, token-neutral byte reuse, and any C# kernel remain benchmark questions under ADRs 0007 and 0017.
 
 ## Why the boundary must sit above SRM
 
@@ -432,6 +432,7 @@ The prototype should not add AsmResolver, Cecil, dnlib, FCS, Roslyn compiler int
 [issue-1]: https://github.com/TheAngryByrd/fsharp2/issues/1
 [issue-7]: https://github.com/TheAngryByrd/fsharp2/issues/7
 [issue-8]: https://github.com/TheAngryByrd/fsharp2/issues/8
+[issue-12]: https://github.com/TheAngryByrd/fsharp2/issues/12
 [ecma-335]: https://ecma-international.org/wp-content/uploads/ECMA-335_6th_edition_june_2012.pdf
 [metadata-tables]: https://github.com/dotnet/runtime/blob/v10.0.10/src/libraries/System.Reflection.Metadata/src/System/Reflection/Metadata/Ecma335/MetadataBuilder.Tables.cs
 [metadata-heaps]: https://github.com/dotnet/runtime/blob/v10.0.10/src/libraries/System.Reflection.Metadata/src/System/Reflection/Metadata/Ecma335/MetadataBuilder.Heaps.cs
