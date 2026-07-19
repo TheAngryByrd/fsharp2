@@ -17,7 +17,7 @@ FSharp2 keeps two deliberately different evidence products:
 
 Raw source-bearing evidence never goes to GitHub Actions logs, workflow artifacts, caches, job summaries, pull-request comments, releases, or package feeds. GitHub documents that repository readers can download workflow artifacts and that pull requests can access applicable caches; repository privacy is therefore not a sufficient raw-evidence access boundary.[^github-artifact-readers] [^github-cache-secrets]
 
-The raw bundle remains authoritative. Redaction never mutates or replaces it. A separate exporter reads the raw manifest, constructs a new typed bundle from an explicit field allowlist, validates canary absence and schema closure, and writes an independently hashed redaction report. A verdict cannot be published, promoted as a performance baseline, or used to claim the Compatibility Gate when required raw evidence, the export report, or deletion/access evidence is missing.
+The raw bundle remains authoritative. Redaction never mutates or replaces it. A separate exporter reads the raw manifest, constructs a new typed bundle from an explicit field allowlist, validates canary absence and schema closure, and writes an R2 linkage record plus an independently hashed S1 redaction report. Only the restricted linkage record contains the raw bundle id/hash. The S1 report uses a random, non-content-derived export receipt id so a private-source digest cannot leak through the shareable layer. A verdict cannot be published, promoted as a performance baseline, or used to claim the Compatibility Gate when required raw evidence, the export report, or deletion/access evidence is missing.
 
 This policy cannot weaken issue #15:
 
@@ -46,14 +46,14 @@ Only trusted commits and reviewed compiler artifacts may run the privileged raw-
 
 ## Classification
 
-Classification is field- and file-specific; a container inherits the highest class of any member. Unknown collected material defaults to **R3 Restricted Raw**. Unknown material in a shareable export is an error, not an implicit redaction.
+Classification is field- and file-specific; a container inherits the highest class of any member. Collection begins only after a structural P0 admission gate proves which inputs and outputs can be persisted. Unknown material that has passed that gate defaults to **R3 Restricted Raw**. Material whose origin or value cannot be proved P0-free is refused and destroyed before persistence. Unknown material in a shareable export is an error, not an implicit redaction.
 
 | Class | Meaning | Examples | Permitted destinations |
 | --- | --- | --- | --- |
 | **P0 Prohibited Evidence** | Material that the harness may use transiently only where the compiler contract requires it, but may never collect, hash, log, upload, cache, dump, or retain. | Private signing bytes/parameters/hash; original private-key path; GitHub/cloud/package tokens; secret environment/config values; signing-process dump; plaintext data-encryption keys. | The minimum process memory or run-scoped secret file needed for the operation. No evidence destination. |
 | **R3 Restricted Raw** | Authoritative source-bearing or memory-/environment-bearing evidence. | Binlog and ProjectImports; response/protocol bytes; raw streams; source/patches; raw PDB/PE/resources; complete invocation/environment; NetTrace; non-signing dump; service/cache snapshot; raw artifact tree. | Per-run encrypted runner volume and dedicated restricted evidence store only. |
 | **R2 Controlled Derived** | Structured data derived from R3 that is useful for diagnosis but is not automatically safe to disclose. | Canonical comparison records; exact diagnostics from an unapproved corpus; private-source hashes; dependency graphs; internal paths not yet mapped; access/deletion audit details. | Restricted evidence store; approved diagnostic workspace. |
-| **S1 Shareable Evidence** | A closed-schema, allowlisted export proved free of P0/R3/R2 fields and suitable for repository readers or public release. | Policy/tool/oracle identities; logical-root paths; verdict and reason codes; public input/artifact hashes; exact messages for approved public/harness sources; aggregate timings; safe fingerprints; redaction report and export hash. | Actions logs/artifacts, job summary, PR comment, release, package provenance, public documentation. |
+| **S1 Shareable Evidence** | A closed-schema, allowlisted export proved free of P0/R3/R2 fields and suitable for repository readers or public release. | Policy/tool/oracle identities; logical-root paths; verdict and reason codes; public input/artifact hashes; exact messages for approved public/harness sources; aggregate timings; safe fingerprints; public redaction report, random export receipt id, and export hash. | Actions logs/artifacts, job summary, PR comment, release, package provenance, public documentation. |
 
 The following rules prevent classification shortcuts:
 
@@ -69,7 +69,17 @@ The following rules prevent classification shortcuts:
 
 Every evidence-producing job uses a run-specific encrypted volume and assigns all work, TEMP/TMP, compiler-service, cache, output, response-file, binlog, trace, dump, and consumer roots beneath it. Access is restricted to the job identity. The volume is never reused across jobs.
 
-The supervisor starts the tested processes with an explicit environment allowlist and no evidence-store credential. It records the complete authoritative bundle required by the differential harness, including raw byte streams and the physical binlog/response pair, but prevents P0 from entering that bundle. Private signing material is mounted only for the signing action, read after command validation, and removed before any dump or evidence walk can run.
+The supervisor starts the tested processes with an explicit, secret-free environment allowlist and no evidence-store credential. Store OIDC credentials are not minted until all tested processes have exited and the P0-free raw manifest is sealed. Ordinary test corpora, project properties, response inputs, and imported projects are admitted only from a reviewed manifest that contains no secret source; an unknown value source stops collection rather than becoming R3.
+
+Full private-key signing uses a separate **signing enclave** because its physical command path is itself P0:
+
+1. The CI secret provider materializes the key inside an encrypted enclave that is outside every captured root. No backing/provider path or secret value enters the project, environment, binlog, or ordinary response archive.
+2. The full-sign Oracle/FSharp2 invocation runs with binlog, dump, trace, and generic process-output capture disabled. Its key-file option is constructed inside the enclave and is never sent to the outer recorder.
+3. A bounded in-memory guard consumes exit/stream/result observations, rejects and discards any byte sequence matching secret material or a prohibited canary, and emits only the typed signing observation allowed by issue #15: mode, public key/token/fingerprint, safe diagnostic identity/text, timing, output identity/hash, flags/slot/signature verification, and exit/leftover result.
+4. The outer R3 bundle records that raw signing command/response/binlog evidence was intentionally omitted as P0 and links the safe observation to the same case. Public/delay/invalid-key controls with checked-in non-secret material still retain the normal physical binlog/response pair.
+5. The enclave clears owned buffers, removes its key file, and destroys its volume before the ordinary evidence walk begins. A cleanup failure quarantines the runner and emits no evidence pass.
+
+For all other cases, the supervisor records the complete authoritative bundle required by the differential harness, including raw byte streams and the physical binlog/response pair. An output guard holds each new opaque stream/file until its policy rule and P0-canary check pass; it does not write first and scan later. P0 detection destroys the buffered value and enters security incident handling without persisting a value, snippet, or hash.
 
 A capture manifest records:
 
@@ -107,7 +117,9 @@ Restricted access is case-scoped, time-bound, and audited:
 2. An evidence custodian approves it. The requestor cannot self-approve when another custodian is available; a single-maintainer break-glass access records that fact and receives retrospective review.
 3. The reader receives a short-lived role limited to those object ids and their wrapping keys. No directory-wide list or public URL is issued.
 4. Download, decrypt, copy, and delete events are written to the audit ledger.
-5. The diagnostic workspace is an encrypted disposable volume, has no source-control/package publication credential, and is destroyed by its deadline.
+5. Diagnosis occurs in a non-exportable encrypted enclave with no general network, clipboard, removable-media, source-control, or package-publication egress. A remote viewer may inspect it, but arbitrary download is disabled.
+6. If an R3/R2 copy must leave that enclave, the custodian registers its new object id, destination, classification, encryption, owner, reason, and expiry before transfer. The copy receives the same or shorter retention and its own access/deletion events.
+7. Closure reconciles the original objects, enclave, and every registered derived copy. A deletion receipt cannot claim completeness while an authorized export is unregistered or outstanding.
 
 Routine repository read, issue triage, CI administration, and package publication do not grant R3/R2 read access. GitHub environments may add required review for privileged jobs, but the raw store's IAM/KMS policy remains the authority.[^github-secure-use]
 
@@ -131,7 +143,8 @@ Integrity is independent of confidentiality:
 - the raw manifest and bundle hash are calculated before encryption;
 - each encrypted object is authenticated by GCM and checked after an authorized download;
 - the S1 export has its own manifest and SHA-256, never reuses the raw bundle hash as its content identity;
-- the redaction report binds raw bundle id/hash, exporter/policy ids, S1 manifest/hash, and verifier result; and
+- an R2 linkage record binds raw bundle id/hash, exporter/policy ids, random export receipt id, S1 manifest/hash, and verifier result;
+- the S1 report binds only the random receipt id, exporter/policy ids, S1 manifest/hash, safe rule counts, and verifier result; and
 - accepted baseline/release summaries carry a signed CI provenance statement for the S1 hash.
 
 The provenance and hashes prove which bytes were reviewed. They do not make restricted bytes safe to publish.
@@ -189,20 +202,14 @@ The fast-compiler work requires stable query/action keys, declaration dependenci
 
 A culture-only change continues to invalidate diagnostic rendering rather than semantic state, and signing/resource changes remain final-link inputs as issue #15 defines. Evidence classification does not enter a compiler semantic cache key. It is a harness/export concern and cannot force recompilation or make localized text part of a semantic fingerprint.
 
-### Redaction report
+### Redaction and linkage reports
 
-redaction-report.json contains:
+The exporter creates two records:
 
-- raw bundle id/hash and policy/exporter/verifier identities;
-- one rule result per expected raw manifest entry: passed, transformed, summarized, or omitted;
-- rule id, classification, destination logical path, and S1 output hash where one exists;
-- declared root/environment/corpus transformations;
-- unknown-field/file count, which must be zero;
-- prohibited/sensitive canary scan results;
-- S1 manifest/hash and byte count; and
-- final pass/fail with reasons.
+1. **export-linkage.internal.json (R2)** contains raw bundle id/hash, random export receipt id, policy/exporter/verifier identities, one rule result per raw entry, the S1 manifest/hash, and final result. It stays in the restricted store.
+2. **redaction-report.json (S1)** contains only the random receipt id, policy/exporter/verifier identities, safe aggregate passed/transformed/summarized/omitted counts by rule/class, declared logical-root/environment/corpus transformations, zero unknown count, canary-test verdicts, S1 manifest/hash/byte count, and final result.
 
-It never contains the removed value, private-key/secret hash, original secret path, or a snippet from an omitted binary.
+Neither record contains a removed value, private-key/secret hash, original secret path, or snippet from an omitted binary. The S1 report additionally contains no raw object id, raw hash, private-source hash, storage key/prefix, KMS id, or diagnostic-access locator. Its receipt id is random and resolves to raw linkage only through the restricted registry.
 
 ### Independent validation
 
@@ -213,7 +220,7 @@ Every exporter test corpus injects distinct synthetic canaries into:
 - a dump from a non-signing process; and
 - a private-key fixture path and a separate fake secret marker.
 
-The S1 verifier scans bytes and parsed fields, reconciles the closed schema, checks the report and hashes, and requires all canaries absent. The real signing key is not copied into the exporter just to scan for it; P0 exclusion is structural and tested with synthetic material. A new schema field, file type, culture lane, trace event, diagnostic shape, or bundle member fails export until policy explicitly classifies it.
+The pre-persistence admission/output guards and signing enclave prove P0 exclusion; export-time scans are an independent backstop, not the first boundary. The S1 verifier scans bytes and parsed fields, reconciles the closed schema, checks both reports and hashes inside the restricted job, and requires all canaries absent. The real signing key is not copied into the exporter just to scan for it; P0 exclusion is structural and tested with synthetic material. A new schema field, file type, culture lane, trace event, diagnostic shape, or bundle member fails export until policy explicitly classifies it.
 
 Only after verification may S1 be written to Actions output. A missing/lossy/mismatched report blocks evidence publication and baseline/release promotion.
 
@@ -227,11 +234,11 @@ Cleanup runs on success, failure, timeout, and cancellation:
 2. remove run-scoped secret files without recording their paths or hashes;
 3. destroy the plaintext capture/diagnostic volume and its data key;
 4. verify no R3/R2 object was uploaded to GitHub Actions, cache, release, package, or job log;
-5. expire/delete restricted objects and every version/replica at the assigned deadline;
+5. expire/delete restricted objects, every version/replica, every diagnostic enclave, and every registered derived copy at the assigned deadline;
 6. revoke/destroy the wrapped per-run data key after the last object is gone; and
-7. write a non-secret deletion receipt containing object ids, version count, policy/retention class, provider result, key-destruction result, UTC, actor, and exceptions.
+7. reconcile the copy registry and write a non-secret deletion receipt containing opaque receipt ids, version/copy counts, policy/retention class, provider result, key-destruction result, UTC, actor, and exceptions.
 
-Failure to clean a dedicated runner quarantines it before another job. Destruction of a per-run encrypted volume/key is the normal runner sanitization boundary; retired physical media follows the owning provider's sanitization process.
+Failure to clean a dedicated runner or account for an authorized copy quarantines the runner/case before another job or a complete-deletion claim. Destruction of a per-run encrypted volume/key is the normal runner sanitization boundary; retired physical media follows the owning provider's sanitization process.
 
 GitHub documents that deleted workflow artifacts cannot be restored and exposes expiration through its artifact API.[^github-artifact-deletion] That mechanism applies only to S1 here. R3/R2 deletion is verified against the dedicated store, including object versions; deleting a workflow run cannot stand in for it.
 
@@ -269,21 +276,21 @@ Before any raw CI upload is enabled, the harness must automate and retain safe r
 
 | Probe | Required result |
 | --- | --- |
-| Classification closure | Every differential bundle member and field has one policy rule; an unknown member fails before upload/export. |
+| Classification closure | Every input/output has a pre-persistence P0 admission rule and every differential bundle member/field has one policy rule; an unknown or unproved origin fails before collection/upload/export. |
 | GitHub boundary | R3/R2/P0 are absent from Actions artifacts, caches, logs, summaries, comments, releases, and packages. |
 | Binlog | Default embedded imports and used environment values are detected as R3; ProjectImports=None remains R3 because events/arguments/environment can still disclose data. |
-| Signing | Real P0 is absent structurally; synthetic key/secret/path canaries never reach raw evidence or S1; no signing-process dump is captured. |
+| Signing | The separate enclave emits only the typed safe observation; real P0, physical key option/response/binlog, and signing dump are never persisted; synthetic key/secret/path canaries fail in memory and never reach R3 or S1. |
 | Diagnostics | Family-wide raw exactness passes; public/harness corpus messages export exactly, while an unapproved-corpus message remains restricted without changing the verdict. |
 | Trace/cache | Private source/cache/NetTrace remains R3; only approved structured decisions/fingerprints enter S1. |
 | Dump | Non-signing dump is R3 only; Triage is not accepted as S1; signing dump collection is refused. |
 | Fork/untrusted | No OIDC/raw-store/signing credential is issued and no persistent runner is exposed. |
 | Encryption | Ciphertext/authentication/AAD and wrapped-key checks pass; wrong run/classification/key fails closed. |
-| Access | Case-scoped reader grant expires; object/KMS/download audit reconciles with the request. |
-| Retention | Synthetic objects expire at each class deadline; all versions and the wrapped key are gone; deletion receipt reconciles. |
-| Export | Closed-schema rebuild, canary scan, raw/S1 hashes, and redaction report pass; tampering or missing report blocks publication. |
+| Access | Case-scoped reader grant expires; diagnosis stays in a non-exportable enclave; every permitted copy is preregistered and object/KMS/view/copy audit reconciles with the request. |
+| Retention | Synthetic objects expire at each class deadline; all versions, enclaves, registered copies, and wrapped keys are gone; deletion receipt reconciles. |
+| Export | Closed-schema rebuild, canary scan, restricted raw-linkage record, random S1 receipt, S1 hash, and public redaction report pass; S1 contains no raw/private-source digest or locator; tampering or a missing report blocks publication. |
 | Failure recovery | Cancellation, timeout, exporter failure, object-store failure, and cleanup failure leave no plaintext reuse and quarantine when required. |
 
-Release evidence records the policy version, exact store/IAM/KMS configuration identity, workflow/action SHAs, runner image, corpus approval, raw bundle id/hash/expiry, S1 hash/provenance, redaction report, access audit status, and deletion schedule. Actions in a privileged evidence workflow are pinned to immutable commit SHAs, matching GitHub's secure-use guidance.[^github-secure-use]
+The restricted release registry records the policy version, exact store/IAM/KMS configuration identity, workflow/action SHAs, runner image, corpus approval, raw bundle id/hash/expiry, random export receipt, S1 hash/provenance, R2 linkage, access audit, copy registry, and deletion schedule. Shareable release evidence records the policy/tool/runner/corpus identities safe for S1, random export receipt, S1 hash/provenance, public redaction report, retention class, and safe deletion-status projection; it contains no raw id/hash/locator or private-source digest. Actions in a privileged evidence workflow are pinned to immutable commit SHAs, matching GitHub's secure-use guidance.[^github-secure-use]
 
 ## Current repository gap and implementation boundary
 
