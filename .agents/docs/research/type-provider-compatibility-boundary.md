@@ -213,7 +213,7 @@ The broker is a build-time sidecar. Applications compiled with an erased provide
 
 ### Cross-platform and RID behavior
 
-The managed broker runs on the **build host**, not the target application's `RuntimeIdentifier`. Its runtime/architecture and provider native dependencies therefore follow the current Windows/Linux/macOS x64/Arm64 build host, while `TypeProviderConfig` target-runtime facts come from the evaluated target references. NativeAOT itself publishes RID-specific applications and supports those six desktop OS/architecture pairs.[^nativeaot]
+The managed broker runs on the **build host**, not the target application's `RuntimeIdentifier`. Its runtime/architecture and provider native dependencies therefore follow the current Windows/Linux/macOS x64/Arm64 build host, while `TypeProviderConfig` target-runtime facts come from the evaluated target references. NativeAOT itself publishes RID-specific applications for those six desktop OS/architecture pairs; [ADR 0026](../adr/0026-support-versioned-glibc-and-musl-linux-floors.md) splits Linux by glibc/musl into eight FSharp2 host payloads.[^nativeaot]
 
 The integration package should carry one platform-neutral broker payload plus the existing RID-selected native host where feasible, launched by the same SDK-selected .NET host/runtime family as MSBuild. Any broker apphost or native dependency is selected by build-host RID. A provider with OS/architecture-specific design-time or native dependencies is supported only in cells where the pinned oracle loads it; “works on win-x64” does not prove another host. Provider-generated managed artifacts still run through the separate downstream RID/NativeAOT consumer matrix.
 
@@ -251,7 +251,7 @@ The provider corpus needs small independently authored contract probes plus pinn
 
 The final gate additionally proves:
 
-1. native-host publish/execution remains strict and warning-clean on all six host RIDs with no provider/FCS assembly in its closure;
+1. native-host publish/execution remains strict and warning-clean on all eight host RIDs with no provider/FCS assembly in its closure;
 2. broker project/package graph contains public FSharp.Core but no FCS, FSharp.Build, official compiler, or oracle implementation;
 3. process lineage and sentinels prove no official compiler invocation;
 4. no provider, reflection, quotation, or provider-owned FCS object enters the NativeAOT process;
@@ -266,7 +266,7 @@ The final gate additionally proves:
 4. **Provider-owned FCS dependencies.** The boundary permits them only as opaque user input. At least one real probe must prove shared FSharp.Core identity, isolation, no broker-to-FCS call path, and no fallback.
 5. **Security.** No in-process managed loading mechanism makes malicious provider code safe. A hardened OS sandbox can change provider behavior and therefore needs an explicit compatibility envelope.
 6. **Nondeterministic/external providers.** Some providers cannot supply a complete freshness proof. Correctness requires live-session-only reuse and controlled oracle fixtures even if that costs warm performance.
-7. **Platform coverage.** A useful real-provider corpus with native dependencies on all six hosts has not yet been selected. Final support is limited to oracle-successful same-host cells, not a claim that every provider is portable.
+7. **Platform coverage.** A useful real-provider corpus with native dependencies on all eight hosts has not yet been selected. Final support is limited to oracle-successful same-host cells, not a claim that every provider is portable.
 8. **Editor/FSI behavior.** This decision sets the batch compiler/MSBuild boundary; an instrumented provider must still capture the exact Oracle `IsHostedExecution` value for each declared build shape. FSI and FCS/editor API compatibility remain outside the core destination; a future editor host may reuse the protocol but needs its own lifecycle/security decision.
 
 ## Primary sources and reproducibility

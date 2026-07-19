@@ -430,11 +430,11 @@ One-command replay by `caseId`/`runId` verifies hashes first and emits a linked 
 | --- | --- | --- |
 | Pull request | x64 Windows/Linux/macOS; selected positive/unsupported/negative; affected Debug/Release; portable PDB; deterministic repeat; graph/sentinel. | Smoke numbers only. |
 | Nightly | Full declared corpus across IcedTasks `netstandard2.0`, `netstandard2.1`, `net6.0`, `net9.0`; language/options, portable/embedded PDB, paths, en-US + non-default + fallback, consumers/cleanup. | 15 samples on characterized runner. |
-| Release | All declared cells, clean package use, signing/resources, deterministic repeats, six host RIDs and declared downstream AOT RIDs on target hardware/OS floors. | 30+, absolute median/p95 and relative policy. |
+| Release | All declared cells, clean package use, signing/resources, deterministic repeats, eight host RIDs and declared downstream AOT RIDs on target hardware/OS floors. | 30+, absolute median/p95 and relative policy. |
 | Oracle refresh | Candidate latest .NET 10 servicing SDK versus prior over complete corpus before manifest update. | Rebaseline only after correctness review. |
 | Diagnostic | Tripwire-selected phase/allocation/GC/working-set/structured traces. | Instrumented, non-comparable. |
 
-Six host RIDs are exhaustive. Cases declare applicable TFM/culture/debug/runtime cells so the harness does not claim an unexecuted Cartesian product. [Select the first IcedTasks vertical slice][issue-6] supplies the first envelope; the final gate expands to the then-current .NET 10 surface.
+Eight host RIDs are exhaustive: Windows and macOS x64/Arm64 plus separate glibc and musl Linux x64/Arm64 payloads. Cases declare applicable TFM/culture/debug/runtime cells so the harness does not claim an unexecuted Cartesian product. [Select the first IcedTasks vertical slice][issue-6] supplies the first envelope; the final gate expands to the then-current .NET 10 surface.
 
 Implementation first corrects current `main`/`master` CI trigger mismatch.[^repo-ci-gap]
 

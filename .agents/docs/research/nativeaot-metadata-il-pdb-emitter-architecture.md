@@ -276,7 +276,7 @@ Rejected. ECMA-335 table encoding, heap-width transitions, sorted-table validati
 
 Rejected as the default, but retained as the strongest benchmark challenger. Its official v6.0 source targets modern frameworks, declares `IsTrimmable=true`, exposes a comprehensive managed PE model, assigns new tokens through a mapping, and can patch or reassemble method bodies; its release notes explicitly claim improved AOT trimming and performance work.[^asmresolver]
 
-Those are credible capabilities, not FSharp2 release evidence. The project does not declare `IsAotCompatible`, and `IsTrimmable` plus release notes do not prove the six-RID strict NativeAOT host gate, exact IcedTasks PDB/F# metadata behavior, or lower final-link cost. Its own PDB guide calls support work in progress, describes reading and only sometimes writing debug data, and warns that APIs can change.[^asmresolver-pdb] Adopting its whole mutable module/file model would add a broad production dependency and tempt incremental state to couple to library objects/tokens. The symbolic FSharp2 boundary makes an isolated AsmResolver adapter possible for a future apples-to-apples benchmark without making it the architecture.
+Those are credible capabilities, not FSharp2 release evidence. The project does not declare `IsAotCompatible`, and `IsTrimmable` plus release notes do not prove the eight-RID strict NativeAOT host gate, exact IcedTasks PDB/F# metadata behavior, or lower final-link cost. Its own PDB guide calls support work in progress, describes reading and only sometimes writing debug data, and warns that APIs can change.[^asmresolver-pdb] Adopting its whole mutable module/file model would add a broad production dependency and tempt incremental state to couple to library objects/tokens. The symbolic FSharp2 boundary makes an isolated AsmResolver adapter possible for a future apples-to-apples benchmark without making it the architecture.
 
 ### Mono.Cecil 0.11.6 or dnlib 4.5
 
@@ -341,7 +341,7 @@ A disposable `win-x64` proof under `C:\tmp\fsharp2-issue7-emitter-proof` tested 
 - DLL SHA-256: `A2C5A2FCE7072E77DBE3226CF3FD2BA2DFA9AB1D58BCC24AFD0C74199C758C30`
 - PDB SHA-256: `5095F5B91F09BB4B5B0B104739CFDE2B4F4BA60DD26C992F961BCECA5444D50B`
 
-A separate `net10.0` consumer referencing that DLL also published with NativeAOT and returned `42` with exit code 0. This is minimal local feasibility evidence, not primary-source proof and not the issue gate. The disposable proof has no F# metadata, sequence points, import/custom-debug blobs, resources, signing, exception handling, reference assembly, IcedTasks input, cross-root repeat, or six-RID matrix. It does not replace any row below.
+A separate `net10.0` consumer referencing that DLL also published with NativeAOT and returned `42` with exit code 0. This is minimal local feasibility evidence, not primary-source proof and not the issue gate. The disposable proof has no F# metadata, sequence points, import/custom-debug blobs, resources, signing, exception handling, reference assembly, IcedTasks input, cross-root repeat, or eight-RID matrix. It does not replace any row below.
 
 ## Required proof before implementation is accepted
 
@@ -357,7 +357,7 @@ A separate `net10.0` consumer referencing that DLL also published with NativeAOT
 | Managed/F# metadata resources | Exact user payloads, logical names/visibility/linking, F# resource presence/modes, four-way F# consumer matrix |
 | Native resources | Icon/manifest/version/raw `.res` probes on each relevant target/platform shape and structural/native observer validation |
 | Incremental fragments | Implementation-only and middle-DAG API edits prove reused/rebuilt fragment identities and clean-link byte equivalence |
-| NativeAOT | Six native host RID gates plus strict NativeAOT consumers of FSharp2-emitted output |
+| NativeAOT | Eight native host RID gates plus strict NativeAOT consumers of FSharp2-emitted output |
 | Throughput | Controlled IcedTasks Cold/Warm measurements and phase/allocation traces; no unchanged MSBuild skip counted as Warm Compilation |
 | Transactionality | Injected failure at metadata, PDB, resource, signing, validation, and publish stages leaves no successful partial artifact set |
 

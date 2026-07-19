@@ -51,3 +51,7 @@ _Avoid_: Feature complete
 **Performance Tripwire**:
 The three-second Compiler Target Invocation threshold beyond which the compiler must explain its critical path and resource costs.
 _Avoid_: Compilation timeout
+
+**Linux Deployment Floor**:
+The versioned conjunction of distro line, architecture, libc ABI, loader/native-dependency manifest, and native clean-image execution that a shipped FSharp2 Linux host must satisfy.
+_Avoid_: Linux kernel minimum, RID support

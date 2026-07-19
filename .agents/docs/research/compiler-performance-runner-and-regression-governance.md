@@ -59,7 +59,7 @@ Microsoft documents that antivirus exclusions are a protection gap, should be na
 | `controlled-nightly` | FSharp2-owned dedicated physical host or exclusive, non-burstable VM restored from a pinned image; one job at a time | 15-sample nightly and approved-PR gates |
 | `controlled-release-<rid>` | Same controls, with one qualified machine class for each required host RID | 30-sample release median/p95 gate |
 
-The six release RIDs remain `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`, and `osx-arm64`. Samples never pool across RIDs, hosts, or machine-class revisions.
+The eight release RIDs are `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `linux-musl-x64`, `linux-musl-arm64`, `osx-x64`, and `osx-arm64`. Samples never pool across RIDs, libc families, hosts, or machine-class revisions.
 
 Each controlled class has a stable id derived from:
 
@@ -212,7 +212,7 @@ A required missing cell blocks the aggregate gate. Neither `unsupported` nor `in
 | Every PR | Run correctness on hosted Windows/Linux/macOS. Optional one-row timing is clearly non-gating. Do not upload it into controlled baselines. |
 | Approved performance PR | On affected controlled classes, run 15 valid same-machine pairs for all affected IcedTasks TFMs and both Warm edits. Block on absolute/relative failure. |
 | Nightly | Run 15 valid pairs over the complete four-TFM IcedTasks Cold/Warm matrix on the designated Windows, Linux, and macOS sentinel classes. Quarantine rather than rebaseline noisy runners. |
-| Release | Run 30 valid pairs over every required cell on all six host-RID classes. Require median and p95 absolute gates, relative median gate, and complete diagnostic evidence. |
+| Release | Run 30 valid pairs over every required cell on all eight host-RID classes. Require median and p95 absolute gates, relative median gate, and complete diagnostic evidence. |
 | Oracle refresh | Compare old and candidate Oracle for correctness over the complete corpus. Record timing context; do not replace the accepted FSharp2 baseline. |
 
 ## Baseline governance

@@ -17,7 +17,7 @@ That boundary has five immediate consequences:
 1. Every production project is AOT- and trim-compatible by policy, but an F# `dotnet build` is not sufficient evidence. The pinned SDK imports the ILLink Roslyn analyzers for C# and Visual Basic only, so the warning-free RID-specific NativeAOT publish is the authoritative F# gate.
 2. Runtime assembly loading and runtime code generation are forbidden in the production closure. Reflection is not categorically forbidden: small, statically analyzable uses may remain, but `Type`-driven discovery, `Assembly.Load*`, `AssemblyLoadContext` plugins, `Reflection.Emit`, and open-ended runtime generic construction cannot define compiler architecture.
 3. FSharp.Core is usable, not blanket-approved. A minimal F# host using lists published and ran warning-free, while adding only `printfn` made the strict publish fail inside FSharp.Core's printf and structured-reflection implementation. Production F# code therefore uses a proved subset and keeps Printf, structured formatting, FSharp.Reflection, and quotation evaluation outside the default path.
-4. The six required host artifacts are `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`, and `osx-arm64`. They are separately published, packaged, installed, and executed. The integration target selects the **build machine** RID, never the target project's `RuntimeIdentifier`.
+4. The eight required host artifacts are `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `linux-musl-x64`, `linux-musl-arm64`, `osx-x64`, and `osx-arm64`. They are separately published, packaged, installed, and executed. The integration target selects the **build machine** RID, never the target project's `RuntimeIdentifier`. [ADR 0026](../adr/0026-support-versioned-glibc-and-musl-linux-floors.md) fixes the Linux floors and native proof.
 5. [ADR 0002](../adr/0002-require-nativeaot-for-compiler-and-output.md) creates two independent release gates: one proves the compiler host itself is native; the other proves that a normal .NET NativeAOT consumer can publish and execute against FSharp2's managed output. Neither gate stands in for the other.
 
 The sharp compatibility boundary is arbitrary F# type providers. The public FSharp.Core contract describes executable provider classes that the compiler constructs and calls, exchanging runtime `Type`, `Assembly`, `MethodBase`, and quotation objects. An arbitrary existing provider cannot be loaded into a closed-world NativeAOT host. Experimental envelopes must reject provider inputs explicitly until their declared provider gate passes. [ADR 0025](../adr/0025-use-a-managed-broker-for-legacy-type-providers.md) now resolves the follow-on decision: final legacy-provider compatibility uses an optional out-of-process managed broker, while a dependency-declaring snapshot contract remains additive. The detailed boundary is captured in the [issue #13 research](type-provider-compatibility-boundary.md).
@@ -38,7 +38,7 @@ The sharp compatibility boundary is arbitrary F# type providers. The public FSha
 | FSharp.Core | Package `10.0.100` contains `netstandard2.0`/`netstandard2.1` assets, no RID asset, no `IsAotCompatible` metadata, broad reflection annotations, and reflection-heavy formatting paths. | The semantic pipeline is primarily F#. | Pin one package version for the host, audit every used API through strict publish, and quarantine Printf/structured reflection/quotation evaluation until separately proved. |
 | Reflection | Static reflection can be preserved; `DynamicallyAccessedMembers` expresses a closed member requirement. Broad `All` requirements retain code and can expose more warnings. | The compiler is independently authored and does not need official compiler runtime types. | Represent target types with FSharp2 metadata IDs/handles, not `System.Type`. Permit reflection only in small reviewed adapters with exact annotations and tests. |
 | Dynamic code/loading | NativeAOT has no dynamic assembly loading or `Reflection.Emit`; runtime-created generic instantiations can warn or fail when code was not generated. LINQ expressions use interpretation. | Production may not load or fall back to the official compiler/FCS. | No production `Assembly.Load*`, plugin `AssemblyLoadContext`, `DynamicMethod`, `Reflection.Emit`, or unbounded `MakeGenericType`/`MakeGenericMethod`. Oracle and output execution stay out of process. |
-| Platform | [.NET 9+ publicly supports][nativeaot-platforms] Windows x64/Arm64, Linux x64/Arm64, and macOS x64/Arm64. Native toolchains are OS-specific; cross-OS compilation is unsupported and same-OS x64/Arm64 cross-compilation needs the target toolchain. | All six desktop OS/architecture pairs are required host gates. | Prefer native target-architecture runners; allow a same-OS cross lane only after its linker/sysroot/toolchain and produced artifact pass the same execution gate. Build Linux on the oldest supported deployment baseline. |
+| Platform | [.NET 9+ publicly supports][nativeaot-platforms] Windows x64/Arm64, Linux x64/Arm64, and macOS x64/Arm64. Native toolchains are OS-specific; cross-OS compilation is unsupported and same-OS x64/Arm64 cross-compilation needs the target toolchain. | All six desktop OS/architecture pairs are required; the Linux pairs split by glibc/musl into eight host RID gates. | Prefer native target-architecture runners; allow a same-OS cross lane only after its linker/sysroot/toolchain and produced artifact pass the same execution gate. Build Linux against the selected floor sysroot. |
 | Deployment | Native output is self-contained and single-file; `Assembly.Location` is empty. Native symbols are separate by default. Full globalization can require ICU; satellite languages are publish inputs. | Experimental adoption is one NuGet/MSBuild seam with RID-specific native hosts. | Select by SDK host RID, use `AppContext.BaseDirectory` only for adjacent host assets, preserve invocation working-directory semantics, package declared cultures deliberately, and test from the installed package in a clean environment. |
 
 ## Required production and oracle graph
@@ -227,7 +227,7 @@ These observations prove that ordinary F# data structures can participate in one
 - Production diagnostics and tracing do not use `printf`, `printfn`, `sprintf`, `%A`, or general structured formatting until a specific implementation and format corpus passes the gate. Prefer direct `Console`/writer calls, ordinal/invariant formatting, and explicit structured fields.
 - `FSharpType`, `FSharpValue`, `LeafExpressionConverter.EvaluateQuotation`, and runtime quotation evaluation stay out of the default compiler pipeline. A later use needs its own warning/size/behavior proof.
 - Host code must not use FSharp.Core reflection to infer the compiler's own record/union schema. Static functions and explicit tables are clearer AOT roots.
-- FSharp.Core updates are deliberate compatibility changes: record package version, repository commit, hashes, warning diff, size diff, and all six host gates.
+- FSharp.Core updates are deliberate compatibility changes: record package version, repository commit, hashes, warning diff, size diff, and all eight host gates.
 - The FSharp.Core referenced by emitted code comes from the target invocation's resolved references. It is not the compiler host's pinned runtime dependency.
 
 ## F# and C# implementation seam
@@ -267,20 +267,22 @@ Those requirements collide directly with NativeAOT's closed world and prohibitio
 
 ## Supported build and execution matrix
 
-The [public .NET 9+ NativeAOT table][nativeaot-platforms] includes all six pairs fixed by [ADR 0011](../adr/0011-support-nativeaot-hosts-across-desktop-platforms.md). SDK pack availability for additional RIDs is not a FSharp2 support promise. Microsoft's required native build tools are Visual Studio C++ on Windows, Clang/linker/zlib development packages on Linux, and Xcode Command Line Tools on macOS.[^nativeaot-prerequisites]
+The [public .NET 9+ NativeAOT table][nativeaot-platforms] includes all six OS/architecture pairs fixed by [ADR 0011](../adr/0011-support-nativeaot-hosts-across-desktop-platforms.md); [ADR 0026](../adr/0026-support-versioned-glibc-and-musl-linux-floors.md) resolves the Linux pairs into separate glibc and musl artifacts, producing eight required host RIDs. SDK pack availability for additional RIDs is not a FSharp2 support promise. Microsoft's required native build tools are Visual Studio C++ on Windows, Clang/linker/zlib development packages on Linux, and Xcode Command Line Tools on macOS.[^nativeaot-prerequisites]
 
 | Required pair | Host RID | Required native toolchain | Release evidence |
 | --- | --- | --- | --- |
 | Windows x64 | `win-x64` | Visual Studio 2022+ Desktop development with C++ | strict publish; install; native execute; compile tracer; symbols/dependency manifest |
 | Windows ARM64 | `win-arm64` | VS 2022+ C++ target toolchain for ARM64 | same on ARM64, or a separately proved Windows x64-to-ARM64 cross lane plus ARM64 execution |
-| Linux x64 | `linux-x64` | `clang`, linker/build tools, zlib development package, glibc sysroot | build on oldest supported distro baseline; install/run in clean x64 image |
-| Linux ARM64 | `linux-arm64` | target-compatible `clang`/linker, C runtime objects, zlib, `objcopy`/`strip` | same on ARM64, or proved Linux cross lane plus ARM64 execution |
+| Linux glibc x64 | `linux-x64` | `clang`, linker/build tools, zlib development package, glibc 2.27 sysroot | inspect ELF; install/run on RHEL 8 x64; real compiler invocation |
+| Linux glibc ARM64 | `linux-arm64` | target-compatible `clang`/linker, C runtime objects, zlib, `objcopy`/`strip`, glibc 2.27 sysroot | inspect ELF; install/run on RHEL 8 Arm64; real compiler invocation |
+| Linux musl x64 | `linux-musl-x64` | Alpine-compatible `clang`, `build-base`, zlib development package, musl 1.2.3 sysroot | inspect ELF; install/run on Alpine 3.21 x64; real compiler invocation |
+| Linux musl ARM64 | `linux-musl-arm64` | target-compatible Alpine toolchain, zlib development package, musl 1.2.3 sysroot | inspect ELF; install/run on Alpine 3.21 Arm64; real compiler invocation |
 | macOS x64 | `osx-x64` | current supported Xcode Command Line Tools | strict publish/install/native execution on supported x64 macOS |
 | macOS ARM64 | `osx-arm64` | current supported Xcode Command Line Tools | same on Apple Silicon |
 
 NativeAOT does not cross-compile across operating systems. Microsoft documents limited same-OS x64/Arm64 cross-compilation when the target toolchain is present.[^nativeaot-cross] The pinned SDK's RID-specific tool packaging target nevertheless refuses to orchestrate AOT child packages in one cross-platform/cross-architecture pack invocation.[^packtool-aot] FSharp2 release automation should therefore stage one independently gated publish per RID and assemble integration packages only after all required artifacts exist.
 
-The Linux support name needs precision. `linux-x64`/`linux-arm64` are the initial glibc-family assets. Alpine/musl requires distinct `linux-musl-*` assets; SDK pack existence is not proof that FSharp2 supports them. Microsoft also warns that a native Linux binary generally runs only on the same or a newer distribution baseline than the build machine.[^nativeaot-linux-baseline] The minimum glibc/distribution floor and whether musl joins the product matrix need a follow-on deployment decision and clean-image evidence.
+Linux support is versioned rather than implied by the abstract word “Linux.” `linux-x64`/`linux-arm64` are glibc-family assets and `linux-musl-x64`/`linux-musl-arm64` are distinct musl assets. [ADR 0026](../adr/0026-support-versioned-glibc-and-musl-linux-floors.md) selects a `GLIBC_2.27` ceiling plus native RHEL 8 floor execution for glibc, and a musl 1.2.3 sysroot plus native Alpine 3.21 floor execution for musl. Microsoft warns that a native Linux binary generally runs only on the same or a newer distribution baseline than the build machine.[^nativeaot-linux-baseline] SDK pack existence, a libc number, QEMU, or a kernel-number guess is not proof that FSharp2 supports an environment; the exact ELF, dependency, globalization, clean-image, service, and cache gates are defined by the [issue #14 research](linux-runtime-and-deployment-compatibility-floors.md).
 
 No release publish uses a “native/current CPU” instruction-set setting for a portable asset. Platform acceleration must be guarded and behaviorally equivalent, and the portable fallback runs in the matrix.
 
@@ -337,7 +339,7 @@ Full globalization still has native deployment implications. Linux terminates if
 
 Purpose: prove the **compiler process and its complete production closure** are NativeAOT-safe for a build-host RID.
 
-For each of the six RIDs:
+For each of the eight RIDs:
 
 ```text
 dotnet publish <FSharp2.Host.fsproj> -c Release -r <host-rid> --self-contained true
@@ -358,7 +360,7 @@ Required evidence:
 4. a test-only native diagnostic proves dynamic code support/compilation false;
 5. from an unrelated working directory, the host performs a real declared Compiler Target Invocation and produces all requested managed artifacts;
 6. path, resource/UI-culture, cancellation, failure cleanup, and native dependency smokes pass in a clean target environment; and
-7. once the persistent service exists, standalone and service NativeAOT paths both pass and produce equivalent observable results under [ADR 0003](../adr/0003-use-a-persistent-incremental-compiler-service.md).
+7. every supported release proves both standalone-client and persistent-service NativeAOT paths and equivalent observable results under [ADR 0003](../adr/0003-use-a-persistent-incremental-compiler-service.md); an earlier Experimental Vertical Milestone without the service is explicitly non-release.
 
 ### Gate B — NativeAOT consumption of emitted managed output
 
@@ -373,9 +375,11 @@ For every declared compatibility envelope:
 5. execute each native consumer and compare public API, runtime behavior, resources, exceptions, and deterministic inputs with the same source built by the pinned Compatibility Oracle; and
 6. include negative tracers where source or a dependency is intentionally AOT-incompatible, verifying FSharp2 preserves the relevant code-analysis attributes and yields the same downstream warning class rather than claiming every source program is warning-free.
 
+For Linux, Gate B covers `linux-x64`, `linux-arm64`, `linux-musl-x64`, and `linux-musl-arm64` regardless of the build-host RID. Each native consumer also passes ADR 0026's exact interpreter, libc ABI, closed native-dependency, globalization, provenance, and minimum RHEL 8 or Alpine 3.21 clean-image execution gates; successful host publication cannot stand in for that emitted-output evidence.
+
 Gate B does not ask FSharp2 to emit native machine code. The SDK/ILCompiler owns that transformation. It asks FSharp2 to emit valid managed IL and metadata without compiler-injected dynamic requirements, missing preservation annotations, invalid generic metadata, host-framework leakage, or broken resources.
 
-The six host publishes and six downstream native-consumer publishes are separately reported. A single `PublishAot passed` checkbox, a native host that never compiles, or an emitted DLL that was merely loaded by CoreCLR is insufficient evidence.
+The eight host publishes and eight downstream native-consumer publishes are separately reported. A single `PublishAot passed` checkbox, a native host that never compiles, or an emitted DLL that was merely loaded by CoreCLR is insufficient evidence.
 
 ## What issue #4 establishes
 
@@ -388,7 +392,7 @@ The following are now constraints rather than open implementation preferences:
 5. no dynamic assembly loading, runtime code generation, or generic plugin discovery in production;
 6. proved-subset FSharp.Core policy, with Printf/structured reflection excluded from the baseline;
 7. primarily F# implementation with only benchmark-justified, statically linked C# kernels;
-8. six build-host RID payloads selected from the SDK host RID and independently executed;
+8. eight build-host RID payloads selected from the SDK host RID and independently executed, including separate glibc and musl Linux pairs under ADR 0026;
 9. full-globalization baseline with invariant compiler semantics and explicit satellite/ICU evidence; and
 10. separate host and emitted-output NativeAOT matrices.
 
@@ -405,8 +409,8 @@ This constraints ticket does not implement the host or copy the official F# comp
 - benchmark evidence for any C# kernel, spans/pools/arenas/unsafe code, or platform acceleration;
 - the NuGet props/targets and physical RID-package topology required by ADR 0019;
 - the full differential corpus for hidden options, resources, signing, PDBs, F# metadata, and failure cleanup from the compiler/MSBuild contract;
-- release engineering, signing/notarization, SBOM/provenance, and supported OS-version floors; and
-- implementation and compatibility evidence for the selected Provider Broker policy, plus the Linux glibc/musl support decision.
+- release engineering, signing/notarization, SBOM/provenance, and non-Linux supported OS-version floors; and
+- implementation and compatibility evidence for the selected Provider Broker policy and the selected Linux floor matrix.
 
 Those tickets must inherit the boundaries above; they may refine implementations and evidence, but cannot replace a native host with a managed fallback or collapse the two NativeAOT gates.
 
@@ -416,7 +420,7 @@ Those tickets must inherit the boundaries above; they may refine implementations
 2. **F# analyzer integration.** SDK `10.0.110` does not import the ILLink Roslyn analyzer target for F#. A later SDK/F# compiler may add equivalent analysis. Keep the publish gate even if earlier diagnostics improve.
 3. **FSharp.Core coverage.** The successful collection probe is narrow. Each newly used FSharp.Core subsystem needs warning/behavior/size coverage; lack of an AOT marker is not proof of failure, and one successful publish is not blanket proof.
 4. **Type providers.** [ADR 0025](../adr/0025-use-a-managed-broker-for-legacy-type-providers.md) resolves the execution boundary; exact Oracle probing/load behavior, provider-visible configuration, and the final compatibility corpus remain implementation evidence to discover rather than architecture still to choose.
-5. **Linux portability.** The glibc/distribution floor and musl support are not settled by the abstract word “Linux.”
+5. **Linux portability.** ADR 0026 fixes glibc and musl floors; the first shipped artifacts still need recorded ELF/dependency manifests and native floor-image evidence for all four Linux RIDs.
 6. **Localization.** Satellite publication is supported, but the exact final oracle culture set and ICU deployment strategy still require cross-platform runtime evidence.
 7. **Cross-architecture builds.** Microsoft supports limited same-OS x64/Arm64 cross-compilation with target toolchains; FSharp2 should not claim a cross lane until the resulting target artifact runs on real target hardware.
 
