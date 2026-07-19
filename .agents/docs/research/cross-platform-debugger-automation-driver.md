@@ -16,6 +16,34 @@ This gate is necessary because the pinned driver has a documented F# computation
 
 `vsdbg` is technically stronger but is not an acceptable standalone harness dependency: Microsoft publishes it under a proprietary license restricted to Microsoft IDE use and forbids redistributing it as a separate offering. MIEngine/OpenDebugAD7 and `lldb-dap` do not provide primary-source evidence of managed F# Portable PDB behavior. They are not substitutes for a passing managed-driver probe.
 
+## Measured candidate result
+
+The reviewed Windows x64 asset passes the checked-in [focused candidate smoke](../../../tools/Invoke-DebuggerDriverProbe.ps1), but it is **not accepted as a driver-conformance pass**. On 2026-07-19 the runner rebuilt an Oracle-compiled, path-mapped F# program from fresh isolated outputs and ran the exact asset twice. Both attempts produced locked semantic fingerprint `67a72b70b92e33adcaabf231edb07182a435d6f44ffd0fe1e986693050c291fd` and the same result:
+
+- archive length/SHA-256 matched `3,524,161` / `3c410a45fa502415203a94fcb88654af65bf8e3dac158a5527a722e7a6b9274a`;
+- a hash-pinned, asset-specific third-party notice bundle accompanied the offline archive;
+- `netcoredbg --buildinfo` reported Windows x64 Release, VCS `9744e1f`, while its internal display version was `3.2.0-1`;
+- the Oracle SDK was fixed to `10.0.110`, including exact hashes for `fsc.dll`, `FSharp.Build.dll`, and the two F# target files;
+- the materialized `Program.fs` bytes matched the SHA-256 checksum in the portable PDB;
+- the Oracle Portable PDB established that the task marker on line 25 belongs to the canonical sequence-point range `23:9-25:16`;
+- both breakpoints were initially pending, then changed to verified at the exact PDB-derived ranges 15-15 and 23-25;
+- the ordinary breakpoint supported step-in, step-out, step-over, stack, and locals observations, while the post-`Task.Yield` breakpoint stopped at canonical line 23;
+- exact framed DAP bytes and parsed messages were retained with timestamps in both directions, including the `setBreakpoints` request; and
+- the adapter exited normally, the DAP-owned debuggee PID was observed, and no run-owned process remained.
+
+An earlier local replay incorrectly requested the marker line 25 and interpreted the driver's correct resolution to canonical line 23 as a defect. Decoding the Oracle sequence points disproved that conclusion. The corrected focused result is `driverProbeVerdict=pass` and `compilerVerdict=not-run`; it proves only this narrow smoke. Consequently, no reviewed off-the-shelf driver currently satisfies the final cross-platform question because the complete conformance probe and required platform cells have not passed, not because this focused smoke reproduced the documented upstream defect. This decision still selects DAP and the fail-closed driver gate, while a reproducibly locked FSharp2-owned `netcoredbg` build or reviewed replacement remains necessary for missing cells.
+
+Replay the focused pass with:
+
+```powershell
+pwsh -File .\tools\Invoke-DebuggerDriverProbe.ps1 `
+  -ArchivePath C:\path\to\reviewed-offline-mirror\netcoredbg-win64.zip
+```
+
+`-ArchivePath` is mandatory; the runner has no network acquisition path. It revalidates and materializes the archive with the locked notice bundle, replaces rather than trusts an earlier extraction, fixes the Oracle SDK/compiler identity, rebuilds the fixture and probe into fresh isolated outputs, hashes the ordered inputs and artifacts into a bootstrap manifest, and binds both attempts to that manifest. It succeeds only when verdict, failure class, compiler verdict, and normalized semantic fingerprint match the lock exactly. Raw attempt evidence stays under ignored `artifacts/` according to the secure evidence policy.
+
+This focused replay is deliberately not the complete driver-conformance probe described below: it does not claim attach, both compiler producers, all value shapes, exceptions, Release/embedded PDBs, or the missing platform cells. Its purpose is to make the narrow current-candidate smoke local, repeatable, and impossible to confuse with final conformance.
+
 ## Why DAP
 
 The pinned DAP contract exposes the complete observation sequence required by issue #18:
@@ -75,7 +103,7 @@ Each declared driver cell compiles and debugs a small pinned F# program containi
 The probe must demonstrate:
 
 1. launch and attach both reach the requested program;
-2. every breakpoint response is `verified` and reports the expected canonical document and actual line;
+2. every breakpoint is either verified immediately or explicitly pending until module load, then stops at the expected canonical document and actual line (a later DAP breakpoint event may provide the verification transition);
 3. the stopped event is attributable to that breakpoint by the normalized top frame, because the pinned driver does not return `hitBreakpointIds`;
 4. step-in, step-over, and step-out visit the expected normalized source sequence without hanging or silently continuing;
 5. stack frames preserve declared F# source documents, ranges, and the expected semantic call chain;

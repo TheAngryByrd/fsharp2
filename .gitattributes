@@ -13,6 +13,7 @@
 *.fsproj merge=union
 *.dbproj merge=union
 *.sh text eol=lf
+tools/debugger-driver-notices/** text eol=lf -whitespace
 
 # Standard to msysgit
 *.doc diff=astextplain

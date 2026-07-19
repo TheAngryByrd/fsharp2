@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 2,
+  "protocol": {
+    "name": "Debug Adapter Protocol",
+    "schemaCommit": "e34479c39ed4973210115872c8e118c097a50d4a",
+    "schemaUrl": "https://github.com/microsoft/debug-adapter-protocol/blob/e34479c39ed4973210115872c8e118c097a50d4a/debugAdapterProtocol.json"
+  },
+  "driver": {
+    "name": "netcoredbg",
+    "version": "3.2.0-1092",
+    "sourceCommit": "9744e1f051866215611b8440c638042aa2aa2f72",
+    "license": "MIT",
+    "licenseUrl": "https://github.com/Samsung/netcoredbg/blob/9744e1f051866215611b8440c638042aa2aa2f72/LICENSE",
+    "assets": [
+      {
+        "rid": "win-x64",
+        "fileName": "netcoredbg-win64.zip",
+        "url": "https://github.com/Samsung/netcoredbg/releases/download/3.2.0-1092/netcoredbg-win64.zip",
+        "length": 3524161,
+        "sha256": "3c410a45fa502415203a94fcb88654af65bf8e3dac158a5527a722e7a6b9274a",
+        "executable": "netcoredbg/netcoredbg.exe",
+        "noticeBundle": {
+          "root": "debugger-driver-notices/win-x64",
+          "files": [
+            {
+              "path": "LICENSE.dbgshim.txt",
+              "length": 1116,
+              "sha256": "cfc21f5e8bd655ae997eec916138b707b1d290b83272c02a95c9f821b8c87310"
+            },
+            {
+              "path": "LICENSE.linenoise-ng.txt",
+              "length": 2689,
+              "sha256": "c676d229c8807fa8701cf5cd9d59788d41de2b4803803a34d35570e700a18363"
+            },
+            {
+              "path": "LICENSE.netcoredbg.txt",
+              "length": 1085,
+              "sha256": "6cd03b0de8299b0800f22b35ae842c931ded7684a2d1ba4f1d4188bab9b09a11"
+            },
+            {
+              "path": "LICENSE.nlohmann-json.txt",
+              "length": 1076,
+              "sha256": "7b875bb7a4e28abb7956ea821b4b7d88ff6a2a4fabf261c3993730a365ec56dd"
+            },
+            {
+              "path": "LICENSE.roslyn.txt",
+              "length": 11358,
+              "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+            },
+            {
+              "path": "THIRD-PARTY-NOTICES.md",
+              "length": 2145,
+              "sha256": "adf29b6824de9345ee1b752ba8aa60cf178f21366740433a76193649c4dfba81"
+            }
+          ]
+        },
+        "oracleToolchain": {
+          "sdkVersion": "10.0.110",
+          "dotnetHost": {
+            "relativePath": "dotnet.exe",
+            "length": 167208,
+            "sha256": "4377f10c78400f0370b88156773de9843c07f14e65b3232005ec3179ef38d463"
+          },
+          "sdkFiles": [
+            {
+              "relativePath": "FSharp/fsc.dll",
+              "length": 108368,
+              "sha256": "8cb573be4b7f70886929a572024ab26fc1893cfdd795ef124c58627610ddbf22"
+            },
+            {
+              "relativePath": "FSharp/FSharp.Build.dll",
+              "length": 210216,
+              "sha256": "ab62157b2111ae5f172e863d086f7035503f83c0bdb9a9efc2e2450891df6e1a"
+            },
+            {
+              "relativePath": "FSharp/Microsoft.FSharp.Targets",
+              "length": 30681,
+              "sha256": "fe0f39ff97942b5250280c071339b1dd5bf22c6488077caf3295dc70b1da80c1"
+            },
+            {
+              "relativePath": "FSharp/Microsoft.FSharp.NetSdk.targets",
+              "length": 11973,
+              "sha256": "d0a8bb234d720395fe609dcfd6fb75828c9ed60789f845a50eebe1f02db91b87"
+            }
+          ]
+        },
+        "focusedReplay": {
+          "driverProbeVerdict": "pass",
+          "compilerVerdict": "not-run",
+          "failureClass": "",
+          "semanticFingerprint": "67a72b70b92e33adcaabf231edb07182a435d6f44ffd0fe1e986693050c291fd"
+        }
+      },
+      {
+        "rid": "linux-x64",
+        "fileName": "netcoredbg-linux-amd64.tar.gz",
+        "url": "https://github.com/Samsung/netcoredbg/releases/download/3.2.0-1092/netcoredbg-linux-amd64.tar.gz",
+        "length": 3510717,
+        "sha256": "080eb3b2d2152465f599d3b33d1ee6e747794e11cc0a3773ec689f5e5f2c5afa",
+        "executable": "netcoredbg/netcoredbg"
+      },
+      {
+        "rid": "linux-arm64",
+        "fileName": "netcoredbg-linux-arm64.tar.gz",
+        "url": "https://github.com/Samsung/netcoredbg/releases/download/3.2.0-1092/netcoredbg-linux-arm64.tar.gz",
+        "length": 3424271,
+        "sha256": "065ff49badec8a695dbea2de6ab6a330c774a191e426a217ab8cc05250627ccb",
+        "executable": "netcoredbg/netcoredbg"
+      },
+      {
+        "rid": "osx-arm64",
+        "fileName": "netcoredbg-osx-arm64.zip",
+        "url": "https://github.com/Samsung/netcoredbg/releases/download/3.2.0-1092/netcoredbg-osx-arm64.zip",
+        "length": 3389504,
+        "sha256": "f4fa33b3ff874910cc184b4bb3b9c56d0abdf5c6521cee0b144d7c6e4a6e59ea",
+        "executable": "netcoredbg/netcoredbg"
+      }
+    ]
+  }
+}
