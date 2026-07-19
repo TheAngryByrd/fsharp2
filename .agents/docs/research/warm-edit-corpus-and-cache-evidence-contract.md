@@ -267,7 +267,7 @@ The controlled-runner series follows the differential harness: 15 valid samples 
 ## Uncertainties and follow-on implementation work
 
 - The current prototype's `parse`, `check`, and `lower` decisions are aggregate and its dependency count is zero for the tracer language. Issue #19 requires declaration/file-checkpoint events and causal edges before the IcedTasks warm proof can pass.
-- A production decoder/canonicalizer for F# signature and optimization meaning is not yet selected. Raw resource hashes must be retained, but they cannot substitute for the semantic fingerprint split required here.
+- [ADR 0023](../adr/0023-keep-the-fsharp-metadata-harness-inspector-envelope-only.md) keeps the harness inspector at the exact resource-envelope layer and any private-pickle decoder diagnostic-only. FSharp2's production NativeAOT importer and semantic/API fingerprints remain separate compiler implementation work; raw resource hashes must be retained, but they cannot substitute for the semantic fingerprint split required here.
 - Exact transitive consumers of `BindReturn` must come from the implemented dependency graph, not a hard-coded file count. `Issue19.BindReturn.Consumer.increment` is the manifest's minimum required `inline-body` edge; additional invalidation is allowed only with an explicit conservative-widening reason.
 - Type-provider invalidation remains deliberately unsupported until the separate provider-boundary decision. This is a declared harness-owned gap, not evidence of compatibility.
 - GitHub issue text could not be refreshed during this research because the configured `gh` authentication returned HTTP 401. The checked-in differential-harness decision and ADR 0020 were therefore treated as the authoritative issue contract.

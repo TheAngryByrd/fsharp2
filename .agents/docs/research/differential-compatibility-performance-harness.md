@@ -468,7 +468,7 @@ Oracle refresh runs old/candidate oracle, reviews every corpus/golden/policy dif
 
 ## Ticketed follow-on decisions
 
-1. **Opaque F# metadata:** bidirectional consumption is the initial semantic gate; [Decide whether the harness needs an independent F# metadata decoder][issue-17] owns the additional failure-localization model and authority boundary.
+1. **Opaque F# metadata:** [ADR 0023](../adr/0023-keep-the-fsharp-metadata-harness-inspector-envelope-only.md) adds an exact, test-only resource-envelope inspector while keeping four-way producer/consumer behavior authoritative; the [issue #17 research](independent-fsharp-metadata-decoder.md) keeps any private-pickle semantic decoder diagnostic-only and separates production importer/fingerprint work.
 2. **Debugger automation:** canonical PDB/source/stack evidence is fixed; [Choose the cross-platform debugger automation driver][issue-18] owns the pinned breakpoint/stepping driver and reproducibility contract.
 3. **Warm edit corpus:** after [Select the first IcedTasks vertical slice][issue-6] fixes the source envelope, [Define the warm-edit corpus and cache-evidence contract][issue-19] owns representative edits and epoch/hit/miss/reuse/invalidation evidence without making cache layout a compatibility contract.
 4. **Performance runner:** [Define compiler performance runner and regression governance][issue-12] owns machine classes, quietness thresholds, scanner exclusions, variance policy, trace schema, and the evidence required before tightening the 10%/50 ms gate.

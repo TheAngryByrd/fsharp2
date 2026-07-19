@@ -160,6 +160,8 @@ The minimum useful trace fields are cache key/schema, node kind, old/new fingerp
 
 The exact pinned IcedTasks edits, forced compiler-contact/replay/recovery controls, complete action-key inputs, and reconciled per-node evidence are fixed by [ADR 0022](../adr/0022-define-the-warm-edit-corpus-and-cache-evidence-contract.md) and the [issue #19 research](warm-edit-corpus-and-cache-evidence-contract.md).
 
+The corresponding reference-metadata authority split is fixed by [ADR 0023](../adr/0023-keep-the-fsharp-metadata-harness-inspector-envelope-only.md) and the [issue #17 research](independent-fsharp-metadata-decoder.md): the harness owns exact envelope inspection, four-way producer/consumer behavior remains the compatibility authority, and the production NativeAOT importer/reference index/API fingerprints remain separate compiler components.
+
 ## What not to copy blindly
 
 - Go's package-level export boundary is excellent for a simple package graph but too coarse for declaration-level F# reuse.
