@@ -1,2 +1,5 @@
 # Ignore AssemblyInfo files
 AssemblyInfo.fs
+
+# Preserve intentionally invalid diagnostic fixtures and their exact ranges.
+tests/FSharp2.Prototype.Diagnostics

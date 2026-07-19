@@ -47,11 +47,10 @@ module internal ServiceHost =
         for value in values do
             writer.Write(value)
 
-    let private readStrings (reader: BinaryReader) =
-        [
-            for _ in 1 .. reader.ReadInt32() do
-                reader.ReadString()
-        ]
+    let private readStrings (reader: BinaryReader) = [
+        for _ in 1 .. reader.ReadInt32() do
+            reader.ReadString()
+    ]
 
     let private writeOptionalString (writer: BinaryWriter) (value: string option) =
         match value with
@@ -117,7 +116,11 @@ module internal ServiceHost =
         writer.Write(invocation.FullPaths)
         writer.Write(invocation.FlatErrors)
         writer.Write(invocation.Utf8Output)
-        writeStrings writer (sources |> List.map _.Text)
+
+        writeStrings
+            writer
+            (sources
+             |> List.map _.Text)
 
     let private readInvocation (reader: BinaryReader) =
         let sourceLinkJson = readBytes reader
@@ -170,7 +173,10 @@ module internal ServiceHost =
         let utf8Output = reader.ReadBoolean()
         let sourceTexts = readStrings reader
 
-        if sourcePaths.Length <> sourceTexts.Length then
+        if
+            sourcePaths.Length
+            <> sourceTexts.Length
+        then
             raise (InvalidDataException("source path/text cardinality mismatch"))
 
         {
@@ -209,13 +215,7 @@ module internal ServiceHost =
             ServerName = None
             TracePath = None
         },
-        List.map2
-            (fun path text -> {
-                Path = path
-                Text = text
-            })
-            sourcePaths
-            sourceTexts
+        List.map2 (fun path text -> { Path = path; Text = text }) sourcePaths sourceTexts
 
     let private writeResponse (writer: BinaryWriter) response =
         writer.Write(ProtocolMagic)

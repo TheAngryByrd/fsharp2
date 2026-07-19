@@ -180,7 +180,10 @@ type internal CompilerService() =
 
         let implementationFingerprint =
             modulesWithContentHashes
-            |> List.collect (snd >> List.map snd)
+            |> List.collect (
+                snd
+                >> List.map snd
+            )
             |> String.concat "|"
             |> Fingerprint.text
 
@@ -321,10 +324,18 @@ type internal CompilerService() =
         }
 
         let decision hitsBefore hitsAfter missesBefore missesAfter =
-            let hitCount = hitsAfter - hitsBefore
-            let missCount = missesAfter - missesBefore
+            let hitCount =
+                hitsAfter
+                - hitsBefore
 
-            if hitCount > 0 && missCount > 0 then
+            let missCount =
+                missesAfter
+                - missesBefore
+
+            if
+                hitCount > 0
+                && missCount > 0
+            then
                 "partial"
             elif hitCount > 0 then
                 "hit"
@@ -338,7 +349,12 @@ type internal CompilerService() =
                 match parse source with
                 | Error diagnostic -> Error diagnostic
                 | Ok(parsedModule, key) ->
-                    parseAll ((source, parsedModule) :: parsed) (key :: keys) tail
+                    parseAll
+                        ((source, parsedModule)
+                         :: parsed)
+                        (key
+                         :: keys)
+                        tail
 
         let rec checkAll typed keys remaining =
             match remaining with
@@ -346,7 +362,13 @@ type internal CompilerService() =
             | (source, parsedModule) :: tail ->
                 match check source.Path parsedModule with
                 | Error diagnostic -> Error diagnostic
-                | Ok(typedModule, key) -> checkAll (typedModule :: typed) (key :: keys) tail
+                | Ok(typedModule, key) ->
+                    checkAll
+                        (typedModule
+                         :: typed)
+                        (key
+                         :: keys)
+                        tail
 
         let parseStarted = Stopwatch.GetTimestamp()
 

@@ -58,7 +58,13 @@ module internal CommandLine =
             None
 
     let private splitValues (value: string) =
-        value.Split([| ','; ';' |], StringSplitOptions.RemoveEmptyEntries)
+        value.Split(
+            [|
+                ','
+                ';'
+            |],
+            StringSplitOptions.RemoveEmptyEntries
+        )
         |> Array.map _.Trim()
 
     let private addPaths (paths: ResizeArray<string>) (value: string) =
@@ -240,37 +246,83 @@ module internal CommandLine =
                 let isFlag value =
                     argument.Equals(value, StringComparison.OrdinalIgnoreCase)
 
-                if tryValue "-o:" (Path.GetFullPath >> Some >> fun value -> assemblyPath <- value) then
+                if
+                    tryValue
+                        "-o:"
+                        (Path.GetFullPath
+                         >> Some
+                         >> fun value -> assemblyPath <- value)
+                then
                     true
                 elif
                     tryValue
                         "--refout:"
-                        (Path.GetFullPath >> Some >> fun value -> referenceAssemblyPath <- value)
+                        (Path.GetFullPath
+                         >> Some
+                         >> fun value -> referenceAssemblyPath <- value)
                 then
                     true
                 elif
                     tryValue
                         "--doc:"
-                        (Path.GetFullPath >> Some >> fun value -> documentationPath <- value)
+                        (Path.GetFullPath
+                         >> Some
+                         >> fun value -> documentationPath <- value)
                 then
                     true
                 elif tryValue "--embed:" (addPaths embeddedSources) then
                     true
-                elif tryValue "-r:" (Path.GetFullPath >> references.Add) then
+                elif
+                    tryValue
+                        "-r:"
+                        (Path.GetFullPath
+                         >> references.Add)
+                then
                     true
-                elif tryValue "--reference:" (Path.GetFullPath >> references.Add) then
+                elif
+                    tryValue
+                        "--reference:"
+                        (Path.GetFullPath
+                         >> references.Add)
+                then
                     true
                 elif tryValue "--define:" defines.Add then
                     true
-                elif tryValue "--langversion:" (Some >> fun value -> languageVersion <- value) then
+                elif
+                    tryValue
+                        "--langversion:"
+                        (Some
+                         >> fun value -> languageVersion <- value)
+                then
                     true
-                elif tryValue "--nowarn:" (splitValues >> disabledWarnings.AddRange) then
+                elif
+                    tryValue
+                        "--nowarn:"
+                        (splitValues
+                         >> disabledWarnings.AddRange)
+                then
                     true
-                elif tryValue "--warn:" (Int32.Parse >> Some >> fun value -> warningLevel <- value) then
+                elif
+                    tryValue
+                        "--warn:"
+                        (Int32.Parse
+                         >> Some
+                         >> fun value -> warningLevel <- value)
+                then
                     true
-                elif tryValue "--warnaserror:" (splitValues >> warningsAsErrors.AddRange) then
+                elif
+                    tryValue
+                        "--warnaserror:"
+                        (splitValues
+                         >> warningsAsErrors.AddRange)
+                then
                     true
-                elif tryValue "--targetprofile:" (Some >> fun value -> targetProfile <- value) then
+                elif
+                    tryValue
+                        "--targetprofile:"
+                        (Some
+                         >> fun value -> targetProfile <- value)
+                then
                     true
                 elif isFlag "--optimize+" then
                     optimize <- true
@@ -422,7 +474,9 @@ module internal CommandLine =
                                                         StringComparison.Ordinal
                                                     )
                                                     ->
-                                                    if not (tryHandleCoreCompileOption argument) then
+                                                    if
+                                                        not (tryHandleCoreCompileOption argument)
+                                                    then
                                                         unsupported.Add(argument)
                                                 | None ->
                                                     sources.Add(
@@ -454,9 +508,7 @@ module internal CommandLine =
                 && keyFilePath.IsNone
             then
                 Error("signing mode requires --keyfile:<path>")
-            elif
-                sources.Count = 0
-            then
+            elif sources.Count = 0 then
                 Error("the compiler requires at least one source file")
             else
                 match assemblyPath with

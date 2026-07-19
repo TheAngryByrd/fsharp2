@@ -186,20 +186,18 @@ module internal Linker =
             .Replace("'", "&apos;", StringComparison.Ordinal)
 
     let private documentation (assemblyName: string) =
-        String.concat
-            "\n"
-            [
-                "<?xml version=\"1.0\"?>"
-                "<doc>"
-                "  <assembly>"
-                "    <name>"
-                + escapeXml assemblyName
-                + "</name>"
-                "  </assembly>"
-                "  <members />"
-                "</doc>"
-                String.Empty
-            ]
+        String.concat "\n" [
+            "<?xml version=\"1.0\"?>"
+            "<doc>"
+            "  <assembly>"
+            "    <name>"
+            + escapeXml assemblyName
+            + "</name>"
+            "  </assembly>"
+            "  <members />"
+            "</doc>"
+            String.Empty
+        ]
         |> UTF8Encoding(false).GetBytes
 
     let private linkWithStrongName
@@ -437,7 +435,10 @@ module internal Linker =
 
         for methodIndex, (_, _, methodCodeSize) in List.indexed encodedMethods do
             pdbMetadata.AddLocalScope(
-                MetadataTokens.MethodDefinitionHandle(methodIndex + 1),
+                MetadataTokens.MethodDefinitionHandle(
+                    methodIndex
+                    + 1
+                ),
                 importScope,
                 Unchecked.defaultof<LocalVariableHandle>,
                 Unchecked.defaultof<LocalConstantHandle>,
@@ -538,21 +539,20 @@ module internal Linker =
             if File.Exists(path) then
                 File.Delete(path)
 
-        let requestedArtifacts =
-            [
-                match invocation.ReferenceAssemblyPath with
-                | Some path -> yield path, artifacts.ReferenceAssembly
-                | None -> ()
+        let requestedArtifacts = [
+            match invocation.ReferenceAssemblyPath with
+            | Some path -> yield path, artifacts.ReferenceAssembly
+            | None -> ()
 
-                match invocation.DocumentationPath with
-                | Some path -> yield path, artifacts.Documentation
-                | None -> ()
+            match invocation.DocumentationPath with
+            | Some path -> yield path, artifacts.Documentation
+            | None -> ()
 
-                yield invocation.PdbPath, artifacts.PortablePdb
-                // The implementation DLL is deliberately last: it is the
-                // transaction's externally visible commit point.
-                yield invocation.AssemblyPath, artifacts.Implementation
-            ]
+            yield invocation.PdbPath, artifacts.PortablePdb
+            // The implementation DLL is deliberately last: it is the
+            // transaction's externally visible commit point.
+            yield invocation.AssemblyPath, artifacts.Implementation
+        ]
 
         let distinctTargets = HashSet<string>(StringComparer.OrdinalIgnoreCase)
 
