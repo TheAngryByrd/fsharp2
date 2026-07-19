@@ -1,0 +1,5 @@
+<Project>
+  <PropertyGroup>
+    <UseFSharp2Compiler Condition="'$(UseFSharp2Compiler)' == ''">false</UseFSharp2Compiler>
+  </PropertyGroup>
+</Project>

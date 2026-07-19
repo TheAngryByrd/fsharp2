@@ -67,14 +67,11 @@ module CompilerTargetTests =
 
         startInfo
 
-    let private invokeFsc2 workingDirectory responsePath =
-        let startInfo =
-            compilerStartInfo [
-                "@"
-                + responsePath
-            ]
-
-        startInfo.WorkingDirectory <- workingDirectory
+    let private invokeProcessStartInfo
+        (timeoutMilliseconds: int)
+        timeoutMessage
+        (startInfo: ProcessStartInfo)
+        =
         startInfo.UseShellExecute <- false
         startInfo.RedirectStandardOutput <- true
         startInfo.RedirectStandardError <- true
@@ -84,18 +81,41 @@ module CompilerTargetTests =
         child.Start()
         |> ignore
 
-        let standardOutput = child.StandardOutput.ReadToEnd()
-        let standardError = child.StandardError.ReadToEnd()
+        let standardOutput = child.StandardOutput.ReadToEndAsync()
+        let standardError = child.StandardError.ReadToEndAsync()
 
-        if not (child.WaitForExit(30_000)) then
+        if not (child.WaitForExit(timeoutMilliseconds)) then
             child.Kill(true)
-            failtest "fsc2 did not exit within 30 seconds"
+            failtest timeoutMessage
 
         {
             ExitCode = child.ExitCode
-            StandardOutput = standardOutput
-            StandardError = standardError
+            StandardOutput = standardOutput.Result
+            StandardError = standardError.Result
         }
+
+    let private invokeFsc2 workingDirectory responsePath =
+        let startInfo =
+            compilerStartInfo [
+                "@"
+                + responsePath
+            ]
+
+        startInfo.WorkingDirectory <- workingDirectory
+
+        invokeProcessStartInfo 30_000 "fsc2 did not exit within 30 seconds" startInfo
+
+    let private invokeProcess workingDirectory timeoutMilliseconds fileName arguments =
+        let startInfo = ProcessStartInfo(fileName)
+        startInfo.WorkingDirectory <- workingDirectory
+
+        for argument in arguments do
+            startInfo.ArgumentList.Add(argument)
+
+        invokeProcessStartInfo
+            timeoutMilliseconds
+            $"{fileName} did not exit within {timeoutMilliseconds} milliseconds"
+            startInfo
 
     let private invokeConsumer workingDirectory assemblyPath expected =
         let startInfo =
@@ -105,27 +125,11 @@ module CompilerTargetTests =
             )
 
         startInfo.WorkingDirectory <- workingDirectory
-        startInfo.UseShellExecute <- false
-        startInfo.RedirectStandardOutput <- true
-        startInfo.RedirectStandardError <- true
 
-        use child = new Process(StartInfo = startInfo)
-
-        child.Start()
-        |> ignore
-
-        let standardOutput = child.StandardOutput.ReadToEnd()
-        let standardError = child.StandardError.ReadToEnd()
-
-        if not (child.WaitForExit(30_000)) then
-            child.Kill(true)
-            failtest "the downstream consumer did not exit within 30 seconds"
-
-        {
-            ExitCode = child.ExitCode
-            StandardOutput = standardOutput
-            StandardError = standardError
-        }
+        invokeProcessStartInfo
+            30_000
+            "the downstream consumer did not exit within 30 seconds"
+            startInfo
 
     let private invokeIlVerify assemblyPath =
         let startInfo = ProcessStartInfo("dotnet")
@@ -136,35 +140,13 @@ module CompilerTargetTests =
         startInfo.ArgumentList.Add(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), "*.dll"))
 
         startInfo.WorkingDirectory <- repositoryRoot
-        startInfo.UseShellExecute <- false
-        startInfo.RedirectStandardOutput <- true
-        startInfo.RedirectStandardError <- true
+        invokeProcessStartInfo 30_000 "ILVerify did not exit within 30 seconds" startInfo
 
-        use child = new Process(StartInfo = startInfo)
-
-        child.Start()
-        |> ignore
-
-        let standardOutput = child.StandardOutput.ReadToEnd()
-        let standardError = child.StandardError.ReadToEnd()
-
-        if not (child.WaitForExit(30_000)) then
-            child.Kill(true)
-            failtest "ILVerify did not exit within 30 seconds"
-
-        {
-            ExitCode = child.ExitCode
-            StandardOutput = standardOutput
-            StandardError = standardError
-        }
-
-    let private startCompilerService workingDirectory pipeName =
-        let startInfo =
-            compilerStartInfo [
-                "--fsharp2-serve:"
-                + pipeName
-            ]
-
+    let private startCompilerServiceProcess
+        workingDirectory
+        pipeName
+        (startInfo: ProcessStartInfo)
+        =
         startInfo.WorkingDirectory <- workingDirectory
         startInfo.UseShellExecute <- false
         startInfo.RedirectStandardOutput <- true
@@ -189,6 +171,25 @@ module CompilerTargetTests =
             "the compiler service should identify its endpoint"
 
         child
+
+    let private startCompilerService workingDirectory pipeName =
+        let startInfo =
+            compilerStartInfo [
+                "--fsharp2-serve:"
+                + pipeName
+            ]
+
+        startCompilerServiceProcess workingDirectory pipeName startInfo
+
+    let private startPackagedCompilerService workingDirectory executablePath pipeName =
+        let startInfo = ProcessStartInfo(Path.GetFullPath(executablePath))
+
+        startInfo.ArgumentList.Add(
+            "--fsharp2-serve:"
+            + pipeName
+        )
+
+        startCompilerServiceProcess workingDirectory pipeName startInfo
 
     let private readTrace path =
         File.ReadAllLines(path)
@@ -2167,5 +2168,361 @@ module CompilerTargetTests =
                         service.WaitForExit(10_000)
                         |> ignore
 
+                    Directory.Delete(root, true)
+
+            testCase
+                "NuGet integration retains the NativeAOT service across CoreCompile edits and failures"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-msbuild",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let packageSource = Path.Combine(root, "packages")
+                    let packageCache = Path.Combine(root, "cache")
+                    let projectRoot = Path.Combine(root, "project")
+                    let projectPath = Path.Combine(projectRoot, "Tracer.fsproj")
+                    let firstSourcePath = Path.Combine(projectRoot, "First.fs")
+                    let sourcePath = Path.Combine(projectRoot, "Tracer.fs")
+                    let tracePath = Path.Combine(projectRoot, "obj", "fsharp2.trace")
+                    let packageVersion = "0.0.0-integration"
+
+                    let pipeName =
+                        "fsharp2-msbuild-"
+                        + Guid.NewGuid().ToString("N")
+
+                    Directory.CreateDirectory(packageSource)
+                    |> ignore
+
+                    Directory.CreateDirectory(projectRoot)
+                    |> ignore
+
+                    let packageProject =
+                        Path.Combine(
+                            repositoryRoot,
+                            "src",
+                            "FSharp2.Compiler.MSBuild",
+                            "FSharp2.Compiler.MSBuild.csproj"
+                        )
+
+                    let pack =
+                        invokeProcess repositoryRoot 180_000 "dotnet" [
+                            "pack"
+                            packageProject
+                            "--configuration"
+                            configuration
+                            "--output"
+                            packageSource
+                            $"-p:PackageVersion={packageVersion}"
+                            "--no-restore"
+                            "--verbosity"
+                            "minimal"
+                        ]
+
+                    Expect.equal
+                        pack.ExitCode
+                        0
+                        (pack.StandardOutput
+                         + pack.StandardError)
+
+                    File.WriteAllText(firstSourcePath, "module First\nlet first () = 1\n")
+                    File.WriteAllText(sourcePath, "module Tracer\nlet answer () = 42\n")
+
+                    File.WriteAllText(
+                        projectPath,
+                        $"""<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Library</OutputType>
+    <AssemblyName>Tracer</AssemblyName>
+    <UseFSharp2Compiler>true</UseFSharp2Compiler>
+    <FSharp2CompilerServerName>{pipeName}</FSharp2CompilerServerName>
+    <FSharp2CompilerTracePath>{tracePath}</FSharp2CompilerTracePath>
+    <DisableImplicitFSharpCoreReference>true</DisableImplicitFSharpCoreReference>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <ProduceReferenceAssembly>true</ProduceReferenceAssembly>
+    <EnableSourceLink>false</EnableSourceLink>
+    <EmbedUntrackedSources>false</EmbedUntrackedSources>
+    <DebugSymbols>false</DebugSymbols>
+    <DebugType>portable</DebugType>
+    <Deterministic>true</Deterministic>
+    <RestoreSources>{packageSource}</RestoreSources>
+    <RestorePackagesPath>{packageCache}</RestorePackagesPath>
+    <RestoreIgnoreFailedSources>true</RestoreIgnoreFailedSources>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="FSharp2.Compiler.MSBuild" Version="{packageVersion}" />
+    <Compile Include="First.fs" />
+    <Compile Include="Tracer.fs" />
+  </ItemGroup>
+</Project>
+"""
+                    )
+
+                    let restore =
+                        invokeProcess projectRoot 60_000 "dotnet" [
+                            "restore"
+                            projectPath
+                            "--source"
+                            packageSource
+                            "--packages"
+                            packageCache
+                            "--ignore-failed-sources"
+                            "--verbosity"
+                            "minimal"
+                        ]
+
+                    Expect.equal
+                        restore.ExitCode
+                        0
+                        (restore.StandardOutput
+                         + restore.StandardError)
+
+                    let packagedHostPath =
+                        Path.Combine(
+                            packageCache,
+                            "fsharp2.compiler.msbuild",
+                            packageVersion,
+                            "tools",
+                            "win-x64",
+                            "fsc2.exe"
+                        )
+
+                    use service = startPackagedCompilerService projectRoot packagedHostPath pipeName
+
+                    try
+                        let build () =
+                            invokeProcess projectRoot 60_000 "dotnet" [
+                                "build"
+                                projectPath
+                                "--configuration"
+                                "Release"
+                                "--no-restore"
+                                "--verbosity"
+                                "minimal"
+                            ]
+
+                        let expectMsbuildDiagnostic code expectedLine result =
+                            Expect.equal
+                                result.StandardError
+                                String.Empty
+                                $"{code} should remain on MSBuild's standard output stream"
+
+                            let lines =
+                                result.StandardOutput.Split(
+                                    [|
+                                        "\r\n"
+                                        "\n"
+                                    |],
+                                    StringSplitOptions.RemoveEmptyEntries
+                                )
+                                |> Array.filter (fun line ->
+                                    line.Contains(
+                                        " "
+                                        + code
+                                        + ":",
+                                        StringComparison.Ordinal
+                                    )
+                                )
+
+                            Expect.sequenceEqual
+                                lines
+                                [|
+                                    expectedLine
+                                    expectedLine
+                                |]
+                                $"{code} should match the oracle occurrence, text, and ordering"
+
+                        let baselineBuild = build ()
+
+                        Expect.equal
+                            baselineBuild.ExitCode
+                            0
+                            (baselineBuild.StandardOutput
+                             + baselineBuild.StandardError)
+
+                        Expect.isTrue (File.Exists tracePath) "CoreCompile should execute fsc2"
+
+                        let baselineTrace = readTrace tracePath
+
+                        Expect.equal
+                            baselineTrace.["sourceCount"]
+                            "2"
+                            "MSBuild should preserve the evaluated source list"
+
+                        Expect.isGreaterThan
+                            (Int32.Parse(baselineTrace.["referenceCount"]))
+                            0
+                            "CoreCompile should supply evaluated framework references"
+
+                        Expect.equal
+                            baselineTrace.["servicePid"]
+                            (service.Id.ToString())
+                            "CoreCompile should connect to the selected retained compiler service"
+
+                        Expect.equal
+                            baselineTrace.["emitted"]
+                            "true"
+                            "fsc2 should own the successful output"
+
+                        let outputPath =
+                            Path.Combine(projectRoot, "bin", "Release", "net10.0", "Tracer.dll")
+
+                        let pdbPath =
+                            Path.Combine(projectRoot, "bin", "Release", "net10.0", "Tracer.pdb")
+
+                        let referencePath =
+                            Path.Combine(
+                                projectRoot,
+                                "obj",
+                                "Release",
+                                "net10.0",
+                                "refint",
+                                "Tracer.dll"
+                            )
+
+                        let documentationPath =
+                            Path.Combine(projectRoot, "bin", "Release", "net10.0", "Tracer.xml")
+
+                        let requestedArtifacts = [
+                            outputPath
+                            pdbPath
+                            referencePath
+                            documentationPath
+                        ]
+
+                        for path in requestedArtifacts do
+                            Expect.isTrue (File.Exists path) $"CoreCompile should produce {path}"
+
+                        let baselineConsumer = invokeConsumer root outputPath 42
+                        Expect.equal baselineConsumer.ExitCode 0 baselineConsumer.StandardError
+
+                        File.WriteAllText(sourcePath, "module Tracer\nlet answer () = 43\n")
+
+                        let editedBuild = build ()
+
+                        Expect.equal
+                            editedBuild.ExitCode
+                            0
+                            (editedBuild.StandardOutput
+                             + editedBuild.StandardError)
+
+                        let editedTrace = readTrace tracePath
+
+                        Expect.equal
+                            editedTrace.["servicePid"]
+                            baselineTrace.["servicePid"]
+                            "a source edit should reuse the retained compiler service"
+
+                        Expect.equal
+                            editedTrace.["previousContentFingerprint"]
+                            baselineTrace.["contentFingerprint"]
+                            "the warm invocation should validate the prior project content"
+
+                        Expect.equal
+                            editedTrace.["invalidationReason"]
+                            "source-content-changed"
+                            "the warm trace should explain the invalidated semantic work"
+
+                        Expect.equal
+                            editedTrace.["exportFingerprint"]
+                            baselineTrace.["exportFingerprint"]
+                            "an implementation edit should preserve the exported fingerprint"
+
+                        let editedConsumer = invokeConsumer root outputPath 43
+                        Expect.equal editedConsumer.ExitCode 0 editedConsumer.StandardError
+
+                        let retainedArtifactHashes =
+                            requestedArtifacts
+                            |> List.map (fun path ->
+                                path,
+                                path
+                                |> File.ReadAllBytes
+                                |> SHA256.HashData
+                            )
+
+                        File.WriteAllText(sourcePath, "module Tracer\nlet answer () = )\n")
+
+                        let failedBuild = build ()
+
+                        Expect.equal
+                            failedBuild.ExitCode
+                            1
+                            "an FS diagnostic should fail CoreCompile and the project build"
+
+                        expectMsbuildDiagnostic
+                            "FS0010"
+                            ($"{sourcePath}(2,17): error FS0010: Unexpected symbol ')' in binding [{projectPath}]")
+                            failedBuild
+
+                        let failedTrace = readTrace tracePath
+
+                        Expect.equal
+                            failedTrace.["servicePid"]
+                            baselineTrace.["servicePid"]
+                            "diagnostic requests should use the same retained service"
+
+                        Expect.equal
+                            failedTrace.["emitted"]
+                            "false"
+                            "a frontend failure must not publish a successful artifact"
+
+                        File.WriteAllText(sourcePath, "module Tracer\nlet answer: int = \"text\"\n")
+
+                        let typeMismatchBuild = build ()
+
+                        Expect.equal
+                            typeMismatchBuild.ExitCode
+                            1
+                            "the milestone type error should fail CoreCompile and the project build"
+
+                        expectMsbuildDiagnostic
+                            "FS0001"
+                            ($"{sourcePath}(2,19): error FS0001: This expression was expected to have type\u001d    'int'    \u001dbut here has type\u001d    'string' [{projectPath}]")
+                            typeMismatchBuild
+
+                        let typeMismatchTrace = readTrace tracePath
+
+                        Expect.equal
+                            typeMismatchTrace.["servicePid"]
+                            baselineTrace.["servicePid"]
+                            "type diagnostics should use the same retained service"
+
+                        Expect.equal
+                            typeMismatchTrace.["emitted"]
+                            "false"
+                            "a type failure must not publish a successful artifact"
+
+                        for path, expectedHash in retainedArtifactHashes do
+                            Expect.isTrue (File.Exists path) $"a failed edit should preserve {path}"
+
+                            Expect.sequenceEqual
+                                (path
+                                 |> File.ReadAllBytes
+                                 |> SHA256.HashData)
+                                expectedHash
+                                $"a failed edit should preserve the last successful bytes for {path}"
+
+                        let retainedConsumer = invokeConsumer root outputPath 43
+
+                        Expect.equal
+                            retainedConsumer.ExitCode
+                            0
+                            "a failed edit should preserve the last successful artifact set"
+                    finally
+                        if not service.HasExited then
+                            service.Kill(true)
+
+                            service.WaitForExit(10_000)
+                            |> ignore
+                finally
                     Directory.Delete(root, true)
         ]

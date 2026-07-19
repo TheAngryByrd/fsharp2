@@ -1,0 +1,25 @@
+<Project>
+  <PropertyGroup Condition="'$(UseFSharp2Compiler)' == 'true'">
+    <FSharp2CompilerHostRuntimeIdentifier Condition="'$(FSharp2CompilerHostRuntimeIdentifier)' == ''">$(NETCoreSdkRuntimeIdentifier)</FSharp2CompilerHostRuntimeIdentifier>
+    <DisableAutoSetFscCompilerPath>true</DisableAutoSetFscCompilerPath>
+    <FSharp2CompilerHostPath Condition="'$(FSharp2CompilerHostPath)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../tools/$(FSharp2CompilerHostRuntimeIdentifier)/fsc2.exe'))</FSharp2CompilerHostPath>
+    <FscToolPath>$([System.IO.Path]::GetDirectoryName('$(FSharp2CompilerHostPath)'))</FscToolPath>
+    <FscToolExe>$([System.IO.Path]::GetFileName('$(FSharp2CompilerHostPath)'))</FscToolExe>
+    <DotnetFscCompilerPath></DotnetFscCompilerPath>
+    <OtherFlags Condition="'$(FSharp2CompilerServerName)' != ''">$(OtherFlags) --fsharp2-server:$(FSharp2CompilerServerName)</OtherFlags>
+    <OtherFlags Condition="'$(FSharp2CompilerTracePath)' != ''">$(OtherFlags) --fsharp2-trace:$(FSharp2CompilerTracePath)</OtherFlags>
+  </PropertyGroup>
+
+  <Target Name="ValidateFSharp2CompilerHost"
+          BeforeTargets="CoreCompile"
+          Condition="'$(UseFSharp2Compiler)' == 'true'">
+    <Error Condition="'$(FSharp2CompilerHostRuntimeIdentifier)' == ''"
+           Code="FSC2MSB0002"
+           Text="FSharp2 could not determine the compiler host runtime identifier. Set FSharp2CompilerHostRuntimeIdentifier explicitly." />
+    <Error Condition="!Exists('$(FSharp2CompilerHostPath)')"
+           Code="FSC2MSB0003"
+           Text="The FSharp2 compiler package does not contain a host for '$(FSharp2CompilerHostRuntimeIdentifier)' at '$(FSharp2CompilerHostPath)'." />
+    <Message Importance="low"
+             Text="FSharp2 compiler selected: $(FSharp2CompilerHostPath)" />
+  </Target>
+</Project>

@@ -3,6 +3,7 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
     <IsPackable>false</IsPackable>
-    <IsTestProject>true</IsTestProject>
+    <!-- Runtime probe invoked by fsharp2.Tests; this executable is not a VSTest assembly. -->
+    <IsTestProject>false</IsTestProject>
   </PropertyGroup>
 </Project>

@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <PackageId>FSharp2.Compiler.MSBuild</PackageId>
+    <Description>Opt-in MSBuild integration for the FSharp2 compiler.</Description>
+    <IsPackable>true</IsPackable>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <!-- This targets-only package excludes its DLL; generated metadata supplies a warning-free C# input. -->
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <DevelopmentDependency>true</DevelopmentDependency>
+    <FSharp2CompilerHostRuntimeIdentifier>win-x64</FSharp2CompilerHostRuntimeIdentifier>
+    <FSharp2CompilerHostPublishDirectory>$([System.IO.Path]::GetFullPath('$(BaseIntermediateOutputPath)fsc2/$(Configuration)/$(FSharp2CompilerHostRuntimeIdentifier)/publish/'))</FSharp2CompilerHostPublishDirectory>
+    <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);PublishFSharp2CompilerHostForPackage</TargetsForTfmSpecificContentInPackage>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../fsc2.Prototype/fsc2.Prototype.fsproj"
+                      ReferenceOutputAssembly="false"
+                      PrivateAssets="all" />
+    <None Include="buildTransitive/FSharp2.Compiler.MSBuild.props"
+          Pack="true"
+          PackagePath="buildTransitive/FSharp2.Compiler.MSBuild.props" />
+    <None Include="buildTransitive/FSharp2.Compiler.MSBuild.targets"
+          Pack="true"
+          PackagePath="buildTransitive/FSharp2.Compiler.MSBuild.targets" />
+  </ItemGroup>
+
+  <Target Name="PublishFSharp2CompilerHostForPackage">
+    <MSBuild Projects="../fsc2.Prototype/fsc2.Prototype.fsproj"
+             Targets="Publish"
+             BuildInParallel="false"
+             Properties="Configuration=$(Configuration);RuntimeIdentifier=$(FSharp2CompilerHostRuntimeIdentifier);PublishAot=true;SelfContained=true;PublishDir=$(FSharp2CompilerHostPublishDirectory)" />
+
+    <Error Condition="!Exists('$(FSharp2CompilerHostPublishDirectory)fsc2.exe')"
+           Code="FSC2MSB0001"
+           Text="The FSharp2 NativeAOT compiler host was not produced for $(FSharp2CompilerHostRuntimeIdentifier)." />
+
+    <ItemGroup>
+      <TfmSpecificPackageFile Include="$(FSharp2CompilerHostPublishDirectory)fsc2.exe"
+                              PackagePath="tools/$(FSharp2CompilerHostRuntimeIdentifier)/fsc2.exe" />
+    </ItemGroup>
+  </Target>
+</Project>
