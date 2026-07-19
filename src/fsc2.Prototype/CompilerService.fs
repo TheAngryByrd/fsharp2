@@ -95,14 +95,12 @@ type internal CompilerService() =
                     Error {
                         Code = "FS0001"
                         Message =
-                            String.concat
-                                Environment.NewLine
-                                [
-                                    "This expression was expected to have type"
-                                    "    'int'    "
-                                    "but here has type"
-                                    "    'string'"
-                                ]
+                            String.concat Environment.NewLine [
+                                "This expression was expected to have type"
+                                "    'int'    "
+                                "but here has type"
+                                "    'string'"
+                            ]
                         Path = Some sourcePath
                         Range = Some declaration.BodyRange
                     }
@@ -129,7 +127,8 @@ type internal CompilerService() =
                 | None, StringLiteral _ ->
                     Error {
                         Code = "FSC2P1001"
-                        Message = "string-valued declarations are not yet supported by the prototype"
+                        Message =
+                            "string-valued declarations are not yet supported by the prototype"
                         Path = Some sourcePath
                         Range = Some declaration.BodyRange
                     }
@@ -140,7 +139,11 @@ type internal CompilerService() =
                 | declaration :: tail ->
                     match typeDeclaration declaration with
                     | Error diagnostic -> Error diagnostic
-                    | Ok declaration -> typeDeclarations (declaration :: typed) tail
+                    | Ok declaration ->
+                        typeDeclarations
+                            (declaration
+                             :: typed)
+                            tail
 
             match typeDeclarations [] parsed.Declarations with
             | Error diagnostic -> Error diagnostic
@@ -187,6 +190,8 @@ type internal CompilerService() =
                 + assemblyName
                 + "|"
                 + implementationFingerprint
+                + "|"
+                + typed.ContentFingerprint
             )
 
         match lowerCache.TryGetValue(key) with

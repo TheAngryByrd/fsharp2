@@ -700,6 +700,100 @@ module CompilerTargetTests =
                          |> Encoding.UTF8.GetString)
                         sourceLinkJson
                         "the SourceLink payload should be preserved exactly"
+
+                    let pdbBytes = File.ReadAllBytes(pdbPath)
+
+                    let pdbIdBytes =
+                        pdb.DebugMetadataHeader.Id
+                        |> Seq.toArray
+
+                    let pdbIdOffsets =
+                        [|
+                            0 .. pdbBytes.Length
+                                 - pdbIdBytes.Length
+                        |]
+                        |> Array.filter (fun offset ->
+                            [|
+                                0 .. pdbIdBytes.Length
+                                     - 1
+                            |]
+                            |> Array.forall (fun index ->
+                                pdbBytes.[offset
+                                          + index] = pdbIdBytes.[index]
+                            )
+                        )
+
+                    Expect.equal
+                        pdbIdOffsets.Length
+                        1
+                        "the portable PDB should contain one patchable content-id slot"
+
+                    let preIdPdb = Array.copy pdbBytes
+                    Array.Clear(preIdPdb, pdbIdOffsets.[0], pdbIdBytes.Length)
+                    let preIdDigest = SHA256.HashData(preIdPdb)
+                    let expectedPdbId = BlobContentId.FromHash(preIdDigest)
+
+                    Expect.equal
+                        (Guid(pdbIdBytes.[0..15]))
+                        expectedPdbId.Guid
+                        "the PDB header id should derive from the pre-id digest"
+
+                    Expect.equal
+                        (BitConverter.ToUInt32(pdbIdBytes, 16))
+                        expectedPdbId.Stamp
+                        "the PDB header stamp should derive from the pre-id digest"
+
+                    use implementationStream = File.OpenRead(outputPath)
+                    use implementation = new PEReader(implementationStream)
+
+                    let debugEntries =
+                        implementation.ReadDebugDirectory()
+                        |> Seq.toArray
+
+                    let debugEntry entryType =
+                        debugEntries
+                        |> Seq.filter (fun entry -> entry.Type = entryType)
+                        |> Seq.exactlyOne
+
+                    let codeViewEntry = debugEntry DebugDirectoryEntryType.CodeView
+                    let codeView = implementation.ReadCodeViewDebugDirectoryData(codeViewEntry)
+
+                    Expect.equal
+                        codeView.Path
+                        "Tracer.pdb"
+                        "CodeView should name the root-independent PDB"
+
+                    Expect.equal
+                        codeView.Guid
+                        expectedPdbId.Guid
+                        "CodeView should reference the emitted portable PDB id"
+
+                    Expect.equal
+                        codeViewEntry.Stamp
+                        expectedPdbId.Stamp
+                        "CodeView should carry the emitted portable PDB stamp"
+
+                    let checksumEntry = debugEntry DebugDirectoryEntryType.PdbChecksum
+
+                    let checksum = implementation.ReadPdbChecksumDebugDirectoryData(checksumEntry)
+
+                    Expect.equal
+                        checksum.AlgorithmName
+                        "SHA256"
+                        "the debug directory should declare the requested checksum algorithm"
+
+                    Expect.sequenceEqual
+                        (checksum.Checksum
+                         |> Seq.toArray)
+                        preIdDigest
+                        "the debug-directory checksum should preserve the pre-id PDB digest"
+
+                    let reproducibleEntry = debugEntry DebugDirectoryEntryType.Reproducible
+
+                    Expect.equal
+                        reproducibleEntry.DataSize
+                        0
+                        "the deterministic image should carry an empty reproducible marker"
                 finally
                     Directory.Delete(root, true)
 
@@ -1030,6 +1124,122 @@ module CompilerTargetTests =
                     let consumer = invokeConsumer root fullPath 42
                     Expect.equal consumer.ExitCode 0 consumer.StandardError
                 finally
+                    Directory.Delete(root, true)
+
+            testCase
+                "rejects malformed strong-name keys transactionally and keeps the service healthy"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-prototype",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                let pipeName =
+                    "fsharp2-"
+                    + Guid.NewGuid().ToString("N")
+
+                use service = startCompilerService root pipeName
+
+                try
+                    let sourcePath = Path.Combine(root, "Tracer.fs")
+                    let validKeyPath = Path.Combine(root, "valid.snk")
+                    let truncatedKeyPath = Path.Combine(root, "truncated.snk")
+                    let trailingKeyPath = Path.Combine(root, "trailing.snk")
+                    File.WriteAllText(sourcePath, "module Tracer\nlet answer () = 42\n")
+
+                    use rsa = RSA.Create()
+                    rsa.KeySize <- 2048
+                    writeCapiPrivateKey validKeyPath (rsa.ExportParameters(true))
+                    let validKey = File.ReadAllBytes(validKeyPath)
+
+                    File.WriteAllBytes(
+                        truncatedKeyPath,
+                        validKey.[.. validKey.Length
+                                     - 2]
+                    )
+
+                    File.WriteAllBytes(trailingKeyPath, Array.append validKey [| 0uy |])
+
+                    let compile name keyPath =
+                        let outputPath =
+                            Path.Combine(
+                                root,
+                                name
+                                + ".dll"
+                            )
+
+                        let pdbPath =
+                            Path.Combine(
+                                root,
+                                name
+                                + ".pdb"
+                            )
+
+                        let responsePath =
+                            Path.Combine(
+                                root,
+                                name
+                                + ".rsp"
+                            )
+
+                        File.WriteAllLines(
+                            responsePath,
+                            [|
+                                $"--fsharp2-server:{pipeName}"
+                                "--target:library"
+                                "--deterministic+"
+                                "--debug:portable"
+                                $"--keyfile:{keyPath}"
+                                $"--out:{outputPath}"
+                                $"--pdb:{pdbPath}"
+                                sourcePath
+                            |]
+                        )
+
+                        outputPath, pdbPath, invokeFsc2 root responsePath
+
+                    for name, keyPath in
+                        [
+                            "truncated", truncatedKeyPath
+                            "trailing", trailingKeyPath
+                        ] do
+                        let outputPath, pdbPath, result = compile name keyPath
+
+                        Expect.equal
+                            result.ExitCode
+                            1
+                            $"the {name} private key should fail explicitly"
+
+                        Expect.stringContains
+                            result.StandardError
+                            "strong-name key"
+                            $"the {name} private-key failure should identify the rejected input"
+
+                        Expect.isFalse
+                            (File.Exists outputPath)
+                            $"the {name} private-key failure must not publish an assembly"
+
+                        Expect.isFalse
+                            (File.Exists pdbPath)
+                            $"the {name} private-key failure must not publish a PDB"
+
+                    let validOutput, _, validResult = compile "valid" validKeyPath
+                    Expect.equal validResult.ExitCode 0 validResult.StandardError
+
+                    let consumer = invokeConsumer root validOutput 42
+                    Expect.equal consumer.ExitCode 0 consumer.StandardError
+                finally
+                    if not service.HasExited then
+                        service.Kill(true)
+
+                        service.WaitForExit(10_000)
+                        |> ignore
+
                     Directory.Delete(root, true)
 
             testCase "a late publish failure restores the previous artifact set"
@@ -1509,7 +1719,7 @@ module CompilerTargetTests =
                     let outputPath = Path.Combine(root, "Tracer.dll")
                     let pdbPath = Path.Combine(root, "Tracer.pdb")
 
-                    let compile value traceName =
+                    let compile (sourceText: string) traceName =
                         let responsePath =
                             Path.Combine(
                                 root,
@@ -1524,7 +1734,7 @@ module CompilerTargetTests =
                                 + ".trace"
                             )
 
-                        File.WriteAllText(sourcePath, $"module Tracer\nlet answer () = {value}\n")
+                        File.WriteAllText(sourcePath, sourceText)
 
                         File.WriteAllLines(
                             responsePath,
@@ -1544,9 +1754,13 @@ module CompilerTargetTests =
                         Expect.equal result.ExitCode 0 result.StandardError
                         readTrace tracePath
 
-                    let baseline = compile 42 "baseline"
-                    let edited = compile 43 "edited"
-                    let replay = compile 43 "replay"
+                    let baselineSource = "module Tracer\nlet answer () = 42\n"
+                    let editedSource = "module Tracer\nlet answer () = 43\n"
+                    let relocatedSource = "module Tracer\n\nlet answer () = 43\n"
+                    let baseline = compile baselineSource "baseline"
+                    let edited = compile editedSource "edited"
+                    let replay = compile editedSource "replay"
+                    let relocated = compile relocatedSource "relocated"
 
                     let servicePid = baseline.["servicePid"]
 
@@ -1560,6 +1774,7 @@ module CompilerTargetTests =
                             "baseline", baseline
                             "edited", edited
                             "replay", replay
+                            "relocated", relocated
                         ] do
                         Expect.equal
                             trace.["servicePid"]
@@ -1643,6 +1858,36 @@ module CompilerTargetTests =
                         "identical lowering inputs should have the same action key"
 
                     Expect.equal
+                        relocated.["parse"]
+                        "miss"
+                        "a layout edit should reparse the changed source"
+
+                    Expect.equal
+                        relocated.["check"]
+                        "miss"
+                        "a layout edit should recheck the changed source"
+
+                    Expect.equal
+                        relocated.["lower"]
+                        "miss"
+                        "a layout edit should rebuild its changed debug contribution"
+
+                    Expect.notEqual
+                        relocated.["lowerKey"]
+                        replay.["lowerKey"]
+                        "debug-output inputs must participate in the lowering action key"
+
+                    Expect.equal
+                        relocated.["exportFingerprint"]
+                        replay.["exportFingerprint"]
+                        "a layout edit should preserve the exported semantic fingerprint"
+
+                    Expect.equal
+                        relocated.["fragmentHash"]
+                        replay.["fragmentHash"]
+                        "a layout edit should preserve the method implementation hash"
+
+                    Expect.equal
                         replay.["dependencyCount"]
                         "0"
                         "the tracer declaration has no semantic dependencies"
@@ -1671,6 +1916,36 @@ module CompilerTargetTests =
                             elapsed
                             0L
                             $"{phase} timing should be non-negative"
+
+                    use pdbStream = File.OpenRead(pdbPath)
+                    use pdbProvider = MetadataReaderProvider.FromPortablePdbStream(pdbStream)
+                    let pdb = pdbProvider.GetMetadataReader()
+
+                    let document =
+                        pdb.Documents
+                        |> Seq.exactlyOne
+                        |> pdb.GetDocument
+
+                    let expectedChecksum =
+                        relocatedSource
+                        |> Encoding.UTF8.GetBytes
+                        |> SHA256.HashData
+
+                    Expect.sequenceEqual
+                        (pdb.GetBlobBytes(document.Hash))
+                        expectedChecksum
+                        "the warm PDB should hash the current source content"
+
+                    let relocatedSequencePoint =
+                        pdb
+                            .GetMethodDebugInformation(MetadataTokens.MethodDefinitionHandle(1))
+                            .GetSequencePoints()
+                        |> Seq.exactlyOne
+
+                    Expect.equal
+                        relocatedSequencePoint.StartLine
+                        3
+                        "the warm PDB should use the current declaration range"
 
                     let consumer = invokeConsumer root outputPath 43
                     Expect.equal consumer.ExitCode 0 consumer.StandardError

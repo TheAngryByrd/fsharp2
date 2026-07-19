@@ -13,9 +13,8 @@ type internal StrongNamePlan = {
     PublicKey: byte array
     SignatureSize: int
     PrivateKey: RSAParameters option
-}
+} with
 
-with
     override _.ToString() = "StrongNamePlan"
 
 /// Independently authored adapter for the standard CAPI key blobs used by
@@ -24,14 +23,22 @@ module internal StrongName =
     let private readExactly (reader: BinaryReader) count =
         let bytes = reader.ReadBytes(count)
 
-        if bytes.Length <> count then
+        if
+            bytes.Length
+            <> count
+        then
             invalidArg "keyBytes" "the strong-name key blob is truncated"
 
         bytes
 
     let private exponentBytes (value: uint32) =
-        let bytes = BitConverter.GetBytes(value) |> Array.rev
-        let firstNonZero = bytes |> Array.tryFindIndex ((<>) 0uy)
+        let bytes =
+            BitConverter.GetBytes(value)
+            |> Array.rev
+
+        let firstNonZero =
+            bytes
+            |> Array.tryFindIndex ((<>) 0uy)
 
         match firstNonZero with
         | Some index -> bytes.[index..]
@@ -47,6 +54,61 @@ module internal StrongName =
         writer.Flush()
         stream.ToArray()
 
+    let private clearPrivateKey (parameters: RSAParameters) =
+        for bytes in
+            [|
+                parameters.D
+                parameters.DP
+                parameters.DQ
+                parameters.InverseQ
+                parameters.P
+                parameters.Q
+            |] do
+            if not (isNull bytes) then
+                CryptographicOperations.ZeroMemory(bytes.AsSpan())
+
+    let private readPrivateKey
+        (reader: BinaryReader)
+        signatureSize
+        halfSize
+        exponent
+        (modulusLittleEndian: byte array)
+        =
+        let mutable parameters = RSAParameters()
+
+        try
+            parameters.Modulus <- Array.rev modulusLittleEndian
+            parameters.Exponent <- exponentBytes exponent
+
+            parameters.P <-
+                readExactly reader halfSize
+                |> Array.rev
+
+            parameters.Q <-
+                readExactly reader halfSize
+                |> Array.rev
+
+            parameters.DP <-
+                readExactly reader halfSize
+                |> Array.rev
+
+            parameters.DQ <-
+                readExactly reader halfSize
+                |> Array.rev
+
+            parameters.InverseQ <-
+                readExactly reader halfSize
+                |> Array.rev
+
+            parameters.D <-
+                readExactly reader signatureSize
+                |> Array.rev
+
+            parameters
+        with _ ->
+            clearPrivateKey parameters
+            reraise ()
+
     let private parseCapiKey (keyBytes: byte array) =
         use stream = new MemoryStream(keyBytes, false)
         use reader = new BinaryReader(stream)
@@ -55,25 +117,50 @@ module internal StrongName =
         let reserved = reader.ReadUInt16()
         let algorithm = reader.ReadUInt32()
 
-        if blobType <> 0x06uy && blobType <> 0x07uy then
+        if
+            blobType
+            <> 0x06uy
+            && blobType
+               <> 0x07uy
+        then
             invalidArg "keyBytes" "the strong-name key must be a CAPI public or private key blob"
 
-        if version <> 0x02uy || reserved <> 0us || algorithm <> 0x00002400u then
+        if
+            version
+            <> 0x02uy
+            || reserved
+               <> 0us
+            || algorithm
+               <> 0x00002400u
+        then
             invalidArg "keyBytes" "the strong-name key has an unsupported CAPI header"
 
         let magic = reader.ReadUInt32()
         let expectedMagic = if blobType = 0x07uy then 0x32415352u else 0x31415352u
 
-        if magic <> expectedMagic then
+        if
+            magic
+            <> expectedMagic
+        then
             invalidArg "keyBytes" "the strong-name key has an invalid RSA header"
 
         let bitLength = reader.ReadUInt32()
 
-        if bitLength = 0u || bitLength % 16u <> 0u then
+        if
+            bitLength = 0u
+            || bitLength % 16u
+               <> 0u
+        then
             invalidArg "keyBytes" "the strong-name key has an invalid modulus size"
 
-        let signatureSize = int bitLength / 8
-        let halfSize = signatureSize / 2
+        let signatureSize =
+            int bitLength
+            / 8
+
+        let halfSize =
+            signatureSize
+            / 2
+
         let exponent = reader.ReadUInt32()
         let modulusLittleEndian = readExactly reader signatureSize
 
@@ -91,42 +178,31 @@ module internal StrongName =
 
         let privateKey =
             if blobType = 0x07uy then
-                let mutable parameters = RSAParameters()
-                parameters.Modulus <- Array.rev modulusLittleEndian
-                parameters.Exponent <- exponentBytes exponent
-                parameters.P <- readExactly reader halfSize |> Array.rev
-                parameters.Q <- readExactly reader halfSize |> Array.rev
-                parameters.DP <- readExactly reader halfSize |> Array.rev
-                parameters.DQ <- readExactly reader halfSize |> Array.rev
-                parameters.InverseQ <- readExactly reader halfSize |> Array.rev
-                parameters.D <- readExactly reader signatureSize |> Array.rev
-
-                Some parameters
+                Some(readPrivateKey reader signatureSize halfSize exponent modulusLittleEndian)
             else
                 None
 
-        if stream.Position <> stream.Length then
-            invalidArg "keyBytes" "the strong-name key contains trailing data"
+        try
+            if
+                stream.Position
+                <> stream.Length
+            then
+                invalidArg "keyBytes" "the strong-name key contains trailing data"
 
-        assemblyPublicKey (publicStream.ToArray()), signatureSize, privateKey
+            assemblyPublicKey (publicStream.ToArray()), signatureSize, privateKey
+        with _ ->
+            privateKey
+            |> Option.iter clearPrivateKey
 
-    let private clearPrivateKey (parameters: RSAParameters) =
-        for bytes in
-            [|
-                parameters.D
-                parameters.DP
-                parameters.DQ
-                parameters.InverseQ
-                parameters.P
-                parameters.Q
-            |] do
-            if not (isNull bytes) then
-                CryptographicOperations.ZeroMemory(bytes.AsSpan())
+            reraise ()
 
     let createPlan mode (keyBytes: byte array) =
         match mode with
         | Unsigned ->
-            if keyBytes.Length <> 0 then
+            if
+                keyBytes.Length
+                <> 0
+            then
                 invalidArg "keyBytes" "unsigned output must not include a strong-name key"
 
             {
@@ -140,7 +216,10 @@ module internal StrongName =
         | FullSign ->
             let publicKey, signatureSize, privateKey = parseCapiKey keyBytes
 
-            if mode = FullSign && privateKey.IsNone then
+            if
+                mode = FullSign
+                && privateKey.IsNone
+            then
                 invalidArg "keyBytes" "full signing requires a private key"
 
             let retainedPrivateKey =
@@ -178,7 +257,9 @@ module internal StrongName =
     let corFlags plan =
         match plan.Mode with
         | PublicSign
-        | FullSign -> CorFlags.ILOnly ||| CorFlags.StrongNameSigned
+        | FullSign ->
+            CorFlags.ILOnly
+            ||| CorFlags.StrongNameSigned
         | Unsigned
         | DelaySign -> CorFlags.ILOnly
 
