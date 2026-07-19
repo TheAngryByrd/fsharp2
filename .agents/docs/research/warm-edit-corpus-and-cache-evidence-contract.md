@@ -13,7 +13,7 @@ Use two line-count-preserving edits to the pinned IcedTasks source in isolated, 
 1. `AsyncEx.AwaitTask(Task<'T>)` is the implementation-only case. It changes the emitted method body while preserving its managed and F# exported meaning and its returned value.
 2. `ParallelAsyncBuilderBase.BindReturn` is the consumer-visible inline case. Its managed signature remains stable, but its public inline body and F# optimization payload change.
 
-The corpus is a sequence, not merely two patches: forced compiler-contact/no-op, identical replay, exact baseline restore, diagnostic-failure recovery, and unknown-impact widening are mandatory controls. Only the first valid invocation after applying one edit contributes to the Warm Compilation timing distribution; replay hits and MSBuild skips cannot lower that statistic.
+The corpus is not merely two patches: forced compiler-contact/no-op, identical replay, exact baseline restore, diagnostic-failure recovery, and unknown-impact widening are mandatory companion controls. A measured sample primes once and then applies its edit immediately; no control invocation may warm extra state before the timed `CoreCompile`, and replay hits or MSBuild skips cannot enter the Warm Compilation timing distribution.
 
 Both edits add a `GC.KeepAlive` lifetime marker to an object already retained by the returned `Async`. This gives the harness an emitted call which the optimizer cannot erase as a source-only no-op, without using APIs missing from `netstandard2.0` or changing the observed result. `GC.KeepAlive(Object)` is present in the pinned `netstandard2.0` reference assembly and is documented as extending object liveness to the call site.[^keep-alive]
 
@@ -97,20 +97,42 @@ Required warm assertions:
 4. Consumers which did not depend on the changed declaration may reuse. Source order alone preserves a checkpoint boundary; it is not permission to recheck every later declaration after equivalence is known.
 5. Final link and publish still occur, and the unchanged IcedTasks tests and runtime observers agree with the Compatibility Oracle.
 
-## Mandatory controls around each edit
+### Mandatory FSharp2 inline consumer
 
-Each TFM and edit starts from its own newly materialized baseline and healthy freshly primed service. The harness then performs these real Compiler Target Invocations in order:
+The harness manifest names a `net9.0` project `Issue19.BindReturn.Consumer` with this unchanged source:
+
+```fsharp
+module Issue19.BindReturn.Consumer
+
+open IcedTasks
+
+let increment (input: Async<int>) =
+    parallelAsync {
+        let! value = input
+        return value + 1
+    }
+```
+
+Compile this project with FSharp2 against the prebuilt producer artifact in the ADR 0020 producer-consumer matrix; execute `increment (async.Return 41)` and require `42`. The dependency graph must contain an `inline-body` edge from `Issue19.BindReturn.Consumer.increment` to `IcedTasks.ParallelAsync.ParallelAsyncBuilderBase.BindReturn`. The implementation-only producer edit keeps the consumer project reusable, while the `BindReturn` edit invalidates, rechecks, and re-emits that declaration; a clean FSharp2 consumer compile and the Compatibility Oracle must agree on diagnostics, artifacts, and runtime behavior. The unchanged IcedTasks test projects remain Oracle-compiled compatibility evidence and do not substitute for this FSharp2 consumer edge.
+
+## Measurement lane and mandatory controls
+
+### Measured warm-edit lane
+
+Each TFM, edit, and timing sample starts from its own newly materialized baseline. Reset the service and cache, perform exactly one untimed prime compile, retain that healthy service PID/epoch, then immediately apply one content-addressed patch and measure the next non-skipped `CoreCompile`. No no-op, inspection, replay, or other compiler request may occur between prime and edit. The invocation must satisfy its edit-specific assertions to enter the warm timing distribution.
+
+### Companion controls
+
+Controls are real Compiler Target Invocations but are excluded from the timing distribution. Each starts from its own reset-and-prime baseline unless the control explicitly tests a replay or recovery chain:
 
 1. **Compiler-contact/no-op:** force `CoreCompile` without changing source. The request must reach the retained service and validate the prior project state. Relevant semantic nodes report hits/reuse, while the deterministic final link still executes. An MSBuild up-to-date skip fails this control.
-2. **Warm edit:** apply exactly one content-addressed patch above and invoke `CoreCompile` through the same service PID and service epoch. This is the only invocation admitted to the warm timing sample; its edit-specific assertions must pass.
-3. **Identical replay:** force `CoreCompile` again without changing the edited bytes. Semantic action keys remain equal and valid nodes hit/reuse; a fresh final link must produce output byte-identical to a clean standalone FSharp2 compile of the same edited inputs.
-4. **Baseline restore:** restore the exact pinned bytes without reformatting, then force `CoreCompile`. The reverse change must be explained, the current PDB/source data must refer to the restored source, and output must match a clean baseline compile.
-5. **Diagnostic failure and recovery:** apply a harness-owned exact `FS0010` or `FS0001` probe, then compile and recover to the last valid content. The failed request stays on the same healthy service but does not advance the last-successful project epoch or action key, publish partial artifacts, replace the last successful artifact set, or poison subsequent reuse.
-6. **Unknown-impact widening:** inject the harness-owned missing-dependency-proof case. FSharp2 must report `widened-uncertain`, recompute the containing scope required for correctness, and agree with a clean compile; an unexplained reuse or silent whole-project miss fails.
+2. **Identical replay:** after a non-sampled edit invocation, force `CoreCompile` again without changing the edited bytes. Semantic action keys remain equal and valid nodes hit/reuse; a fresh final link must produce output byte-identical to a clean standalone FSharp2 compile of the same edited inputs.
+3. **Baseline restore:** after replay, restore the exact pinned bytes without reformatting, then force `CoreCompile`. The reverse change must be explained, the current PDB/source data must refer to the restored source, and output must match a clean baseline compile.
+4. **Diagnostic failure and recovery:** from equivalent valid prestate, run the same harness-owned exact `FS0010` or `FS0001` failure through FSharp2 and the Compatibility Oracle, compare their normalized post-failure leftover artifact sets, then recover to the last valid content. The failed FSharp2 request must not advance the last-successful semantic project epoch/action key or poison subsequent reuse. Do not impose a blanket retain-or-delete policy on disk: match the Oracle artifact behavior separately from retained compiler state.
+5. **Unknown-impact widening:** inject the harness-owned missing-dependency-proof case from a fresh prime. FSharp2 must report `widened-uncertain`, recompute the containing scope required for correctness, and agree with a clean compile; an unexplained reuse or silent whole-project miss fails.
+6. **Cold bypass:** start without reusable live or disk state. Every lookup reports bypass rather than a hit, and the invocation remains a real compiler target execution.
 
-A separate Cold Compilation control starts without reusable live or disk state. Every lookup reports bypass rather than a hit, and the invocation remains a real compiler target execution. Cold and control invocations do not enter the warm-edit timing distribution.
-
-Successful baseline, edit, replay, and restore lanes remain diagnostic-free under the pinned warning-as-error policy. Failure lanes require exact FS Diagnostic Compatibility with the Compatibility Oracle. These probes do not narrow the user's family-wide requirement: the complete `FSxxxx` error-and-warning surface remains mandatory at the final Compatibility Gate.
+Successful baseline, edit, replay, and restore lanes remain diagnostic-free under the pinned warning-as-error policy. Failure lanes require exact FS Diagnostic Compatibility and normalized leftover-artifact equivalence with the Compatibility Oracle. These probes do not narrow the user's family-wide requirement: the complete `FSxxxx` error-and-warning surface remains mandatory at the final Compatibility Gate.
 
 ## Oracle validation of the exact edits
 
@@ -151,7 +173,7 @@ A single hash of the DLL, reference DLL, or opaque F# metadata resource is too c
 
 ## Evidence schema
 
-The current prototype already exposes `querySchema`, node kind, content fingerprints, invalidation reason, parse/check/lower keys and decisions, dependency count, phase timings, export fingerprint, fragment hash, and whole-output `emitted` state.[^prototype-model][^prototype-trace] Existing tests prove the retained service, implementation-edit fingerprint split, cache-key replay, current PDB, fresh link, and last-good-output behavior.[^prototype-tests]
+The current prototype already exposes `querySchema`, node kind, content fingerprints, invalidation reason, parse/check/lower keys and decisions, dependency count, phase timings, export fingerprint, fragment hash, and whole-output `emitted` state.[^prototype-model][^prototype-trace] Existing tests prove the retained service, implementation-edit fingerprint split, cache-key replay, current PDB, fresh link, and last-good-output behavior for the current tracer; general negative-output behavior remains Oracle-derived.[^prototype-tests]
 
 Issue #19 extends that vocabulary; it does not make physical cache paths, table/dictionary layout, serialized compiler objects, locking, eviction, or compaction policy a compatibility contract.
 
@@ -166,7 +188,8 @@ Record at least:
 - project-state epoch and last-successful project action key before/after the request; failed requests must leave both unchanged;
 - explicit Cold/Warm mode and live/disk cache allow/bypass policy;
 - previous/current project action key, option-set hash, reference-set hash, and ordered-source-list hash;
-- baseline/current managed API, decoded F# export, implementation, debug, diagnostic, reference-artifact, and final-artifact fingerprints; and
+- baseline/current managed API, decoded F# export, implementation, debug, diagnostic, reference-artifact, and final-artifact fingerprints;
+- normalized pre/post artifact manifests plus the Compatibility Oracle leftover comparison for failed invocations; and
 - real `CoreCompile`, request/RPC, phase, link, publish, and target-finish timings.
 
 ### Per-node event
@@ -180,7 +203,7 @@ Each considered node emits:
 | Decision | `bypass`, `hit-live`, `hit-disk`, `miss-no-entry`, `miss-key-changed`, `miss-schema`, `miss-corrupt`, `rechecked-equivalent`, `invalidated-direct`, `invalidated-transitive`, `widened-uncertain`, `reused`, `re-lowered`, `re-emitted`, or `relinked`. |
 | Cause | Stable reason code, direct `invalidatedBy` node ids, dependency edge kind, transitive depth, and widened scope/reason. |
 | Work | Reused/reparsed/rechecked/re-lowered/re-emitted status, old/new fragment hash, cache level, bytes read/written, dependency count, and elapsed microseconds. |
-| Outcome | Success/diagnostic/failure, artifact contribution, and whether atomic publish committed or retained the previous successful artifact set. |
+| Outcome | Success/diagnostic/failure, artifact contribution, whether last-successful semantic state advanced, the normalized pre/post artifact-set delta, and the Oracle leftover-comparison result. |
 
 The trace may additionally carry a dependency-edge digest when the complete edge list is too large, but every invalidated node must still identify its direct cause. A count without causality cannot prove transitive invalidation.
 
@@ -195,7 +218,7 @@ Aggregate by node kind, phase, cache level, file, and project:
 - dependency edges visited, invalidation fan-out, maximum transitive depth, and widening counts by reason;
 - fragments reused, re-lowered, re-emitted, and final links performed;
 - downstream consumer projects reused, rechecked, and invalidated; and
-- diagnostics reused/recomputed, artifacts published, and previous artifacts retained after failure.
+- diagnostics reused/recomputed; artifacts published, retained, modified, or removed after failure; and normalized Oracle-leftover matches/mismatches.
 
 Require conservation checks such as:
 
@@ -232,13 +255,12 @@ These probes are additions to the complete IcedTasks corpus, not patches to the 
 For each TFM and edit:
 
 1. Verify the immutable corpus commit/tree, ordered source list, per-file hashes, options, references, and patch preimage.
-2. Reset service and cache, perform one untimed prime build, and capture the baseline artifact/fingerprint graph.
-3. Run the mandatory compiler-contact/no-op control through the healthy service.
-4. Retain the service PID/epoch, apply one content-addressed patch, verify its postimage hash, and measure one non-skipped `CoreCompile` through IPC, invalidation, check/lower/emission, atomic publish, response, and target finish.
-5. Run identical replay, exact baseline restore, diagnostic failure/recovery, and unknown-impact controls without admitting them to the timing sample.
-6. Rebuild every valid source state with a clean standalone FSharp2 compiler and rebuild the edited state with the Compatibility Oracle; run all comparators required by ADR 0020, including unchanged tests and consumers.
-7. Assert the edit-specific fingerprint and invalidation closure, counter conservation, no fallback, current PDB/source data, failure atomicity, and fresh final link.
-8. Restore by discarding the isolated materialization. The pinned IcedTasks checkout and product source remain untouched.
+2. Reset service and cache, perform exactly one untimed prime build, and capture the baseline artifact/fingerprint graph.
+3. Without an intervening compiler request, retain the service PID/epoch, apply one content-addressed patch, verify its postimage hash, and measure one non-skipped `CoreCompile` through IPC, invalidation, check/lower/emission, atomic publish, response, and target finish.
+4. Run compiler-contact/no-op, identical replay, exact baseline restore, diagnostic failure/recovery, unknown-impact, and cold controls in the separate lanes defined above; none enter the timing sample.
+5. Rebuild every valid source state with a clean standalone FSharp2 compiler and rebuild the edited state with the Compatibility Oracle; run all comparators required by ADR 0020, including unchanged tests and the named FSharp2 inline consumer.
+6. Assert the edit-specific fingerprint and invalidation closure, counter conservation, no fallback, current PDB/source data, last-successful-state isolation, Oracle-matched failure leftovers, and fresh final link.
+7. Restore by discarding the isolated materialization. The pinned IcedTasks checkout and product source remain untouched.
 
 The controlled-runner series follows the differential harness: 15 valid samples initially, 30+ for release, cold median at most 3,000 ms, and warm median below 1,000 ms. Instrumented traces explain failures but do not mix with the uninstrumented timing distribution.
 
@@ -246,7 +268,7 @@ The controlled-runner series follows the differential harness: 15 valid samples 
 
 - The current prototype's `parse`, `check`, and `lower` decisions are aggregate and its dependency count is zero for the tracer language. Issue #19 requires declaration/file-checkpoint events and causal edges before the IcedTasks warm proof can pass.
 - A production decoder/canonicalizer for F# signature and optimization meaning is not yet selected. Raw resource hashes must be retained, but they cannot substitute for the semantic fingerprint split required here.
-- Exact transitive consumers of `BindReturn` must come from the implemented dependency graph, not a hard-coded expected file count. The manifest should name minimum required consumers and allow additional invalidation only with an explicit conservative-widening reason.
+- Exact transitive consumers of `BindReturn` must come from the implemented dependency graph, not a hard-coded file count. `Issue19.BindReturn.Consumer.increment` is the manifest's minimum required `inline-body` edge; additional invalidation is allowed only with an explicit conservative-widening reason.
 - Type-provider invalidation remains deliberately unsupported until the separate provider-boundary decision. This is a declared harness-owned gap, not evidence of compatibility.
 - GitHub issue text could not be refreshed during this research because the configured `gh` authentication returned HTTP 401. The checked-in differential-harness decision and ADR 0020 were therefore treated as the authoritative issue contract.
 
