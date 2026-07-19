@@ -6,10 +6,11 @@ open System.Collections.Immutable
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
 [<Struct>]
-type internal SourcePosition =
-    { Offset: int
-      Line: int
-      Column: int }
+type internal SourcePosition = {
+    Offset: int
+    Line: int
+    Column: int
+} with
 
     override _.ToString() = "SourcePosition"
 
@@ -17,9 +18,8 @@ type internal SourcePosition =
 type internal SourceRange = {
     Start: SourcePosition
     End: SourcePosition
-}
+} with
 
-with
     override _.ToString() = "SourceRange"
 
 type internal CompilerDiagnostic = {
@@ -27,14 +27,14 @@ type internal CompilerDiagnostic = {
     Message: string
     Path: string option
     Range: SourceRange option
-}
+} with
 
-with
     override _.ToString() = "CompilerDiagnostic"
 
-type internal SourceInput =
-    { Path: string
-      Text: string }
+type internal SourceInput = {
+    Path: string
+    Text: string
+} with
 
     override _.ToString() = "SourceInput"
 
@@ -42,9 +42,8 @@ type internal ManagedResourceInput = {
     LogicalName: string
     IsPublic: bool
     Data: byte array
-}
+} with
 
-with
     override _.ToString() = "ManagedResourceInput"
 
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
@@ -64,11 +63,29 @@ type internal StrongNameMode =
 type internal CompilerInvocation = {
     AssemblyPath: string
     PdbPath: string
+    ReferenceAssemblyPath: string option
+    DocumentationPath: string option
     SourcePaths: string list
+    EmbeddedSourcePaths: string list
+    ReferencePaths: string list
+    Defines: string list
+    LanguageVersion: string option
+    Optimize: bool
+    CheckNulls: bool
+    NoFramework: bool
+    WarningLevel: int option
+    DisabledWarnings: string list
+    TreatWarningsAsErrors: bool
+    WarningsAsErrors: string list
+    HighEntropyVA: bool
+    TargetProfile: string option
+    NoCopyFSharpCore: bool
+    SimpleResolution: bool
+    TestFlags: string list
     Deterministic: bool
     PortablePdb: bool
     SourceLinkJson: byte array
-    DebugDocumentPath: string
+    DebugDocumentPaths: string list
     ManagedResource: ManagedResourceInput option
     NativeResourceData: byte array
     StrongNameMode: StrongNameMode
@@ -78,9 +95,8 @@ type internal CompilerInvocation = {
     Utf8Output: bool
     ServerName: string option
     TracePath: string option
-}
+} with
 
-with
     override _.ToString() = "CompilerInvocation"
 
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
@@ -102,9 +118,8 @@ type internal ParsedDeclaration = {
     Body: ParsedExpression
     BodyRange: SourceRange
     Range: SourceRange
-}
+} with
 
-with
     override _.ToString() = "ParsedDeclaration"
 
 type internal ParsedModule = {
@@ -112,9 +127,8 @@ type internal ParsedModule = {
     SourceChecksum: ImmutableArray<byte>
     ContentFingerprint: string
     Declarations: ParsedDeclaration list
-}
+} with
 
-with
     override _.ToString() = "ParsedModule"
 
 type internal ValueType =
@@ -134,9 +148,8 @@ type internal TypedDeclaration = {
     Body: TypedExpression
     ExportFingerprint: string
     Range: SourceRange
-}
+} with
 
-with
     override _.ToString() = "TypedDeclaration"
 
 type internal TypedModule = {
@@ -145,9 +158,8 @@ type internal TypedModule = {
     ContentFingerprint: string
     Declarations: TypedDeclaration list
     ExportFingerprint: string
-}
+} with
 
-with
     override _.ToString() = "TypedModule"
 
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
@@ -165,11 +177,11 @@ type internal SymbolicMethodFragment = {
     Instructions: SymbolicInstruction list
     DependencyIds: string list
     ContentHash: string
+    DocumentIndex: int
     DocumentChecksum: ImmutableArray<byte>
     Range: SourceRange
-}
+} with
 
-with
     override _.ToString() = "SymbolicMethodFragment"
 
 type internal SymbolicTypeFragment = {
@@ -178,9 +190,8 @@ type internal SymbolicTypeFragment = {
     Namespace: string
     Name: string
     Methods: SymbolicMethodFragment list
-}
+} with
 
-with
     override _.ToString() = "SymbolicTypeFragment"
 
 type internal SymbolicModuleFragment = {
@@ -188,9 +199,8 @@ type internal SymbolicModuleFragment = {
     StableId: string
     Name: string
     Types: SymbolicTypeFragment list
-}
+} with
 
-with
     override _.ToString() = "SymbolicModuleFragment"
 
 type internal SymbolicAssembly = {
@@ -199,9 +209,8 @@ type internal SymbolicAssembly = {
     AssemblyName: string
     PublicFingerprint: string
     Module: SymbolicModuleFragment
-}
+} with
 
-with
     override _.ToString() = "SymbolicAssembly"
 
 type internal CompilerQueryResult = {
@@ -221,9 +230,8 @@ type internal CompilerQueryResult = {
     ParseElapsedMicroseconds: int64
     CheckElapsedMicroseconds: int64
     LowerElapsedMicroseconds: int64
-}
+} with
 
-with
     override _.ToString() = "CompilerQueryResult"
 
 type internal ServiceCompilationResponse = {
@@ -251,9 +259,8 @@ type internal ServiceCompilationResponse = {
     ExportFingerprint: string
     FragmentHash: string
     Emitted: bool
-}
+} with
 
-with
     override _.ToString() = "ServiceCompilationResponse"
 
 type internal QueryStatistics = {
@@ -263,7 +270,6 @@ type internal QueryStatistics = {
     CheckMisses: int
     LowerHits: int
     LowerMisses: int
-}
+} with
 
-with
     override _.ToString() = "QueryStatistics"

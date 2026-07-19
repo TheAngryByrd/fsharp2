@@ -22,9 +22,10 @@ module internal Frontend =
 
         override _.ToString() = "TokenKind"
 
-    type private Token =
-        { Kind: TokenKind
-          Range: SourceRange }
+    type private Token = {
+        Kind: TokenKind
+        Range: SourceRange
+    } with
 
         override _.ToString() = "Token"
 
@@ -121,14 +122,25 @@ module internal Frontend =
                 let first = offset
 
                 while offset < text.Length
-                      && text.[offset] <> '"'
-                      && text.[offset] <> '\n'
-                      && text.[offset] <> '\r' do
+                      && text.[offset]
+                         <> '"'
+                      && text.[offset]
+                         <> '\n'
+                      && text.[offset]
+                         <> '\r' do
                     advance ()
 
-                if offset < text.Length
-                   && text.[offset] = '"' then
-                    let value = text.Substring(first, offset - first)
+                if
+                    offset < text.Length
+                    && text.[offset] = '"'
+                then
+                    let value =
+                        text.Substring(
+                            first,
+                            offset
+                            - first
+                        )
+
                     advance ()
                     add (StringLiteralToken value) start
                 else
@@ -334,8 +346,5 @@ module internal Frontend =
                             )
                 | _ ->
                     Error(
-                        prototypeDiagnostic
-                            source.Path
-                            (current ()).Range
-                            "expected a module name"
+                        prototypeDiagnostic source.Path (current ()).Range "expected a module name"
                     )

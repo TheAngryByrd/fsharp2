@@ -8,9 +8,8 @@ module internal CommandLine =
     type private PathMap = {
         SourceRoot: string
         TargetRoot: string
-    }
+    } with
 
-    with
         override _.ToString() = "PathMap"
 
     let private trimQuotes (value: string) =
@@ -58,14 +57,27 @@ module internal CommandLine =
         else
             None
 
+    let private splitValues (value: string) =
+        value.Split([| ','; ';' |], StringSplitOptions.RemoveEmptyEntries)
+        |> Array.map _.Trim()
+
+    let private addPaths (paths: ResizeArray<string>) (value: string) =
+        for path in value.Split(';', StringSplitOptions.RemoveEmptyEntries) do
+            paths.Add(
+                path
+                |> trimQuotes
+                |> Path.GetFullPath
+            )
+
     let private parsePathMaps (pathMaps: ResizeArray<PathMap>) (value: string) =
         for mapping in value.Split(';', StringSplitOptions.RemoveEmptyEntries) do
             let separator = mapping.IndexOf('=')
 
             if
-                separator <= 0
-                || separator
-                   = mapping.Length - 1
+                separator
+                <= 0
+                || separator = mapping.Length
+                               - 1
             then
                 invalidArg "value" "path maps must use '<source>=<target>'"
 
@@ -74,17 +86,17 @@ module internal CommandLine =
                     mapping.Substring(0, separator)
                     |> Path.GetFullPath
                     |> fun root ->
-                        root.TrimEnd(
-                            Path.DirectorySeparatorChar,
-                            Path.AltDirectorySeparatorChar
+                        root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                TargetRoot =
+                    mapping
+                        .Substring(
+                            separator
+                            + 1
                         )
-                TargetRoot = mapping.Substring(separator + 1).Replace('\\', '/')
+                        .Replace('\\', '/')
             }
 
-    let private mapDocumentPath
-        (pathMaps: ResizeArray<PathMap>)
-        (sourcePath: string)
-        =
+    let private mapDocumentPath (pathMaps: ResizeArray<PathMap>) (sourcePath: string) =
         let comparison =
             if OperatingSystem.IsWindows() then
                 StringComparison.OrdinalIgnoreCase
@@ -107,10 +119,7 @@ module internal CommandLine =
                 let relativePath =
                     sourcePath
                         .Substring(sourceRoot.Length)
-                        .TrimStart(
-                            Path.DirectorySeparatorChar,
-                            Path.AltDirectorySeparatorChar
-                        )
+                        .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
                         .Replace('\\', '/')
 
                 let targetRoot = mapping.TargetRoot.TrimEnd('/')
@@ -118,7 +127,10 @@ module internal CommandLine =
                 if relativePath.Length = 0 then
                     Some targetRoot
                 elif targetRoot.Length = 0 then
-                    Some("/" + relativePath)
+                    Some(
+                        "/"
+                        + relativePath
+                    )
                 else
                     Some(
                         targetRoot
@@ -140,11 +152,16 @@ module internal CommandLine =
         then
             invalidArg "value" "resources must use '<path>[,<name>[,public|private]]'"
 
-        let path = Path.GetFullPath(parts.[0] |> trimQuotes)
+        let path =
+            Path.GetFullPath(
+                parts.[0]
+                |> trimQuotes
+            )
 
         let logicalName =
             if
-                parts.Length >= 2
+                parts.Length
+                >= 2
                 && not (String.IsNullOrWhiteSpace(parts.[1]))
             then
                 parts.[1]
@@ -176,6 +193,8 @@ module internal CommandLine =
 
             let mutable assemblyPath: string option = None
             let mutable pdbPath: string option = None
+            let mutable referenceAssemblyPath: string option = None
+            let mutable documentationPath: string option = None
             let mutable deterministic = false
             let mutable portablePdb = false
             let mutable sourceLinkPath: string option = None
@@ -190,9 +209,116 @@ module internal CommandLine =
             let mutable keyFilePath: string option = None
             let mutable delaySign = false
             let mutable publicSign = false
+            let mutable languageVersion: string option = None
+            let mutable optimize = false
+            let mutable checkNulls = false
+            let mutable noFramework = false
+            let mutable warningLevel: int option = None
+            let mutable treatWarningsAsErrors = false
+            let mutable highEntropyVA = false
+            let mutable targetProfile: string option = None
+            let mutable noCopyFSharpCore = false
+            let mutable simpleResolution = false
             let sources = ResizeArray<string>()
+            let embeddedSources = ResizeArray<string>()
+            let references = ResizeArray<string>()
+            let defines = ResizeArray<string>()
+            let disabledWarnings = ResizeArray<string>()
+            let warningsAsErrors = ResizeArray<string>()
+            let testFlags = ResizeArray<string>()
             let pathMaps = ResizeArray<PathMap>()
             let unsupported = ResizeArray<string>()
+
+            let tryHandleCoreCompileOption (argument: string) =
+                let tryValue prefix apply =
+                    match optionValue prefix argument with
+                    | Some value ->
+                        apply value
+                        true
+                    | None -> false
+
+                let isFlag value =
+                    argument.Equals(value, StringComparison.OrdinalIgnoreCase)
+
+                if tryValue "-o:" (Path.GetFullPath >> Some >> fun value -> assemblyPath <- value) then
+                    true
+                elif
+                    tryValue
+                        "--refout:"
+                        (Path.GetFullPath >> Some >> fun value -> referenceAssemblyPath <- value)
+                then
+                    true
+                elif
+                    tryValue
+                        "--doc:"
+                        (Path.GetFullPath >> Some >> fun value -> documentationPath <- value)
+                then
+                    true
+                elif tryValue "--embed:" (addPaths embeddedSources) then
+                    true
+                elif tryValue "-r:" (Path.GetFullPath >> references.Add) then
+                    true
+                elif tryValue "--reference:" (Path.GetFullPath >> references.Add) then
+                    true
+                elif tryValue "--define:" defines.Add then
+                    true
+                elif tryValue "--langversion:" (Some >> fun value -> languageVersion <- value) then
+                    true
+                elif tryValue "--nowarn:" (splitValues >> disabledWarnings.AddRange) then
+                    true
+                elif tryValue "--warn:" (Int32.Parse >> Some >> fun value -> warningLevel <- value) then
+                    true
+                elif tryValue "--warnaserror:" (splitValues >> warningsAsErrors.AddRange) then
+                    true
+                elif tryValue "--targetprofile:" (Some >> fun value -> targetProfile <- value) then
+                    true
+                elif isFlag "--optimize+" then
+                    optimize <- true
+                    true
+                elif isFlag "--optimize-" then
+                    optimize <- false
+                    true
+                elif isFlag "--checknulls+" then
+                    checkNulls <- true
+                    true
+                elif isFlag "--checknulls-" then
+                    checkNulls <- false
+                    true
+                elif isFlag "--noframework" then
+                    noFramework <- true
+                    true
+                elif
+                    isFlag "--warnaserror"
+                    || isFlag "--warnaserror+"
+                then
+                    treatWarningsAsErrors <- true
+                    true
+                elif isFlag "--warnaserror-" then
+                    treatWarningsAsErrors <- false
+                    true
+                elif isFlag "--highentropyva+" then
+                    highEntropyVA <- true
+                    true
+                elif isFlag "--highentropyva-" then
+                    highEntropyVA <- false
+                    true
+                elif isFlag "--nocopyfsharpcore" then
+                    noCopyFSharpCore <- true
+                    true
+                elif isFlag "--simpleresolution" then
+                    simpleResolution <- true
+                    true
+                elif isFlag "--test:GraphBasedChecking" then
+                    testFlags.Add("GraphBasedChecking")
+                    true
+                elif isFlag "--test:ParallelIlxGen" then
+                    testFlags.Add("ParallelIlxGen")
+                    true
+                elif isFlag "--test:ParallelOptimization" then
+                    testFlags.Add("ParallelOptimization")
+                    true
+                else
+                    false
 
             for argument in expanded do
                 match optionValue "--fsharp2-server:" argument with
@@ -239,7 +365,8 @@ module internal CommandLine =
                                                 assemblyPath <- Some(Path.GetFullPath(value))
                                             | None ->
                                                 match optionValue "--pdb:" argument with
-                                                | Some value -> pdbPath <- Some(Path.GetFullPath(value))
+                                                | Some value ->
+                                                    pdbPath <- Some(Path.GetFullPath(value))
                                                 | None when
                                                     argument.Equals(
                                                         "--target:library",
@@ -295,7 +422,8 @@ module internal CommandLine =
                                                         StringComparison.Ordinal
                                                     )
                                                     ->
-                                                    unsupported.Add(argument)
+                                                    if not (tryHandleCoreCompileOption argument) then
+                                                        unsupported.Add(argument)
                                                 | None ->
                                                     sources.Add(
                                                         Path.GetFullPath(
@@ -315,18 +443,21 @@ module internal CommandLine =
                 Error("the prototype requires --deterministic+")
             elif not portablePdb then
                 Error("the prototype requires --debug:portable")
-            elif delaySign && publicSign then
+            elif
+                delaySign
+                && publicSign
+            then
                 Error("--delaysign+ and --publicsign+ are mutually exclusive")
             elif
-                (delaySign || publicSign)
+                (delaySign
+                 || publicSign)
                 && keyFilePath.IsNone
             then
                 Error("signing mode requires --keyfile:<path>")
             elif
-                sources.Count
-                <> 1
+                sources.Count = 0
             then
-                Error("the prototype currently requires exactly one source file")
+                Error("the compiler requires at least one source file")
             else
                 match assemblyPath with
                 | None -> Error("missing required --out:<path> option")
@@ -345,14 +476,35 @@ module internal CommandLine =
                     Ok {
                         AssemblyPath = output
                         PdbPath = pdb
+                        ReferenceAssemblyPath = referenceAssemblyPath
+                        DocumentationPath = documentationPath
                         SourcePaths = List.ofSeq sources
+                        EmbeddedSourcePaths = List.ofSeq embeddedSources
+                        ReferencePaths = List.ofSeq references
+                        Defines = List.ofSeq defines
+                        LanguageVersion = languageVersion
+                        Optimize = optimize
+                        CheckNulls = checkNulls
+                        NoFramework = noFramework
+                        WarningLevel = warningLevel
+                        DisabledWarnings = List.ofSeq disabledWarnings
+                        TreatWarningsAsErrors = treatWarningsAsErrors
+                        WarningsAsErrors = List.ofSeq warningsAsErrors
+                        HighEntropyVA = highEntropyVA
+                        TargetProfile = targetProfile
+                        NoCopyFSharpCore = noCopyFSharpCore
+                        SimpleResolution = simpleResolution
+                        TestFlags = List.ofSeq testFlags
                         Deterministic = deterministic
                         PortablePdb = portablePdb
                         SourceLinkJson =
                             sourceLinkPath
                             |> Option.map File.ReadAllBytes
                             |> Option.defaultValue Array.empty
-                        DebugDocumentPath = mapDocumentPath pathMaps sources.[0]
+                        DebugDocumentPaths =
+                            sources
+                            |> Seq.map (mapDocumentPath pathMaps)
+                            |> List.ofSeq
                         ManagedResource = managedResource
                         NativeResourceData = nativeResourceData
                         StrongNameMode = strongNameMode

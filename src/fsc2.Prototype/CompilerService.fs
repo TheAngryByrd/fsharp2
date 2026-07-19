@@ -34,11 +34,6 @@ type internal CompilerService() =
         Stopwatch.GetElapsedTime(started).Ticks
         / 10L
 
-    let sourceStateKey assemblyName (source: SourceInput) =
-        assemblyName
-        + "\n"
-        + source.Path
-
     let parse (source: SourceInput) =
         let key =
             Fingerprint.text (
@@ -163,23 +158,35 @@ type internal CompilerService() =
                 checkCache.Add(key, typed)
                 Ok(typed, key)
 
-    let lower (assemblyName: string) (typed: TypedModule) =
-        let declarationsWithContentHashes =
-            typed.Declarations
-            |> List.map (fun declaration ->
-                let implementation =
-                    match declaration.Body with
-                    | TypedIntegerLiteral value ->
-                        declaration.StableId
-                        + "="
-                        + value.ToString()
+    let lower (assemblyName: string) (typedModules: TypedModule list) =
+        let modulesWithContentHashes =
+            typedModules
+            |> List.map (fun typed ->
+                let declarationsWithContentHashes =
+                    typed.Declarations
+                    |> List.map (fun declaration ->
+                        let implementation =
+                            match declaration.Body with
+                            | TypedIntegerLiteral value ->
+                                declaration.StableId
+                                + "="
+                                + value.ToString()
 
-                declaration, Fingerprint.text implementation
+                        declaration, Fingerprint.text implementation
+                    )
+
+                typed, declarationsWithContentHashes
             )
 
         let implementationFingerprint =
-            declarationsWithContentHashes
-            |> List.map snd
+            modulesWithContentHashes
+            |> List.collect (snd >> List.map snd)
+            |> String.concat "|"
+            |> Fingerprint.text
+
+        let contentFingerprint =
+            typedModules
+            |> List.map _.ContentFingerprint
             |> String.concat "|"
             |> Fingerprint.text
 
@@ -191,7 +198,7 @@ type internal CompilerService() =
                 + "|"
                 + implementationFingerprint
                 + "|"
-                + typed.ContentFingerprint
+                + contentFingerprint
             )
 
         match lowerCache.TryGetValue(key) with
@@ -219,34 +226,47 @@ type internal CompilerService() =
                 + "/module:"
                 + moduleName
 
-            let typeStableId =
-                moduleStableId
-                + "/type:"
-                + typed.Name
+            let types =
+                modulesWithContentHashes
+                |> List.mapi (fun documentIndex (typed, declarationsWithContentHashes) ->
+                    let typeStableId =
+                        moduleStableId
+                        + "/type:"
+                        + typed.Name
 
-            let methods =
-                declarationsWithContentHashes
-                |> List.map (fun (declaration, contentHash) ->
-                    let instructions =
-                        match declaration.Body with
-                        | TypedIntegerLiteral value -> [
-                            LoadInt32 value
-                            Return
-                          ]
+                    let methods =
+                        declarationsWithContentHashes
+                        |> List.map (fun (declaration, contentHash) ->
+                            let instructions =
+                                match declaration.Body with
+                                | TypedIntegerLiteral value -> [
+                                    LoadInt32 value
+                                    Return
+                                  ]
+
+                            {
+                                SchemaVersion = querySchema
+                                StableId =
+                                    typeStableId
+                                    + "/method:"
+                                    + declaration.StableId
+                                Name = declaration.Name
+                                ReturnType = declaration.ReturnType
+                                Instructions = instructions
+                                DependencyIds = []
+                                ContentHash = contentHash
+                                DocumentIndex = documentIndex
+                                DocumentChecksum = typed.SourceChecksum
+                                Range = declaration.Range
+                            }
+                        )
 
                     {
                         SchemaVersion = querySchema
-                        StableId =
-                            typeStableId
-                            + "/method:"
-                            + declaration.StableId
-                        Name = declaration.Name
-                        ReturnType = declaration.ReturnType
-                        Instructions = instructions
-                        DependencyIds = []
-                        ContentHash = contentHash
-                        DocumentChecksum = typed.SourceChecksum
-                        Range = declaration.Range
+                        StableId = typeStableId
+                        Namespace = String.Empty
+                        Name = typed.Name
+                        Methods = methods
                     }
                 )
 
@@ -254,28 +274,37 @@ type internal CompilerService() =
                 SchemaVersion = querySchema
                 StableId = assemblyStableId
                 AssemblyName = assemblyName
-                PublicFingerprint = typed.ExportFingerprint
+                PublicFingerprint =
+                    typedModules
+                    |> List.map _.ExportFingerprint
+                    |> String.concat "|"
+                    |> Fingerprint.text
                 Module = {
                     SchemaVersion = querySchema
                     StableId = moduleStableId
                     Name = moduleName
-                    Types = [
-                        {
-                            SchemaVersion = querySchema
-                            StableId = typeStableId
-                            Namespace = String.Empty
-                            Name = typed.Name
-                            Methods = methods
-                        }
-                    ]
+                    Types = types
                 }
             }
 
             lowerCache.Add(key, symbolic)
             symbolic, key
 
-    member _.Compile(assemblyName: string, source: SourceInput) =
-        let stateKey = sourceStateKey assemblyName source
+    member _.Compile(assemblyName: string, sources: SourceInput list) =
+        let combine values =
+            match values with
+            | [ value ] -> value
+            | _ ->
+                values
+                |> String.concat "|"
+                |> Fingerprint.text
+
+        let stateKey =
+            assemblyName
+            + "\n"
+            + (sources
+               |> List.map _.Path
+               |> String.concat "\n")
 
         let previousContentFingerprint =
             match lastSuccessfulContent.TryGetValue(stateKey) with
@@ -291,41 +320,74 @@ type internal CompilerService() =
             LowerMisses = lowerMisses
         }
 
+        let decision hitsBefore hitsAfter missesBefore missesAfter =
+            let hitCount = hitsAfter - hitsBefore
+            let missCount = missesAfter - missesBefore
+
+            if hitCount > 0 && missCount > 0 then
+                "partial"
+            elif hitCount > 0 then
+                "hit"
+            else
+                "miss"
+
+        let rec parseAll parsed keys remaining =
+            match remaining with
+            | [] -> Ok(List.rev parsed, List.rev keys)
+            | source :: tail ->
+                match parse source with
+                | Error diagnostic -> Error diagnostic
+                | Ok(parsedModule, key) ->
+                    parseAll ((source, parsedModule) :: parsed) (key :: keys) tail
+
+        let rec checkAll typed keys remaining =
+            match remaining with
+            | [] -> Ok(List.rev typed, List.rev keys)
+            | (source, parsedModule) :: tail ->
+                match check source.Path parsedModule with
+                | Error diagnostic -> Error diagnostic
+                | Ok(typedModule, key) -> checkAll (typedModule :: typed) (key :: keys) tail
+
         let parseStarted = Stopwatch.GetTimestamp()
 
-        match parse source with
+        match parseAll [] [] sources with
         | Error error -> Error error
-        | Ok(parsed, parseKey) ->
+        | Ok(parsedModules, parseKeys) ->
             let parseElapsedMicroseconds = elapsedMicroseconds parseStarted
             let checkStarted = Stopwatch.GetTimestamp()
 
-            match check source.Path parsed with
+            match checkAll [] [] parsedModules with
             | Error diagnostic -> Error diagnostic
-            | Ok(typed, checkKey) ->
+            | Ok(typedModules, checkKeys) ->
                 let checkElapsedMicroseconds = elapsedMicroseconds checkStarted
                 let lowerStarted = Stopwatch.GetTimestamp()
-                let symbolic, lowerKey = lower assemblyName typed
+                let symbolic, lowerKey = lower assemblyName typedModules
                 let lowerElapsedMicroseconds = elapsedMicroseconds lowerStarted
+
+                let contentFingerprint =
+                    parsedModules
+                    |> List.map (fun (_, parsedModule) -> parsedModule.ContentFingerprint)
+                    |> combine
 
                 let invalidationReason =
                     if previousContentFingerprint.Length = 0 then
                         "no-prior-state"
-                    elif previousContentFingerprint = parsed.ContentFingerprint then
+                    elif previousContentFingerprint = contentFingerprint then
                         "unchanged"
                     else
                         "source-content-changed"
 
-                lastSuccessfulContent.[stateKey] <- parsed.ContentFingerprint
+                lastSuccessfulContent.[stateKey] <- contentFingerprint
 
                 Ok {
                     SymbolicAssembly = symbolic
                     QuerySchema = querySchema
-                    NodeKind = "source"
-                    ContentFingerprint = parsed.ContentFingerprint
+                    NodeKind = if sources.Length = 1 then "source" else "project"
+                    ContentFingerprint = contentFingerprint
                     PreviousContentFingerprint = previousContentFingerprint
                     InvalidationReason = invalidationReason
-                    ParseKey = parseKey
-                    CheckKey = checkKey
+                    ParseKey = combine parseKeys
+                    CheckKey = combine checkKeys
                     LowerKey = lowerKey
                     DependencyCount =
                         symbolic.Module.Types
@@ -335,9 +397,12 @@ type internal CompilerService() =
                                 methodFragment.DependencyIds.Length
                             )
                         )
-                    ParseDecision = if parseHits > before.ParseHits then "hit" else "miss"
-                    CheckDecision = if checkHits > before.CheckHits then "hit" else "miss"
-                    LowerDecision = if lowerHits > before.LowerHits then "hit" else "miss"
+                    ParseDecision =
+                        decision before.ParseHits parseHits before.ParseMisses parseMisses
+                    CheckDecision =
+                        decision before.CheckHits checkHits before.CheckMisses checkMisses
+                    LowerDecision =
+                        decision before.LowerHits lowerHits before.LowerMisses lowerMisses
                     ParseElapsedMicroseconds = parseElapsedMicroseconds
                     CheckElapsedMicroseconds = checkElapsedMicroseconds
                     LowerElapsedMicroseconds = lowerElapsedMicroseconds

@@ -42,12 +42,12 @@ module internal CompilationPipeline =
     let private compileCore
         (service: CompilerService)
         (invocation: CompilerInvocation)
-        (source: SourceInput)
+        (sources: SourceInput list)
         =
         let compileStarted = Stopwatch.GetTimestamp()
         let assemblyName = Path.GetFileNameWithoutExtension(invocation.AssemblyPath)
 
-        match service.Compile(assemblyName, source) with
+        match service.Compile(assemblyName, sources) with
         | Error diagnostic ->
             diagnostic
             |> DiagnosticFormatter.format invocation
@@ -85,7 +85,13 @@ module internal CompilationPipeline =
                     CompileElapsedMicroseconds = elapsedMicroseconds compileStarted
                     ExportFingerprint = query.SymbolicAssembly.PublicFingerprint
                     FragmentHash =
-                        query.SymbolicAssembly.Module.Types.Head.Methods.Head.ContentHash
+                        match
+                            query.SymbolicAssembly.Module.Types
+                            |> List.collect _.Methods
+                            |> List.map _.ContentHash
+                        with
+                        | [ contentHash ] -> contentHash
+                        | contentHashes -> String.concat "|" contentHashes
                     Emitted = true
                 }
             with ex ->
@@ -96,10 +102,10 @@ module internal CompilationPipeline =
     let compile
         (service: CompilerService)
         (invocation: CompilerInvocation)
-        (source: SourceInput)
+        (sources: SourceInput list)
         =
         try
-            compileCore service invocation source
+            compileCore service invocation sources
         finally
             if invocation.StrongNameKey.Length > 0 then
                 CryptographicOperations.ZeroMemory(invocation.StrongNameKey.AsSpan())

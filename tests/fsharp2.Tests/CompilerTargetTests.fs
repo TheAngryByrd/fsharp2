@@ -480,6 +480,185 @@ module CompilerTargetTests =
                 finally
                     Directory.Delete(root, true)
 
+            testCase
+                "accepts the IcedTasks CoreCompile argument subset and preserves ordered modules"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-prototype",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let firstSourcePath = Path.Combine(root, "First.fs")
+                    let tracerSourcePath = Path.Combine(root, "Tracer.fs")
+                    let sourceLinkPath = Path.Combine(root, "Tracer.sourcelink.json")
+                    let outputPath = Path.Combine(root, "Tracer.dll")
+                    let referenceOutputPath = Path.Combine(root, "ref", "Tracer.dll")
+                    let pdbPath = Path.Combine(root, "Tracer.pdb")
+                    let documentationPath = Path.Combine(root, "Tracer.xml")
+                    let responsePath = Path.Combine(root, "compile.rsp")
+                    let tracePath = Path.Combine(root, "compile.trace")
+
+                    File.WriteAllText(firstSourcePath, "module First\nlet first () = 1\n")
+                    File.WriteAllText(tracerSourcePath, "module Tracer\nlet answer () = 42\n")
+
+                    File.WriteAllText(
+                        sourceLinkPath,
+                        "{\"documents\":{\"*.fs\":\"https://example.invalid/*.fs\"}}"
+                    )
+
+                    let systemRuntime =
+                        Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), "System.Runtime.dll")
+
+                    File.WriteAllLines(
+                        responsePath,
+                        [|
+                            $"-o:{outputPath}"
+                            "--debug:portable"
+                            $"--embed:{firstSourcePath}"
+                            $"--sourcelink:{sourceLinkPath}"
+                            "--langversion:9.0"
+                            "--noframework"
+                            "--define:TRACE"
+                            "--define:RELEASE"
+                            $"--doc:{documentationPath}"
+                            "--optimize+"
+                            "--checknulls+"
+                            "--define:NULLABLE"
+                            $"-r:{systemRuntime}"
+                            "--target:library"
+                            "--nowarn:FS0057,NU5104,FS3513"
+                            "--warn:3"
+                            "--warnaserror"
+                            "--warnaserror:3239"
+                            "--fullpaths"
+                            "--flaterrors"
+                            "--highentropyva+"
+                            "--targetprofile:netcore"
+                            "--nocopyfsharpcore"
+                            "--deterministic+"
+                            "--simpleresolution"
+                            "--test:GraphBasedChecking"
+                            "--test:ParallelIlxGen"
+                            "--test:ParallelOptimization"
+                            $"--refout:{referenceOutputPath}"
+                            $"--fsharp2-trace:{tracePath}"
+                            firstSourcePath
+                            tracerSourcePath
+                        |]
+                    )
+
+                    let result = invokeFsc2 root responsePath
+                    Expect.equal result.ExitCode 0 result.StandardError
+                    Expect.isTrue (File.Exists outputPath) "the implementation DLL should exist"
+                    Expect.isTrue (File.Exists pdbPath) "the portable PDB should exist"
+
+                    Expect.isTrue
+                        (File.Exists referenceOutputPath)
+                        "the requested reference assembly should exist"
+
+                    Expect.isTrue
+                        (File.Exists documentationPath)
+                        "the requested XML documentation should exist"
+
+                    use implementationStream = File.OpenRead(outputPath)
+                    use implementation = new PEReader(implementationStream)
+                    let metadata = implementation.GetMetadataReader()
+
+                    let typeNames =
+                        metadata.TypeDefinitions
+                        |> Seq.map (fun handle ->
+                            handle
+                            |> metadata.GetTypeDefinition
+                            |> fun definition -> metadata.GetString(definition.Name)
+                        )
+                        |> Seq.toArray
+
+                    Expect.sequenceEqual
+                        typeNames
+                        [|
+                            "<Module>"
+                            "First"
+                            "Tracer"
+                        |]
+                        "source order should determine emitted module-type order"
+
+                    use referenceStream = File.OpenRead(referenceOutputPath)
+                    use referenceAssembly = new PEReader(referenceStream)
+
+                    Expect.equal
+                        (referenceAssembly.GetMetadataReader().TypeDefinitions.Count)
+                        3
+                        "the reference output should expose both compiled modules"
+
+                    use pdbStream = File.OpenRead(pdbPath)
+                    use pdbProvider = MetadataReaderProvider.FromPortablePdbStream(pdbStream)
+                    let pdb = pdbProvider.GetMetadataReader()
+
+                    Expect.equal
+                        pdb.Documents.Count
+                        2
+                        "each ordered source should have a portable-PDB document"
+
+                    let documentNames =
+                        pdb.Documents
+                        |> Seq.map (
+                            pdb.GetDocument
+                            >> fun document -> pdb.GetString(document.Name)
+                        )
+                        |> Seq.toArray
+
+                    Expect.sequenceEqual
+                        documentNames
+                        [|
+                            "First.fs"
+                            "Tracer.fs"
+                        |]
+                        "PDB documents should preserve source order"
+
+                    let methodDocumentNames = [|
+                        for methodRow in 1 .. metadata.MethodDefinitions.Count do
+                            let methodDebugInformation =
+                                MetadataTokens.MethodDefinitionHandle(methodRow)
+                                |> pdb.GetMethodDebugInformation
+
+                            methodDebugInformation.Document
+                            |> pdb.GetDocument
+                            |> fun document -> pdb.GetString(document.Name)
+                    |]
+
+                    Expect.sequenceEqual
+                        methodDocumentNames
+                        documentNames
+                        "method debug rows should point to their source-order documents"
+
+                    let trace = readTrace tracePath
+
+                    Expect.equal
+                        trace.["sourceCount"]
+                        "2"
+                        "the trace should record source cardinality"
+
+                    Expect.equal
+                        trace.["referenceCount"]
+                        "1"
+                        "the trace should record the explicit reference closure"
+
+                    Expect.stringContains
+                        (File.ReadAllText(documentationPath))
+                        "<name>Tracer</name>"
+                        "XML documentation should identify the compiled assembly"
+
+                    let consumer = invokeConsumer root outputPath 42
+                    Expect.equal consumer.ExitCode 0 consumer.StandardError
+                finally
+                    Directory.Delete(root, true)
+
             testCase "emits structurally valid and verifiable IL"
             <| fun _ ->
                 let root =
@@ -1258,6 +1437,8 @@ module CompilerTargetTests =
                     let sourcePath = Path.Combine(root, "Tracer.fs")
                     let outputPath = Path.Combine(root, "Tracer.dll")
                     let pdbPath = Path.Combine(root, "Tracer.pdb")
+                    let referenceOutputPath = Path.Combine(root, "ref", "Tracer.dll")
+                    let documentationPath = Path.Combine(root, "Tracer.xml")
                     let responsePath = Path.Combine(root, "compile.rsp")
 
                     let originalPdb = [|
@@ -1266,12 +1447,25 @@ module CompilerTargetTests =
                         0x32uy
                     |]
 
+                    let originalReference = [|
+                        0x52uy
+                        0x45uy
+                        0x46uy
+                    |]
+
+                    let originalDocumentation = "<original />"
+
                     File.WriteAllText(sourcePath, "module Tracer\nlet answer () = 42\n")
 
                     Directory.CreateDirectory(outputPath)
                     |> ignore
 
+                    Directory.CreateDirectory(Path.GetDirectoryName(referenceOutputPath))
+                    |> ignore
+
                     File.WriteAllBytes(pdbPath, originalPdb)
+                    File.WriteAllBytes(referenceOutputPath, originalReference)
+                    File.WriteAllText(documentationPath, originalDocumentation)
 
                     File.WriteAllLines(
                         responsePath,
@@ -1281,6 +1475,8 @@ module CompilerTargetTests =
                             "--debug:portable"
                             $"--out:{outputPath}"
                             $"--pdb:{pdbPath}"
+                            $"--refout:{referenceOutputPath}"
+                            $"--doc:{documentationPath}"
                             sourcePath
                         |]
                     )
@@ -1302,8 +1498,18 @@ module CompilerTargetTests =
                         originalPdb
                         "the previous PDB should be restored when assembly publication fails"
 
+                    Expect.sequenceEqual
+                        (File.ReadAllBytes(referenceOutputPath))
+                        originalReference
+                        "the previous reference DLL should be restored when assembly publication fails"
+
+                    Expect.equal
+                        (File.ReadAllText(documentationPath))
+                        originalDocumentation
+                        "the previous XML documentation should be restored when assembly publication fails"
+
                     let transactionFiles =
-                        Directory.GetFiles(root)
+                        Directory.GetFiles(root, "*", SearchOption.AllDirectories)
                         |> Array.filter (fun path ->
                             path.Contains(".fsc2-", StringComparison.Ordinal)
                         )

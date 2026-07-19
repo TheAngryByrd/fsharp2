@@ -9,13 +9,15 @@ open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open System.Reflection.PortableExecutable
 open System.Security.Cryptography
+open System.Text
 
 type internal LinkedArtifacts = {
     Implementation: byte array
     PortablePdb: byte array
-}
+    ReferenceAssembly: byte array
+    Documentation: byte array
+} with
 
-with
     override _.ToString() = "LinkedArtifacts"
 
 [<Sealed>]
@@ -23,7 +25,10 @@ type private PrototypeNativeResourceSection(payload: byte array) =
     inherit ResourceSectionBuilder()
 
     override _.Serialize(builder: BlobBuilder, location: SectionLocation) =
-        if builder.Count <> 0 then
+        if
+            builder.Count
+            <> 0
+        then
             invalidOp "the native resource section must start empty"
 
         let writeDirectory () =
@@ -42,14 +47,31 @@ type private PrototypeNativeResourceSection(payload: byte array) =
 
         writeDirectory ()
         builder.WriteUInt32(10u)
-        builder.WriteUInt32(directoryFlag ||| typeDirectoryOffset)
+
+        builder.WriteUInt32(
+            directoryFlag
+            ||| typeDirectoryOffset
+        )
+
         writeDirectory ()
         builder.WriteUInt32(1u)
-        builder.WriteUInt32(directoryFlag ||| nameDirectoryOffset)
+
+        builder.WriteUInt32(
+            directoryFlag
+            ||| nameDirectoryOffset
+        )
+
         writeDirectory ()
         builder.WriteUInt32(0u)
         builder.WriteUInt32(dataEntryOffset)
-        builder.WriteUInt32(uint32 (location.RelativeVirtualAddress + payloadOffset))
+
+        builder.WriteUInt32(
+            uint32 (
+                location.RelativeVirtualAddress
+                + payloadOffset
+            )
+        )
+
         builder.WriteUInt32(uint32 payload.Length)
         builder.WriteUInt32(0u)
         builder.WriteUInt32(0u)
@@ -155,46 +177,111 @@ module internal Linker =
         sequencePoints.WriteCompressedInteger(range.Start.Column)
         sequencePoints
 
+    let private escapeXml (value: string) =
+        value
+            .Replace("&", "&amp;", StringComparison.Ordinal)
+            .Replace("<", "&lt;", StringComparison.Ordinal)
+            .Replace(">", "&gt;", StringComparison.Ordinal)
+            .Replace("\"", "&quot;", StringComparison.Ordinal)
+            .Replace("'", "&apos;", StringComparison.Ordinal)
+
+    let private documentation (assemblyName: string) =
+        String.concat
+            "\n"
+            [
+                "<?xml version=\"1.0\"?>"
+                "<doc>"
+                "  <assembly>"
+                "    <name>"
+                + escapeXml assemblyName
+                + "</name>"
+                "  </assembly>"
+                "  <members />"
+                "</doc>"
+                String.Empty
+            ]
+        |> UTF8Encoding(false).GetBytes
+
     let private linkWithStrongName
         (invocation: CompilerInvocation)
         (symbolic: SymbolicAssembly)
         (strongName: StrongNamePlan)
         =
-        if
-            symbolic.Module.Types.Length
-            <> 1
-        then
-            invalidOp "the first linker tracer supports exactly one symbolic type fragment"
+        let typeFragments = symbolic.Module.Types
 
-        let typeFragment = symbolic.Module.Types.Head
+        let methodFragments =
+            typeFragments
+            |> List.collect _.Methods
 
         if
-            typeFragment.Methods.Length
-            <> 1
-        then
-            invalidOp "the first linker tracer supports exactly one symbolic method fragment"
-
-        let methodFragment = typeFragment.Methods.Head
-
-        if
-            symbolic.SchemaVersion <> symbolic.Module.SchemaVersion
-            || symbolic.SchemaVersion <> typeFragment.SchemaVersion
-            || symbolic.SchemaVersion <> methodFragment.SchemaVersion
+            symbolic.SchemaVersion
+            <> symbolic.Module.SchemaVersion
+            || (typeFragments
+                |> List.exists (fun typeFragment ->
+                    symbolic.SchemaVersion
+                    <> typeFragment.SchemaVersion
+                    || (typeFragment.Methods
+                        |> List.exists (fun methodFragment ->
+                            symbolic.SchemaVersion
+                            <> methodFragment.SchemaVersion
+                        ))
+                ))
         then
             invalidOp "the symbolic emission graph uses inconsistent schema versions"
 
         if
             String.IsNullOrWhiteSpace(symbolic.StableId)
             || String.IsNullOrWhiteSpace(symbolic.Module.StableId)
-            || String.IsNullOrWhiteSpace(typeFragment.StableId)
-            || String.IsNullOrWhiteSpace(methodFragment.StableId)
+            || (typeFragments
+                |> List.exists (fun typeFragment ->
+                    String.IsNullOrWhiteSpace(typeFragment.StableId)
+                    || (typeFragment.Methods
+                        |> List.exists (fun methodFragment ->
+                            String.IsNullOrWhiteSpace(methodFragment.StableId)
+                        ))
+                ))
         then
             invalidOp "the symbolic emission graph contains an empty stable identity"
+
+        if
+            invocation.DebugDocumentPaths.Length
+            <> typeFragments.Length
+        then
+            invalidOp "the symbolic emission graph must contain one debug document per source type"
+
+        let documentChecksums =
+            typeFragments
+            |> List.mapi (fun documentIndex typeFragment ->
+                match typeFragment.Methods with
+                | [] -> invalidOp "a source type must contain at least one method for PDB emission"
+                | firstMethod :: remainingMethods ->
+                    if
+                        firstMethod.DocumentIndex
+                        <> documentIndex
+                        || (remainingMethods
+                            |> List.exists (fun methodFragment ->
+                                methodFragment.DocumentIndex
+                                <> documentIndex
+                                || methodFragment.DocumentChecksum
+                                   <> firstMethod.DocumentChecksum
+                            ))
+                    then
+                        invalidOp "a source type has inconsistent debug-document metadata"
+
+                    firstMethod.DocumentChecksum
+            )
 
         let metadata = MetadataBuilder()
         let ilStream = BlobBuilder()
         let methodBodies = MethodBodyStreamEncoder(ilStream)
-        let bodyOffset, methodCodeSize = encodeMethodBody methodBodies methodFragment
+
+        let encodedMethods =
+            methodFragments
+            |> List.map (fun methodFragment ->
+                let bodyOffset, codeSize = encodeMethodBody methodBodies methodFragment
+                methodFragment, bodyOffset, codeSize
+            )
+
         let signature = encodeSignature ()
 
         let publicKeyToken =
@@ -269,56 +356,69 @@ module internal Linker =
         )
         |> ignore
 
-        metadata.AddTypeDefinition(
-            TypeAttributes.Public
-            ||| TypeAttributes.Abstract
-            ||| TypeAttributes.Sealed
-            ||| TypeAttributes.BeforeFieldInit,
-            (if String.IsNullOrEmpty(typeFragment.Namespace) then
-                 Unchecked.defaultof<StringHandle>
-             else
-                 metadata.GetOrAddString(typeFragment.Namespace)),
-            metadata.GetOrAddString(typeFragment.Name),
-            systemObject,
-            firstField,
-            firstMethod
-        )
-        |> ignore
+        let mutable nextMethodRow = 1
 
-        metadata.AddMethodDefinition(
-            MethodAttributes.Public
-            ||| MethodAttributes.Static
-            ||| MethodAttributes.HideBySig,
-            MethodImplAttributes.IL
-            ||| MethodImplAttributes.Managed,
-            metadata.GetOrAddString(methodFragment.Name),
-            metadata.GetOrAddBlob(signature),
-            bodyOffset,
-            firstParameter
-        )
-        |> ignore
+        for typeFragment in typeFragments do
+            metadata.AddTypeDefinition(
+                TypeAttributes.Public
+                ||| TypeAttributes.Abstract
+                ||| TypeAttributes.Sealed
+                ||| TypeAttributes.BeforeFieldInit,
+                (if String.IsNullOrEmpty(typeFragment.Namespace) then
+                     Unchecked.defaultof<StringHandle>
+                 else
+                     metadata.GetOrAddString(typeFragment.Namespace)),
+                metadata.GetOrAddString(typeFragment.Name),
+                systemObject,
+                firstField,
+                MetadataTokens.MethodDefinitionHandle(nextMethodRow)
+            )
+            |> ignore
+
+            nextMethodRow <-
+                nextMethodRow
+                + typeFragment.Methods.Length
+
+        let methodSignature = metadata.GetOrAddBlob(signature)
+
+        for methodFragment, bodyOffset, _ in encodedMethods do
+            metadata.AddMethodDefinition(
+                MethodAttributes.Public
+                ||| MethodAttributes.Static
+                ||| MethodAttributes.HideBySig,
+                MethodImplAttributes.IL
+                ||| MethodImplAttributes.Managed,
+                metadata.GetOrAddString(methodFragment.Name),
+                methodSignature,
+                bodyOffset,
+                firstParameter
+            )
+            |> ignore
 
         let pdbMetadata = MetadataBuilder()
 
-        let documentName =
-            invocation.DebugDocumentPath
-            |> pdbMetadata.GetOrAddDocumentName
-
-        let document =
-            pdbMetadata.AddDocument(
-                documentName,
-                pdbMetadata.GetOrAddGuid(sha256DocumentHashAlgorithm),
-                pdbMetadata.GetOrAddBlob(methodFragment.DocumentChecksum),
-                pdbMetadata.GetOrAddGuid(fsharpLanguage)
+        let documents =
+            (invocation.DebugDocumentPaths, documentChecksums)
+            ||> List.map2 (fun path checksum ->
+                pdbMetadata.AddDocument(
+                    pdbMetadata.GetOrAddDocumentName(path),
+                    pdbMetadata.GetOrAddGuid(sha256DocumentHashAlgorithm),
+                    pdbMetadata.GetOrAddBlob(checksum),
+                    pdbMetadata.GetOrAddGuid(fsharpLanguage)
+                )
             )
 
-        let sequencePoints =
-            methodFragment
-            |> encodeSequencePoint
-            |> pdbMetadata.GetOrAddBlob
+        for methodFragment in methodFragments do
+            let sequencePoints =
+                methodFragment
+                |> encodeSequencePoint
+                |> pdbMetadata.GetOrAddBlob
 
-        pdbMetadata.AddMethodDebugInformation(document, sequencePoints)
-        |> ignore
+            pdbMetadata.AddMethodDebugInformation(
+                documents.[methodFragment.DocumentIndex],
+                sequencePoints
+            )
+            |> ignore
 
         let systemNamespace = pdbMetadata.GetOrAddBlobUTF8("System", false)
         let importDefinitions = BlobBuilder()
@@ -335,15 +435,16 @@ module internal Linker =
                 pdbMetadata.GetOrAddBlob(importDefinitions)
             )
 
-        pdbMetadata.AddLocalScope(
-            firstMethod,
-            importScope,
-            Unchecked.defaultof<LocalVariableHandle>,
-            Unchecked.defaultof<LocalConstantHandle>,
-            0,
-            methodCodeSize
-        )
-        |> ignore
+        for methodIndex, (_, _, methodCodeSize) in List.indexed encodedMethods do
+            pdbMetadata.AddLocalScope(
+                MetadataTokens.MethodDefinitionHandle(methodIndex + 1),
+                importScope,
+                Unchecked.defaultof<LocalVariableHandle>,
+                Unchecked.defaultof<LocalConstantHandle>,
+                0,
+                methodCodeSize
+            )
+            |> ignore
 
         if invocation.SourceLinkJson.Length > 0 then
             pdbMetadata.AddCustomDebugInformation(
@@ -409,13 +510,21 @@ module internal Linker =
         mvidWriter.WriteGuid(peId.Guid)
         StrongName.sign peBuilder peBlob strongName
 
+        let implementation = peBlob.ToArray()
+
         {
-            Implementation = peBlob.ToArray()
+            Implementation = implementation
             PortablePdb = pdbBlob.ToArray()
+            // The prototype has not yet split contract-only metadata emission
+            // from implementation emission. Preserve the requested artifact
+            // contract now; the compatibility gate still owns a true ref DLL.
+            ReferenceAssembly = implementation
+            Documentation = documentation symbolic.AssemblyName
         }
 
     let link (invocation: CompilerInvocation) (symbolic: SymbolicAssembly) =
-        let strongName = StrongName.createPlan invocation.StrongNameMode invocation.StrongNameKey
+        let strongName =
+            StrongName.createPlan invocation.StrongNameMode invocation.StrongNameKey
 
         try
             linkWithStrongName invocation symbolic strongName
@@ -423,91 +532,98 @@ module internal Linker =
             StrongName.clearPlan strongName
 
     let publishTransactionally invocation artifacts =
-        let outputDirectory = Path.GetDirectoryName(invocation.AssemblyPath)
-        let pdbDirectory = Path.GetDirectoryName(invocation.PdbPath)
-
-        Directory.CreateDirectory(outputDirectory)
-        |> ignore
-
-        Directory.CreateDirectory(pdbDirectory)
-        |> ignore
-
         let nonce = Guid.NewGuid().ToString("N")
-
-        let temporaryAssembly =
-            invocation.AssemblyPath
-            + ".fsc2-"
-            + nonce
-            + ".tmp"
-
-        let temporaryPdb =
-            invocation.PdbPath
-            + ".fsc2-"
-            + nonce
-            + ".tmp"
-
-        let backupAssembly =
-            invocation.AssemblyPath
-            + ".fsc2-"
-            + nonce
-            + ".backup"
-
-        let backupPdb =
-            invocation.PdbPath
-            + ".fsc2-"
-            + nonce
-            + ".backup"
 
         let deleteIfPresent path =
             if File.Exists(path) then
                 File.Delete(path)
 
-        let mutable assemblyBackedUp = false
-        let mutable pdbBackedUp = false
-        let mutable assemblyPublished = false
-        let mutable pdbPublished = false
+        let requestedArtifacts =
+            [
+                match invocation.ReferenceAssemblyPath with
+                | Some path -> yield path, artifacts.ReferenceAssembly
+                | None -> ()
+
+                match invocation.DocumentationPath with
+                | Some path -> yield path, artifacts.Documentation
+                | None -> ()
+
+                yield invocation.PdbPath, artifacts.PortablePdb
+                // The implementation DLL is deliberately last: it is the
+                // transaction's externally visible commit point.
+                yield invocation.AssemblyPath, artifacts.Implementation
+            ]
+
+        let distinctTargets = HashSet<string>(StringComparer.OrdinalIgnoreCase)
+
+        for targetPath, _ in requestedArtifacts do
+            if
+                targetPath
+                |> Path.GetFullPath
+                |> distinctTargets.Add
+                |> not
+            then
+                invalidOp "compiler output paths must be distinct"
+
+        let states =
+            requestedArtifacts
+            |> List.mapi (fun index (targetPath, bytes) ->
+                let directory = Path.GetDirectoryName(targetPath)
+
+                if not (String.IsNullOrEmpty(directory)) then
+                    Directory.CreateDirectory(directory)
+                    |> ignore
+
+                targetPath,
+                bytes,
+                targetPath
+                + ".fsc2-"
+                + nonce
+                + "-"
+                + index.ToString()
+                + ".tmp",
+                targetPath
+                + ".fsc2-"
+                + nonce
+                + "-"
+                + index.ToString()
+                + ".backup",
+                ref false,
+                ref false
+            )
 
         try
-            File.WriteAllBytes(temporaryAssembly, artifacts.Implementation)
-            File.WriteAllBytes(temporaryPdb, artifacts.PortablePdb)
+            for _, bytes, temporaryPath, _, _, _ in states do
+                File.WriteAllBytes(temporaryPath, bytes)
 
-            if File.Exists(invocation.AssemblyPath) then
-                File.Move(invocation.AssemblyPath, backupAssembly)
-                assemblyBackedUp <- true
+            for targetPath, _, _, backupPath, backedUp, _ in states do
+                if File.Exists(targetPath) then
+                    File.Move(targetPath, backupPath)
+                    backedUp.Value <- true
 
-            if File.Exists(invocation.PdbPath) then
-                File.Move(invocation.PdbPath, backupPdb)
-                pdbBackedUp <- true
-
-            File.Move(temporaryPdb, invocation.PdbPath)
-            pdbPublished <- true
-            File.Move(temporaryAssembly, invocation.AssemblyPath)
-            assemblyPublished <- true
+            for targetPath, _, temporaryPath, _, _, published in states do
+                File.Move(temporaryPath, targetPath)
+                published.Value <- true
 
             try
-                deleteIfPresent backupAssembly
-                deleteIfPresent backupPdb
+                for _, _, _, backupPath, _, _ in states do
+                    deleteIfPresent backupPath
             with _ ->
                 // The requested artifact set is already complete. A backup
                 // cleanup failure must not roll back successfully published
                 // outputs into a partial set.
                 ()
         with _ ->
-            if assemblyPublished then
-                deleteIfPresent invocation.AssemblyPath
+            for targetPath, _, _, _, _, published in states do
+                if published.Value then
+                    deleteIfPresent targetPath
 
-            if pdbPublished then
-                deleteIfPresent invocation.PdbPath
+            for targetPath, _, _, backupPath, backedUp, _ in states do
+                if backedUp.Value then
+                    File.Move(backupPath, targetPath, true)
 
-            if assemblyBackedUp then
-                File.Move(backupAssembly, invocation.AssemblyPath, true)
-
-            if pdbBackedUp then
-                File.Move(backupPdb, invocation.PdbPath, true)
-
-            deleteIfPresent temporaryAssembly
-            deleteIfPresent temporaryPdb
-            deleteIfPresent backupAssembly
-            deleteIfPresent backupPdb
+            for _, _, temporaryPath, backupPath, _, _ in states do
+                deleteIfPresent temporaryPath
+                deleteIfPresent backupPath
 
             reraise ()

@@ -5,7 +5,11 @@ open System.IO
 open System.Security.Cryptography
 
 module CompilerHost =
-    let private writeTrace (path: string) (response: ServiceCompilationResponse) =
+    let private writeTrace
+        (invocation: CompilerInvocation)
+        (path: string)
+        (response: ServiceCompilationResponse)
+        =
         let directory = Path.GetDirectoryName(path)
 
         Directory.CreateDirectory(directory)
@@ -15,6 +19,10 @@ module CompilerHost =
             path,
             [|
                 "schema=1"
+                "sourceCount="
+                + invocation.SourcePaths.Length.ToString()
+                "referenceCount="
+                + invocation.ReferencePaths.Length.ToString()
                 "servicePid="
                 + response.ServiceProcessId.ToString()
                 "querySchema="
@@ -62,9 +70,9 @@ module CompilerHost =
             |]
         )
 
-    let private compileLocally (invocation: CompilerInvocation) (source: SourceInput) =
+    let private compileLocally (invocation: CompilerInvocation) (sources: SourceInput list) =
         let service = CompilerService()
-        CompilationPipeline.compile service invocation source
+        CompilationPipeline.compile service invocation sources
 
     let private runCompilation (arguments: string array) =
         match CommandLine.parse arguments with
@@ -76,24 +84,24 @@ module CompilerHost =
 
             1
         | Ok invocation ->
-            let sourcePath = invocation.SourcePaths.Head
-
-            let source = {
-                Path = sourcePath
-                Text = File.ReadAllText(sourcePath)
-            }
+            let sources =
+                invocation.SourcePaths
+                |> List.map (fun sourcePath -> {
+                    Path = sourcePath
+                    Text = File.ReadAllText(sourcePath)
+                })
 
             let response =
                 try
                     match invocation.ServerName with
-                    | Some pipeName -> ServiceHost.compileRemote pipeName invocation source
-                    | None -> compileLocally invocation source
+                    | Some pipeName -> ServiceHost.compileRemote pipeName invocation sources
+                    | None -> compileLocally invocation sources
                 finally
                     if invocation.StrongNameKey.Length > 0 then
                         CryptographicOperations.ZeroMemory(invocation.StrongNameKey.AsSpan())
 
             invocation.TracePath
-            |> Option.iter (fun path -> writeTrace path response)
+            |> Option.iter (fun path -> writeTrace invocation path response)
 
             if
                 response.ExitCode
