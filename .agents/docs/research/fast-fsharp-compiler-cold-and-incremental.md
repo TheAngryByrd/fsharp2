@@ -158,6 +158,8 @@ The performance work should be accepted only with correctness evidence:
 
 The minimum useful trace fields are cache key/schema, node kind, old/new fingerprint, invalidation reason, reused/rechecked/emitted status, dependency count, and elapsed time. This turns a failed three-second target into an actionable dependency or startup diagnosis.
 
+The exact pinned IcedTasks edits, forced compiler-contact/replay/recovery controls, complete action-key inputs, and reconciled per-node evidence are fixed by [ADR 0022](../adr/0022-define-the-warm-edit-corpus-and-cache-evidence-contract.md) and the [issue #19 research](warm-edit-corpus-and-cache-evidence-contract.md).
+
 ## What not to copy blindly
 
 - Go's package-level export boundary is excellent for a simple package graph but too coarse for declaration-level F# reuse.
