@@ -10,13 +10,19 @@ module internal Frontend =
     [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
     type private TokenKind =
         | ModuleKeyword
+        | NamespaceKeyword
         | LetKeyword
+        | DoKeyword
         | Identifier of string
         | Integer of int
         | StringLiteralToken of string
+        | AttributeStart
+        | AttributeEnd
         | LeftParenthesis
         | RightParenthesis
         | Colon
+        | Comma
+        | Dot
         | Equals
         | EndOfFile
 
@@ -28,6 +34,13 @@ module internal Frontend =
     } with
 
         override _.ToString() = "Token"
+
+    type private ParseResultBuilder() =
+        member _.Bind(result, continuation) = Result.bind continuation result
+        member _.Return(value) = Ok value
+        member _.ReturnFrom(result) = result
+
+    let private parseResult = ParseResultBuilder()
 
     let private diagnostic code path range message = {
         Code = code
@@ -96,7 +109,9 @@ module internal Frontend =
 
                 match value with
                 | "module" -> add ModuleKeyword start
+                | "namespace" -> add NamespaceKeyword start
                 | "let" -> add LetKeyword start
+                | "do" -> add DoKeyword start
                 | _ -> add (Identifier value) start
             elif Char.IsDigit(current) then
                 let start = position ()
@@ -153,21 +168,41 @@ module internal Frontend =
                         )
             else
                 let start = position ()
-                advance ()
 
-                match current with
-                | '(' -> add LeftParenthesis start
-                | ')' -> add RightParenthesis start
-                | ':' -> add Colon start
-                | '=' -> add Equals start
-                | _ ->
-                    tokenizationError <-
-                        Some(
-                            prototypeDiagnostic
-                                source.Path
-                                { Start = start; End = position () }
-                                "unsupported token"
-                        )
+                if
+                    current = '['
+                    && offset + 1 < text.Length
+                    && text.[offset + 1] = '<'
+                then
+                    advance ()
+                    advance ()
+                    add AttributeStart start
+                elif
+                    current = '>'
+                    && offset + 1 < text.Length
+                    && text.[offset + 1] = ']'
+                then
+                    advance ()
+                    advance ()
+                    add AttributeEnd start
+                else
+                    advance ()
+
+                    match current with
+                    | '(' -> add LeftParenthesis start
+                    | ')' -> add RightParenthesis start
+                    | ':' -> add Colon start
+                    | ',' -> add Comma start
+                    | '.' -> add Dot start
+                    | '=' -> add Equals start
+                    | _ ->
+                        tokenizationError <-
+                            Some(
+                                prototypeDiagnostic
+                                    source.Path
+                                    { Start = start; End = position () }
+                                    "unsupported token"
+                            )
 
         match tokenizationError with
         | Some error -> Error error
@@ -210,12 +245,58 @@ module internal Frontend =
 
             let expected token message =
                 if (current ()).Kind = token then
-                    consume ()
-                    |> ignore
-
-                    Ok()
+                    Ok(consume ())
                 else
                     Error(prototypeDiagnostic source.Path (current ()).Range message)
+
+            let identifier message =
+                let token = consume ()
+
+                match token.Kind with
+                | Identifier value -> Ok(value, token)
+                | _ -> Error(prototypeDiagnostic source.Path token.Range message)
+
+            let qualifiedIdentifier message =
+                let rec remaining parts =
+                    match (current ()).Kind with
+                    | Dot ->
+                        consume ()
+                        |> ignore
+
+                        match identifier message with
+                        | Error error -> Error error
+                        | Ok(value, _) ->
+                            remaining (
+                                value
+                                :: parts
+                            )
+                    | _ ->
+                        parts
+                        |> List.rev
+                        |> String.concat "."
+                        |> Ok
+
+                match identifier message with
+                | Error error -> Error error
+                | Ok(value, _) -> remaining [ value ]
+
+            let qualifiedTypeName (value: string) =
+                let separator = value.LastIndexOf('.')
+
+                if separator < 0 then
+                    {
+                        Namespace = String.Empty
+                        Name = value
+                    }
+                else
+                    {
+                        Namespace = value.Substring(0, separator)
+                        Name =
+                            value.Substring(
+                                separator
+                                + 1
+                            )
+                    }
 
             let parseExpression () =
                 let expressionToken = consume ()
@@ -248,19 +329,20 @@ module internal Frontend =
                 =
                 match expected Equals "expected '='" with
                 | Error error -> Error error
-                | Ok() ->
+                | Ok _ ->
                     match parseExpression () with
                     | Error error -> Error error
                     | Ok(body, bodyRange) ->
                         match expected EndOfFile "expected end of file" with
                         | Error error -> Error error
-                        | Ok() ->
+                        | Ok _ ->
                             Ok {
                                 Name = moduleName
                                 SourceChecksum =
                                     sourceChecksum
                                     |> ImmutableArray.CreateRange<byte>
                                 ContentFingerprint = contentFingerprint
+                                AssemblyAttributes = []
                                 Declarations = [
                                     {
                                         Name = declarationName
@@ -276,14 +358,12 @@ module internal Frontend =
                                 ]
                             }
 
-            match expected ModuleKeyword "expected 'module'" with
-            | Error error -> Error error
-            | Ok() ->
-                match (consume ()).Kind with
-                | Identifier moduleName ->
+            let parseModule () =
+                match identifier "expected a module name" with
+                | Ok(moduleName, _) ->
                     match expected LetKeyword "expected 'let'" with
                     | Error error -> Error error
-                    | Ok() ->
+                    | Ok _ ->
                         let declarationToken = consume ()
 
                         match declarationToken.Kind with
@@ -295,7 +375,7 @@ module internal Frontend =
 
                                 match expected RightParenthesis "expected ')'" with
                                 | Error error -> Error error
-                                | Ok() ->
+                                | Ok _ ->
                                     finishDeclaration
                                         moduleName
                                         declarationToken
@@ -344,7 +424,111 @@ module internal Frontend =
                                     declarationToken.Range
                                     "expected a declaration name"
                             )
-                | _ ->
-                    Error(
-                        prototypeDiagnostic source.Path (current ()).Range "expected a module name"
-                    )
+                | Error error -> Error error
+
+            let parseGeneratedAssemblyAttributeFile () =
+                let rec parseNamedArguments arguments =
+                    match (current ()).Kind with
+                    | RightParenthesis -> Ok(List.rev arguments)
+                    | Comma ->
+                        consume ()
+                        |> ignore
+
+                        parseResult {
+                            let! name, _ = identifier "expected a named argument"
+                            let! _ = expected Equals "expected '='"
+                            let valueToken = consume ()
+
+                            match valueToken.Kind with
+                            | StringLiteralToken value ->
+                                let argument: ParsedNamedStringArgument = {
+                                    Name = name
+                                    Value = value
+                                }
+
+                                return!
+                                    parseNamedArguments (
+                                        argument
+                                        :: arguments
+                                    )
+                            | _ ->
+                                return!
+                                    Error(
+                                        prototypeDiagnostic
+                                            source.Path
+                                            valueToken.Range
+                                            "expected a string-valued named argument"
+                                    )
+                        }
+                    | _ ->
+                        Error(
+                            prototypeDiagnostic source.Path (current ()).Range "expected ',' or ')'"
+                        )
+
+                parseResult {
+                    let! namespaceName = qualifiedIdentifier "expected a namespace name"
+                    let! attributeStart = expected AttributeStart "expected '[<'"
+
+                    let! attributeTypeName = qualifiedIdentifier "expected an attribute type name"
+
+                    let! _ = expected LeftParenthesis "expected '('"
+                    let constructorToken = consume ()
+
+                    let! constructorArgument =
+                        match constructorToken.Kind with
+                        | StringLiteralToken value -> Ok value
+                        | _ ->
+                            Error(
+                                prototypeDiagnostic
+                                    source.Path
+                                    constructorToken.Range
+                                    "expected a string constructor argument"
+                            )
+
+                    let! namedArguments = parseNamedArguments []
+                    let! _ = expected RightParenthesis "expected ')'"
+                    let! attributeEnd = expected AttributeEnd "expected '>]'"
+                    let! _ = expected DoKeyword "expected 'do'"
+                    let! _ = expected LeftParenthesis "expected '('"
+                    let! _ = expected RightParenthesis "expected ')'"
+                    let! _ = expected EndOfFile "expected end of file"
+
+                    return {
+                        Name = namespaceName
+                        SourceChecksum =
+                            sourceChecksum
+                            |> ImmutableArray.CreateRange<byte>
+                        ContentFingerprint = contentFingerprint
+                        AssemblyAttributes = [
+                            {
+                                AttributeType = qualifiedTypeName attributeTypeName
+                                ConstructorArgument = constructorArgument
+                                NamedArguments = namedArguments
+                                Range = {
+                                    Start = attributeStart.Range.Start
+                                    End = attributeEnd.Range.End
+                                }
+                            }
+                        ]
+                        Declarations = []
+                    }
+                }
+
+            match (current ()).Kind with
+            | ModuleKeyword ->
+                consume ()
+                |> ignore
+
+                parseModule ()
+            | NamespaceKeyword ->
+                consume ()
+                |> ignore
+
+                parseGeneratedAssemblyAttributeFile ()
+            | _ ->
+                Error(
+                    prototypeDiagnostic
+                        source.Path
+                        (current ()).Range
+                        "expected 'module' or 'namespace'"
+                )

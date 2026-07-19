@@ -99,6 +99,7 @@ type internal CompilerService() =
                         Path = Some sourcePath
                         Range = Some declaration.BodyRange
                     }
+
                 | _, IntegerLiteral value ->
                     let stableId =
                         parsed.Name
@@ -128,35 +129,109 @@ type internal CompilerService() =
                         Range = Some declaration.BodyRange
                     }
 
-            let rec typeDeclarations typed remaining =
+            let typeAssemblyAttribute index (attribute: ParsedAssemblyAttribute) =
+                let attributeTypeName =
+                    if String.IsNullOrEmpty(attribute.AttributeType.Namespace) then
+                        attribute.AttributeType.Name
+                    else
+                        attribute.AttributeType.Namespace
+                        + "."
+                        + attribute.AttributeType.Name
+
+                match attributeTypeName, attribute.NamedArguments with
+                | "System.Runtime.Versioning.TargetFrameworkAttribute",
+                  [ { Name = "FrameworkDisplayName" } ] ->
+                    let stableId =
+                        parsed.Name
+                        + "/assembly-attribute:"
+                        + index.ToString()
+                        + ":"
+                        + attributeTypeName
+
+                    let exportFingerprint =
+                        String.concat "\n" [
+                            attributeTypeName
+                            attribute.ConstructorArgument
+
+                            yield!
+                                attribute.NamedArguments
+                                |> List.collect (fun argument -> [
+                                    argument.Name
+                                    argument.Value
+                                ])
+                        ]
+                        |> Fingerprint.text
+
+                    Ok {
+                        StableId = stableId
+                        AttributeType = attribute.AttributeType
+                        ConstructorArgument = attribute.ConstructorArgument
+                        NamedArguments = attribute.NamedArguments
+                        ExportFingerprint = exportFingerprint
+                        Range = attribute.Range
+                    }
+                | "System.Runtime.Versioning.TargetFrameworkAttribute", _ ->
+                    Error {
+                        Code = "FSC2P1001"
+                        Message =
+                            "the generated target-framework attribute has unsupported named arguments"
+                        Path = Some sourcePath
+                        Range = Some attribute.Range
+                    }
+                | _ ->
+                    Error {
+                        Code = "FSC2P1001"
+                        Message = "unsupported assembly attribute"
+                        Path = Some sourcePath
+                        Range = Some attribute.Range
+                    }
+
+            let rec collectResults completed remaining =
                 match remaining with
-                | [] -> Ok(List.rev typed)
-                | declaration :: tail ->
-                    match typeDeclaration declaration with
+                | [] -> Ok(List.rev completed)
+                | result :: tail ->
+                    match result with
                     | Error diagnostic -> Error diagnostic
-                    | Ok declaration ->
-                        typeDeclarations
-                            (declaration
-                             :: typed)
+                    | Ok value ->
+                        collectResults
+                            (value
+                             :: completed)
                             tail
 
-            match typeDeclarations [] parsed.Declarations with
-            | Error diagnostic -> Error diagnostic
-            | Ok declarations ->
-                let typed = {
-                    Name = parsed.Name
-                    SourceChecksum = parsed.SourceChecksum
-                    ContentFingerprint = parsed.ContentFingerprint
-                    Declarations = declarations
-                    ExportFingerprint =
-                        declarations
-                        |> List.map (fun declaration -> declaration.ExportFingerprint)
-                        |> String.concat "|"
-                        |> Fingerprint.text
-                }
+            let typedAssemblyAttributes =
+                parsed.AssemblyAttributes
+                |> List.mapi typeAssemblyAttribute
+                |> collectResults []
 
-                checkCache.Add(key, typed)
-                Ok(typed, key)
+            match typedAssemblyAttributes with
+            | Error diagnostic -> Error diagnostic
+            | Ok assemblyAttributes ->
+                let typedDeclarations =
+                    parsed.Declarations
+                    |> List.map typeDeclaration
+                    |> collectResults []
+
+                match typedDeclarations with
+                | Error diagnostic -> Error diagnostic
+                | Ok declarations ->
+                    let typed = {
+                        Name = parsed.Name
+                        SourceChecksum = parsed.SourceChecksum
+                        ContentFingerprint = parsed.ContentFingerprint
+                        AssemblyAttributes = assemblyAttributes
+                        Declarations = declarations
+                        ExportFingerprint =
+                            List.append
+                                (assemblyAttributes
+                                 |> List.map _.ExportFingerprint)
+                                (declarations
+                                 |> List.map _.ExportFingerprint)
+                            |> String.concat "|"
+                            |> Fingerprint.text
+                    }
+
+                    checkCache.Add(key, typed)
+                    Ok(typed, key)
 
     let lower (assemblyName: string) (typedModules: TypedModule list) =
         let modulesWithContentHashes =
@@ -176,6 +251,13 @@ type internal CompilerService() =
                     )
 
                 typed, declarationsWithContentHashes
+            )
+
+        let assemblyAttributesWithContentHashes =
+            typedModules
+            |> List.collect (fun typed ->
+                typed.AssemblyAttributes
+                |> List.map (fun attribute -> attribute, attribute.ExportFingerprint)
             )
 
         let implementationFingerprint =
@@ -229,49 +311,80 @@ type internal CompilerService() =
                 + "/module:"
                 + moduleName
 
+            let documents =
+                typedModules
+                |> List.mapi (fun documentIndex typed -> {
+                    SchemaVersion = querySchema
+                    StableId =
+                        moduleStableId
+                        + "/document:"
+                        + documentIndex.ToString()
+                    Checksum = typed.SourceChecksum
+                })
+
+            let assemblyAttributes =
+                assemblyAttributesWithContentHashes
+                |> List.map (fun (attribute, contentHash) -> {
+                    SchemaVersion = querySchema
+                    StableId = attribute.StableId
+                    AttributeType = attribute.AttributeType
+                    ConstructorArgument = attribute.ConstructorArgument
+                    NamedArguments =
+                        attribute.NamedArguments
+                        |> List.map (fun argument -> {
+                            Name = argument.Name
+                            Value = argument.Value
+                        })
+                    ContentHash = contentHash
+                })
+
             let types =
                 modulesWithContentHashes
                 |> List.mapi (fun documentIndex (typed, declarationsWithContentHashes) ->
-                    let typeStableId =
-                        moduleStableId
-                        + "/type:"
-                        + typed.Name
+                    if List.isEmpty declarationsWithContentHashes then
+                        None
+                    else
+                        let typeStableId =
+                            moduleStableId
+                            + "/type:"
+                            + typed.Name
 
-                    let methods =
-                        declarationsWithContentHashes
-                        |> List.map (fun (declaration, contentHash) ->
-                            let instructions =
-                                match declaration.Body with
-                                | TypedIntegerLiteral value -> [
-                                    LoadInt32 value
-                                    Return
-                                  ]
+                        let methods =
+                            declarationsWithContentHashes
+                            |> List.map (fun (declaration, contentHash) ->
+                                let instructions =
+                                    match declaration.Body with
+                                    | TypedIntegerLiteral value -> [
+                                        LoadInt32 value
+                                        Return
+                                      ]
 
-                            {
-                                SchemaVersion = querySchema
-                                StableId =
-                                    typeStableId
-                                    + "/method:"
-                                    + declaration.StableId
-                                Name = declaration.Name
-                                ReturnType = declaration.ReturnType
-                                Instructions = instructions
-                                DependencyIds = []
-                                ContentHash = contentHash
-                                DocumentIndex = documentIndex
-                                DocumentChecksum = typed.SourceChecksum
-                                Range = declaration.Range
-                            }
-                        )
+                                {
+                                    SchemaVersion = querySchema
+                                    StableId =
+                                        typeStableId
+                                        + "/method:"
+                                        + declaration.StableId
+                                    Name = declaration.Name
+                                    ReturnType = declaration.ReturnType
+                                    Instructions = instructions
+                                    DependencyIds = []
+                                    ContentHash = contentHash
+                                    DocumentIndex = documentIndex
+                                    DocumentChecksum = typed.SourceChecksum
+                                    Range = declaration.Range
+                                }
+                            )
 
-                    {
-                        SchemaVersion = querySchema
-                        StableId = typeStableId
-                        Namespace = String.Empty
-                        Name = typed.Name
-                        Methods = methods
-                    }
+                        Some {
+                            SchemaVersion = querySchema
+                            StableId = typeStableId
+                            Namespace = String.Empty
+                            Name = typed.Name
+                            Methods = methods
+                        }
                 )
+                |> List.choose id
 
             let symbolic: SymbolicAssembly = {
                 SchemaVersion = querySchema
@@ -282,6 +395,8 @@ type internal CompilerService() =
                     |> List.map _.ExportFingerprint
                     |> String.concat "|"
                     |> Fingerprint.text
+                Documents = documents
+                AssemblyAttributes = assemblyAttributes
                 Module = {
                     SchemaVersion = querySchema
                     StableId = moduleStableId

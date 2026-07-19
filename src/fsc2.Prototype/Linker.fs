@@ -79,6 +79,14 @@ type private PrototypeNativeResourceSection(payload: byte array) =
         builder.Align(4)
 
 module internal Linker =
+    type private TargetReferenceIdentity = {
+        Name: string
+        Version: Version
+        Culture: string
+        PublicKeyToken: byte array
+        Flags: AssemblyFlags
+    }
+
     let private sha256DocumentHashAlgorithm =
         Guid("8829d00f-11b8-4213-878b-770e8597ac16")
 
@@ -87,6 +95,111 @@ module internal Linker =
     let private sourceLinkKind = Guid("cc110556-a091-4d38-9fec-25ab9a351a6a")
 
     let private immutableBytes (bytes: byte array) = ImmutableArray.CreateRange<byte>(bytes)
+
+    let private publicKeyToken (publicKey: byte array) =
+        if publicKey.Length = 0 then
+            Array.empty
+        else
+            let hash = SHA1.HashData(publicKey)
+
+            Array.init
+                8
+                (fun index ->
+                    hash.[hash.Length
+                          - index
+                          - 1]
+                )
+
+    let private tryReadTargetReference (expectedName: string) (path: string) =
+        if
+            not (
+                String.Equals(
+                    Path.GetFileNameWithoutExtension(path),
+                    expectedName,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+        then
+            None
+        else
+            use stream = File.OpenRead(path)
+            use pe = new PEReader(stream)
+            let metadata = pe.GetMetadataReader()
+            let definition = metadata.GetAssemblyDefinition()
+            let publicKey = metadata.GetBlobBytes(definition.PublicKey)
+
+            Some {
+                Name = metadata.GetString(definition.Name)
+                Version = definition.Version
+                Culture =
+                    if definition.Culture.IsNil then
+                        String.Empty
+                    else
+                        metadata.GetString(definition.Culture)
+                PublicKeyToken = publicKeyToken publicKey
+                Flags =
+                    enum<AssemblyFlags> (
+                        int definition.Flags
+                        &&& ~~~(int AssemblyFlags.PublicKey)
+                    )
+            }
+
+    let private defaultSystemRuntimeReference = {
+        Name = "System.Runtime"
+        Version = Version(10, 0, 0, 0)
+        Culture = String.Empty
+        PublicKeyToken = [|
+            0xb0uy
+            0x3fuy
+            0x5fuy
+            0x7fuy
+            0x11uy
+            0xd5uy
+            0x0auy
+            0x3auy
+        |]
+        Flags = enum<AssemblyFlags> 0
+    }
+
+    let private targetReferenceName (symbolic: SymbolicAssembly) =
+        symbolic.AssemblyAttributes
+        |> List.tryPick (fun attribute ->
+            if
+                attribute.AttributeType.Namespace = "System.Runtime.Versioning"
+                && attribute.AttributeType.Name = "TargetFrameworkAttribute"
+                && attribute.ConstructorArgument.StartsWith(
+                    ".NETStandard,",
+                    StringComparison.Ordinal
+                )
+            then
+                Some "netstandard"
+            else
+                None
+        )
+        |> Option.defaultValue "System.Runtime"
+
+    let private resolveTargetReference invocation symbolic =
+        let expectedName = targetReferenceName symbolic
+
+        match
+            invocation.ReferencePaths
+            |> List.tryPick (tryReadTargetReference expectedName)
+        with
+        | Some reference -> reference
+        | None when
+            List.isEmpty invocation.ReferencePaths
+            && expectedName = "System.Runtime"
+            ->
+            // The original synthetic prototype accepted no explicit reference
+            // closure and targets its own .NET 10 host profile. Real
+            // Compiler Target Invocations always resolve from evaluated refs.
+            defaultSystemRuntimeReference
+        | None ->
+            invalidOp (
+                "the target reference set does not contain assembly '"
+                + expectedName
+                + "'"
+            )
 
     let private addManagedResource
         (metadata: MetadataBuilder)
@@ -149,6 +262,42 @@ module internal Linker =
             .Parameters(0, (fun returnType -> returnType.Type().Int32()), (fun _ -> ()))
 
         signature
+
+    let private encodeStringConstructorSignature () =
+        let signature = BlobBuilder()
+
+        BlobEncoder(signature)
+            .MethodSignature(isInstanceMethod = true)
+            .Parameters(
+                1,
+                (fun returnType -> returnType.Void()),
+                (fun parameters -> parameters.AddParameter().Type().String())
+            )
+
+        signature
+
+    let private encodeAssemblyAttributeValue (attribute: SymbolicAssemblyAttributeFragment) =
+        let value = BlobBuilder()
+
+        BlobEncoder(value)
+            .CustomAttributeSignature(
+                (fun fixedArguments ->
+                    fixedArguments.AddArgument().Scalar().Constant(attribute.ConstructorArgument)
+                ),
+                (fun namedArguments ->
+                    let arguments = namedArguments.Count(attribute.NamedArguments.Length)
+
+                    for argument in attribute.NamedArguments do
+                        arguments.AddArgument(
+                            false,
+                            (fun argumentType -> argumentType.ScalarType().String()),
+                            (fun argumentName -> argumentName.Name(argument.Name)),
+                            (fun literal -> literal.Scalar().Constant(argument.Value))
+                        )
+                )
+            )
+
+        value
 
     let private encodeSequencePoint (methodFragment: SymbolicMethodFragment) =
         let sequencePoints = BlobBuilder()
@@ -214,6 +363,16 @@ module internal Linker =
         if
             symbolic.SchemaVersion
             <> symbolic.Module.SchemaVersion
+            || (symbolic.Documents
+                |> List.exists (fun document ->
+                    symbolic.SchemaVersion
+                    <> document.SchemaVersion
+                ))
+            || (symbolic.AssemblyAttributes
+                |> List.exists (fun attribute ->
+                    symbolic.SchemaVersion
+                    <> attribute.SchemaVersion
+                ))
             || (typeFragments
                 |> List.exists (fun typeFragment ->
                     symbolic.SchemaVersion
@@ -230,6 +389,10 @@ module internal Linker =
         if
             String.IsNullOrWhiteSpace(symbolic.StableId)
             || String.IsNullOrWhiteSpace(symbolic.Module.StableId)
+            || (symbolic.Documents
+                |> List.exists (fun document -> String.IsNullOrWhiteSpace(document.StableId)))
+            || (symbolic.AssemblyAttributes
+                |> List.exists (fun attribute -> String.IsNullOrWhiteSpace(attribute.StableId)))
             || (typeFragments
                 |> List.exists (fun typeFragment ->
                     String.IsNullOrWhiteSpace(typeFragment.StableId)
@@ -243,31 +406,25 @@ module internal Linker =
 
         if
             invocation.DebugDocumentPaths.Length
-            <> typeFragments.Length
+            <> symbolic.Documents.Length
         then
-            invalidOp "the symbolic emission graph must contain one debug document per source type"
+            invalidOp "the symbolic emission graph must contain one debug document per source input"
 
         let documentChecksums =
-            typeFragments
-            |> List.mapi (fun documentIndex typeFragment ->
-                match typeFragment.Methods with
-                | [] -> invalidOp "a source type must contain at least one method for PDB emission"
-                | firstMethod :: remainingMethods ->
-                    if
-                        firstMethod.DocumentIndex
-                        <> documentIndex
-                        || (remainingMethods
-                            |> List.exists (fun methodFragment ->
-                                methodFragment.DocumentIndex
-                                <> documentIndex
-                                || methodFragment.DocumentChecksum
-                                   <> firstMethod.DocumentChecksum
-                            ))
-                    then
-                        invalidOp "a source type has inconsistent debug-document metadata"
+            symbolic.Documents
+            |> List.map _.Checksum
 
-                    firstMethod.DocumentChecksum
+        if
+            methodFragments
+            |> List.exists (fun methodFragment ->
+                methodFragment.DocumentIndex < 0
+                || methodFragment.DocumentIndex
+                   >= symbolic.Documents.Length
+                || methodFragment.DocumentChecksum
+                   <> symbolic.Documents.[methodFragment.DocumentIndex].Checksum
             )
+        then
+            invalidOp "a symbolic method has inconsistent debug-document metadata"
 
         let metadata = MetadataBuilder()
         let ilStream = BlobBuilder()
@@ -282,33 +439,29 @@ module internal Linker =
 
         let signature = encodeSignature ()
 
-        let publicKeyToken =
-            [|
-                0xb0uy
-                0x3fuy
-                0x5fuy
-                0x7fuy
-                0x11uy
-                0xd5uy
-                0x0auy
-                0x3auy
-            |]
-            |> immutableBytes
-            |> metadata.GetOrAddBlob
+        let targetReference = resolveTargetReference invocation symbolic
 
-        let systemRuntime =
+        let targetReferenceCulture =
+            if String.IsNullOrEmpty(targetReference.Culture) then
+                Unchecked.defaultof<StringHandle>
+            else
+                metadata.GetOrAddString(targetReference.Culture)
+
+        let coreLibrary =
             metadata.AddAssemblyReference(
-                metadata.GetOrAddString("System.Runtime"),
-                Version(10, 0, 0, 0),
-                Unchecked.defaultof<StringHandle>,
-                publicKeyToken,
-                enum<AssemblyFlags> 0,
+                metadata.GetOrAddString(targetReference.Name),
+                targetReference.Version,
+                targetReferenceCulture,
+                targetReference.PublicKeyToken
+                |> immutableBytes
+                |> metadata.GetOrAddBlob,
+                targetReference.Flags,
                 Unchecked.defaultof<BlobHandle>
             )
 
         let systemObject =
             metadata.AddTypeReference(
-                systemRuntime,
+                coreLibrary,
                 metadata.GetOrAddString("System"),
                 metadata.GetOrAddString("Object")
             )
@@ -334,15 +487,42 @@ module internal Linker =
                 strongName.PublicKey
                 |> metadata.GetOrAddBlob
 
-        metadata.AddAssembly(
-            metadata.GetOrAddString(symbolic.AssemblyName),
-            Version(1, 0, 0, 0),
-            Unchecked.defaultof<StringHandle>,
-            assemblyPublicKey,
-            StrongName.assemblyFlags strongName,
-            StrongName.assemblyHashAlgorithm strongName
-        )
-        |> ignore
+        let assemblyDefinition =
+            metadata.AddAssembly(
+                metadata.GetOrAddString(symbolic.AssemblyName),
+                Version(1, 0, 0, 0),
+                Unchecked.defaultof<StringHandle>,
+                assemblyPublicKey,
+                StrongName.assemblyFlags strongName,
+                StrongName.assemblyHashAlgorithm strongName
+            )
+
+        let attributeConstructorSignature =
+            encodeStringConstructorSignature ()
+            |> metadata.GetOrAddBlob
+
+        for attribute in symbolic.AssemblyAttributes do
+            let attributeType =
+                metadata.AddTypeReference(
+                    coreLibrary,
+                    metadata.GetOrAddString(attribute.AttributeType.Namespace),
+                    metadata.GetOrAddString(attribute.AttributeType.Name)
+                )
+
+            let constructor =
+                metadata.AddMemberReference(
+                    attributeType,
+                    metadata.GetOrAddString(".ctor"),
+                    attributeConstructorSignature
+                )
+
+            let value =
+                attribute
+                |> encodeAssemblyAttributeValue
+                |> metadata.GetOrAddBlob
+
+            metadata.AddCustomAttribute(assemblyDefinition, constructor, value)
+            |> ignore
 
         metadata.AddTypeDefinition(
             TypeAttributes.NotPublic,

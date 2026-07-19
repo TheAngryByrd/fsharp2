@@ -204,6 +204,60 @@ module CompilerTargetTests =
         )
         |> Map.ofArray
 
+    let private findAssemblyAttribute (metadata: MetadataReader) expectedTypeName =
+        metadata.CustomAttributes
+        |> Seq.choose (fun handle ->
+            let attribute = metadata.GetCustomAttribute(handle)
+
+            if
+                attribute.Parent.Kind
+                <> HandleKind.AssemblyDefinition
+                || attribute.Constructor.Kind
+                   <> HandleKind.MemberReference
+            then
+                None
+            else
+                let constructor =
+                    attribute.Constructor
+                    |> MetadataTokens.GetRowNumber
+                    |> MetadataTokens.MemberReferenceHandle
+                    |> metadata.GetMemberReference
+
+                if
+                    constructor.Parent.Kind
+                    <> HandleKind.TypeReference
+                then
+                    None
+                else
+                    let attributeType =
+                        constructor.Parent
+                        |> MetadataTokens.GetRowNumber
+                        |> MetadataTokens.TypeReferenceHandle
+                        |> metadata.GetTypeReference
+
+                    let fullName =
+                        metadata.GetString(attributeType.Namespace)
+                        + "."
+                        + metadata.GetString(attributeType.Name)
+
+                    if
+                        fullName
+                        <> expectedTypeName
+                        || attributeType.ResolutionScope.Kind
+                           <> HandleKind.AssemblyReference
+                    then
+                        None
+                    else
+                        let scope =
+                            attributeType.ResolutionScope
+                            |> MetadataTokens.GetRowNumber
+                            |> MetadataTokens.AssemblyReferenceHandle
+                            |> metadata.GetAssemblyReference
+
+                        Some(attribute, constructor, scope)
+        )
+        |> Seq.exactlyOne
+
     let private rvaToFileOffset (headers: PEHeaders) relativeVirtualAddress =
         headers.SectionHeaders
         |> Seq.find (fun section ->
@@ -657,6 +711,158 @@ module CompilerTargetTests =
 
                     let consumer = invokeConsumer root outputPath 42
                     Expect.equal consumer.ExitCode 0 consumer.StandardError
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "resolves generated target-framework metadata from the target reference set"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-prototype",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let targetFrameworkSourcePath =
+                        Path.Combine(root, ".NETStandard,Version=v2.1.AssemblyAttributes.fs")
+
+                    let tracerSourcePath = Path.Combine(root, "Tracer.fs")
+                    let outputPath = Path.Combine(root, "Tracer.dll")
+                    let pdbPath = Path.Combine(root, "Tracer.pdb")
+                    let responsePath = Path.Combine(root, "compile.rsp")
+
+                    let dotnetRoot =
+                        let rec findPacksRoot (directory: DirectoryInfo) =
+                            if isNull directory then
+                                None
+                            elif Directory.Exists(Path.Combine(directory.FullName, "packs")) then
+                                Some directory.FullName
+                            else
+                                findPacksRoot directory.Parent
+
+                        RuntimeEnvironment.GetRuntimeDirectory()
+                        |> DirectoryInfo
+                        |> findPacksRoot
+                        |> Option.defaultWith (fun () ->
+                            failwith
+                                "the active .NET runtime is not beneath an SDK installation containing packs"
+                        )
+
+                    let netstandardReferencePath =
+                        Path.Combine(
+                            dotnetRoot,
+                            "packs",
+                            "NETStandard.Library.Ref",
+                            "2.1.0",
+                            "ref",
+                            "netstandard2.1",
+                            "netstandard.dll"
+                        )
+
+                    Expect.isTrue
+                        (File.Exists netstandardReferencePath)
+                        "the installed .NET SDK should contain the netstandard2.1 reference assembly"
+
+                    File.WriteAllText(
+                        targetFrameworkSourcePath,
+                        "namespace Microsoft.BuildSettings\n[<System.Runtime.Versioning.TargetFrameworkAttribute(\".NETStandard,Version=v2.1\", FrameworkDisplayName=\".NET Standard 2.1\")>]\ndo ()\n"
+                    )
+
+                    File.WriteAllText(tracerSourcePath, "module Tracer\nlet answer () = 42\n")
+
+                    File.WriteAllLines(
+                        responsePath,
+                        [|
+                            $"-o:{outputPath}"
+                            "--debug:portable"
+                            "--noframework"
+                            $"-r:{netstandardReferencePath}"
+                            "--target:library"
+                            "--deterministic+"
+                            targetFrameworkSourcePath
+                            tracerSourcePath
+                        |]
+                    )
+
+                    let result = invokeFsc2 root responsePath
+                    Expect.equal result.ExitCode 0 result.StandardError
+
+                    use implementationStream = File.OpenRead(outputPath)
+                    use implementation = new PEReader(implementationStream)
+                    let metadata = implementation.GetMetadataReader()
+
+                    let (targetFrameworkAttribute, targetFrameworkConstructor, targetFrameworkScope) =
+                        findAssemblyAttribute
+                            metadata
+                            "System.Runtime.Versioning.TargetFrameworkAttribute"
+
+                    Expect.equal
+                        (metadata.GetString(targetFrameworkScope.Name))
+                        "netstandard"
+                        "the attribute type should resolve through the supplied facade"
+
+                    Expect.equal
+                        targetFrameworkScope.Version
+                        (System.Version(2, 1, 0, 0))
+                        "the attribute scope should retain the supplied reference version"
+
+                    Expect.sequenceEqual
+                        (metadata.GetBlobBytes(targetFrameworkScope.PublicKeyOrToken))
+                        (Convert.FromHexString("CC7B13FFCD2DDD51"))
+                        "the attribute scope should retain the supplied reference identity"
+
+                    Expect.sequenceEqual
+                        (metadata.GetBlobBytes(targetFrameworkConstructor.Signature))
+                        (Convert.FromHexString("2001010E"))
+                        "the constructor signature should match the Compatibility Oracle"
+
+                    Expect.sequenceEqual
+                        (metadata.GetBlobBytes(targetFrameworkAttribute.Value))
+                        (Convert.FromHexString(
+                            "0100192E4E45545374616E646172642C56657273696F6E3D76322E310100540E144672616D65776F726B446973706C61794E616D65112E4E4554205374616E6461726420322E31"
+                        ))
+                        "the attribute value should match the Compatibility Oracle"
+
+                    let typeNames =
+                        metadata.TypeDefinitions
+                        |> Seq.map (fun handle ->
+                            let definition = metadata.GetTypeDefinition(handle)
+
+                            metadata.GetString(definition.Name)
+                        )
+                        |> Seq.toArray
+
+                    Expect.sequenceEqual
+                        typeNames
+                        [|
+                            "<Module>"
+                            "Tracer"
+                        |]
+                        "the generated attribute source should not add a runtime type"
+
+                    use pdbStream = File.OpenRead(pdbPath)
+                    use pdbProvider = MetadataReaderProvider.FromPortablePdbStream(pdbStream)
+                    let pdb = pdbProvider.GetMetadataReader()
+
+                    let documentNames =
+                        pdb.Documents
+                        |> Seq.map (
+                            pdb.GetDocument
+                            >> fun document -> pdb.GetString(document.Name)
+                        )
+                        |> Seq.toArray
+
+                    Expect.sequenceEqual
+                        documentNames
+                        [|
+                            ".NETStandard,Version=v2.1.AssemblyAttributes.fs"
+                            "Tracer.fs"
+                        |]
+                        "the portable PDB should retain the generated source in order"
                 finally
                     Directory.Delete(root, true)
 
@@ -2246,7 +2452,6 @@ module CompilerTargetTests =
     <FSharp2CompilerTracePath>{tracePath}</FSharp2CompilerTracePath>
     <DisableImplicitFSharpCoreReference>true</DisableImplicitFSharpCoreReference>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
-    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <ProduceReferenceAssembly>true</ProduceReferenceAssembly>
     <EnableSourceLink>false</EnableSourceLink>
@@ -2355,7 +2560,7 @@ module CompilerTargetTests =
 
                         Expect.equal
                             baselineTrace.["sourceCount"]
-                            "2"
+                            "3"
                             "MSBuild should preserve the evaluated source list"
 
                         Expect.isGreaterThan
@@ -2401,6 +2606,86 @@ module CompilerTargetTests =
 
                         for path in requestedArtifacts do
                             Expect.isTrue (File.Exists path) $"CoreCompile should produce {path}"
+
+                        do
+                            use implementationStream = File.OpenRead(outputPath)
+                            use implementation = new PEReader(implementationStream)
+                            let metadata = implementation.GetMetadataReader()
+
+                            let (targetFrameworkAttribute,
+                                 targetFrameworkConstructor,
+                                 targetFrameworkScope) =
+                                findAssemblyAttribute
+                                    metadata
+                                    "System.Runtime.Versioning.TargetFrameworkAttribute"
+
+                            Expect.equal
+                                (metadata.GetString(targetFrameworkConstructor.Name))
+                                ".ctor"
+                                "the target-framework attribute should use its string constructor"
+
+                            Expect.sequenceEqual
+                                (metadata.GetBlobBytes(targetFrameworkConstructor.Signature))
+                                [|
+                                    0x20uy
+                                    0x01uy
+                                    0x01uy
+                                    0x0euy
+                                |]
+                                "the constructor signature should be instance void(string)"
+
+                            Expect.equal
+                                (metadata.GetString(targetFrameworkScope.Name))
+                                "System.Runtime"
+                                "the attribute type should resolve through the target reference set"
+
+                            Expect.equal
+                                targetFrameworkScope.Version
+                                (System.Version(10, 0, 0, 0))
+                                "the attribute scope should retain the target reference version"
+
+                            Expect.sequenceEqual
+                                (metadata.GetBlobBytes(targetFrameworkAttribute.Value))
+                                (Convert.FromHexString(
+                                    "0100192E4E4554436F72654170702C56657273696F6E3D7631302E300100540E144672616D65776F726B446973706C61794E616D65092E4E45542031302E30"
+                                ))
+                                "the target-framework attribute value should match the Compatibility Oracle"
+
+                            let hasBuildSettingsType =
+                                metadata.TypeDefinitions
+                                |> Seq.exists (fun handle ->
+                                    let definition = metadata.GetTypeDefinition(handle)
+
+                                    metadata.GetString(definition.Namespace) = "Microsoft.BuildSettings"
+                                )
+
+                            Expect.isFalse
+                                hasBuildSettingsType
+                                "the generated assembly-attribute file should not add a runtime type"
+
+                            use pdbStream = File.OpenRead(pdbPath)
+
+                            use pdbProvider =
+                                MetadataReaderProvider.FromPortablePdbStream(pdbStream)
+
+                            let pdb = pdbProvider.GetMetadataReader()
+
+                            let documentNames =
+                                pdb.Documents
+                                |> Seq.map (
+                                    pdb.GetDocument
+                                    >> fun document -> pdb.GetString(document.Name)
+                                )
+                                |> Seq.toArray
+
+                            Expect.sequenceEqual
+                                documentNames
+                                [|
+                                    ".NETCoreApp,Version=v10.0.AssemblyAttributes.fs"
+                                    "First.fs"
+                                    "Tracer.fs"
+                                |]
+                                "the portable PDB should retain every evaluated source in order"
 
                         let baselineConsumer = invokeConsumer root outputPath 42
                         Expect.equal baselineConsumer.ExitCode 0 baselineConsumer.StandardError

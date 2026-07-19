@@ -122,10 +122,34 @@ type internal ParsedDeclaration = {
 
     override _.ToString() = "ParsedDeclaration"
 
+type internal ParsedNamedStringArgument = {
+    Name: string
+    Value: string
+} with
+
+    override _.ToString() = "ParsedNamedStringArgument"
+
+type internal QualifiedTypeName = {
+    Namespace: string
+    Name: string
+} with
+
+    override _.ToString() = "QualifiedTypeName"
+
+type internal ParsedAssemblyAttribute = {
+    AttributeType: QualifiedTypeName
+    ConstructorArgument: string
+    NamedArguments: ParsedNamedStringArgument list
+    Range: SourceRange
+} with
+
+    override _.ToString() = "ParsedAssemblyAttribute"
+
 type internal ParsedModule = {
     Name: string
     SourceChecksum: ImmutableArray<byte>
     ContentFingerprint: string
+    AssemblyAttributes: ParsedAssemblyAttribute list
     Declarations: ParsedDeclaration list
 } with
 
@@ -152,10 +176,22 @@ type internal TypedDeclaration = {
 
     override _.ToString() = "TypedDeclaration"
 
+type internal TypedAssemblyAttribute = {
+    StableId: string
+    AttributeType: QualifiedTypeName
+    ConstructorArgument: string
+    NamedArguments: ParsedNamedStringArgument list
+    ExportFingerprint: string
+    Range: SourceRange
+} with
+
+    override _.ToString() = "TypedAssemblyAttribute"
+
 type internal TypedModule = {
     Name: string
     SourceChecksum: ImmutableArray<byte>
     ContentFingerprint: string
+    AssemblyAttributes: TypedAssemblyAttribute list
     Declarations: TypedDeclaration list
     ExportFingerprint: string
 } with
@@ -194,6 +230,32 @@ type internal SymbolicTypeFragment = {
 
     override _.ToString() = "SymbolicTypeFragment"
 
+type internal SymbolicDocumentFragment = {
+    SchemaVersion: int
+    StableId: string
+    Checksum: ImmutableArray<byte>
+} with
+
+    override _.ToString() = "SymbolicDocumentFragment"
+
+type internal SymbolicNamedStringArgument = {
+    Name: string
+    Value: string
+} with
+
+    override _.ToString() = "SymbolicNamedStringArgument"
+
+type internal SymbolicAssemblyAttributeFragment = {
+    SchemaVersion: int
+    StableId: string
+    AttributeType: QualifiedTypeName
+    ConstructorArgument: string
+    NamedArguments: SymbolicNamedStringArgument list
+    ContentHash: string
+} with
+
+    override _.ToString() = "SymbolicAssemblyAttributeFragment"
+
 type internal SymbolicModuleFragment = {
     SchemaVersion: int
     StableId: string
@@ -208,6 +270,8 @@ type internal SymbolicAssembly = {
     StableId: string
     AssemblyName: string
     PublicFingerprint: string
+    Documents: SymbolicDocumentFragment list
+    AssemblyAttributes: SymbolicAssemblyAttributeFragment list
     Module: SymbolicModuleFragment
 } with
 
