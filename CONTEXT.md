@@ -48,6 +48,10 @@ _Avoid_: IcedTasks fixture, reduced IcedTasks slice, patched IcedTasks
 The evidence threshold that must be met before the replacement compiler target is presented as drop-in compatible rather than experimental.
 _Avoid_: Feature complete
 
+**Debugger Automation Driver**:
+The test-only, hash-pinned DAP adapter whose F# conformance probe must pass before its breakpoint, stepping, source, locals, or stack observations can judge compiler output.
+_Avoid_: Debugger oracle, PDB validator
+
 **Performance Tripwire**:
 The three-second Compiler Target Invocation threshold beyond which the compiler must explain its critical path and resource costs.
 _Avoid_: Compilation timeout
