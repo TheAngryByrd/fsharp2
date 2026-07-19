@@ -472,7 +472,7 @@ Oracle refresh runs old/candidate oracle, reviews every corpus/golden/policy dif
 2. **Debugger automation:** canonical PDB/source/stack evidence is fixed; [Choose the cross-platform debugger automation driver][issue-18] owns the pinned breakpoint/stepping driver and reproducibility contract.
 3. **Warm edit corpus:** after [Select the first IcedTasks vertical slice][issue-6] fixes the source envelope, [Define the warm-edit corpus and cache-evidence contract][issue-19] owns representative edits and epoch/hit/miss/reuse/invalidation evidence without making cache layout a compatibility contract.
 4. **Performance runner:** [Define compiler performance runner and regression governance][issue-12] owns machine classes, quietness thresholds, scanner exclusions, variance policy, trace schema, and the evidence required before tightening the 10%/50 ms gate.
-5. **Type providers:** [Choose the type-provider compatibility boundary][issue-13] decides between a broker, an ahead-of-time contract, a declared compatibility limitation, or another boundary; provider cases remain explicitly unsupported until then.
+5. **Type providers:** [ADR 0025](../adr/0025-use-a-managed-broker-for-legacy-type-providers.md) selects an optional managed broker for final legacy-provider compatibility and keeps a dependency-declaring snapshot contract additive; the [issue #13 research](type-provider-compatibility-boundary.md) defines the protocol, invalidation, cache, diagnostic, and gate contract. Provider cases remain explicitly unsupported until their declared broker envelope passes, not because the boundary is undecided.
 6. **Linux deployment:** [Establish Linux runtime and deployment compatibility floors][issue-14] owns separate glibc and musl floors; `linux-*` cannot imply both.
 7. **Localization/signing:** [Define localization, signing, and native-resource compatibility policy][issue-15] owns the final culture/ICU matrix, key custody, and native-resource/signing probes.
 8. **Sensitive evidence:** [Define secure harness evidence retention and redaction][issue-16] owns CI retention, access, redaction, and deletion policy before raw binlogs or source-bearing bundles are uploaded.
@@ -521,7 +521,6 @@ Oracle refresh runs old/candidate oracle, reviews every corpus/golden/policy dif
 [issue-7]: https://github.com/TheAngryByrd/fsharp2/issues/7
 [issue-8]: https://github.com/TheAngryByrd/fsharp2/issues/8
 [issue-12]: https://github.com/TheAngryByrd/fsharp2/issues/12
-[issue-13]: https://github.com/TheAngryByrd/fsharp2/issues/13
 [issue-14]: https://github.com/TheAngryByrd/fsharp2/issues/14
 [issue-15]: https://github.com/TheAngryByrd/fsharp2/issues/15
 [issue-16]: https://github.com/TheAngryByrd/fsharp2/issues/16

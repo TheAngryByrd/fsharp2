@@ -20,7 +20,7 @@ That boundary has five immediate consequences:
 4. The six required host artifacts are `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`, and `osx-arm64`. They are separately published, packaged, installed, and executed. The integration target selects the **build machine** RID, never the target project's `RuntimeIdentifier`.
 5. [ADR 0002](../adr/0002-require-nativeaot-for-compiler-and-output.md) creates two independent release gates: one proves the compiler host itself is native; the other proves that a normal .NET NativeAOT consumer can publish and execute against FSharp2's managed output. Neither gate stands in for the other.
 
-The sharp unresolved compatibility problem is arbitrary F# type providers. The public FSharp.Core contract describes executable provider classes that the compiler constructs and calls, exchanging runtime `Type`, `Assembly`, `MethodBase`, and quotation objects. An arbitrary existing provider cannot be loaded into a closed-world NativeAOT host. Experimental envelopes must reject provider inputs explicitly. Before the final Compatibility Gate, a follow-on decision must choose an out-of-process managed provider broker, a new ahead-of-time provider contract, or an explicit compatibility limitation; this ticket does not silently choose one.
+The sharp compatibility boundary is arbitrary F# type providers. The public FSharp.Core contract describes executable provider classes that the compiler constructs and calls, exchanging runtime `Type`, `Assembly`, `MethodBase`, and quotation objects. An arbitrary existing provider cannot be loaded into a closed-world NativeAOT host. Experimental envelopes must reject provider inputs explicitly until their declared provider gate passes. [ADR 0025](../adr/0025-use-a-managed-broker-for-legacy-type-providers.md) now resolves the follow-on decision: final legacy-provider compatibility uses an optional out-of-process managed broker, while a dependency-declaring snapshot contract remains additive. The detailed boundary is captured in the [issue #13 research](type-provider-compatibility-boundary.md).
 
 ## Evidence vocabulary
 
@@ -258,12 +258,12 @@ Those requirements collide directly with NativeAOT's closed world and prohibitio
 
 1. The production host has no generic plugin loader and never treats `--compilertool` or a referenced `TypeProviderAssemblyAttribute` as permission to call `Assembly.Load`.
 2. Every Experimental Vertical Milestone declares whether type providers are excluded. When excluded, detection produces a clear unsupported-envelope diagnostic before partial output is published.
-3. Provider assemblies remain metadata inputs unless a future architecture explicitly moves execution elsewhere.
+3. Provider assemblies remain metadata-only inputs to the NativeAOT host. In an enabled [ADR 0025](../adr/0025-use-a-managed-broker-for-legacy-type-providers.md) envelope, the managed Provider Broker alone loads the selected design-time assembly as executable user input; provider objects never enter the native process.
 4. Oracle infrastructure may run providers through the official managed compiler for differential evidence, but production may not delegate a successful compilation to that compiler.
 
-### Newly sharp follow-on decision
+### Resolved follow-on decision
 
-Before the final drop-in Compatibility Gate, the project must decide whether production may ship a separate, managed, out-of-process **type-provider broker**. That choice changes the trust boundary, installation prerequisites, protocol/versioning, cancellation, invalidation, target-reference identity, sandbox story, and meaning of “NativeAOT compiler host.” Alternatives are an ahead-of-time provider protocol or an explicit compatibility exclusion. This ticket establishes the conflict and the fail-explicitly interim behavior; it does not mutate the tracker or choose the product policy.
+[ADR 0025](../adr/0025-use-a-managed-broker-for-legacy-type-providers.md) selects a separate, managed, out-of-process **Provider Broker** for final legacy-provider compatibility. The NativeAOT compiler remains closed-world and owns every compiler decision; the broker executes only the public provider contract and has no FCS/compiler fallback path. Provider inputs remain fail-explicitly unsupported in experimental envelopes until the broker's declared gate passes. A new ahead-of-time provider snapshot contract may improve deterministic cross-session reuse, but is additive rather than a substitute for existing providers. See the [type-provider boundary research](type-provider-compatibility-boundary.md) for trust, protocol, invalidation, cache, diagnostics, performance, and platform constraints.
 
 ## Supported build and execution matrix
 
@@ -406,7 +406,7 @@ This constraints ticket does not implement the host or copy the official F# comp
 - the NuGet props/targets and physical RID-package topology required by ADR 0019;
 - the full differential corpus for hidden options, resources, signing, PDBs, F# metadata, and failure cleanup from the compiler/MSBuild contract;
 - release engineering, signing/notarization, SBOM/provenance, and supported OS-version floors; and
-- the newly sharp type-provider execution policy and Linux glibc/musl support decision.
+- implementation and compatibility evidence for the selected Provider Broker policy, plus the Linux glibc/musl support decision.
 
 Those tickets must inherit the boundaries above; they may refine implementations and evidence, but cannot replace a native host with a managed fallback or collapse the two NativeAOT gates.
 
@@ -415,7 +415,7 @@ Those tickets must inherit the boundaries above; they may refine implementations
 1. **Servicing drift.** The repo asks for SDK `10.0.100` with feature roll-forward; this observation selected `10.0.110`. Refresh target source, analyzer behavior, runtime packs, FSharp.Core closure, warnings, sizes, and hashes for each servicing update.
 2. **F# analyzer integration.** SDK `10.0.110` does not import the ILLink Roslyn analyzer target for F#. A later SDK/F# compiler may add equivalent analysis. Keep the publish gate even if earlier diagnostics improve.
 3. **FSharp.Core coverage.** The successful collection probe is narrow. Each newly used FSharp.Core subsystem needs warning/behavior/size coverage; lack of an AOT marker is not proof of failure, and one successful publish is not blanket proof.
-4. **Type providers.** Existing provider execution is architecturally unresolved for the final compatibility destination.
+4. **Type providers.** [ADR 0025](../adr/0025-use-a-managed-broker-for-legacy-type-providers.md) resolves the execution boundary; exact Oracle probing/load behavior, provider-visible configuration, and the final compatibility corpus remain implementation evidence to discover rather than architecture still to choose.
 5. **Linux portability.** The glibc/distribution floor and musl support are not settled by the abstract word “Linux.”
 6. **Localization.** Satellite publication is supported, but the exact final oracle culture set and ICU deployment strategy still require cross-platform runtime evidence.
 7. **Cross-architecture builds.** Microsoft supports limited same-OS x64/Arm64 cross-compilation with target toolchains; FSharp2 should not claim a cross lane until the resulting target artifact runs on real target hardware.

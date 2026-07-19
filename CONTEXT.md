@@ -32,6 +32,10 @@ _Avoid_: Representative diagnostics, error-code coverage, similar messages
 The compiler shipped in the latest .NET 10 SDK, whose observable behavior resolves compatibility questions not settled by the written F# specification.
 _Avoid_: Reference implementation
 
+**Provider Broker**:
+The optional managed build-time sidecar that executes legacy F# type providers for FSharp2 while the NativeAOT compiler retains all compiler semantics, diagnostics, incremental state, and artifact ownership.
+_Avoid_: Managed compiler fallback, type-provider sandbox
+
 **Experimental Vertical Milestone**:
 An opt-in release that performs the complete compilation path for a declared compatibility envelope that is narrower than the final destination.
 _Avoid_: Partial compiler
