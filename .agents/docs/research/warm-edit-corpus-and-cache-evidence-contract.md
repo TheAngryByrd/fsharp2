@@ -1,10 +1,14 @@
 # Warm-edit corpus and cache-evidence contract
 
-Status: issue [#19](https://github.com/TheAngryByrd/fsharp2/issues/19) research decision, 2026-07-18
+Status: issue [#19](https://github.com/TheAngryByrd/fsharp2/issues/19) research decision, refreshed 2026-07-19 against the live issue question
+
+Document purpose: normative harness-contract reference backed by research; it is not an implementation tutorial or a cache-layout/API specification.
 
 Corpus: IcedTasks commit `ba4e932b71bfde354f0e2561c2519b282fe56ff9`, tree `20abf5280d4630db438c7c6f06838105df12c765`
 
 Governing decisions: [ADR 0003](../adr/0003-use-a-persistent-incremental-compiler-service.md), [ADR 0005](../adr/0005-use-the-shipped-compiler-as-compatibility-oracle.md), [ADR 0013](../adr/0013-use-memory-and-content-addressed-disk-caches.md), [ADR 0016](../adr/0016-explain-slow-compilations-with-structured-traces.md), [ADR 0018](../adr/0018-track-incremental-dependencies-at-declaration-granularity.md), and [ADR 0020](../adr/0020-use-the-complete-icedtasks-corpus-for-the-first-milestone.md)
+
+Related authority: [differential-harness verdicts](differential-compatibility-performance-harness.md), [`perf-governance-v1`](compiler-performance-runner-and-regression-governance.md), and [`evidence-governance-v1`](secure-harness-evidence-retention-and-redaction.md)
 
 ## Decision
 
@@ -13,11 +17,11 @@ Use two line-count-preserving edits to the pinned IcedTasks source in isolated, 
 1. `AsyncEx.AwaitTask(Task<'T>)` is the implementation-only case. It changes the emitted method body while preserving its managed and F# exported meaning and its returned value.
 2. `ParallelAsyncBuilderBase.BindReturn` is the consumer-visible inline case. Its managed signature remains stable, but its public inline body and F# optimization payload change.
 
-The corpus is not merely two patches: forced compiler-contact/no-op, identical replay, exact baseline restore, diagnostic-failure recovery, and unknown-impact widening are mandatory companion controls. A measured sample primes once and then applies its edit immediately; no control invocation may warm extra state before the timed `CoreCompile`, and replay hits or MSBuild skips cannot enter the Warm Compilation timing distribution.
+The corpus is not merely two patches: forced compiler-contact/no-op, a comment-only content edit, identical replay, exact baseline restore, diagnostic add/fix, compiler-option/reference/source-order key mutations, A -> B -> A recovery, stale-state races, corrupt/schema-rejected entries, and unknown-impact widening are mandatory companion controls. A measured sample primes once and then applies its edit immediately; no control invocation may warm extra state before the timed `CoreCompile`, and replay hits or MSBuild skips cannot enter the Warm Compilation timing distribution.
 
 Both edits add a `GC.KeepAlive` lifetime marker to an object already retained by the returned `Async`. This gives the harness an emitted call which the optimizer cannot erase as a source-only no-op, without using APIs missing from `netstandard2.0` or changing the observed result. `GC.KeepAlive(Object)` is present in the pinned `netstandard2.0` reference assembly and is documented as extending object liveness to the call site.[^keep-alive]
 
-The Warm Compilation gate primes one compiler service, applies exactly one edit, then performs a real `CoreCompile` through the same healthy service PID and cache epoch. It compares the edited result with the Compatibility Oracle and requires per-node reuse and invalidation evidence. An unchanged MSBuild skip, a timestamp touch, wall time alone, or a whole-project cache miss does not satisfy the gate.
+The Warm Compilation gate primes one compiler service, applies exactly one edit, then performs a real `CoreCompile` through the same healthy service instance, live-state epoch, and cache-namespace epoch. It compares the edited result with the Compatibility Oracle and requires per-node reuse and invalidation evidence. An unchanged MSBuild skip, a timestamp touch, wall time alone, or a whole-project cache miss does not satisfy the gate.
 
 This applies the query/action-key, exported-interface, and dependency-graph lessons from the [comparative compiler research](fast-fsharp-compiler-cold-and-incremental.md): cache semantic computations by stable inputs, compare consumer-visible fingerprints before invalidating dependants, and retain F# file-order checkpoints. Rust's query model and Swift's dependency-driven incremental compilation are the closest primary-source analogues; MSBuild's timestamp target skip remains only the outer guard.[^rust-query][^swift-incremental][^msbuild-incremental]
 
@@ -117,22 +121,46 @@ Compile this project with FSharp2 against the prebuilt producer artifact in the 
 
 ## Measurement lane and mandatory controls
 
+### Cold, warm, replay, and skip are different states
+
+- **Cold Compilation** executes one real `CoreCompile` while the request explicitly bypasses both live and disk compiler state. It has no semantic reuse. OS page-cache warmth does not change this classification.
+- **Measured Warm Compilation** starts from one successful prime, retains the same service instance and live-state epoch, changes declared content, and executes the first non-skipped post-edit `CoreCompile`. Its event stream must prove both valid reuse and the work caused by the edit. For this milestone, a disk hit after a process restart is a useful recovery control but is not a measured Warm sample.
+- **Compiler-contact/no-op** and **identical replay** force a real `CoreCompile` with the same semantic input action key. They prove lookup and reuse behavior but do not enter the Warm-edit timing distribution.
+- **Unchanged-target skip** means MSBuild did not execute `CoreCompile`. It contains no compiler request, query, reuse, or timing evidence and is neither Cold nor Warm Compilation. MSBuild officially defines this outer target skip from declared inputs and outputs; it does not establish semantic reuse inside the compiler.[^msbuild-incremental]
+
+The measured interval is `CoreCompile` `TargetStarted` through its matching `TargetFinished`, including the FSharp2 task/client, service request, validation, incremental work, fresh link/publish, response, and target completion. It excludes restore, project evaluation, materialization, cache reset, prime compilation, patching, Oracle execution, artifact comparison, consumers, debugger automation, and heavy diagnostic replay. No debugger or harness post-processing time may be placed inside Compiler Target Invocation. The ordinary bounded decision stream and work summary are part of the request; EventPipe or another heavy profiler is a separate replay and never enters the timing distribution.
+
 ### Measured warm-edit lane
 
-Each TFM, edit, and timing sample starts from its own newly materialized baseline. Reset the service and cache, perform exactly one untimed prime compile, retain that healthy service PID/epoch, then immediately apply one content-addressed patch and measure the next non-skipped `CoreCompile`. No no-op, inspection, replay, or other compiler request may occur between prime and edit. The invocation must satisfy its edit-specific assertions to enter the warm timing distribution.
+Each TFM, edit, and timing sample starts from its own newly materialized baseline. Reset the service and cache, perform exactly one untimed prime compile, retain that healthy service instance/live-state/cache-namespace lineage, then immediately apply one content-addressed patch and measure the next non-skipped `CoreCompile`. No no-op, inspection, replay, or other compiler request may occur between prime and edit. The invocation must satisfy its edit-specific assertions to enter the warm timing distribution.
 
 ### Companion controls
 
 Controls are real Compiler Target Invocations but are excluded from the timing distribution. Each starts from its own reset-and-prime baseline unless the control explicitly tests a replay or recovery chain:
 
-1. **Compiler-contact/no-op:** force `CoreCompile` without changing source. The request must reach the retained service and validate the prior project state. Relevant semantic nodes report hits/reuse, while the deterministic final link still executes. An MSBuild up-to-date skip fails this control.
-2. **Identical replay:** after a non-sampled edit invocation, force `CoreCompile` again without changing the edited bytes. Semantic action keys remain equal and valid nodes hit/reuse; a fresh final link must produce output byte-identical to a clean standalone FSharp2 compile of the same edited inputs.
-3. **Baseline restore:** after replay, restore the exact pinned bytes without reformatting, then force `CoreCompile`. The reverse change must be explained, the current PDB/source data must refer to the restored source, and output must match a clean baseline compile.
-4. **Diagnostic failure and recovery:** from equivalent valid prestate, run the same harness-owned exact `FS0010` or `FS0001` failure through FSharp2 and the Compatibility Oracle, compare their normalized post-failure leftover artifact sets, then recover to the last valid content. The failed FSharp2 request must not advance the last-successful semantic project epoch/action key or poison subsequent reuse. Do not impose a blanket retain-or-delete policy on disk: match the Oracle artifact behavior separately from retained compiler state.
-5. **Unknown-impact widening:** inject the harness-owned missing-dependency-proof case from a fresh prime. FSharp2 must report `widened-uncertain`, recompute the containing scope required for correctness, and agree with a clean compile; an unexplained reuse or silent whole-project miss fails.
-6. **Cold bypass:** start without reusable live or disk state. Every lookup reports bypass rather than a hit, and the invocation remains a real compiler target execution.
+1. **Compiler-contact/no-op:** force `CoreCompile` without changing source bytes or the project action key. The request must reach the retained service and validate the prior project state. Relevant semantic nodes report hits/reuse, while the deterministic final link still executes. An MSBuild up-to-date skip fails this control.
+2. **Comment-only content edit:** in an isolated materialization, change the one-line `AsyncEx.fs` comment `// Why not handle TaskCanceledException/OperationCanceledException?` to `// Why handle neither TaskCanceledException nor OperationCanceledException?`. Exact content and the PDB document checksum change, but declaration export, implementation, and diagnostic fingerprints remain equal. The source-content/debug contribution must refresh; semantic checkpoints may reuse only after equivalence is established. Restore the exact original bytes afterward.
+3. **Identical replay:** after a non-sampled edit invocation, force `CoreCompile` again without changing the edited bytes. Semantic action keys remain equal and valid nodes hit/reuse; a fresh final link must produce output byte-identical to a clean standalone FSharp2 compile of the same edited inputs.
+4. **Baseline restore and A -> B -> A:** after replay, restore the exact pinned bytes without reformatting, then force `CoreCompile`. The action key returns to A but the last-successful project epoch advances to a new state rather than rolling backward. A content-addressed A result may hit, but it must be revalidated against the current dependency graph; current PDB/source data must refer to restored source and output must match a clean baseline compile.
+5. **Diagnostic add/fix:** append the exact harness-owned [`UnexpectedToken.fs`](../../../tests/FSharp2.Prototype.Diagnostics/UnexpectedToken.fs) (`FS0010`) or [`TypeMismatch.fs`](../../../tests/FSharp2.Prototype.Diagnostics/TypeMismatch.fs) (`FS0001`) source after `AutoOpens.fs` as a temporary ordered `Compile` input to the full IcedTasks project, compare FSharp2 and Oracle diagnostics and normalized post-failure artifact sets, remove it, and recover. The failed request must not advance last-successful project epoch/action key, publish a successful artifact, or poison subsequent reuse. Do not impose a blanket retain-or-delete policy on disk: match Oracle artifact behavior separately from retained compiler state.
+6. **Key mutation:** execute each compiler-option, reference-identity, and ordered-source-list A -> B -> A control below. A timestamp-only mutation does not count.
+7. **Unknown-impact widening:** inject the harness-owned missing-dependency-proof case from a fresh prime. FSharp2 must report `widened-uncertain`, recompute the containing scope required for correctness, and agree with a clean compile; an unexplained reuse or silent whole-project miss fails.
+8. **Adversarial stale state:** use deterministic harness barriers at the project-state commit seam to exercise an out-of-order commit race; use a versioned test cache adapter to return a logically schema-mismatched candidate and an integrity-failing candidate without depending on physical cache files; and exercise an unexpected service restart. No old attempt or entry may publish over a newer successful state. The restart makes a measured Warm row `product-fail`; a separately declared recovery control may start a new service and prove safe disk reuse. Sleeping, racing by chance, or flipping bytes in an implementation-specific cache file does not satisfy this control.
+9. **Cold bypass:** start with explicit live/disk bypass. Cache-eligible nodes report bypass rather than lookup hits, reuse is zero, and the invocation remains a real compiler target execution.
 
 Successful baseline, edit, replay, and restore lanes remain diagnostic-free under the pinned warning-as-error policy. Failure lanes require exact FS Diagnostic Compatibility and normalized leftover-artifact equivalence with the Compatibility Oracle. These probes do not narrow the user's family-wide requirement: the complete `FSxxxx` error-and-warning surface remains mandatory at the final Compatibility Gate.
+
+### Exact key-mutation controls
+
+F# compiler options define references, conditional symbols, optimization, debug behavior, and ordered source processing, so the evaluated option set, reference closure, and source order are semantic inputs rather than cache-location details.[^fsharp-options]
+
+| Control | A -> B -> A materialization | Required evidence |
+| --- | --- | --- |
+| Compiler option | Compile Release A with the pinned `Optimize=true`; compile B with only the evaluated `Optimize=false`/`--optimize-` value changed; restore A. | `optionSetHash` changes and returns exactly. Syntax and typing may reuse because optimization is not their input; optimization/lowering/emission nodes whose behavior depends on the switch must not reuse B from A. Every state matches a clean same-option FSharp2 build and the Oracle's runtime/API behavior. |
+| Reference content and semantic identity | Through a harness-owned temporary targets overlay, reference a deterministic C# assembly `Issue19.ReferenceProbe` targeting `netstandard2.0`, assembly name/version `Issue19.ReferenceProbe, 1.0.0.0`. Variant A exposes `public const int Marker = 1`; B uses the same logical item/path/assembly identity but `Marker = 2`; then restore A. IcedTasks source does not use the probe. | Reference bytes and decoded export fingerprints change even though path/name/version do not. The reference-import node recomputes. IcedTasks declarations may reuse only when the graph proves no observed edge; otherwise widening must be explicit. The restored content-addressed A candidate is revalidated, never trusted by path or timestamp. |
+| Ordered source list | Add two harness-owned internal files between `Task.fs` and `AsyncEx.fs`. Each begins with `namespace IcedTasks`; `Issue19OrderA.fs` then defines `module internal Issue19OrderA` and `let marker = 1`, while `Issue19OrderB.fs` defines the corresponding B module/value `2`. A orders A then B; B swaps only those two `Compile` items; restore A. | The file-content set stays identical while `orderedSourceListHash` changes and returns. Checkpoints before the first marker reuse; both marker-order checkpoints recompute. Later checkpoints may reuse only after the cumulative environment is proved equivalent. Final link/debug ordering refreshes and each state matches a clean compile. |
+
+Each control uses a fresh prime and its own service/cache lineage. It is correctness evidence, not a Warm performance sample. The manifest records exact overlay, source, option, and reference hashes; discarding the materialization removes every IcedTasks-adjacent change.
 
 ## Oracle validation of the exact edits
 
@@ -181,16 +209,31 @@ Issue #19 extends that vocabulary; it does not make physical cache paths, table/
 
 Record at least:
 
-- trace/run/case/edit ids and schema versions;
+- trace/run/case/edit ids, one logical `requestId`, one unique execution `attemptId`, attempt ordinal/parent/retry reason, and schema versions;
 - corpus commit/tree, ordered file hashes, before/after edited-file SHA-256, canonical patch SHA-256, and TFM;
 - compiler/package/protocol/query/emitter/linker identities;
-- service PID, service start identity, service epoch, cache epoch/root/schema, and health before/after;
-- project-state epoch and last-successful project action key before/after the request; failed requests must leave both unchanged;
+- opaque service-instance id, live-state epoch, cache-namespace id/epoch/schema, and health before/after;
+- base and last-successful project-state epoch/action key before/after the attempt, plus atomic commit/superseded state;
 - explicit Cold/Warm mode and live/disk cache allow/bypass policy;
 - previous/current project action key, option-set hash, reference-set hash, and ordered-source-list hash;
 - baseline/current managed API, decoded F# export, implementation, debug, diagnostic, reference-artifact, and final-artifact fingerprints;
 - normalized pre/post artifact manifests plus the Compatibility Oracle leftover comparison for failed invocations; and
-- real `CoreCompile`, request/RPC, phase, link, publish, and target-finish timings.
+- real `CoreCompile`, request/RPC, phase, link, publish, and target-finish timings; and
+- attempt outcome (`valid`, `product-fail`, or `infra-invalid`), four-state case verdict, stable reasons, and the evidence proving any infrastructure attribution.
+
+### Identity, epoch, failure, and retry rules
+
+These identities are deliberately independent:
+
+| Identity | Contract |
+| --- | --- |
+| Logical request | `requestId` names one evaluated Compiler Target Invocation. A transport retry for that invocation keeps the request id but receives a new, never-reused `attemptId`; a replacement performance row is a new request linked by `replacementForAttemptId`, not another attempt of the original invocation. |
+| Service instance | `serviceInstanceId` is random and unique for one process lifetime. PID and process start identity corroborate it only in restricted evidence; PID alone is not identity because operating systems reuse it. |
+| Live-state epoch | `serviceStateEpoch` is monotonic within one service instance and changes only when the in-memory query graph is reset, quarantined, or wholesale-recovered. Normal successful requests do not increment it. Prime and measured edit require the same service instance and state epoch. |
+| Disk namespace epoch | `cacheNamespaceId` identifies one compiler/query/cache-schema compatibility namespace; `cacheNamespaceEpoch` changes when that namespace is cleared, migrated, quarantined, or replaced. A service restart may retain this pair, which permits a separate disk-recovery control, but it does not preserve the measured live Warm lineage. |
+| Project state | `lastSuccessfulProjectEpoch` is monotonic for one logical project/TFM within a service-state epoch. It advances exactly once when a successful attempt atomically commits a different project action key/state; an identical replay republishes output without advancing semantic state. `lastSuccessfulProjectActionKey` names the committed inputs. |
+
+Every attempt records `baseProjectEpoch`. Commit is compare-and-swap against that base. A diagnostic or compiler failure, cancelled/superseded attempt, malformed candidate trace, or unsuccessful publication leaves the committed project epoch, action key, live project state, and last-good artifact pointer unchanged; speculative failure-key entries may remain only if isolated and never masquerade as last-successful state. For retries, at most one attempt may commit; later completion of an older attempt is `superseded` and cannot publish. In A -> B -> A, the action key returns to A while epochs move `e -> e+1 -> e+2`; this is a new validated state, never an epoch rollback. An unexpected service-instance/state-epoch or cache-namespace-epoch change is `product-fail` when candidate-owned and `infra-invalid` only when independent runner evidence proves the runner caused it.
 
 ### Per-node event
 
@@ -199,19 +242,22 @@ Each considered node emits:
 | Field | Meaning |
 | --- | --- |
 | Identity | Stable `nodeId`, kind (`syntax`, `file-checkpoint`, `declaration`, `diagnostic`, `fragment`, `link`, `consumer-project`), logical file/order, and declaration/symbol id where applicable. |
-| Keys | Hashed action key plus old/new content, export, implementation, debug, and diagnostic fingerprints. Raw source or secrets do not belong in shareable traces. |
-| Decision | `bypass`, `hit-live`, `hit-disk`, `miss-no-entry`, `miss-key-changed`, `miss-schema`, `miss-corrupt`, `rechecked-equivalent`, `invalidated-direct`, `invalidated-transitive`, `widened-uncertain`, `reused`, `re-lowered`, `re-emitted`, or `relinked`. |
-| Cause | Stable reason code, direct `invalidatedBy` node ids, dependency edge kind, transitive depth, and widened scope/reason. |
-| Work | Reused/reparsed/rechecked/re-lowered/re-emitted status, old/new fragment hash, cache level, bytes read/written, dependency count, and elapsed microseconds. |
-| Outcome | Success/diagnostic/failure, artifact contribution, whether last-successful semantic state advanced, the normalized pre/post artifact-set delta, and the Oracle leftover-comparison result. |
+| Keys | Hashed action key plus old/new content, export, implementation, debug, and diagnostic fingerprints. Only approved public/harness fingerprints may be shareable; private fingerprints are R2 and raw source/secrets are never shareable. |
+| Cache lookup | Exactly one of `not-eligible`, `bypass-policy`, `hit-live`, `hit-disk`, `miss-no-entry`, `miss-key-changed`, `reject-schema`, or `reject-corrupt`. A hit means only that a candidate was found; it is not proof of validity or reuse. |
+| Validity/invalidation | Exactly one of `no-prior`, `valid`, `invalid-direct`, `invalid-transitive`, or `widened-uncertain`, with stable reason code, direct `invalidatedBy` ids, dependency-edge kind, transitive depth, and widened scope/reason. |
+| Semantic comparison | Exactly one of `not-compared`, `equal`, `changed`, or `unavailable`. `equal` after executed work is rechecked-equivalent, not reuse. `unavailable` covers a diagnostic/compiler failure before a comparable result exists. |
+| Actual work | For each applicable phase (`source-read`, `parse`, `check`, `lower`, `emit`, `link`), exactly one of `not-applicable`, `reused`, `executed-success`, `executed-diagnostic`, or `executed-failed`, plus bytes read/written, dependency count, and elapsed microseconds. Old/new fragment hashes accompany applicable emission work. |
+| Outcome | `success`, `diagnostic`, or `compiler-failure`; artifact contribution; commit/superseded state; normalized pre/post artifact-set delta; and Oracle leftover-comparison result. |
 
-The trace may additionally carry a dependency-edge digest when the complete edge list is too large, but every invalidated node must still identify its direct cause. A count without causality cannot prove transitive invalidation.
+These axes are orthogonal. For example, a node can report `hit-live`, `invalid-transitive`, `equal`, and `check=executed-success`: the old candidate was found, could not initially be reused because a dependency changed, and was rechecked to equivalent meaning. Collapsing that event to either "hit" or "rechecked" loses required evidence.
+
+The restricted trace carries the complete dependency graph and direct-cause ids as R2. The shareable trace carries allowed public-corpus node identities, reason codes, dependency counts/depths, approved fingerprints, and reconciliation verdicts, not raw edges. Every invalidated node must still have a resolvable direct cause in authoritative evidence. A count without causality cannot prove transitive invalidation.
 
 ### Auditable counters
 
 Aggregate by node kind, phase, cache level, file, and project:
 
-- lookups, live hits, disk hits, misses, bypasses, schema rejects, corrupt rejects;
+- cache-eligible nodes, lookup attempts, live hits, disk hits, no-entry misses, key-change misses, bypasses, schema rejects, and corrupt rejects;
 - files/syntax trees reused and reparsed;
 - file checkpoints reused, rebuilt, and conservatively widened;
 - declarations considered, reused, rechecked, export-unchanged, export-changed, directly invalidated, and transitively invalidated;
@@ -223,13 +269,49 @@ Aggregate by node kind, phase, cache level, file, and project:
 Require conservation checks such as:
 
 ```text
-lookups = liveHits + diskHits + misses + bypasses
-declarationsConsidered = declarationsReused + declarationsRechecked
-successfulRechecks = exportUnchanged + exportChanged
-fragmentsConsidered = fragmentsReused + fragmentsRelowered
+cacheEligibleNodes = bypasses + lookupAttempts
+lookupAttempts = liveHits + diskHits + noEntryMisses + keyChangedMisses + schemaRejects + corruptRejects
+hits = liveHits + diskHits
+misses = noEntryMisses + keyChangedMisses
+rejects = schemaRejects + corruptRejects
+
+priorSemanticNodes = validNodes + directInvalidations + transitiveInvalidations + widenedInvalidations
+invalidations = directInvalidations + transitiveInvalidations + widenedInvalidations
+successfulSemanticRecomputations = semanticEqual + semanticChanged
+
+phaseEligible = phaseReused + phaseExecutedSuccess + phaseExecutedDiagnostic + phaseExecutedFailed
+phaseExecuted = phaseExecutedSuccess + phaseExecutedDiagnostic + phaseExecutedFailed
+declarationsConsidered = declarationsReused + declarationsRecheckedSuccess + declarationsRecheckedDiagnostic + declarationsRecheckedFailed
+fragmentsConsidered = fragmentsReused + fragmentsReloweredSuccess + fragmentsReloweredDiagnostic + fragmentsReloweredFailed
 ```
 
-The invocation is `infra-error` if required node events are missing, aggregate counters do not reconcile, the service/cache epoch changed unexpectedly, or trace and binlog/protocol evidence disagree.
+Every aggregate is derived from the same canonical event set, not separately incremented mutable counters. A reused phase must have a valid hit; a miss/reject cannot reuse that candidate; an invalidated affected phase cannot be marked reused; and a semantic `equal` reached through execution counts as recomputation. On Cold Compilation, lookup attempts and reuse are zero while every cache-eligible node is bypassed. On a successful supported invocation, the final link executes exactly once and cannot be reported as a whole-output cache hit. A measured Warm edit has both nonzero required work for the changed closure and nonzero proven semantic reuse; silent whole-project recomputation fails the edit-specific proof even if output and time pass.
+
+Missing/malformed candidate-emitted node events, unreconciled counters, candidate-owned epoch drift, or disagreement with binlog/protocol evidence is `product-fail`, producing case verdict `fail`. It is `infra-invalid` only when independent supervisor evidence proves that correct candidate evidence existed and runner-side collection lost or corrupted it; unresolved attribution fails toward the candidate. This aligns with `perf-governance-v1`: performance attempts cannot retry away required-evidence failures.
+
+### Evidence visibility: semantics are contractual; cache layout is not
+
+Apply `evidence-governance-v1` field by field:
+
+- **R3 Restricted Raw:** source/protocol/binlog bytes, service PID and raw process-start identity, physical cache root and cache files, cache snapshots, raw traces, and complete machine/process inventories.
+- **R2 Controlled Derived:** complete/raw dependency edges, raw-to-shareable id mapping, internal unmapped paths, and private-source/input fingerprints or hashes.
+- **S1 Shareable:** schema/compiler/policy ids; public corpus and harness-fixture hashes; logical path/node identities; run-scoped opaque service/cache/project epoch ids; hit/miss/reuse/invalidation reason codes; dependency/work counters; timings; approved public-corpus fingerprints; equality and reconciliation verdicts. Raw dependency edges remain R2.
+
+The local verifier uses R3/R2 to prove equality relationships such as `sameServiceInstance=true`, `sameServiceStateEpoch=true`, and `sameCacheNamespaceEpoch=true`; S1 need not reveal the PID, process start value, cache root, or raw private hashes. A physical root, filename, table/dictionary shape, serialization object, sharding, locking, eviction/compaction policy, key encoding, or memory address is never a compatibility or performance-pass condition. Cache implementations may change without changing this contract as long as logical identity, validity, causality, work, artifacts, and verdict evidence still reconcile.
+
+### Attempt outcome, case verdict, and failure reasons
+
+Each baseline/candidate attempt has one `perf-governance-v1` outcome:
+
+| Attempt outcome | Meaning |
+| --- | --- |
+| `valid` | State controls, execution, correctness, outputs, and required evidence are trustworthy. A valid timing may still contribute to a series-level performance `fail`. |
+| `product-fail` | FSharp2 caused a correctness, diagnostic, fallback, artifact, state-control, timeout/hang, stale-reuse, malformed/missing-evidence, or publication failure. It terminates the required cell as `fail` and is not replacement-eligible. |
+| `infra-invalid` | Independent observations prove admission noise, runner/tool failure, or runner-side evidence collection—not compiler behavior or emission—invalidated the attempt. It is preserved and replacement-eligible only within the predeclared cap. |
+
+Aggregate cases retain the differential harness's exact four verdicts: `pass`, `fail`, `unsupported`, and `infra-error`. `unsupported` is valid only for a manifest cell explicitly outside the current milestone and rejected before successful output; none of the two mandatory IcedTasks edits or key controls may use it. The type-provider tracer remains `unsupported` only until its ADR 0025 broker gate passes. `infra-error` means infrastructure prevented a trustworthy required verdict; it never converts to pass. Family-wide FS Diagnostic Compatibility remains required at the final gate, so an unimplemented FSxxxx family is `fail` there, not `unsupported`.
+
+Stable failure reasons include `corpus-precondition`, `target-skipped`, `wrong-mode`, `service-lineage-changed`, `cache-epoch-changed`, `stale-commit`, `stale-reuse`, `key-input-omitted`, `unexplained-widening`, `over-invalidation`, `counter-nonconservation`, `causality-missing`, `diagnostic-mismatch`, `artifact-mismatch`, `runtime-mismatch`, `oracle-leftover-mismatch`, `compiler-crash`, `compiler-timeout`, `performance-threshold`, `runner-admission`, `runner-collection-loss`, and `oracle-or-tool-unavailable`. The reason refines but never weakens the attempt outcome or four-state verdict.
 
 ## Adversarial invalidation corpus
 
@@ -250,19 +332,21 @@ The two mandatory edits are performance-gated. The remaining cases are correctne
 
 These probes are additions to the complete IcedTasks corpus, not patches to the IcedTasks product or tests. Their source, patch, and expected invalidation closure live in the harness manifest and are restored by discarding the isolated materialization.
 
-## Acceptance sequence
+## Acceptance requirements
 
-For each TFM and edit:
+Every TFM/edit cell must satisfy this contract:
 
-1. Verify the immutable corpus commit/tree, ordered source list, per-file hashes, options, references, and patch preimage.
-2. Reset service and cache, perform exactly one untimed prime build, and capture the baseline artifact/fingerprint graph.
-3. Without an intervening compiler request, retain the service PID/epoch, apply one content-addressed patch, verify its postimage hash, and measure one non-skipped `CoreCompile` through IPC, invalidation, check/lower/emission, atomic publish, response, and target finish.
-4. Run compiler-contact/no-op, identical replay, exact baseline restore, diagnostic failure/recovery, unknown-impact, and cold controls in the separate lanes defined above; none enter the timing sample.
-5. Rebuild every valid source state with a clean standalone FSharp2 compiler and rebuild the edited state with the Compatibility Oracle; run all comparators required by ADR 0020, including unchanged tests and the named FSharp2 inline consumer.
-6. Assert the edit-specific fingerprint and invalidation closure, counter conservation, no fallback, current PDB/source data, last-successful-state isolation, Oracle-matched failure leftovers, and fresh final link.
-7. Restore by discarding the isolated materialization. The pinned IcedTasks checkout and product source remain untouched.
+| Boundary | Required evidence |
+| --- | --- |
+| Immutable inputs | Corpus commit/tree, ordered source list, per-file hashes, options, references, patch preimage, and patch postimage match the manifest. |
+| Prime lineage | Exactly one untimed prime follows the service/cache reset and captures the baseline artifact/fingerprint graph. |
+| Measured transition | With no intervening compiler request, the same service-instance/live-state/cache-namespace lineage receives one content-addressed edit and executes one non-skipped `CoreCompile` covering IPC, invalidation, check/lower/emission, atomic publish, response, and target finish. |
+| Separate controls | Compiler-contact/no-op, comment-only content, identical replay, exact baseline restore/A -> B -> A, diagnostic add/fix, option/reference/order key mutations, stale-state, unknown-impact, and Cold controls run in their declared independent lanes and never enter the timing sample. |
+| Independent correctness | Every valid source state matches a clean standalone FSharp2 compile; the edited state matches the Compatibility Oracle and all ADR 0020 comparators, unchanged tests, runtime probes, and the named FSharp2 inline consumer. |
+| Reconciliation | Edit-specific fingerprints and invalidation closure, request/attempt and epoch invariants, counter conservation, no fallback, current PDB/source data, last-successful-state isolation, Oracle-matched failure leftovers, fresh final link, evidence classification, attempt outcome, and four-state verdict all reconcile. |
+| Isolation and restore | The case ends by discarding its isolated materialization; the pinned IcedTasks checkout and product source remain untouched. |
 
-The controlled-runner series follows the differential harness: 15 valid samples initially, 30+ for release, cold median at most 3,000 ms, and warm median below 1,000 ms. Instrumented traces explain failures but do not mix with the uninstrumented timing distribution.
+The controlled-runner series follows `perf-governance-v1`: 15 complete valid pairs within at most 18 scheduled pairs for controlled PR/nightly runs, and 30 within at most 36 for release; cold median is at most 3,000 ms and warm median is below 1,000 ms, with the separate release p95 and relative-regression gates still mandatory. Instrumented traces explain failures but do not mix with the uninstrumented timing distribution.
 
 ## Uncertainties and follow-on implementation work
 
@@ -270,7 +354,10 @@ The controlled-runner series follows the differential harness: 15 valid samples 
 - [ADR 0023](../adr/0023-keep-the-fsharp-metadata-harness-inspector-envelope-only.md) keeps the harness inspector at the exact resource-envelope layer and any private-pickle decoder diagnostic-only. FSharp2's production NativeAOT importer and semantic/API fingerprints remain separate compiler implementation work; raw resource hashes must be retained, but they cannot substitute for the semantic fingerprint split required here.
 - Exact transitive consumers of `BindReturn` must come from the implemented dependency graph, not a hard-coded file count. `Issue19.BindReturn.Consumer.increment` is the manifest's minimum required `inline-body` edge; additional invalidation is allowed only with an explicit conservative-widening reason.
 - Type-provider invalidation remains deliberately unsupported in the current milestone until the [ADR 0025](../adr/0025-use-a-managed-broker-for-legacy-type-providers.md) broker envelope passes its declared gate. This is a declared harness-owned gap, not evidence of compatibility; the selected final boundary and cache rules are defined by the [issue #13 research](type-provider-compatibility-boundary.md).
-- GitHub issue text could not be refreshed during this research because the configured `gh` authentication returned HTTP 401. The checked-in differential-harness decision and ADR 0020 were therefore treated as the authoritative issue contract.
+- The implementation ticket must choose and version canonical stable symbol/node identities and semantic fingerprint encodings. This note constrains their observable equality and invalidation behavior, not their byte layout.
+- The service/cache implementation must make project-state compare-and-swap, cache namespace quarantine, and crash recovery atomic enough to satisfy the stale-attempt tests. The on-disk journal/index strategy remains private.
+- The harness implementation must supply the temporary targets overlay, two reference variants, two order-marker files, exact patch hashes, and an independent event-to-counter reconciler. Until deliberate event mutation proves every conservation/failure path, a green compiler test is not cache-evidence proof.
+- The live issue asks only for the controlled Warm edits and epoch/hit/miss/reuse/invalidation/work proof. That research question is resolved here; implementing the graph, schemas, controls, and complete final-gate FSxxxx corpus remains follow-on engineering under issue #1.
 
 ## Primary sources and repo evidence
 
@@ -285,6 +372,7 @@ The controlled-runner series follows the differential harness: 15 valid samples 
 [^rust-query]: [rustc query system](https://rustc-dev-guide.rust-lang.org/query.html) and [incremental compilation](https://rustc-dev-guide.rust-lang.org/queries/incremental-compilation.html).
 [^swift-incremental]: [Swift incremental compilation design](https://github.com/swiftlang/swift/blob/main/docs/IncrementalCompilation.md).
 [^msbuild-incremental]: [MSBuild incremental builds](https://learn.microsoft.com/en-us/visualstudio/msbuild/incremental-builds).
+[^fsharp-options]: [Official F# compiler options](https://learn.microsoft.com/en-us/dotnet/fsharp/language-reference/compiler-options), including `--define`, `--reference`, `--optimize`, debug controls, and command-line source inputs.
 [^icedtasks-project]: [Pinned `IcedTasks.fsproj`](https://github.com/TheAngryByrd/IcedTasks/blob/ba4e932b71bfde354f0e2561c2519b282fe56ff9/src/IcedTasks/IcedTasks.fsproj#L1-L30).
 [^icedtasks-props]: [Pinned `Directory.Build.props`](https://github.com/TheAngryByrd/IcedTasks/blob/ba4e932b71bfde354f0e2561c2519b282fe56ff9/Directory.Build.props#L1-L36).
 [^prototype-model]: [`CompilerQueryResult`, response, and statistics fields](../../../src/fsc2.Prototype/Model.fs#L216-L273).
