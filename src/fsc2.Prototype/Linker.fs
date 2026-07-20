@@ -626,6 +626,9 @@ module internal Linker =
 
                 for fieldFragment in typeFragment.InstanceFields do
                     yield! fieldFragment.Attributes
+
+                for methodFragment in typeFragment.Methods do
+                    yield! methodFragment.Attributes
         ]
 
         let rec invalidTypeExpression =
@@ -702,6 +705,11 @@ module internal Linker =
                         |> List.exists (fun methodFragment ->
                             symbolic.SchemaVersion
                             <> methodFragment.SchemaVersion
+                            || (methodFragment.Attributes
+                                |> List.exists (fun attribute ->
+                                    symbolic.SchemaVersion
+                                    <> attribute.SchemaVersion
+                                ))
                         ))
                 ))
         then
@@ -749,6 +757,10 @@ module internal Linker =
                     || (typeFragment.Methods
                         |> List.exists (fun methodFragment ->
                             String.IsNullOrWhiteSpace(methodFragment.StableId)
+                            || (methodFragment.Attributes
+                                |> List.exists (fun attribute ->
+                                    String.IsNullOrWhiteSpace(attribute.StableId)
+                                ))
                         ))
                 ))
         then
@@ -1318,6 +1330,15 @@ module internal Linker =
                     bodyOffset,
                     MetadataTokens.ParameterHandle(nextParameterRow)
                 )
+
+            let parent =
+                MetadataTokens.EntityHandle(
+                    TableIndex.MethodDef,
+                    MetadataTokens.GetRowNumber(methodDefinition)
+                )
+
+            for attribute in methodFragment.Attributes do
+                addKnownCustomAttribute parent attribute
 
             methodFragment.Parameters
             |> List.iteri (fun index parameter ->

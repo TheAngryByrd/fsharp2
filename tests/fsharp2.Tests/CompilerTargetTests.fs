@@ -34,7 +34,7 @@ module CompilerTargetTests =
         Parameters: (int * string * ParameterAttributes) array
         GenericParameters: (int * string * GenericParameterAttributes) array
         GenericParameterConstraints: (int * string array) array
-        CustomAttributes: (string * string) array
+        CustomAttributes: (string * string * string) array
         SequencePoints: string array
     }
 
@@ -42,7 +42,7 @@ module CompilerTargetTests =
         Attributes: TypeAttributes
         BaseType: string
         DeclaringType: string
-        CustomAttributes: (string * string) array
+        CustomAttributes: (string * string * string) array
         Constructor: MethodMetadataShape
         InstanceMember: MethodMetadataShape
     }
@@ -377,7 +377,7 @@ module CompilerTargetTests =
         let customAttributeShape handle =
             let attribute = metadata.GetCustomAttribute(handle)
 
-            let attributeTypeName =
+            let attributeTypeName, constructorSignature =
                 match attribute.Constructor.Kind with
                 | HandleKind.MemberReference ->
                     let constructor =
@@ -386,10 +386,14 @@ module CompilerTargetTests =
                         |> MetadataTokens.MemberReferenceHandle
                         |> metadata.GetMemberReference
 
-                    typeName constructor.Parent
+                    typeName constructor.Parent,
+                    (constructor.DecodeMethodSignature(SignatureShapeProvider(), ())
+                     |> SignatureShapeProvider.Format)
                 | kind -> failtestf "unsupported custom-attribute constructor %A" kind
 
-            attributeTypeName, Convert.ToHexString(metadata.GetBlobBytes(attribute.Value))
+            attributeTypeName,
+            constructorSignature,
+            Convert.ToHexString(metadata.GetBlobBytes(attribute.Value))
 
         let typeHandle, typeDefinition =
             metadata.TypeDefinitions
@@ -2605,6 +2609,122 @@ module CompilerTargetTests =
                         genericTrace.["dependencyCount"]
                         "3"
                         "a generic flexible constraint should depend on its type definition and argument declarations"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "matches the Oracle DefaultValue attribute on an object member"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-default-value-object-member",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "TaskBuilderBase.fs")
+
+                    let attributedSource =
+                        "namespace IcedTasks.TaskBase\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        [<DefaultValue>]\n        member inline _.Zero() = 0\n"
+
+                    File.WriteAllText(sourcePath, attributedSource)
+
+                    let oracleOutputPath = Path.Combine(root, "TaskBuilderBase-oracle.dll")
+                    let oraclePdbPath = Path.Combine(root, "TaskBuilderBase-oracle.pdb")
+                    let oracleResponsePath = Path.Combine(root, "oracle.rsp")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root oracleResponsePath [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{oracleOutputPath}"
+                            $"--pdb:{oraclePdbPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let responsePath = Path.Combine(root, "fsharp2.rsp")
+
+                    let outputPath, attributedFingerprint =
+                        compileForExportFingerprint
+                            root
+                            responsePath
+                            sourcePath
+                            "TaskBuilderBase-fsharp2"
+                            []
+
+                    let pdbPath = Path.ChangeExtension(outputPath, ".pdb")
+
+                    Expect.equal
+                        (objectTypeMetadataShape outputPath pdbPath "Zero")
+                        (objectTypeMetadataShape oracleOutputPath oraclePdbPath "Zero")
+                        "the attributed member should match the Compatibility Oracle's CLR and portable-PDB surface"
+
+                    let emittedAssembly = Assembly.Load(File.ReadAllBytes(outputPath))
+
+                    let builderType =
+                        emittedAssembly.GetType(
+                            "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                            throwOnError = true
+                        )
+
+                    let builder = Activator.CreateInstance(builderType)
+                    let zeroMethod = builderType.GetMethod("Zero")
+
+                    Expect.equal
+                        (zeroMethod.Invoke(builder, [||]))
+                        (box 0)
+                        "the attributed member should remain executable"
+
+                    File.WriteAllText(
+                        sourcePath,
+                        attributedSource.Replace(
+                            "        [<DefaultValue>]\n",
+                            "\n        [<DefaultValue>]\n"
+                        )
+                    )
+
+                    let _, relocatedFingerprint =
+                        compileForExportFingerprint
+                            root
+                            responsePath
+                            sourcePath
+                            "TaskBuilderBase-relocated-attribute"
+                            []
+
+                    Expect.equal
+                        relocatedFingerprint
+                        attributedFingerprint
+                        "moving an attribute without changing its meaning should preserve the export fingerprint"
+
+                    File.WriteAllText(
+                        sourcePath,
+                        attributedSource.Replace("        [<DefaultValue>]\n", String.Empty)
+                    )
+
+                    let _, unattributedFingerprint =
+                        compileForExportFingerprint
+                            root
+                            responsePath
+                            sourcePath
+                            "TaskBuilderBase-without-attribute"
+                            []
+
+                    Expect.notEqual
+                        unattributedFingerprint
+                        attributedFingerprint
+                        "removing a consumer-visible member attribute should change the export fingerprint"
                 finally
                     Directory.Delete(root, true)
 
@@ -5197,7 +5317,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "18"
+                        "19"
                         "query cache evidence should be versioned"
 
                     Expect.equal

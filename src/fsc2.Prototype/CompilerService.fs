@@ -534,6 +534,26 @@ type internal CompilerService() =
                 =
                 let unsupported message = diagnostic attribute.Range message
 
+                let create kind arguments =
+                    let stableId =
+                        ownerStableId
+                        + "/attribute:"
+                        + index.ToString(CultureInfo.InvariantCulture)
+
+                    Ok {
+                        StableId = stableId
+                        Kind = kind
+                        ConstructorArguments = arguments
+                        ExportFingerprint =
+                            Fingerprint.parts [
+                                stableId
+                                TypeIdentity.attributeKind kind
+                                yield!
+                                    arguments
+                                    |> List.map TypeIdentity.attributeArgument
+                            ]
+                    }
+
                 match knownAttributeKind attribute with
                 | None -> unsupported "the declaration attribute is not yet supported"
                 | Some kind when
@@ -545,45 +565,15 @@ type internal CompilerService() =
                     unsupported "the attribute is not valid on this declaration"
                 | Some DefaultValueAttribute ->
                     match attribute.ConstructorArguments with
+                    | [] -> create DefaultValueAttribute []
                     | [ ParsedBooleanAttributeArgument value ] ->
-                        let stableId =
-                            ownerStableId
-                            + "/attribute:"
-                            + index.ToString(CultureInfo.InvariantCulture)
-
-                        let arguments = [ TypedBooleanAttributeArgument value ]
-
-                        Ok {
-                            StableId = stableId
-                            Kind = DefaultValueAttribute
-                            ConstructorArguments = arguments
-                            ExportFingerprint =
-                                Fingerprint.parts [
-                                    stableId
-                                    TypeIdentity.attributeKind DefaultValueAttribute
-                                    yield!
-                                        arguments
-                                        |> List.map TypeIdentity.attributeArgument
-                                ]
-                        }
-                    | _ -> unsupported "DefaultValueAttribute requires one boolean argument"
+                        create DefaultValueAttribute [ TypedBooleanAttributeArgument value ]
+                    | _ ->
+                        unsupported
+                            "DefaultValueAttribute requires zero arguments or one boolean argument"
                 | Some kind ->
                     if List.isEmpty attribute.ConstructorArguments then
-                        let stableId =
-                            ownerStableId
-                            + "/attribute:"
-                            + index.ToString(CultureInfo.InvariantCulture)
-
-                        Ok {
-                            StableId = stableId
-                            Kind = kind
-                            ConstructorArguments = []
-                            ExportFingerprint =
-                                Fingerprint.parts [
-                                    stableId
-                                    TypeIdentity.attributeKind kind
-                                ]
-                        }
+                        create kind []
                     else
                         unsupported "the declaration attribute does not accept arguments"
 
@@ -628,6 +618,7 @@ type internal CompilerService() =
                                 Name = declaration.Name
                                 GenericParameters = []
                                 Constraints = []
+                                Attributes = []
                                 Parameters = []
                                 ReturnType = CliInt32
                                 Body = TypedIntegerLiteral value
@@ -1053,6 +1044,7 @@ type internal CompilerService() =
                                             Name = methodDeclaration.Name
                                             GenericParameters = methodDeclaration.TypeParameters
                                             Constraints = constraints
+                                            Attributes = []
                                             Parameters = parameters
                                             ReturnType = returnType
                                             Body =
@@ -1672,48 +1664,64 @@ type internal CompilerService() =
                                     + "->"
                                     + TypeIdentity.cliType returnType
 
-                                let exportFingerprint =
-                                    Fingerprint.parts [
+                                match
+                                    typeCustomAttributes
                                         methodStableId
-                                        "instance"
-                                        "generic-parameters"
-                                        yield! methodTypeParameters
-                                        "constraints"
+                                        [ DefaultValueAttribute ]
+                                        methodDeclaration.Attributes
+                                with
+                                | Error error -> Error error
+                                | Ok attributes ->
+                                    let exportFingerprint =
+                                        Fingerprint.parts [
+                                            methodStableId
+                                            "instance"
+                                            "generic-parameters"
+                                            yield! methodTypeParameters
+                                            "constraints"
 
-                                        yield!
-                                            constraints
-                                            |> List.map TypeIdentity.methodConstraintIdentity
-                                        "parameters"
+                                            yield!
+                                                constraints
+                                                |> List.map TypeIdentity.methodConstraintIdentity
 
-                                        yield!
-                                            parameters
-                                            |> List.collect (fun parameter -> [
-                                                parameter.Name
-                                                TypeIdentity.cliType parameter.Type
-                                            ])
+                                            "attributes"
 
-                                        "return"
-                                        TypeIdentity.cliType returnType
-                                        "inline-body"
-                                        TypeIdentity.inlineBody body
-                                    ]
+                                            yield!
+                                                attributes
+                                                |> List.map TypeIdentity.customAttribute
 
-                                Ok {
-                                    StableId = methodStableId
-                                    Name = methodDeclaration.Name
-                                    GenericParameters = methodTypeParameters
-                                    Constraints = constraints
-                                    Parameters = parameters
-                                    ReturnType = returnType
-                                    Body = body
-                                    ExportFingerprint = exportFingerprint
-                                    Range =
-                                        match body with
-                                        | TypedResumableCode expression -> expression.Range
-                                        | TypedIntegerLiteral _
-                                        | TypedParameterReference _
-                                        | TypedTraitCall _ -> methodDeclaration.BodyRange
-                                }
+                                            "parameters"
+
+                                            yield!
+                                                parameters
+                                                |> List.collect (fun parameter -> [
+                                                    parameter.Name
+                                                    TypeIdentity.cliType parameter.Type
+                                                ])
+
+                                            "return"
+                                            TypeIdentity.cliType returnType
+                                            "inline-body"
+                                            TypeIdentity.inlineBody body
+                                        ]
+
+                                    Ok {
+                                        StableId = methodStableId
+                                        Name = methodDeclaration.Name
+                                        GenericParameters = methodTypeParameters
+                                        Constraints = constraints
+                                        Attributes = attributes
+                                        Parameters = parameters
+                                        ReturnType = returnType
+                                        Body = body
+                                        ExportFingerprint = exportFingerprint
+                                        Range =
+                                            match body with
+                                            | TypedResumableCode expression -> expression.Range
+                                            | TypedIntegerLiteral _
+                                            | TypedParameterReference _
+                                            | TypedTraitCall _ -> methodDeclaration.BodyRange
+                                    }
 
                     match
                         declaration.Methods
@@ -2651,6 +2659,9 @@ type internal CompilerService() =
                     GenericParameters = methodDeclaration.GenericParameters
                     Constraints = methodDeclaration.Constraints
                     GenericParameterConstraints = genericParameterConstraints methodDeclaration
+                    Attributes =
+                        methodDeclaration.Attributes
+                        |> List.map customAttributeFragment
                     Parameters = methodDeclaration.Parameters
                     ReturnType = methodDeclaration.ReturnType
                     Instructions = instructions
@@ -2859,6 +2870,7 @@ type internal CompilerService() =
                                 GenericParameters = []
                                 Constraints = []
                                 GenericParameterConstraints = []
+                                Attributes = []
                                 Parameters = []
                                 ReturnType = CliVoid
                                 Instructions = [
@@ -2961,6 +2973,7 @@ type internal CompilerService() =
                                         GenericParameters = []
                                         Constraints = []
                                         GenericParameterConstraints = []
+                                        Attributes = []
                                         Parameters = [
                                             {
                                                 Name = expression.CaptureName
@@ -3000,6 +3013,7 @@ type internal CompilerService() =
                                         GenericParameters = []
                                         Constraints = []
                                         GenericParameterConstraints = []
+                                        Attributes = []
                                         Parameters = [
                                             {
                                                 Name = expression.StateMachineParameterName

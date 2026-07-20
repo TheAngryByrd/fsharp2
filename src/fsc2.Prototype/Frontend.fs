@@ -1763,7 +1763,7 @@ module internal Frontend =
                                         "expected a static member, type declaration, or end of file"
                                 )
 
-                        let parseInstanceMethod () =
+                        let parseInstanceMethod attributes =
                             parseResult {
                                 let! memberToken = expected MemberKeyword "expected 'member'"
                                 let! _ = expected InlineKeyword "expected 'inline'"
@@ -1791,6 +1791,7 @@ module internal Frontend =
                                 let! body, bodyRange = parseExpression ()
 
                                 return {
+                                    Attributes = attributes
                                     ReceiverName = receiverName
                                     Name = methodName
                                     Parameters = parameters
@@ -1806,9 +1807,20 @@ module internal Frontend =
 
                         let rec parseInstanceMethods methods =
                             match (current ()).Kind with
+                            | AttributeStart ->
+                                parseResult {
+                                    let! attributes = parseDeclarationAttributes ()
+                                    let! methodDeclaration = parseInstanceMethod attributes
+
+                                    return!
+                                        parseInstanceMethods (
+                                            methodDeclaration
+                                            :: methods
+                                        )
+                                }
                             | MemberKeyword ->
                                 parseResult {
-                                    let! methodDeclaration = parseInstanceMethod ()
+                                    let! methodDeclaration = parseInstanceMethod []
 
                                     return!
                                         parseInstanceMethods (
@@ -1896,7 +1908,8 @@ module internal Frontend =
                                         typeToken.Range
                                         "attributed or generic object types are not yet supported"
                                 )
-                            | true, MemberKeyword ->
+                            | true, MemberKeyword
+                            | true, AttributeStart ->
                                 parseInstanceMethods []
                                 |> Result.bind (fun methods ->
                                     match List.tryLast methods with

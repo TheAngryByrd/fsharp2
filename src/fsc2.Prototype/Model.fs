@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 18
+    let Query = 19
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -270,6 +270,7 @@ type internal ParsedStaticTypeDeclaration = {
     override _.ToString() = "ParsedStaticTypeDeclaration"
 
 type internal ParsedInstanceMethodDeclaration = {
+    Attributes: ParsedAttribute list
     ReceiverName: string
     Name: string
     Parameters: ParsedParameter list
@@ -622,42 +623,6 @@ type internal TypedParameter = {
 
     override _.ToString() = "TypedParameter"
 
-type internal TypedMethodDeclaration = {
-    StableId: string
-    Name: string
-    GenericParameters: string list
-    Constraints: TypedMethodConstraint list
-    Parameters: TypedParameter list
-    ReturnType: CliType
-    Body: TypedExpression
-    ExportFingerprint: string
-    Range: SourceRange
-} with
-
-    override _.ToString() = "TypedMethodDeclaration"
-
-type internal TypedLiteralFieldDeclaration = {
-    StableId: string
-    Name: string
-    Value: string
-    ExportFingerprint: string
-} with
-
-    override _.ToString() = "TypedLiteralFieldDeclaration"
-
-type internal TypedTypeAbbreviationDeclaration = {
-    StableId: string
-    Name: string
-    TypeParameters: string list
-    Constraints: TypedTypeConstraint list
-    TargetType: TypedTypeExpression
-    AllowsNull: bool
-    ExportFingerprint: string
-    Range: SourceRange
-} with
-
-    override _.ToString() = "TypedTypeAbbreviationDeclaration"
-
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
 type internal KnownAttributeKind =
     | AutoOpenAttribute
@@ -691,6 +656,43 @@ type internal TypedCustomAttribute = {
 } with
 
     override _.ToString() = "TypedCustomAttribute"
+
+type internal TypedMethodDeclaration = {
+    StableId: string
+    Name: string
+    GenericParameters: string list
+    Constraints: TypedMethodConstraint list
+    Attributes: TypedCustomAttribute list
+    Parameters: TypedParameter list
+    ReturnType: CliType
+    Body: TypedExpression
+    ExportFingerprint: string
+    Range: SourceRange
+} with
+
+    override _.ToString() = "TypedMethodDeclaration"
+
+type internal TypedLiteralFieldDeclaration = {
+    StableId: string
+    Name: string
+    Value: string
+    ExportFingerprint: string
+} with
+
+    override _.ToString() = "TypedLiteralFieldDeclaration"
+
+type internal TypedTypeAbbreviationDeclaration = {
+    StableId: string
+    Name: string
+    TypeParameters: string list
+    Constraints: TypedTypeConstraint list
+    TargetType: TypedTypeExpression
+    AllowsNull: bool
+    ExportFingerprint: string
+    Range: SourceRange
+} with
+
+    override _.ToString() = "TypedTypeAbbreviationDeclaration"
 
 type internal TypedFieldDeclaration = {
     StableId: string
@@ -840,6 +842,16 @@ type internal SymbolicMethodKind =
 
     override _.ToString() = "SymbolicMethodKind"
 
+type internal SymbolicCustomAttributeFragment = {
+    SchemaVersion: int
+    StableId: string
+    Kind: KnownAttributeKind
+    ConstructorArguments: TypedAttributeArgument list
+    ContentHash: string
+} with
+
+    override _.ToString() = "SymbolicCustomAttributeFragment"
+
 type internal SymbolicMethodFragment = {
     SchemaVersion: int
     StableId: string
@@ -848,6 +860,7 @@ type internal SymbolicMethodFragment = {
     GenericParameters: string list
     Constraints: TypedMethodConstraint list
     GenericParameterConstraints: (int * CliType) list
+    Attributes: SymbolicCustomAttributeFragment list
     Parameters: TypedParameter list
     ReturnType: CliType
     Instructions: SymbolicInstruction list
@@ -870,16 +883,6 @@ type internal SymbolicLiteralFieldFragment = {
 } with
 
     override _.ToString() = "SymbolicLiteralFieldFragment"
-
-type internal SymbolicCustomAttributeFragment = {
-    SchemaVersion: int
-    StableId: string
-    Kind: KnownAttributeKind
-    ConstructorArguments: TypedAttributeArgument list
-    ContentHash: string
-} with
-
-    override _.ToString() = "SymbolicCustomAttributeFragment"
 
 type internal SymbolicInstanceFieldFragment = {
     SchemaVersion: int
