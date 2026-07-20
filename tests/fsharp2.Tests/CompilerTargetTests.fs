@@ -5209,6 +5209,88 @@ module CompilerTargetTests =
                 finally
                     Directory.Delete(root, true)
 
+            testCase "constructs a parameterless closed generic object"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-parameterless-generic-construction",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "ValueTask.fs")
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "namespace IcedTasks.ValueTasks\n\nopen System.Collections.Generic\n\n[<AutoOpen>]\nmodule ValueTasks =\n    type Factory() =\n        member inline _.Zero() = 0\n\n        static member inline Create() : List<int> =\n            List<int>()\n"
+                    )
+
+                    let oracleOutputPath = Path.Combine(root, "ValueTask-oracle.dll")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root (Path.Combine(root, "oracle.rsp")) [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{oracleOutputPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let outputPath, _ =
+                        compileForExportFingerprint
+                            root
+                            (Path.Combine(root, "fsharp2.rsp"))
+                            sourcePath
+                            "ValueTask-fsharp2"
+                            [ typeof<System.Collections.Generic.List<int>>.Assembly.Location ]
+
+                    let inspectAndInvoke assemblyPath =
+                        let assembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let factoryType =
+                            assembly.GetType(
+                                "IcedTasks.ValueTasks.ValueTasks+Factory",
+                                throwOnError = true
+                            )
+
+                        let create =
+                            factoryType.GetMethod(
+                                "Create",
+                                BindingFlags.Public
+                                ||| BindingFlags.Static
+                            )
+
+                        create.Attributes,
+                        create.ReturnType.FullName,
+                        (create.Invoke(null, Array.empty<obj>)
+                        :?> System.Collections.Generic.List<int>)
+                            .Count
+
+                    let oracleShape = inspectAndInvoke oracleOutputPath
+                    let fsharp2Shape = inspectAndInvoke outputPath
+
+                    Expect.equal
+                        fsharp2Shape
+                        oracleShape
+                        "the parameterless generic construction should match the Compatibility Oracle"
+
+                    let _, _, count = fsharp2Shape
+                    Expect.equal count 0 "the constructed list should be empty"
+                finally
+                    Directory.Delete(root, true)
+
             testCase "emits multiple namespace fragments from one source document"
             <| fun _ ->
                 let sourceText =
@@ -7470,7 +7552,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "50"
+                        "51"
                         "query cache evidence should be versioned"
 
                     Expect.equal

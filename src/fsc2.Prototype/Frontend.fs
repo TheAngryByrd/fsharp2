@@ -1575,7 +1575,7 @@ module internal Frontend =
                     parseResult {
                         let! constructedType = parseTypeExpression ()
                         let! openToken = expected LeftParenthesis "expected '('"
-                        let! argument, _ = parseExpression ()
+                        let! arguments = parseCallArguments ()
                         let! closeToken = expected RightParenthesis "expected ')'"
 
                         let argumentRange = {
@@ -1584,7 +1584,7 @@ module internal Frontend =
                         }
 
                         return
-                            TypeConstruction(constructedType, [ argument ], argumentRange),
+                            TypeConstruction(constructedType, arguments, argumentRange),
                             {
                                 Start = expressionToken.Range.Start
                                 End = closeToken.Range.End
