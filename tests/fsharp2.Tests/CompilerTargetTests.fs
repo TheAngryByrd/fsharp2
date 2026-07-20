@@ -4019,6 +4019,49 @@ module CompilerTargetTests =
 
                     Expect.equal fsharp2Behavior 42 "Alias should return the helper result"
 
+            testCase "executes a grouped FSharp function application"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Apply(continuation: ('T -> 'U), value: 'T) : 'U =\n            (continuation value)\n"
+
+                withObjectMemberDifferential
+                    "fsharp2-grouped-function-application"
+                    sourceText
+                    "Apply"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeApply assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        let continuation: int -> string = fun value -> string value
+
+                        builderType
+                            .GetMethod("Apply")
+                            .MakeGenericMethod(typeof<int>, typeof<string>)
+                            .Invoke(
+                                null,
+                                [|
+                                    box continuation
+                                    box 42
+                                |]
+                            )
+                        :?> string
+
+                    let oracleBehavior = invokeApply oracleOutputPath
+                    let fsharp2Behavior = invokeApply outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the emitted function application should behave like the Compatibility Oracle"
+
+                    Expect.equal fsharp2Behavior "42" "Apply should invoke its function argument"
+
             testCase "retained service invalidates an IcedTasks inline object-member edit"
             <| fun _ ->
                 let root =
@@ -6126,7 +6169,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "25"
+                        "26"
                         "query cache evidence should be versioned"
 
                     Expect.equal

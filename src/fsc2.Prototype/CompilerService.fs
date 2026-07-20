@@ -176,6 +176,19 @@ module private TypeIdentity =
                     arguments
                     |> List.map inlineBody
             ]
+        | TypedFunctionApplication(functionType,
+                                   domainType,
+                                   rangeType,
+                                   functionExpression,
+                                   argumentExpression) ->
+            Fingerprint.parts [
+                "function-application"
+                cliType functionType
+                cliType domainType
+                cliType rangeType
+                inlineBody functionExpression
+                inlineBody argumentExpression
+            ]
         | TypedResumableCode expression -> resumableCode expression
         | TypedResumableTryFinally expression ->
             Fingerprint.parts [
@@ -984,6 +997,7 @@ type internal CompilerService() =
                     | _, BooleanLiteral _
                     | _, MemberAssignment _
                     | _, SequentialExpression _
+                    | _, FunctionApplication _
                     | _, LetExpression _
                     | _, LambdaExpression _
                     | _, TypeConstruction _ ->
@@ -1418,6 +1432,7 @@ type internal CompilerService() =
                             | Ok _, Ok _, UnitApplication _
                             | Ok _, Ok _, MemberAssignment _
                             | Ok _, Ok _, SequentialExpression _
+                            | Ok _, Ok _, FunctionApplication _
                             | Ok _, Ok _, LetExpression _
                             | Ok _, Ok _, LambdaExpression _
                             | Ok _, Ok _, TypeConstruction _ ->
@@ -1857,6 +1872,48 @@ type internal CompilerService() =
                                                     returnType,
                                                     nextArgumentLocalIndex
                                                 )
+                                    | FunctionApplication(functionExpression, argumentExpression) ->
+                                        match
+                                            typeStaticExpression
+                                                localBindings
+                                                nextLocalIndex
+                                                functionExpression
+                                        with
+                                        | Error error -> Error error
+                                        | Ok(typedFunction,
+                                             (CliGenericType(functionType, [ domainType; rangeType ]) as cliFunctionType),
+                                             nextFunctionLocalIndex) when
+                                            functionType.DeclarationId = fsharpFunctionType.DeclarationId
+                                            ->
+                                            match
+                                                typeStaticExpression
+                                                    localBindings
+                                                    nextFunctionLocalIndex
+                                                    argumentExpression
+                                            with
+                                            | Error error -> Error error
+                                            | Ok(typedArgument, argumentType, nextArgumentLocalIndex) when
+                                                argumentType = domainType
+                                                ->
+                                                Ok(
+                                                    TypedFunctionApplication(
+                                                        cliFunctionType,
+                                                        domainType,
+                                                        rangeType,
+                                                        typedFunction,
+                                                        typedArgument
+                                                    ),
+                                                    rangeType,
+                                                    nextArgumentLocalIndex
+                                                )
+                                            | Ok _ ->
+                                                diagnostic
+                                                    methodDeclaration.BodyRange
+                                                    "the function argument type does not match its domain"
+                                        | Ok _ ->
+                                            diagnostic
+                                                methodDeclaration.BodyRange
+                                                "this expression is not an F# function"
                                     | LetExpression(bindingName,
                                                     value,
                                                     body,
@@ -2525,6 +2582,7 @@ type internal CompilerService() =
                                 | UnitApplication _
                                 | MemberAssignment _
                                 | SequentialExpression _
+                                | FunctionApplication _
                                 | LetExpression _
                                 | LambdaExpression _
                                 | TypeConstruction _ ->
@@ -2561,6 +2619,7 @@ type internal CompilerService() =
                                     | TypedLocalReference _
                                     | TypedLet _
                                     | TypedStaticMethodCall _
+                                    | TypedFunctionApplication _
                                     | TypedResumableTryFinally _
                                     | TypedTraitCall _ -> methodDeclaration.BodyRange
 
@@ -3445,6 +3504,32 @@ type internal CompilerService() =
                     @ [ callInstruction ],
                     (loweredArguments
                      |> List.collect snd)
+                | TypedFunctionApplication(functionType,
+                                           domainType,
+                                           rangeType,
+                                           functionExpression,
+                                           argumentExpression) ->
+                    let functionInstructions, functionLocals =
+                        valueExpressionInstructions kind functionExpression
+
+                    let argumentInstructions, argumentLocals =
+                        valueExpressionInstructions kind argumentExpression
+
+                    let invoke = {
+                        DeclaringType = CliDeclaringType functionType
+                        Name = "Invoke"
+                        GenericArity = 0
+                        IsInstance = true
+                        ParameterTypes = [ CliTypeParameter 0 ]
+                        ReturnType = CliTypeParameter 1
+                        TargetStableId = None
+                    }
+
+                    functionInstructions
+                    @ argumentInstructions
+                    @ [ CallVirtualMethod invoke ],
+                    functionLocals
+                    @ argumentLocals
                 | TypedResumableCode _
                 | TypedResumableTryFinally _
                 | TypedTraitCall _ -> invalidOp "this expression cannot be lowered as a local value"
@@ -3463,7 +3548,7 @@ type internal CompilerService() =
                         Return
                     ],
                     []
-                | (TypedLocalReference _ | TypedLet _ | TypedStaticMethodCall _) as expression ->
+                | (TypedLocalReference _ | TypedLet _ | TypedStaticMethodCall _ | TypedFunctionApplication _) as expression ->
                     let instructions, locals = valueExpressionInstructions kind expression
 
                     instructions
@@ -3730,7 +3815,8 @@ type internal CompilerService() =
                         | TypedLocalReference _
                         | TypedLet _
                         | TypedTraitCall _ -> 1
-                        | TypedStaticMethodCall _ -> 8
+                        | TypedStaticMethodCall _
+                        | TypedFunctionApplication _ -> 8
                     DependencyIds =
                         methodDependencies methodDeclaration
                         @ instructionDependencies
@@ -4029,6 +4115,7 @@ type internal CompilerService() =
                                     | TypedLocalReference _
                                     | TypedLet _
                                     | TypedStaticMethodCall _
+                                    | TypedFunctionApplication _
                                     | TypedTraitCall _ -> None
 
                                 match closureExpression with

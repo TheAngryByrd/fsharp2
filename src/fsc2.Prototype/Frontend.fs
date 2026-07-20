@@ -837,6 +837,41 @@ module internal Frontend =
                     |> Result.map (fun members -> rootName, members)
 
                 match expressionToken.Kind with
+                | LeftParenthesis ->
+                    parseResult {
+                        let! _ = expected LeftParenthesis "expected '('"
+                        let! firstExpression, firstRange = parseExpression ()
+
+                        let rec parseApplications expression expressionRange =
+                            parseResult {
+                                return!
+                                    match (current ()).Kind with
+                                    | RightParenthesis ->
+                                        consume ()
+                                        |> ignore
+
+                                        Ok(expression, expressionRange)
+                                    | EndOfFile ->
+                                        Error(
+                                            prototypeDiagnostic
+                                                source.Path
+                                                (current ()).Range
+                                                "expected ')' after an expression"
+                                        )
+                                    | _ ->
+                                        parseExpression ()
+                                        |> Result.bind (fun (argument, argumentRange) ->
+                                            parseApplications
+                                                (FunctionApplication(expression, argument))
+                                                {
+                                                    Start = expressionRange.Start
+                                                    End = argumentRange.End
+                                                }
+                                        )
+                            }
+
+                        return! parseApplications firstExpression firstRange
+                    }
                 | LetKeyword ->
                     parseResult {
                         let! letToken = expected LetKeyword "expected 'let'"
