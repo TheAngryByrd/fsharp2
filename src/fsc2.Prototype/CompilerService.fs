@@ -370,7 +370,11 @@ type private ObjectMethodKind =
 
     member this.AllowedAttributeKinds =
         match this with
-        | InstanceObjectMethod -> [ DefaultValueAttribute ]
+        | InstanceObjectMethod ->
+            [
+                DefaultValueAttribute
+                NoEagerConstraintApplicationAttribute
+            ]
         | StaticObjectMethod -> [ NoEagerConstraintApplicationAttribute ]
 
 type private ObjectMethodCompletion = {
@@ -2750,6 +2754,12 @@ type internal CompilerService() =
                     let typeMethod (methodDeclaration: ParsedInstanceMethodDeclaration) =
                         let usedTypeParameterNames = HashSet<string>(StringComparer.Ordinal)
 
+                        methodDeclaration.TypeParameters
+                        |> List.iter (fun name ->
+                            usedTypeParameterNames.Add(name)
+                            |> ignore
+                        )
+
                         let collectUsedTypeParameterNames typeExpression =
                             collectTypeParameters [] typeExpression
                             |> List.iter (fun name ->
@@ -2831,7 +2841,7 @@ type internal CompilerService() =
 
                         let methodTypeParameters =
                             collectMethodTypeParameters
-                                []
+                                methodDeclaration.TypeParameters
                                 generalizedParameters
                                 generalizedReturnType
 
@@ -2842,6 +2852,121 @@ type internal CompilerService() =
                             methodTypeParameters
                             |> List.mapi (fun index name -> name, index)
                             |> Map.ofList
+
+                        let resolveDirectMethodConstraint =
+                            function
+                            | ParsedSubtypeConstraint(typeParameter, superType, range) ->
+                                if not (declaredMethodParameters.Contains(typeParameter)) then
+                                    diagnostic
+                                        range
+                                        $"the constrained type parameter '{typeParameter}' is not declared"
+                                else
+                                    resolveType declaredMethodParameters superType
+                                    |> Result.map (fun typedSuperType ->
+                                        TypedDirectConstraint(
+                                            TypedSubtypeConstraint(typeParameter, typedSuperType)
+                                        )
+                                    )
+                            | ParsedMemberConstraint(typeParameter,
+                                                     memberName,
+                                                     memberType,
+                                                     range) ->
+                                if not (declaredMethodParameters.Contains(typeParameter)) then
+                                    diagnostic
+                                        range
+                                        $"the constrained type parameter '{typeParameter}' is not declared"
+                                else
+                                    resolveType declaredMethodParameters memberType
+                                    |> Result.map (fun typedMemberType ->
+                                        TypedDirectConstraint(
+                                            TypedMemberConstraint(
+                                                typeParameter,
+                                                memberName,
+                                                typedMemberType
+                                            )
+                                        )
+                                    )
+
+                        let expandedAbbreviationConstraints constraintType =
+                            match constraintType with
+                            | ParsedGenericTypeApplication(ParsedNamedType(aliasName, _),
+                                                           arguments,
+                                                           _) when
+                                String.IsNullOrEmpty(aliasName.Namespace)
+                                ->
+                                match typeAbbreviations |> Map.tryFind aliasName.Name with
+                                | Some abbreviation when
+                                    abbreviation.TypeParameters.Length = arguments.Length
+                                    ->
+                                    let substitutions =
+                                        List.zip abbreviation.TypeParameters arguments
+                                        |> Map.ofList
+
+                                    let substituteConstraint =
+                                        function
+                                        | ParsedSubtypeConstraint(typeParameter,
+                                                                  superType,
+                                                                  range) ->
+                                            match
+                                                ParsedTypeParameter(typeParameter, range)
+                                                |> substituteType substitutions
+                                            with
+                                            | ParsedTypeParameter(substitutedParameter, _) ->
+                                                Some(
+                                                    ParsedSubtypeConstraint(
+                                                        substitutedParameter,
+                                                        substituteType substitutions superType,
+                                                        range
+                                                    )
+                                                )
+                                            | _ -> None
+                                        | ParsedMemberConstraint(typeParameter,
+                                                                 memberName,
+                                                                 memberType,
+                                                                 range) ->
+                                            match
+                                                ParsedTypeParameter(typeParameter, range)
+                                                |> substituteType substitutions
+                                            with
+                                            | ParsedTypeParameter(substitutedParameter, _) ->
+                                                Some(
+                                                    ParsedMemberConstraint(
+                                                        substitutedParameter,
+                                                        memberName,
+                                                        substituteType substitutions memberType,
+                                                        range
+                                                    )
+                                                )
+                                            | _ -> None
+
+                                    abbreviation.Constraints
+                                    |> List.choose substituteConstraint
+                                | _ -> []
+                            | _ -> []
+
+                        let resolveMethodConstraint =
+                            function
+                            | ParsedAbbreviationConstraint constraintType ->
+                                match resolveType declaredMethodParameters constraintType with
+                                | Error error -> Error error
+                                | Ok typedConstraintType ->
+                                    constraintType
+                                    |> expandedAbbreviationConstraints
+                                    |> List.map resolveDirectMethodConstraint
+                                    |> collectResults []
+                                    |> Result.map (fun expanded ->
+                                        TypedAbbreviationConstraint typedConstraintType
+                                        :: expanded
+                                    )
+                            | ParsedDirectConstraint directConstraint ->
+                                resolveDirectMethodConstraint directConstraint
+                                |> Result.map List.singleton
+
+                        let typedMethodConstraints =
+                            methodDeclaration.Constraints
+                            |> List.map resolveMethodConstraint
+                            |> collectResults []
+                            |> Result.map List.concat
 
                         let typedParameters =
                             typeObjectMethodParameters
@@ -2864,10 +2989,20 @@ type internal CompilerService() =
                             |> Seq.toList
                             |> collectResults []
 
-                        match typedParameters, typedFlexibleConstraints with
-                        | Error error, _
-                        | _, Error error -> Error error
-                        | Ok parameters, Ok constraints when
+                        match typedParameters, typedFlexibleConstraints, typedMethodConstraints with
+                        | Error error, _, _
+                        | _, Error error, _
+                        | _, _, Error error -> Error error
+                        | Ok _, Ok _, Ok _ when
+                            (methodDeclaration.TypeParameters
+                             |> Set.ofList
+                             |> Set.count)
+                            <> methodDeclaration.TypeParameters.Length
+                            ->
+                            diagnostic
+                                methodDeclaration.Range
+                                "method type parameters must be unique"
+                        | Ok parameters, Ok _, Ok _ when
                             (parameters
                              |> List.map _.Name
                              |> Set.ofList
@@ -2877,7 +3012,11 @@ type internal CompilerService() =
                             diagnostic
                                 methodDeclaration.Range
                                 "instance-member parameter names must be unique"
-                        | Ok parameters, Ok constraints ->
+                        | Ok parameters, Ok flexibleConstraints, Ok explicitConstraints ->
+                            let constraints =
+                                explicitConstraints
+                                @ flexibleConstraints
+
                             let isResumableCodeReference (reference: CliTypeReference) =
                                 reference.AssemblyName = "FSharp.Core"
                                 && reference.TypeName.Namespace = "Microsoft.FSharp.Core.CompilerServices"
@@ -3623,7 +3762,12 @@ type internal CompilerService() =
                         function
                         | ParsedInstanceObjectMethod methodDeclaration ->
                             typeMethod methodDeclaration
-                            |> Result.map TypedInstanceObjectMethod
+                            |> Result.map (fun typedMethod ->
+                                TypedInstanceObjectMethod(
+                                    methodDeclaration.ReceiverName,
+                                    typedMethod
+                                )
+                            )
                         | ParsedStaticObjectMethod methodDeclaration ->
                             typeStaticMethod methodDeclaration
                             |> Result.map TypedStaticObjectMethod
@@ -5584,7 +5728,7 @@ type internal CompilerService() =
                                     typeDeclaration.Methods
                                     |> List.choose (fun objectMethodDeclaration ->
                                         match objectMethodDeclaration with
-                                        | TypedInstanceObjectMethod methodDeclaration ->
+                                        | TypedInstanceObjectMethod(receiverName, methodDeclaration) ->
                                             let extensionMethod = {
                                                 methodDeclaration with
                                                     Name =
@@ -5593,7 +5737,7 @@ type internal CompilerService() =
                                                         + methodDeclaration.Name
                                                     Parameters =
                                                         {
-                                                            Name = "this"
+                                                            Name = receiverName
                                                             Type = extendedType
                                                             Attributes = []
                                                         }
@@ -5697,11 +5841,11 @@ type internal CompilerService() =
                                     |> List.map (fun objectMethodDeclaration ->
                                         let kind, methodDeclaration =
                                             match objectMethodDeclaration with
-                                            | TypedInstanceObjectMethod methodDeclaration when
+                                            | TypedInstanceObjectMethod(_, methodDeclaration) when
                                                 not methodDeclaration.IsPublic
                                                 ->
                                                 InternalInstanceInlineMember, methodDeclaration
-                                            | TypedInstanceObjectMethod methodDeclaration ->
+                                            | TypedInstanceObjectMethod(_, methodDeclaration) ->
                                                 InstanceInlineMember, methodDeclaration
                                             | TypedStaticObjectMethod methodDeclaration ->
                                                 StaticInlineMemberStub, methodDeclaration

@@ -4769,6 +4769,134 @@ module CompilerTargetTests =
                 finally
                     Directory.Delete(root, true)
 
+            testCase
+                "preserves explicit generic parameters and constraints on a type extension member"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen System.Runtime.CompilerServices\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type Awaiter<'Awaiter, 'TResult\n        when 'Awaiter :> ICriticalNotifyCompletion\n        and 'Awaiter: (member GetResult: unit -> 'TResult)> = 'Awaiter\n\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n    [<AutoOpen>]\n    module LowPriority =\n        type TaskBuilderBase with\n            [<NoEagerConstraintApplication>]\n            member inline _.Source<'TResult1, 'TResult2, 'Awaiter, 'TOverall\n                when Awaiter<'Awaiter, 'TResult1>>\n                (awaiter: 'Awaiter)\n                : 'Awaiter =\n                awaiter\n"
+
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-constrained-extension-member",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "TaskBuilderBase.fs")
+                    File.WriteAllText(sourcePath, sourceText)
+
+                    let oracleOutputPath = Path.Combine(root, "TaskBuilderBase-oracle.dll")
+                    let oracleResponsePath = Path.Combine(root, "oracle.rsp")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root oracleResponsePath [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{oracleOutputPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let responsePath = Path.Combine(root, "fsharp2.rsp")
+
+                    let outputPath, _ =
+                        compileForExportFingerprint
+                            root
+                            responsePath
+                            sourcePath
+                            "TaskBuilderBase-fsharp2"
+                            []
+
+                    let inspectAndInvoke assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        let extensionModuleType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+LowPriority",
+                                throwOnError = true
+                            )
+
+                        let extensionMethod =
+                            extensionModuleType.GetMethod(
+                                "TaskBuilderBase.Source",
+                                BindingFlags.Public
+                                ||| BindingFlags.Static
+                            )
+
+                        Expect.isNotNull
+                            extensionMethod
+                            "the nested module should expose the constrained type-extension method"
+
+                        let genericParameters =
+                            extensionMethod.GetGenericArguments()
+                            |> Array.map (fun parameter ->
+                                parameter.GenericParameterPosition,
+                                parameter.Name,
+                                parameter.GenericParameterAttributes,
+                                (parameter.GetGenericParameterConstraints()
+                                 |> Array.map _.FullName)
+                            )
+
+                        let closedMethod =
+                            extensionMethod.MakeGenericMethod(
+                                typeof<int>,
+                                typeof<string>,
+                                typeof<System.Runtime.CompilerServices.TaskAwaiter<int>>,
+                                typeof<bool>
+                            )
+
+                        let builder = Activator.CreateInstance(builderType)
+                        let awaiter = System.Threading.Tasks.Task.FromResult(42).GetAwaiter()
+
+                        let result =
+                            closedMethod.Invoke(
+                                null,
+                                [|
+                                    builder
+                                    awaiter
+                                |]
+                            )
+                            :?> System.Runtime.CompilerServices.TaskAwaiter<int>
+
+                        genericParameters,
+                        (extensionMethod.GetParameters()
+                         |> Array.map (fun parameter ->
+                             parameter.Name, parameter.ParameterType.ToString()
+                         )),
+                        extensionMethod.Attributes,
+                        result.GetResult()
+
+                    let oracleShape = inspectAndInvoke oracleOutputPath
+                    let fsharp2Shape = inspectAndInvoke outputPath
+
+                    Expect.equal
+                        fsharp2Shape
+                        oracleShape
+                        "the constrained extension member should match the Compatibility Oracle"
+
+                    let _, _, _, result = fsharp2Shape
+                    Expect.equal result 42 "Source should return its awaiter argument"
+                finally
+                    Directory.Delete(root, true)
+
             testCase "retained service invalidates an IcedTasks inline object-member edit"
             <| fun _ ->
                 let root =

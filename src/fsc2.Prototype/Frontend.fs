@@ -1947,6 +1947,136 @@ module internal Frontend =
 
                         let! _ = expected Dot "expected '.'"
                         let! methodName, _ = identifier "expected an instance member name"
+
+                        let parseDirectConstraint () =
+                            parseResult {
+                                let! constrainedParameter, parameterToken =
+                                    typeParameter "expected a constrained type parameter"
+
+                                return!
+                                    match (current ()).Kind with
+                                    | Subtype ->
+                                        consume ()
+                                        |> ignore
+
+                                        parseTypeExpression ()
+                                        |> Result.map (fun superType ->
+                                            ParsedSubtypeConstraint(
+                                                constrainedParameter,
+                                                superType,
+                                                {
+                                                    Start = parameterToken.Range.Start
+                                                    End = superType.Range.End
+                                                }
+                                            )
+                                        )
+                                    | Colon ->
+                                        parseResult {
+                                            let! _ = expected Colon "expected ':'"
+                                            let! _ = expected LeftParenthesis "expected '('"
+                                            let! _ = expected MemberKeyword "expected 'member'"
+                                            let! memberName, _ = identifier "expected a member name"
+                                            let! _ = expected Colon "expected ':'"
+                                            let! memberType = parseTypeExpression ()
+                                            let! closeToken = expected RightParenthesis "expected ')'"
+
+                                            return
+                                                ParsedMemberConstraint(
+                                                    constrainedParameter,
+                                                    memberName,
+                                                    memberType,
+                                                    {
+                                                        Start = parameterToken.Range.Start
+                                                        End = closeToken.Range.End
+                                                    }
+                                                )
+                                        }
+                                    | _ ->
+                                        Error(
+                                            prototypeDiagnostic
+                                                source.Path
+                                                (current ()).Range
+                                                "expected ':>' or a member constraint"
+                                        )
+                            }
+
+                        let rec parseMethodConstraints constraints =
+                            parseResult {
+                                let! constraint' =
+                                    match (current ()).Kind with
+                                    | TypeParameter _ ->
+                                        parseDirectConstraint ()
+                                        |> Result.map ParsedDirectConstraint
+                                    | _ ->
+                                        parseTypeExpression ()
+                                        |> Result.map ParsedAbbreviationConstraint
+
+                                let constraints = constraint' :: constraints
+
+                                return!
+                                    match (current ()).Kind with
+                                    | AndKeyword ->
+                                        consume ()
+                                        |> ignore
+
+                                        parseMethodConstraints constraints
+                                    | GreaterThan -> Ok(List.rev constraints)
+                                    | _ ->
+                                        Error(
+                                            prototypeDiagnostic
+                                                source.Path
+                                                (current ()).Range
+                                                "expected 'and' or '>' after a method constraint"
+                                        )
+                            }
+
+                        let rec parseMethodTypeParameters parameters =
+                            parseResult {
+                                let! parameter, _ =
+                                    typeParameter "expected an instance-member type parameter"
+
+                                let parameters = parameter :: parameters
+
+                                return!
+                                    match (current ()).Kind with
+                                    | Comma ->
+                                        consume ()
+                                        |> ignore
+
+                                        parseMethodTypeParameters parameters
+                                    | WhenKeyword ->
+                                        consume ()
+                                        |> ignore
+
+                                        parseMethodConstraints []
+                                        |> Result.map (fun constraints ->
+                                            List.rev parameters, constraints
+                                        )
+                                    | GreaterThan -> Ok(List.rev parameters, [])
+                                    | _ ->
+                                        Error(
+                                            prototypeDiagnostic
+                                                source.Path
+                                                (current ()).Range
+                                                "expected ',', 'when', or '>' after an instance-member type parameter"
+                                        )
+                            }
+
+                        let! methodTypeParameters, methodConstraints =
+                            match (current ()).Kind with
+                            | LessThan ->
+                                consume ()
+                                |> ignore
+
+                                parseResult {
+                                    let! parameters, constraints =
+                                        parseMethodTypeParameters []
+
+                                    let! _ = expected GreaterThan "expected '>'"
+                                    return parameters, constraints
+                                }
+                            | _ -> Ok([], [])
+
                         let! _ = expected LeftParenthesis "expected '('"
                         let! parameters = parseParameters []
                         let! _ = expected RightParenthesis "expected ')'"
@@ -1969,6 +2099,8 @@ module internal Frontend =
                             IsPublic = isPublic
                             ReceiverName = receiverName
                             Name = methodName
+                            TypeParameters = methodTypeParameters
+                            Constraints = methodConstraints
                             Parameters = parameters
                             ReturnType = returnType
                             Body = body

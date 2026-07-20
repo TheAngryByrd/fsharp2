@@ -305,6 +305,8 @@ type internal ParsedInstanceMethodDeclaration = {
     IsPublic: bool
     ReceiverName: string
     Name: string
+    TypeParameters: string list
+    Constraints: ParsedMethodConstraint list
     Parameters: ParsedParameter list
     ReturnType: ParsedTypeExpression option
     Body: ParsedExpression
@@ -861,12 +863,12 @@ type internal TypedMethodDeclaration = {
     override _.ToString() = "TypedMethodDeclaration"
 
 type internal TypedObjectMethodDeclaration =
-    | TypedInstanceObjectMethod of TypedMethodDeclaration
+    | TypedInstanceObjectMethod of receiverName: string * declaration: TypedMethodDeclaration
     | TypedStaticObjectMethod of TypedMethodDeclaration
 
     member this.Method =
         match this with
-        | TypedInstanceObjectMethod declaration
+        | TypedInstanceObjectMethod(_, declaration)
         | TypedStaticObjectMethod declaration -> declaration
 
     override _.ToString() = "TypedObjectMethodDeclaration"
