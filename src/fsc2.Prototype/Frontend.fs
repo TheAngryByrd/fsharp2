@@ -17,6 +17,7 @@ module internal Frontend =
         | TypeKeyword
         | StaticKeyword
         | InlineKeyword
+        | WithKeyword
         | WhenKeyword
         | AndKeyword
         | MemberKeyword
@@ -375,6 +376,7 @@ module internal Frontend =
                 | "type" -> add TypeKeyword start
                 | "static" -> add StaticKeyword start
                 | "inline" -> add InlineKeyword start
+                | "with" -> add WithKeyword start
                 | "when" -> add WhenKeyword start
                 | "and" -> add AndKeyword start
                 | "member" -> add MemberKeyword start
@@ -1876,6 +1878,108 @@ module internal Frontend =
                                 "expected a literal declaration or end of file"
                         )
 
+                let parseParameter () =
+                    parseResult {
+                        let! attributes =
+                            match (current ()).Kind with
+                            | AttributeStart -> parseDeclarationAttributes ()
+                            | _ -> Ok []
+
+                        let! parameterName, parameterToken =
+                            identifier "expected a parameter name"
+
+                        let! _ = expected Colon "expected ':'"
+                        let! parameterType = parseTypeExpression ()
+
+                        return {
+                            Attributes = attributes
+                            Name = parameterName
+                            Type = parameterType
+                            Range = {
+                                Start = parameterToken.Range.Start
+                                End = parameterType.Range.End
+                            }
+                        }
+                    }
+
+                let rec parseParameters parameters =
+                    match (current ()).Kind with
+                    | RightParenthesis -> Ok(List.rev parameters)
+                    | _ ->
+                        parseParameter ()
+                        |> Result.bind (fun parameter ->
+                            let parameters =
+                                parameter
+                                :: parameters
+
+                            match (current ()).Kind with
+                            | Comma ->
+                                consume ()
+                                |> ignore
+
+                                parseParameters parameters
+                            | RightParenthesis -> Ok(List.rev parameters)
+                            | _ ->
+                                Error(
+                                    prototypeDiagnostic
+                                        source.Path
+                                        (current ()).Range
+                                        "expected ',' or ')' after a method parameter"
+                                )
+                        )
+
+                let parseInstanceMethod attributes =
+                    parseResult {
+                        let! memberToken = expected MemberKeyword "expected 'member'"
+                        let! _ = expected InlineKeyword "expected 'inline'"
+
+                        let isPublic =
+                            match (current ()).Kind with
+                            | InternalKeyword ->
+                                consume ()
+                                |> ignore
+
+                                false
+                            | _ -> true
+
+                        let! receiverName, _ =
+                            identifier "expected an instance member receiver"
+
+                        let! _ = expected Dot "expected '.'"
+                        let! methodName, _ = identifier "expected an instance member name"
+                        let! _ = expected LeftParenthesis "expected '('"
+                        let! parameters = parseParameters []
+                        let! _ = expected RightParenthesis "expected ')'"
+
+                        let! returnType =
+                            match (current ()).Kind with
+                            | Colon ->
+                                consume ()
+                                |> ignore
+
+                                parseTypeExpression ()
+                                |> Result.map Some
+                            | _ -> Ok None
+
+                        let! _ = expected Equals "expected '='"
+                        let! body, bodyRange = parseExpression ()
+
+                        return {
+                            Attributes = attributes
+                            IsPublic = isPublic
+                            ReceiverName = receiverName
+                            Name = methodName
+                            Parameters = parameters
+                            ReturnType = returnType
+                            Body = body
+                            BodyRange = bodyRange
+                            Range = {
+                                Start = memberToken.Range.Start
+                                End = bodyRange.End
+                            }
+                        }
+                    }
+
                 let parseTypeDeclaration attributes =
                     parseResult {
                         let declarationToken = consume ()
@@ -2087,56 +2191,6 @@ module internal Frontend =
                                         )
                             }
 
-                        let parseParameter () =
-                            parseResult {
-                                let! attributes =
-                                    match (current ()).Kind with
-                                    | AttributeStart -> parseDeclarationAttributes ()
-                                    | _ -> Ok []
-
-                                let! parameterName, parameterToken =
-                                    identifier "expected a parameter name"
-
-                                let! _ = expected Colon "expected ':'"
-                                let! parameterType = parseTypeExpression ()
-
-                                return {
-                                    Attributes = attributes
-                                    Name = parameterName
-                                    Type = parameterType
-                                    Range = {
-                                        Start = parameterToken.Range.Start
-                                        End = parameterType.Range.End
-                                    }
-                                }
-                            }
-
-                        let rec parseParameters parameters =
-                            match (current ()).Kind with
-                            | RightParenthesis -> Ok(List.rev parameters)
-                            | _ ->
-                                parseParameter ()
-                                |> Result.bind (fun parameter ->
-                                    let parameters =
-                                        parameter
-                                        :: parameters
-
-                                    match (current ()).Kind with
-                                    | Comma ->
-                                        consume ()
-                                        |> ignore
-
-                                        parseParameters parameters
-                                    | RightParenthesis -> Ok(List.rev parameters)
-                                    | _ ->
-                                        Error(
-                                            prototypeDiagnostic
-                                                source.Path
-                                                (current ()).Range
-                                                "expected ',' or ')' after a method parameter"
-                                        )
-                                )
-
                         let parseStaticMethod attributes allowDeclaredReturnType =
                             parseResult {
                                 let! staticToken = expected StaticKeyword "expected 'static'"
@@ -2215,61 +2269,12 @@ module internal Frontend =
                                         "expected a static member, type declaration, or end of file"
                                 )
 
-                        let parseInstanceMethod attributes =
-                            parseResult {
-                                let! memberToken = expected MemberKeyword "expected 'member'"
-                                let! _ = expected InlineKeyword "expected 'inline'"
-
-                                let isPublic =
-                                    match (current ()).Kind with
-                                    | InternalKeyword ->
-                                        consume ()
-                                        |> ignore
-
-                                        false
-                                    | _ -> true
-
-                                let! receiverName, _ =
-                                    identifier "expected an instance member receiver"
-
-                                let! _ = expected Dot "expected '.'"
-                                let! methodName, _ = identifier "expected an instance member name"
-                                let! _ = expected LeftParenthesis "expected '('"
-                                let! parameters = parseParameters []
-                                let! _ = expected RightParenthesis "expected ')'"
-
-                                let! returnType =
-                                    match (current ()).Kind with
-                                    | Colon ->
-                                        consume ()
-                                        |> ignore
-
-                                        parseTypeExpression ()
-                                        |> Result.map Some
-                                    | _ -> Ok None
-
-                                let! _ = expected Equals "expected '='"
-                                let! body, bodyRange = parseExpression ()
-
-                                return {
-                                    Attributes = attributes
-                                    IsPublic = isPublic
-                                    ReceiverName = receiverName
-                                    Name = methodName
-                                    Parameters = parameters
-                                    ReturnType = returnType
-                                    Body = body
-                                    BodyRange = bodyRange
-                                    Range = {
-                                        Start = memberToken.Range.Start
-                                        End = bodyRange.End
-                                    }
-                                }
-                            }
-
                         let rec parseObjectMethods methods =
                             match (current ()).Kind with
-                            | AttributeStart ->
+                            | AttributeStart when
+                                (current ()).Range.Start.Column
+                                > typeToken.Range.Start.Column
+                                ->
                                 parseResult {
                                     let! attributes = parseDeclarationAttributes ()
 
@@ -2315,6 +2320,8 @@ module internal Frontend =
                                             :: methods
                                         )
                                 }
+                            | AttributeStart
+                            | ModuleKeyword
                             | TypeKeyword
                             | AndKeyword
                             | EndOfFile -> Ok(List.rev methods)
@@ -2404,6 +2411,7 @@ module internal Frontend =
                                     | Some lastMethod ->
                                         Ok(
                                             ParsedObjectType {
+                                                Container = OrdinaryObjectType
                                                 Name = declarationName
                                                 Methods = methods
                                                 ConstructorRange = declarationNameToken.Range
@@ -2515,6 +2523,86 @@ module internal Frontend =
                                 }
                     }
 
+                let parseExtensionModule attributes =
+                    parseResult {
+                        let! moduleToken = expected ModuleKeyword "expected 'module'"
+                        let! moduleName, _ = identifier "expected a module name"
+                        let! _ = expected Equals "expected '='"
+                        let! typeToken = expected TypeKeyword "expected 'type'"
+
+                        let! extendedTypeName, extendedTypeToken =
+                            identifier "expected an extended type name"
+
+                        let! _ = expected WithKeyword "expected 'with'"
+
+                        let rec parseExtensionMethods methods =
+                            match (current ()).Kind with
+                            | AttributeStart when
+                                (current ()).Range.Start.Column
+                                > typeToken.Range.Start.Column
+                                ->
+                                parseResult {
+                                    let! methodAttributes = parseDeclarationAttributes ()
+                                    let! methodDeclaration = parseInstanceMethod methodAttributes
+
+                                    return!
+                                        parseExtensionMethods (
+                                            ParsedInstanceObjectMethod methodDeclaration
+                                            :: methods
+                                        )
+                                }
+                            | MemberKeyword when
+                                (current ()).Range.Start.Column
+                                > typeToken.Range.Start.Column
+                                ->
+                                parseResult {
+                                    let! methodDeclaration = parseInstanceMethod []
+
+                                    return!
+                                        parseExtensionMethods (
+                                            ParsedInstanceObjectMethod methodDeclaration
+                                            :: methods
+                                        )
+                                }
+                            | EndOfFile -> Ok(List.rev methods)
+                            | _ when
+                                (current ()).Range.Start.Column
+                                <= moduleToken.Range.Start.Column
+                                -> Ok(List.rev methods)
+                            | _ ->
+                                Error(
+                                    prototypeDiagnostic
+                                        source.Path
+                                        (current ()).Range
+                                        "expected a type-extension member or module declaration"
+                                )
+
+                        let! methods = parseExtensionMethods []
+
+                        return!
+                            match List.tryLast methods with
+                            | Some lastMethod ->
+                                Ok(
+                                    ParsedObjectType {
+                                        Container = ParsedExtensionModule(moduleName, attributes)
+                                        Name = extendedTypeName
+                                        Methods = methods
+                                        ConstructorRange = extendedTypeToken.Range
+                                        Range = {
+                                            Start = moduleToken.Range.Start
+                                            End = lastMethod.Range.End
+                                        }
+                                    }
+                                )
+                            | None ->
+                                Error(
+                                    prototypeDiagnostic
+                                        source.Path
+                                        typeToken.Range
+                                        "a type extension must declare a member"
+                                )
+                    }
+
                 let canStartTypeDeclaration declarations token =
                     match token with
                     | TypeKeyword -> true
@@ -2567,6 +2655,16 @@ module internal Frontend =
                                     :: declarations
                                 )
                         }
+                    | ModuleKeyword ->
+                        parseResult {
+                            let! declaration = parseExtensionModule []
+
+                            return!
+                                parseModuleDeclarations (
+                                    declaration
+                                    :: declarations
+                                )
+                        }
                     | AttributeStart ->
                         parseResult {
                             let! attributes = parseDeclarationAttributes ()
@@ -2575,12 +2673,13 @@ module internal Frontend =
                                 match (current ()).Kind with
                                 | token when canStartTypeDeclaration declarations token ->
                                     parseTypeDeclaration attributes
+                                | ModuleKeyword -> parseExtensionModule attributes
                                 | _ ->
                                     Error(
                                         prototypeDiagnostic
                                             source.Path
                                             (current ()).Range
-                                            "expected a type declaration after attributes"
+                                            "expected a type or module declaration after attributes"
                                     )
 
                             return!

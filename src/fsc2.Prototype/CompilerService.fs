@@ -499,7 +499,7 @@ type internal CompilerService() =
                         StableId = declaration.StableId
                         Methods = declaration.Methods
                     }
-                | TypedObjectType declaration ->
+                | TypedObjectType({ Container = OrdinaryTypedObjectType } as declaration) ->
                     checkedSourceTypes.Add {
                         Namespace = namespaceName
                         Name = declaration.Name
@@ -513,6 +513,7 @@ type internal CompilerService() =
                                 | TypedInstanceObjectMethod _ -> None
                             )
                     }
+                | TypedObjectType _ -> ()
                 | TypedStructType declaration ->
                     checkedSourceStructs.Add {
                         Namespace = namespaceName
@@ -1602,9 +1603,17 @@ type internal CompilerService() =
                         )
                 | ParsedObjectType declaration ->
                     let stableId =
-                        parsed.StableId
-                        + "/type:"
-                        + declaration.Name
+                        match declaration.Container with
+                        | OrdinaryObjectType ->
+                            parsed.StableId
+                            + "/type:"
+                            + declaration.Name
+                        | ParsedExtensionModule(moduleName, _) ->
+                            parsed.StableId
+                            + "/module:"
+                            + moduleName
+                            + "/extension:"
+                            + declaration.Name
 
                     let rec collectTypeParameters collected =
                         function
@@ -3626,12 +3635,44 @@ type internal CompilerService() =
                     with
                     | Error error -> Error error
                     | Ok methods ->
-                        Ok(
-                            TypedObjectType {
-                                StableId = stableId
-                                Name = declaration.Name
-                                Methods = methods
-                                ExportFingerprint =
+                        let typedContainer =
+                            match declaration.Container with
+                            | OrdinaryObjectType -> Ok OrdinaryTypedObjectType
+                            | ParsedExtensionModule(moduleName, attributes) ->
+                                let targetTypeName = {
+                                    Namespace = String.Empty
+                                    Name = declaration.Name
+                                }
+
+                                match
+                                    resolveNamedType
+                                        0
+                                        targetTypeName
+                                        declaration.ConstructorRange,
+                                    typeCustomAttributes
+                                        stableId
+                                        [ AutoOpenAttribute ]
+                                        attributes
+                                with
+                                | Error error, _
+                                | _, Error error -> Error error
+                                | Ok targetType, Ok typedAttributes ->
+                                    targetType
+                                    |> toCliType Map.empty declaration.ConstructorRange
+                                    |> Result.map (fun cliTargetType ->
+                                        TypedExtensionModule(
+                                            moduleName,
+                                            typedAttributes,
+                                            cliTargetType
+                                        )
+                                    )
+
+                        match typedContainer with
+                        | Error error -> Error error
+                        | Ok typedContainer ->
+                            let exportFingerprint =
+                                match typedContainer with
+                                | OrdinaryTypedObjectType ->
                                     Fingerprint.parts [
                                         stableId
                                         "constructor:unit"
@@ -3642,10 +3683,36 @@ type internal CompilerService() =
                                                 methodDeclaration.Method.ExportFingerprint
                                             )
                                     ]
-                                ConstructorRange = declaration.ConstructorRange
-                                Range = declaration.Range
-                            }
-                        )
+                                | TypedExtensionModule(moduleName, attributes, targetType) ->
+                                    Fingerprint.parts [
+                                        stableId
+                                        "extension-module"
+                                        moduleName
+                                        TypeIdentity.cliType targetType
+                                        "attributes"
+
+                                        yield!
+                                            attributes
+                                            |> List.map TypeIdentity.customAttribute
+
+                                        yield!
+                                            methods
+                                            |> List.map (fun methodDeclaration ->
+                                                methodDeclaration.Method.ExportFingerprint
+                                            )
+                                    ]
+
+                            Ok(
+                                TypedObjectType {
+                                    StableId = stableId
+                                    Container = typedContainer
+                                    Name = declaration.Name
+                                    Methods = methods
+                                    ExportFingerprint = exportFingerprint
+                                    ConstructorRange = declaration.ConstructorRange
+                                    Range = declaration.Range
+                                }
+                            )
                 | ParsedStructType declaration ->
                     let stableId =
                         parsed.StableId
@@ -4540,7 +4607,8 @@ type internal CompilerService() =
                 match kind with
                 | InstanceConstructor
                 | InstanceInlineMember
-                | InternalInstanceInlineMember ->
+                | InternalInstanceInlineMember
+                | TypeExtensionMember ->
                     parameterIndex
                     + 1
                 | ModuleFunction
@@ -5507,101 +5575,167 @@ type internal CompilerService() =
                     let isNested = typed.ContainerKind = ModuleSource
 
                     declarationsWithContentHashes
-                    |> List.choose (fun (declaration, _) ->
+                    |> List.choose (fun (declaration, typeContentHash) ->
                         match declaration with
                         | TypedObjectType typeDeclaration ->
-                            let constructorStableId =
-                                typeDeclaration.StableId
-                                + "/constructor:unit"
-
-                            let objectConstructor = {
-                                DeclaringType =
-                                    CoreDeclaringType {
-                                        Namespace = "System"
-                                        Name = "Object"
-                                    }
-                                Name = ".ctor"
-                                GenericArity = 0
-                                IsInstance = true
-                                ParameterTypes = []
-                                ReturnType = CliVoid
-                                TargetStableId = None
-                            }
-
-                            let constructor = {
-                                SchemaVersion = querySchema
-                                StableId = constructorStableId
-                                Name = ".ctor"
-                                Kind = InstanceConstructor
-                                GenericParameters = []
-                                Constraints = []
-                                GenericParameterConstraints = []
-                                Attributes = []
-                                Parameters = []
-                                Locals = []
-                                ReturnType = CliVoid
-                                Instructions = [
-                                    LoadArgument 0
-                                    CallMethod objectConstructor
-                                    Return
-                                ]
-                                EmitDefaultSequencePoint = true
-                                MaxStack = 1
-                                DependencyIds = [ objectConstructor.StableId ]
-                                ContentHash =
-                                    Fingerprint.parts [
-                                        constructorStableId
-                                        objectConstructor.StableId
-                                    ]
-                                DocumentIndex = documentIndex
-                                DocumentChecksum = typed.SourceChecksum
-                                Range = typeDeclaration.ConstructorRange
-                            }
-
-                            let methods =
-                                typeDeclaration.Methods
-                                |> List.map (fun objectMethodDeclaration ->
-                                    let kind, methodDeclaration =
+                            match typeDeclaration.Container with
+                            | TypedExtensionModule(moduleName, attributes, extendedType) ->
+                                let methods =
+                                    typeDeclaration.Methods
+                                    |> List.choose (fun objectMethodDeclaration ->
                                         match objectMethodDeclaration with
-                                        | TypedInstanceObjectMethod methodDeclaration when
-                                            not methodDeclaration.IsPublic
-                                            ->
-                                            InternalInstanceInlineMember, methodDeclaration
                                         | TypedInstanceObjectMethod methodDeclaration ->
-                                            InstanceInlineMember, methodDeclaration
-                                        | TypedStaticObjectMethod methodDeclaration ->
-                                            StaticInlineMemberStub, methodDeclaration
+                                            let extensionMethod = {
+                                                methodDeclaration with
+                                                    Name =
+                                                        typeDeclaration.Name
+                                                        + "."
+                                                        + methodDeclaration.Name
+                                                    Parameters =
+                                                        {
+                                                            Name = "this"
+                                                            Type = extendedType
+                                                            Attributes = []
+                                                        }
+                                                        :: methodDeclaration.Parameters
+                                                    ExportFingerprint =
+                                                        Fingerprint.parts [
+                                                            methodDeclaration.ExportFingerprint
+                                                            "type-extension"
+                                                            TypeIdentity.cliType extendedType
+                                                        ]
+                                            }
 
-                                    methodFragment
-                                        kind
-                                        documentIndex
-                                        typed.SourceChecksum
-                                        methodDeclaration.StableId
-                                        (methodImplementationHash methodDeclaration)
-                                        methodDeclaration
-                                )
+                                            methodFragment
+                                                TypeExtensionMember
+                                                documentIndex
+                                                typed.SourceChecksum
+                                                methodDeclaration.StableId
+                                                (Fingerprint.parts [
+                                                    typeContentHash
+                                                    extensionMethod.ExportFingerprint
+                                                    methodImplementationHash methodDeclaration
+                                                 ])
+                                                extensionMethod
+                                            |> Some
+                                        | TypedStaticObjectMethod _ -> None
+                                    )
 
-                            Some {
-                                SchemaVersion = querySchema
-                                StableId = typeDeclaration.StableId
-                                Namespace = if isNested then String.Empty else typed.Namespace
-                                Name = typeDeclaration.Name
-                                IsPublic = true
-                                EnclosingTypeStableId =
-                                    if isNested then Some moduleTypeStableId else None
-                                Kind = ObjectContainer
-                                GenericParameters = []
-                                Attributes = [
-                                    compilationMappingAttribute
-                                        typeDeclaration.StableId
-                                        ObjectTypeConstruct
-                                ]
-                                LiteralFields = []
-                                InstanceFields = []
-                                Methods =
-                                    constructor
-                                    :: methods
-                            }
+                                Some {
+                                    SchemaVersion = querySchema
+                                    StableId = typeDeclaration.StableId
+                                    Namespace = String.Empty
+                                    Name = moduleName
+                                    IsPublic = true
+                                    EnclosingTypeStableId = Some moduleTypeStableId
+                                    Kind = ExtensionModuleContainer
+                                    GenericParameters = []
+                                    Attributes = [
+                                        yield!
+                                            attributes
+                                            |> List.map customAttributeFragment
+
+                                        compilationMappingAttribute
+                                            typeDeclaration.StableId
+                                            ModuleConstruct
+                                    ]
+                                    LiteralFields = []
+                                    InstanceFields = []
+                                    Methods = methods
+                                }
+                            | OrdinaryTypedObjectType ->
+                                let constructorStableId =
+                                    typeDeclaration.StableId
+                                    + "/constructor:unit"
+
+                                let objectConstructor = {
+                                    DeclaringType =
+                                        CoreDeclaringType {
+                                            Namespace = "System"
+                                            Name = "Object"
+                                        }
+                                    Name = ".ctor"
+                                    GenericArity = 0
+                                    IsInstance = true
+                                    ParameterTypes = []
+                                    ReturnType = CliVoid
+                                    TargetStableId = None
+                                }
+
+                                let constructor = {
+                                    SchemaVersion = querySchema
+                                    StableId = constructorStableId
+                                    Name = ".ctor"
+                                    Kind = InstanceConstructor
+                                    GenericParameters = []
+                                    Constraints = []
+                                    GenericParameterConstraints = []
+                                    Attributes = []
+                                    Parameters = []
+                                    Locals = []
+                                    ReturnType = CliVoid
+                                    Instructions = [
+                                        LoadArgument 0
+                                        CallMethod objectConstructor
+                                        Return
+                                    ]
+                                    EmitDefaultSequencePoint = true
+                                    MaxStack = 1
+                                    DependencyIds = [ objectConstructor.StableId ]
+                                    ContentHash =
+                                        Fingerprint.parts [
+                                            constructorStableId
+                                            objectConstructor.StableId
+                                        ]
+                                    DocumentIndex = documentIndex
+                                    DocumentChecksum = typed.SourceChecksum
+                                    Range = typeDeclaration.ConstructorRange
+                                }
+
+                                let methods =
+                                    typeDeclaration.Methods
+                                    |> List.map (fun objectMethodDeclaration ->
+                                        let kind, methodDeclaration =
+                                            match objectMethodDeclaration with
+                                            | TypedInstanceObjectMethod methodDeclaration when
+                                                not methodDeclaration.IsPublic
+                                                ->
+                                                InternalInstanceInlineMember, methodDeclaration
+                                            | TypedInstanceObjectMethod methodDeclaration ->
+                                                InstanceInlineMember, methodDeclaration
+                                            | TypedStaticObjectMethod methodDeclaration ->
+                                                StaticInlineMemberStub, methodDeclaration
+
+                                        methodFragment
+                                            kind
+                                            documentIndex
+                                            typed.SourceChecksum
+                                            methodDeclaration.StableId
+                                            (methodImplementationHash methodDeclaration)
+                                            methodDeclaration
+                                    )
+
+                                Some {
+                                    SchemaVersion = querySchema
+                                    StableId = typeDeclaration.StableId
+                                    Namespace = if isNested then String.Empty else typed.Namespace
+                                    Name = typeDeclaration.Name
+                                    IsPublic = true
+                                    EnclosingTypeStableId =
+                                        if isNested then Some moduleTypeStableId else None
+                                    Kind = ObjectContainer
+                                    GenericParameters = []
+                                    Attributes = [
+                                        compilationMappingAttribute
+                                            typeDeclaration.StableId
+                                            ObjectTypeConstruct
+                                    ]
+                                    LiteralFields = []
+                                    InstanceFields = []
+                                    Methods =
+                                        constructor
+                                        :: methods
+                                }
                         | TypedMethod _
                         | TypedLiteralField _
                         | TypedTypeAbbreviation _

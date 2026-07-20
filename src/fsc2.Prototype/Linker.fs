@@ -305,6 +305,12 @@ module internal Linker =
                 ||| MethodAttributes.Static
                 ||| MethodAttributes.HideBySig
           }
+        | TypeExtensionMember -> {
+            IsInstance = false
+            Attributes =
+                MethodAttributes.Public
+                ||| MethodAttributes.Static
+          }
         | StaticInlineMemberStub -> {
             IsInstance = false
             Attributes =
@@ -1340,6 +1346,10 @@ module internal Linker =
                         ||| TypeAttributes.Abstract
                         ||| TypeAttributes.Sealed
                         ||| TypeAttributes.BeforeFieldInit
+                | ExtensionModuleContainer ->
+                    visibility
+                    ||| TypeAttributes.Abstract
+                    ||| TypeAttributes.Sealed
                 | StaticMemberContainer ->
                     visibility
                     ||| enum<TypeAttributes> 0x00002000
@@ -1371,6 +1381,7 @@ module internal Linker =
                 match typeFragment.Kind with
                 | StructContainer -> systemValueType
                 | ModuleContainer
+                | ExtensionModuleContainer
                 | StaticMemberContainer
                 | ObjectContainer
                 | ClosureContainer -> systemObject

@@ -4661,6 +4661,114 @@ module CompilerTargetTests =
 
                     Expect.equal fsharp2Behavior 42 "Touch should pass the field address to Helper"
 
+            testCase "emits an attributed nested module type extension"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n    [<AutoOpen>]\n    module LowPriority =\n        type TaskBuilderBase with\n            member inline _.Source(value: 'T) : 'T = value\n"
+
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-nested-extension-module",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "TaskBuilderBase.fs")
+                    File.WriteAllText(sourcePath, sourceText)
+
+                    let oracleOutputPath = Path.Combine(root, "TaskBuilderBase-oracle.dll")
+                    let oracleResponsePath = Path.Combine(root, "oracle.rsp")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root oracleResponsePath [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{oracleOutputPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let responsePath = Path.Combine(root, "fsharp2.rsp")
+
+                    let outputPath, _ =
+                        compileForExportFingerprint
+                            root
+                            responsePath
+                            sourcePath
+                            "TaskBuilderBase-fsharp2"
+                            []
+
+                    let inspectAndInvoke assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        let extensionModuleType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+LowPriority",
+                                throwOnError = true
+                            )
+
+                        let extensionMethod =
+                            extensionModuleType.GetMethod(
+                                "TaskBuilderBase.Source",
+                                BindingFlags.Public
+                                ||| BindingFlags.Static
+                            )
+
+                        Expect.isNotNull
+                            extensionMethod
+                            "the nested module should expose the type-extension method"
+
+                        let closedMethod = extensionMethod.MakeGenericMethod(typeof<int>)
+                        let builder = Activator.CreateInstance(builderType)
+
+                        extensionModuleType.Attributes,
+                        (extensionModuleType.CustomAttributes
+                         |> Seq.map _.AttributeType.FullName
+                         |> Seq.sort
+                         |> Seq.toArray),
+                        extensionMethod.Attributes,
+                        (extensionMethod.GetParameters()
+                         |> Array.map _.ParameterType.ToString()),
+                        closedMethod.Invoke(
+                            null,
+                            [|
+                                builder
+                                box 42
+                            |]
+                        )
+                        :?> int
+
+                    let oracleShape = inspectAndInvoke oracleOutputPath
+                    let fsharp2Shape = inspectAndInvoke outputPath
+
+                    Expect.equal
+                        fsharp2Shape
+                        oracleShape
+                        "the nested extension module should match the Compatibility Oracle"
+
+                    let _, _, _, _, result = fsharp2Shape
+                    Expect.equal result 42 "the extension should return its argument"
+                finally
+                    Directory.Delete(root, true)
+
             testCase "retained service invalidates an IcedTasks inline object-member edit"
             <| fun _ ->
                 let root =

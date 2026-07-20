@@ -325,7 +325,15 @@ type internal ParsedObjectMethodDeclaration =
 
     override _.ToString() = "ParsedObjectMethodDeclaration"
 
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal ParsedObjectTypeContainer =
+    | OrdinaryObjectType
+    | ParsedExtensionModule of name: string * attributes: ParsedAttribute list
+
+    override _.ToString() = "ParsedObjectTypeContainer"
+
 type internal ParsedObjectTypeDeclaration = {
+    Container: ParsedObjectTypeContainer
     Name: string
     Methods: ParsedObjectMethodDeclaration list
     ConstructorRange: SourceRange
@@ -406,15 +414,18 @@ module internal ParsedDeclaration =
                 + declaration.Name
             )
         | ParsedObjectType declaration ->
-            Some(
-                {
-                    Name = declaration.Name
-                    GenericArity = 0
-                },
-                moduleStableId
-                + "/type:"
-                + declaration.Name
-            )
+            match declaration.Container with
+            | OrdinaryObjectType ->
+                Some(
+                    {
+                        Name = declaration.Name
+                        GenericArity = 0
+                    },
+                    moduleStableId
+                    + "/type:"
+                    + declaration.Name
+                )
+            | ParsedExtensionModule _ -> None
         | ParsedStructType declaration ->
             Some(
                 {
@@ -860,6 +871,16 @@ type internal TypedObjectMethodDeclaration =
 
     override _.ToString() = "TypedObjectMethodDeclaration"
 
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal TypedObjectTypeContainer =
+    | OrdinaryTypedObjectType
+    | TypedExtensionModule of
+        name: string *
+        attributes: TypedCustomAttribute list *
+        extendedType: CliType
+
+    override _.ToString() = "TypedObjectTypeContainer"
+
 type internal TypedLiteralFieldDeclaration = {
     StableId: string
     Name: string
@@ -917,6 +938,7 @@ type internal TypedStaticTypeDeclaration = {
 
 type internal TypedObjectTypeDeclaration = {
     StableId: string
+    Container: TypedObjectTypeContainer
     Name: string
     Methods: TypedObjectMethodDeclaration list
     ExportFingerprint: string
@@ -1038,6 +1060,7 @@ type internal SymbolicInstruction =
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
 type internal SymbolicMethodKind =
     | ModuleFunction
+    | TypeExtensionMember
     | StaticInlineMemberStub
     | InstanceConstructor
     | InstanceInlineMember
@@ -1121,6 +1144,7 @@ type internal SymbolicInstanceFieldFragment = {
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
 type internal SymbolicTypeKind =
     | ModuleContainer
+    | ExtensionModuleContainer
     | StaticMemberContainer
     | ObjectContainer
     | StructContainer
