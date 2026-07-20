@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 13
+    let Query = 14
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -426,6 +426,14 @@ type internal ParsedModule = {
 
     override _.ToString() = "ParsedModule"
 
+type internal CliTypeReference = {
+    AssemblyName: string
+    TypeName: QualifiedTypeName
+    IsValueType: bool
+} with
+
+    override _.ToString() = "CliTypeReference"
+
 type internal CliType =
     | CliInt32
     | CliBoolean
@@ -434,6 +442,8 @@ type internal CliType =
     | CliTypeParameter of int
     | CliMethodTypeParameter of int
     | CliByRef of CliType
+    | CliNamedType of CliTypeReference
+    | CliGenericType of genericType: CliTypeReference * arguments: CliType list
 
     override _.ToString() = "CliType"
 
@@ -461,6 +471,21 @@ module internal StableIdentity =
         | CliByRef elementType ->
             "byref:"
             + cliType elementType
+        | CliNamedType typeReference ->
+            String.concat "|" [
+                "named"
+                typeReference.AssemblyName
+                qualifiedTypeName typeReference.TypeName
+                if typeReference.IsValueType then "value" else "reference"
+            ]
+        | CliGenericType(typeReference, arguments) ->
+            String.concat "|" [
+                "generic"
+                typeReference.AssemblyName
+                qualifiedTypeName typeReference.TypeName
+                if typeReference.IsValueType then "value" else "reference"
+                yield! arguments |> List.map cliType
+            ]
 
 type internal SymbolicMethodReference = {
     DeclaringType: QualifiedTypeName

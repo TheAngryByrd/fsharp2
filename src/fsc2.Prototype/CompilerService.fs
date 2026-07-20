@@ -1007,7 +1007,25 @@ type internal CompilerService() =
                             |> collectTypeParameters collected
                             |> fun parameters -> collectTypeParameters parameters range
 
-                    let toCliType methodParameterIndex range =
+                    let fsharpUnitType = {
+                        AssemblyName = "FSharp.Core"
+                        TypeName = {
+                            Namespace = "Microsoft.FSharp.Core"
+                            Name = "Unit"
+                        }
+                        IsValueType = false
+                    }
+
+                    let fsharpFunctionType = {
+                        AssemblyName = "FSharp.Core"
+                        TypeName = {
+                            Namespace = "Microsoft.FSharp.Core"
+                            Name = "FSharpFunc`2"
+                        }
+                        IsValueType = false
+                    }
+
+                    let rec toCliType methodParameterIndex range =
                         function
                         | TypedTypeParameter name ->
                             match
@@ -1038,11 +1056,34 @@ type internal CompilerService() =
                             resolvedType.TypeName.Namespace = "Microsoft.FSharp.Core"
                             && resolvedType.TypeName.Name = "Unit"
                             ->
-                            Ok CliVoid
+                            Ok(CliNamedType fsharpUnitType)
+                        | TypedFunctionType(domain, rangeType) ->
+                            match
+                                toCliType methodParameterIndex range domain,
+                                toCliType methodParameterIndex range rangeType
+                            with
+                            | Error error, _
+                            | _, Error error -> Error error
+                            | Ok domainType, Ok rangeType ->
+                                Ok(
+                                    CliGenericType(
+                                        fsharpFunctionType,
+                                        [ domainType; rangeType ]
+                                    )
+                                )
                         | typedType ->
                             diagnostic
                                 range
                                 $"the instance-member CLI type '{TypeIdentity.expression typedType}' is not yet supported"
+
+                    let toCliReturnType methodParameterIndex range typedType =
+                        match typedType with
+                        | TypedNamedType resolvedType when
+                            resolvedType.TypeName.Namespace = "Microsoft.FSharp.Core"
+                            && resolvedType.TypeName.Name = "Unit"
+                            ->
+                            Ok CliVoid
+                        | _ -> toCliType methodParameterIndex range typedType
 
                     let typeMethod (methodDeclaration: ParsedInstanceMethodDeclaration) =
                         let methodTypeParameters =
@@ -1121,7 +1162,9 @@ type internal CompilerService() =
                                 | None -> Ok None
                                 | Some returnType ->
                                     resolveType declaredMethodParameters returnType
-                                    |> Result.bind (toCliType methodParameterIndex returnType.Range)
+                                    |> Result.bind (
+                                        toCliReturnType methodParameterIndex returnType.Range
+                                    )
                                     |> Result.map Some
 
                             match typedBody, declaredReturnType with

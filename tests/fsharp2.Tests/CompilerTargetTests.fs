@@ -46,6 +46,135 @@ module CompilerTargetTests =
         InstanceMember: MethodMetadataShape
     }
 
+    type private SignatureShapeProvider() as this =
+        let fullTypeName
+            (metadata: MetadataReader)
+            (namespaceHandle: StringHandle)
+            (nameHandle: StringHandle)
+            =
+            let namespaceName = metadata.GetString(namespaceHandle)
+            let name = metadata.GetString(nameHandle)
+
+            if String.IsNullOrEmpty(namespaceName) then
+                name
+            else
+                namespaceName
+                + "."
+                + name
+
+        let assemblyName (metadata: MetadataReader) =
+            if metadata.IsAssembly then
+                metadata.GetAssemblyDefinition().Name
+                |> metadata.GetString
+            else
+                "<module>"
+
+        let rec resolutionScopeName (metadata: MetadataReader) (handle: EntityHandle) =
+            match handle.Kind with
+            | HandleKind.AssemblyReference ->
+                handle
+                |> MetadataTokens.GetRowNumber
+                |> MetadataTokens.AssemblyReferenceHandle
+                |> metadata.GetAssemblyReference
+                |> _.Name
+                |> metadata.GetString
+            | HandleKind.TypeReference ->
+                let declaringType =
+                    handle
+                    |> MetadataTokens.GetRowNumber
+                    |> MetadataTokens.TypeReferenceHandle
+                    |> metadata.GetTypeReference
+
+                resolutionScopeName metadata declaringType.ResolutionScope
+            | HandleKind.ModuleDefinition -> assemblyName metadata
+            | HandleKind.ModuleReference ->
+                handle
+                |> MetadataTokens.GetRowNumber
+                |> MetadataTokens.ModuleReferenceHandle
+                |> metadata.GetModuleReference
+                |> _.Name
+                |> metadata.GetString
+            | _ -> handle.Kind.ToString()
+
+        static member Format(signature: MethodSignature<string>) =
+            String.concat "|" [
+                signature.Header.CallingConvention.ToString()
+                $"generic:{signature.GenericParameterCount}"
+                $"required:{signature.RequiredParameterCount}"
+                "return:"
+                signature.ReturnType
+                "parameters:"
+                yield! signature.ParameterTypes
+            ]
+
+        interface ISignatureTypeProvider<string, unit> with
+            member _.GetArrayType(elementType, shape) = $"array:{shape.Rank}:{elementType}"
+
+            member _.GetByReferenceType(elementType) =
+                "byref:"
+                + elementType
+
+            member _.GetFunctionPointerType(signature) =
+                "function-pointer:"
+                + SignatureShapeProvider.Format(signature)
+
+            member _.GetGenericInstantiation(genericType, typeArguments) =
+                String.concat "" [
+                    genericType
+                    "<"
+                    typeArguments
+                    |> String.concat ","
+                    ">"
+                ]
+
+            member _.GetGenericMethodParameter(_, index) = $"!!{index}"
+
+            member _.GetGenericTypeParameter(_, index) = $"!{index}"
+
+            member _.GetModifiedType(modifier, unmodifiedType, isRequired) =
+                String.concat ":" [
+                    if isRequired then "modreq" else "modopt"
+                    modifier
+                    unmodifiedType
+                ]
+
+            member _.GetPinnedType(elementType) =
+                "pinned:"
+                + elementType
+
+            member _.GetPointerType(elementType) =
+                "pointer:"
+                + elementType
+
+            member _.GetPrimitiveType(code) = code.ToString()
+
+            member _.GetSZArrayType(elementType) =
+                "szarray:"
+                + elementType
+
+            member _.GetTypeFromDefinition(metadata, handle, rawTypeKind) =
+                let definition = metadata.GetTypeDefinition(handle)
+
+                String.concat "" [
+                    $"{rawTypeKind:X2}:"
+                    fullTypeName metadata definition.Namespace definition.Name
+                    "@"
+                    assemblyName metadata
+                ]
+
+            member _.GetTypeFromReference(metadata, handle, rawTypeKind) =
+                let reference = metadata.GetTypeReference(handle)
+
+                String.concat "" [
+                    $"{rawTypeKind:X2}:"
+                    fullTypeName metadata reference.Namespace reference.Name
+                    "@"
+                    resolutionScopeName metadata reference.ResolutionScope
+                ]
+
+            member _.GetTypeFromSpecification(metadata, context, handle, _) =
+                metadata.GetTypeSpecification(handle).DecodeSignature(this, context)
+
     let private repositoryRoot =
         Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, "..", ".."))
 
@@ -280,7 +409,9 @@ module CompilerTargetTests =
             {
                 Attributes = definition.Attributes
                 ImplementationAttributes = definition.ImplAttributes
-                Signature = Convert.ToHexString(metadata.GetBlobBytes(definition.Signature))
+                Signature =
+                    definition.DecodeSignature(SignatureShapeProvider(), ())
+                    |> SignatureShapeProvider.Format
                 Parameters =
                     definition.GetParameters()
                     |> Seq.map (fun handle ->
@@ -2309,6 +2440,89 @@ module CompilerTargetTests =
                         (returnMethod.Invoke(builder, [| box 37 |]))
                         (box 37)
                         "the emitted generic member should return its specialized argument"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "encodes an inline object member function parameter and return type"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-function-object-member",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "TaskBuilderBase.fs")
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "namespace IcedTasks.TaskBase\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Delay(generator: unit -> 'T) : unit -> 'T = generator\n"
+                    )
+
+                    let oracleOutputPath = Path.Combine(root, "TaskBuilderBase-oracle.dll")
+                    let oraclePdbPath = Path.Combine(root, "TaskBuilderBase-oracle.pdb")
+                    let oracleResponsePath = Path.Combine(root, "oracle.rsp")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root oracleResponsePath [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{oracleOutputPath}"
+                            $"--pdb:{oraclePdbPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let responsePath = Path.Combine(root, "fsharp2.rsp")
+
+                    let outputPath, _ =
+                        compileForExportFingerprint
+                            root
+                            responsePath
+                            sourcePath
+                            "TaskBuilderBase-fsharp2"
+                            []
+
+                    let pdbPath = Path.ChangeExtension(outputPath, ".pdb")
+
+                    Expect.equal
+                        (objectTypeMetadataShape outputPath pdbPath "Delay")
+                        (objectTypeMetadataShape oracleOutputPath oraclePdbPath "Delay")
+                        "the function-typed member should match the Compatibility Oracle's CLR and portable-PDB surface"
+
+                    let emittedAssembly = Assembly.Load(File.ReadAllBytes(outputPath))
+
+                    let builderType =
+                        emittedAssembly.GetType(
+                            "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                            throwOnError = true
+                        )
+
+                    let builder = Activator.CreateInstance(builderType)
+
+                    let delayMethod = builderType.GetMethod("Delay").MakeGenericMethod(typeof<int>)
+
+                    let generator () = 37
+
+                    let returned =
+                        delayMethod.Invoke(builder, [| box generator |]) :?> (unit -> int)
+
+                    Expect.equal
+                        (returned ())
+                        37
+                        "the emitted function-typed member should return its function argument"
                 finally
                     Directory.Delete(root, true)
 
@@ -4419,7 +4633,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "13"
+                        "14"
                         "query cache evidence should be versioned"
 
                     Expect.equal
