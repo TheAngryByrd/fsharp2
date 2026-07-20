@@ -5,7 +5,7 @@ open System.Collections.Immutable
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 5
+    let Query = 6
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -107,7 +107,10 @@ type internal CompilerInvocation = {
 type internal ParsedExpression =
     | IntegerLiteral of int
     | StringLiteral of string
-    | TraitCall of receiverName: string * memberName: string
+    | TraitCall of
+        receiverName: string *
+        memberName: string *
+        argumentNames: string list
 
     override _.ToString() = "ParsedExpression"
 
@@ -286,7 +289,10 @@ type internal CliType =
 
 type internal TypedExpression =
     | TypedIntegerLiteral of int
-    | TypedTraitCall of receiverName: string * memberName: string
+    | TypedTraitCall of
+        receiverName: string *
+        memberName: string *
+        argumentNames: string list
 
     override _.ToString() = "TypedExpression"
 

@@ -586,7 +586,9 @@ type internal CompilerService() =
                             with
                             | Error error, _, _
                             | _, Error error, _ -> Error error
-                            | Ok constraints, Ok parameters, TraitCall(receiverName, memberName) ->
+                            | Ok constraints,
+                              Ok parameters,
+                              TraitCall(receiverName, memberName, argumentNames) ->
                                 if
                                     parameters
                                     |> List.exists (fun parameter -> parameter.Name = receiverName)
@@ -595,6 +597,19 @@ type internal CompilerService() =
                                     diagnostic
                                         methodDeclaration.BodyRange
                                         $"the receiver '{receiverName}' is not a method parameter"
+                                elif
+                                    argumentNames
+                                    |> List.exists (fun argumentName ->
+                                        parameters
+                                        |> List.exists (fun parameter ->
+                                            parameter.Name = argumentName
+                                        )
+                                        |> not
+                                    )
+                                then
+                                    diagnostic
+                                        methodDeclaration.BodyRange
+                                        "a trait-call argument is not a method parameter"
                                 else
                                     match inferTraitReturnType memberName with
                                     | Error error -> Error error
@@ -629,6 +644,7 @@ type internal CompilerService() =
                                                 "trait-call"
                                                 receiverName
                                                 memberName
+                                                yield! argumentNames
                                             ]
 
                                         Ok {
@@ -638,7 +654,12 @@ type internal CompilerService() =
                                             Constraints = constraints
                                             Parameters = parameters
                                             ReturnType = returnType
-                                            Body = TypedTraitCall(receiverName, memberName)
+                                            Body =
+                                                TypedTraitCall(
+                                                    receiverName,
+                                                    memberName,
+                                                    argumentNames
+                                                )
                                             ExportFingerprint = exportFingerprint
                                             Range = methodDeclaration.Range
                                         }
@@ -863,12 +884,13 @@ type internal CompilerService() =
                                     methodDeclaration.StableId
                                     + "="
                                     + value.ToString()
-                                | TypedTraitCall(receiverName, memberName) ->
+                                | TypedTraitCall(receiverName, memberName, argumentNames) ->
                                     Fingerprint.parts [
                                         methodDeclaration.StableId
                                         "trait-call"
                                         receiverName
                                         memberName
+                                        yield! argumentNames
                                     ]
                             | TypedLiteralField fieldDeclaration ->
                                 fieldDeclaration.StableId
@@ -1057,7 +1079,7 @@ type internal CompilerService() =
                     LoadInt32 value
                     Return
                   ]
-                | TypedTraitCall(_, memberName) -> [
+                | TypedTraitCall(_, memberName, _) -> [
                     LoadString(
                         "Dynamic invocation of "
                         + memberName

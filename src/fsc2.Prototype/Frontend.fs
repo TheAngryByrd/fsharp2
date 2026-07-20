@@ -683,12 +683,43 @@ module internal Frontend =
                         let! _ = expected Dot "expected '.'"
                         let! memberName, _ = identifier "expected a member name"
                         let! _ = expected LeftParenthesis "expected '('"
+
+                        let rec parseCallArguments arguments =
+                            parseResult {
+                                let! argumentName, _ =
+                                    identifier "expected a trait-call argument"
+
+                                let arguments = argumentName :: arguments
+
+                                return!
+                                    match (current ()).Kind with
+                                    | Comma ->
+                                        consume ()
+                                        |> ignore
+
+                                        parseCallArguments arguments
+                                    | RightParenthesis -> Ok(List.rev arguments)
+                                    | _ ->
+                                        Error(
+                                            prototypeDiagnostic
+                                                source.Path
+                                                (current ()).Range
+                                                "expected ',' or ')' after a trait-call argument"
+                                        )
+                            }
+
+                        let! argumentNames =
+                            match (current ()).Kind with
+                            | RightParenthesis -> Ok []
+                            | _ -> parseCallArguments []
+
                         let! closeToken = expected RightParenthesis "expected ')'"
 
                         return
                             TraitCall(
                                 receiverName,
-                                memberName
+                                memberName,
+                                argumentNames
                             ),
                             {
                                 Start = expressionToken.Range.Start
