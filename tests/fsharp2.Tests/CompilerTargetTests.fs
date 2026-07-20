@@ -4171,6 +4171,37 @@ module CompilerTargetTests =
 
                     Expect.equal fsharp2Behavior (0, 42) "Choose should select one branch"
 
+            testCase "executes Boolean negation"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Negate(value: bool) : bool =\n            not value\n"
+
+                withObjectMemberDifferential "fsharp2-boolean-not" sourceText "Negate"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeNegate assemblyPath value =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        builderType.GetMethod("Negate").Invoke(null, [| box value |]) :?> bool
+
+                    let oracleBehavior =
+                        invokeNegate oracleOutputPath false, invokeNegate oracleOutputPath true
+
+                    let fsharp2Behavior =
+                        invokeNegate outputPath false, invokeNegate outputPath true
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the emitted Boolean negation should behave like the Compatibility Oracle"
+
+                    Expect.equal fsharp2Behavior (true, false) "Negate should invert its input"
+
             testCase "executes a multi-expression conditional branch"
             <| fun _ ->
                 let sourceText =
@@ -6359,7 +6390,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "31"
+                        "32"
                         "query cache evidence should be versioned"
 
                     Expect.equal

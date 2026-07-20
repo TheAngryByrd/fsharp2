@@ -29,6 +29,7 @@ module internal Frontend =
         | IfKeyword
         | ThenKeyword
         | ElseKeyword
+        | NotKeyword
         | Identifier of string
         | TypeParameter of string
         | Integer of int
@@ -386,6 +387,7 @@ module internal Frontend =
                 | "if" -> add IfKeyword start
                 | "then" -> add ThenKeyword start
                 | "else" -> add ElseKeyword start
+                | "not" -> add NotKeyword start
                 | _ -> add (Identifier value) start
             elif Char.IsDigit(current) then
                 let start = position ()
@@ -925,6 +927,18 @@ module internal Frontend =
                             }
 
                         return! parseApplications firstExpression firstRange
+                    }
+                | NotKeyword ->
+                    parseResult {
+                        let! notToken = expected NotKeyword "expected 'not'"
+                        let! expression, expressionRange = parseExpression ()
+
+                        let range = {
+                            Start = notToken.Range.Start
+                            End = expressionRange.End
+                        }
+
+                        return BooleanNegationExpression(expression, range), range
                     }
                 | IfKeyword ->
                     parseResult {

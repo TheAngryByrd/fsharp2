@@ -496,6 +496,7 @@ module internal Linker =
             | BranchIfFalse label -> instructions.Branch(ILOpCode.Brfalse, resolveLabel label)
             | Branch label -> instructions.Branch(ILOpCode.Br, resolveLabel label)
             | Nop -> instructions.OpCode(ILOpCode.Nop)
+            | CompareEqual -> instructions.OpCode(ILOpCode.Ceq)
             | Box cliType ->
                 instructions.OpCode(ILOpCode.Box)
                 instructions.Token(resolveDeclaringType (CliDeclaringType cliType))

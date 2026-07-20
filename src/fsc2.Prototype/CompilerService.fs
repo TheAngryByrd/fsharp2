@@ -240,6 +240,11 @@ module private TypeIdentity =
                         inlineBody expression
                     ])
             ]
+        | TypedBooleanNegation(expression, _) ->
+            Fingerprint.parts [
+                "boolean-negation"
+                inlineBody expression
+            ]
         | TypedResumableCode expression -> resumableCode expression
         | TypedResumableTryFinally expression ->
             Fingerprint.parts [
@@ -1054,6 +1059,7 @@ type internal CompilerService() =
                     | _, ExplicitUpcastExpression _
                     | _, SequentialValueExpression _
                     | _, LocalAssignment _
+                    | _, BooleanNegationExpression _
                     | _, LetExpression _
                     | _, LambdaExpression _
                     | _, TypeConstruction _ ->
@@ -1494,6 +1500,7 @@ type internal CompilerService() =
                             | Ok _, Ok _, ExplicitUpcastExpression _
                             | Ok _, Ok _, SequentialValueExpression _
                             | Ok _, Ok _, LocalAssignment _
+                            | Ok _, Ok _, BooleanNegationExpression _
                             | Ok _, Ok _, LetExpression _
                             | Ok _, Ok _, LambdaExpression _
                             | Ok _, Ok _, TypeConstruction _ ->
@@ -2178,6 +2185,24 @@ type internal CompilerService() =
                                             diagnostic
                                                 methodDeclaration.BodyRange
                                                 "this explicit upcast source is not yet supported"
+                                    | BooleanNegationExpression(expression, range) ->
+                                        match
+                                            typeStaticExpression
+                                                localBindings
+                                                nextLocalIndex
+                                                expression
+                                        with
+                                        | Error error -> Error error
+                                        | Ok(typedExpression, CliBoolean, nextExpressionLocalIndex) ->
+                                            Ok(
+                                                TypedBooleanNegation(typedExpression, range),
+                                                CliBoolean,
+                                                nextExpressionLocalIndex
+                                            )
+                                        | Ok _ ->
+                                            diagnostic
+                                                methodDeclaration.BodyRange
+                                                "the operand of 'not' is not bool"
                                     | LocalAssignment(name, value) ->
                                         match
                                             localBindings
@@ -2326,6 +2351,8 @@ type internal CompilerService() =
                                         @ inferredSubtypeConstraints body
                                     | TypedLocalAssignment(_, _, value) ->
                                         inferredSubtypeConstraints value
+                                    | TypedBooleanNegation(expression, _) ->
+                                        inferredSubtypeConstraints expression
                                     | TypedStaticMethodCall(_, _, arguments) ->
                                         arguments
                                         |> List.collect inferredSubtypeConstraints
@@ -2987,6 +3014,7 @@ type internal CompilerService() =
                                 | ExplicitUpcastExpression _
                                 | SequentialValueExpression _
                                 | LocalAssignment _
+                                | BooleanNegationExpression _
                                 | LetExpression _
                                 | LambdaExpression _
                                 | TypeConstruction _ ->
@@ -3029,6 +3057,7 @@ type internal CompilerService() =
                                     | TypedUpcast _
                                     | TypedSequential _
                                     | TypedLocalAssignment _
+                                    | TypedBooleanNegation _
                                     | TypedResumableTryFinally _
                                     | TypedTraitCall _ -> methodDeclaration.BodyRange
 
@@ -3873,6 +3902,18 @@ type internal CompilerService() =
                     valueInstructions
                     @ [ StoreLocal localIndex ],
                     valueLocals
+                | TypedBooleanNegation(expression, range) ->
+                    let expressionInstructions, expressionLocals =
+                        valueExpressionInstructions freshLabel kind expression
+
+                    [ MarkSequencePoint range ]
+                    @ expressionInstructions
+                    @ [
+                        LoadInt32 0
+                        CompareEqual
+                        MarkHiddenSequencePoint
+                    ],
+                    expressionLocals
                 | TypedLet(localIndex, name, _, localType, value, body, bindingRange, bodyRange) ->
                     let valueInstructions, valueLocals =
                         valueExpressionInstructions freshLabel kind value
@@ -4086,7 +4127,7 @@ type internal CompilerService() =
                         Return
                     ],
                     []
-                | (TypedLocalReference _ | TypedLet _ | TypedLocalAssignment _ | TypedStaticMethodCall _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _ | TypedUpcast _ | TypedSequential _) as expression ->
+                | (TypedLocalReference _ | TypedLet _ | TypedLocalAssignment _ | TypedStaticMethodCall _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _ | TypedUpcast _ | TypedSequential _ | TypedBooleanNegation _) as expression ->
                     let instructions, locals =
                         valueExpressionInstructions freshLabel kind expression
 
@@ -4322,6 +4363,7 @@ type internal CompilerService() =
                         | BranchIfFalse _
                         | Branch _
                         | Nop
+                        | CompareEqual
                         | LoadInt32 _
                         | LoadString _
                         | LoadNull
@@ -4366,7 +4408,8 @@ type internal CompilerService() =
                         | TypedConditional _
                         | TypedUpcast _
                         | TypedSequential _
-                        | TypedLocalAssignment _ -> 8
+                        | TypedLocalAssignment _
+                        | TypedBooleanNegation _ -> 8
                     DependencyIds =
                         methodDependencies methodDeclaration
                         @ instructionDependencies
@@ -4671,6 +4714,7 @@ type internal CompilerService() =
                                     | TypedUpcast _
                                     | TypedSequential _
                                     | TypedLocalAssignment _
+                                    | TypedBooleanNegation _
                                     | TypedTraitCall _ -> None
 
                                 match closureExpression with
