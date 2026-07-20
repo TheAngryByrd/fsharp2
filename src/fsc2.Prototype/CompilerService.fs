@@ -1505,6 +1505,7 @@ type internal CompilerService() =
                     | _, SequentialExpression _
                     | _, FunctionApplication _
                     | _, ExpressionMemberCall _
+                    | _, ExpressionMemberAccess _
                     | _, ConditionalExpression _
                     | _, ExplicitUpcastExpression _
                     | _, SequentialValueExpression _
@@ -1958,6 +1959,7 @@ type internal CompilerService() =
                             | Ok _, Ok _, SequentialExpression _
                             | Ok _, Ok _, FunctionApplication _
                             | Ok _, Ok _, ExpressionMemberCall _
+                            | Ok _, Ok _, ExpressionMemberAccess _
                             | Ok _, Ok _, ConditionalExpression _
                             | Ok _, Ok _, ExplicitUpcastExpression _
                             | Ok _, Ok _, SequentialValueExpression _
@@ -2310,6 +2312,8 @@ type internal CompilerService() =
                             | FunctionApplication(functionExpression, argumentExpression) ->
                                 let constraints = collect constraints functionExpression
                                 collect constraints argumentExpression
+                            | ExpressionMemberAccess(receiver, _) ->
+                                collect constraints receiver
                             | ExpressionMemberCall(receiver, _, arguments) ->
                                 let constraints = collect constraints receiver
                                 (constraints, arguments) ||> List.fold collect
@@ -3135,6 +3139,88 @@ type internal CompilerService() =
                                             diagnostic
                                                 methodDeclaration.BodyRange
                                                 "this expression is not an F# function"
+                                    | BoundInstanceMember(receiverName, memberName) ->
+                                        typeStaticExpression
+                                            localBindings
+                                            nextLocalIndex
+                                            (ExpressionMemberAccess(
+                                                ValueReference receiverName,
+                                                memberName
+                                            ))
+                                    | ExpressionMemberAccess(receiver, memberName) ->
+                                        match
+                                            typeStaticExpression
+                                                localBindings
+                                                nextLocalIndex
+                                                receiver
+                                        with
+                                        | Error error -> Error error
+                                        | Ok(typedReceiver,
+                                             receiverType,
+                                             nextReceiverLocalIndex) ->
+                                            let declaringType, typeArguments =
+                                                match receiverType with
+                                                | CliNamedType typeReference ->
+                                                    Some typeReference, []
+                                                | CliGenericType(typeReference, arguments) ->
+                                                    Some typeReference, arguments
+                                                | _ -> None, []
+
+                                            match declaringType with
+                                            | None ->
+                                                diagnostic
+                                                    methodDeclaration.BodyRange
+                                                    $"the expression type has no readable property '{memberName}'"
+                                            | Some typeReference ->
+                                                let candidates =
+                                                    references.Methods(
+                                                        typeReference.DeclarationId,
+                                                        "get_"
+                                                        + memberName,
+                                                        false
+                                                    )
+                                                    |> List.filter (fun methodDefinition ->
+                                                        methodDefinition.GenericArity = 0
+                                                        && List.isEmpty
+                                                            methodDefinition.ParameterTypes
+                                                    )
+                                                    |> List.map (fun methodDefinition ->
+                                                        methodDefinition,
+                                                        substituteTypeArguments
+                                                            typeArguments
+                                                            methodDefinition.ReturnType
+                                                    )
+                                                    |> List.distinctBy (fun (methodDefinition, _) ->
+                                                        methodDefinition.StableId
+                                                    )
+
+                                                match candidates with
+                                                | [ methodDefinition, resultType ] ->
+                                                    Ok(
+                                                        TypedInstanceMethodCall(
+                                                            {
+                                                                DeclaringType = receiverType
+                                                                Name = methodDefinition.Name
+                                                                ParameterTypes =
+                                                                    methodDefinition.ParameterTypes
+                                                                ReturnType =
+                                                                    methodDefinition.ReturnType
+                                                                ResultType = resultType
+                                                            },
+                                                            typedReceiver,
+                                                            []
+                                                        ),
+                                                        resultType,
+                                                        nextReceiverLocalIndex
+                                                    )
+                                                | [] ->
+                                                    diagnostic
+                                                        methodDeclaration.BodyRange
+                                                        $"the expression type has no readable property '{memberName}'"
+                                                | _ ->
+                                                    diagnostic
+                                                        methodDeclaration.BodyRange
+                                                        $"the property access '{memberName}' is ambiguous"
                                     | ExpressionMemberCall(receiver, memberName, arguments) ->
                                         match
                                             typeStaticExpression
@@ -3764,7 +3850,6 @@ type internal CompilerService() =
                                                                 range
                                                                 $"the object-expression member '{memberName}' is ambiguous on the base type"
                                     | UnitApplication _
-                                    | BoundInstanceMember _
                                     | MemberAssignment _
                                     | SequentialExpression _
                                     | LambdaExpression _ ->
@@ -4833,6 +4918,7 @@ type internal CompilerService() =
                                 | SequentialExpression _
                                 | FunctionApplication _
                                 | ExpressionMemberCall _
+                                | ExpressionMemberAccess _
                                 | ConditionalExpression _
                                 | ExplicitUpcastExpression _
                                 | SequentialValueExpression _

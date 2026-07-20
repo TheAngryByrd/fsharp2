@@ -1677,15 +1677,33 @@ module internal Frontend =
 
                         return!
                             match (current ()).Kind with
-                            | LeftParenthesis when memberPath.Length = 1 ->
+                            | LeftParenthesis ->
                                 parseResult {
                                     let! _ = expected LeftParenthesis "expected '('"
                                     let! arguments = parseCallArguments ()
                                     let! closeToken = expected RightParenthesis "expected ')'"
 
+                                    let calledExpression =
+                                        match memberPath with
+                                        | [ memberName ] ->
+                                            MemberCall(receiverName, memberName, arguments)
+                                        | _ ->
+                                            let memberName = List.last memberPath
+
+                                            let receiver =
+                                                memberPath
+                                                |> List.take (memberPath.Length - 1)
+                                                |> List.fold
+                                                    (fun expression name ->
+                                                        ExpressionMemberAccess(expression, name)
+                                                    )
+                                                    (ValueReference receiverName)
+
+                                            ExpressionMemberCall(receiver, memberName, arguments)
+
                                     return!
                                         parsePostfixMemberCalls
-                                            (MemberCall(receiverName, memberPath.Head, arguments))
+                                            calledExpression
                                             {
                                                 Start = expressionToken.Range.Start
                                                 End = closeToken.Range.End

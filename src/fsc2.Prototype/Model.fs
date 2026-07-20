@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 54
+    let Query = 55
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -214,6 +214,7 @@ type internal ParsedExpression =
         receiver: ParsedExpression *
         memberName: string *
         arguments: ParsedExpression list
+    | ExpressionMemberAccess of receiver: ParsedExpression * memberName: string
     | ConditionalExpression of
         condition: ParsedExpression *
         ifTrue: ParsedExpression *

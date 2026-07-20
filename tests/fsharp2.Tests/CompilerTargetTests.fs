@@ -4422,6 +4422,56 @@ module CompilerTargetTests =
 
                     Expect.equal fsharp2Behavior 42 "Run should invoke the returned delegate"
 
+            testCase "reads an IcedTasks resumption instance property"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Run(value: ResumptionDynamicInfo<int>) : ResumptionFunc<int> =\n            value.ResumptionFunc\n"
+
+                withObjectMemberDifferential "fsharp2-resumption-instance-property" sourceText "Run"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeRun assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        let initial =
+                            Microsoft.FSharp.Core.CompilerServices.ResumptionFunc<int>(fun _ ->
+                                true
+                            )
+
+                        let value =
+                            { new Microsoft.FSharp.Core.CompilerServices.ResumptionDynamicInfo<int>(initial) with
+                                override _.MoveNext(_) = ()
+                                override _.SetStateMachine(_, _) = ()
+                            }
+
+                        builderType.GetMethod("Run").Invoke(null, [| box value |])
+                        :?> Microsoft.FSharp.Core.CompilerServices.ResumptionFunc<int>
+
+                    let invokeResumption assemblyPath =
+                        let resumption = invokeRun assemblyPath
+
+                        let mutable machine =
+                            Unchecked.defaultof<
+                                Microsoft.FSharp.Core.CompilerServices.ResumableStateMachine<int>
+                             >
+
+                        resumption.Invoke(&machine)
+
+                    let oracleBehavior = invokeResumption oracleOutputPath
+                    let fsharp2Behavior = invokeResumption outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the resumption property should behave like the Compatibility Oracle"
+
+                    Expect.isTrue fsharp2Behavior "Run should return the resumption delegate"
+
             testCase "executes an if-then-else expression"
             <| fun _ ->
                 let sourceText =
@@ -7622,7 +7672,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "54"
+                        "55"
                         "query cache evidence should be versioned"
 
                     Expect.equal
