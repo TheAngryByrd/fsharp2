@@ -245,6 +245,20 @@ module internal Linker =
         | CliBoolean -> encoder.Boolean()
         | CliString -> encoder.String()
         | CliMethodTypeParameter index -> encoder.GenericMethodTypeParameter(index)
+        | CliVoid -> invalidOp "void is valid only as a method return type"
+        | CliByRef _ -> invalidOp "byref must be encoded by a return or parameter encoder"
+
+    let private encodeReturnType (encoder: ReturnTypeEncoder) =
+        function
+        | CliVoid -> encoder.Void()
+        | CliByRef elementType -> encodeCliType (encoder.Type(true)) elementType
+        | returnType -> encodeCliType (encoder.Type(false)) returnType
+
+    let private encodeParameterType (encoder: ParameterTypeEncoder) =
+        function
+        | CliVoid -> invalidOp "a method parameter cannot have type void"
+        | CliByRef elementType -> encodeCliType (encoder.Type(true)) elementType
+        | parameterType -> encodeCliType (encoder.Type(false)) parameterType
 
     let private encodeMethodSignature (methodFragment: SymbolicMethodFragment) =
         let signature = BlobBuilder()
@@ -256,13 +270,11 @@ module internal Linker =
             )
             .Parameters(
                 methodFragment.Parameters.Length,
-                (fun returnType ->
-                    encodeCliType (returnType.Type()) methodFragment.ReturnType
-                ),
+                (fun returnType -> encodeReturnType returnType methodFragment.ReturnType),
                 (fun parameters ->
                     for parameter in methodFragment.Parameters do
-                        encodeCliType
-                            (parameters.AddParameter().Type())
+                        encodeParameterType
+                            (parameters.AddParameter())
                             parameter.Type
                 )
             )
@@ -280,8 +292,8 @@ module internal Linker =
                 (fun returnType -> returnType.Void()),
                 (fun parameters ->
                     for parameterType in parameterTypes do
-                        encodeCliType
-                            (parameters.AddParameter().Type())
+                        encodeParameterType
+                            (parameters.AddParameter())
                             parameterType
                 )
             )
@@ -443,6 +455,7 @@ module internal Linker =
                 invalidTypeExpression genericType
                 || (arguments
                     |> List.exists invalidTypeExpression)
+            | TypedByRefType elementType -> invalidTypeExpression elementType
             | TypedFunctionType(domain, range) ->
                 invalidTypeExpression domain
                 || invalidTypeExpression range

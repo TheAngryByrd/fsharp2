@@ -5,7 +5,7 @@ open System.Collections.Immutable
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 7
+    let Query = 8
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -104,13 +104,20 @@ type internal CompilerInvocation = {
     override _.ToString() = "CompilerInvocation"
 
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal ParsedCallArgument =
+    | ParsedValueArgument of string
+    | ParsedAddressOfArgument of string
+
+    override _.ToString() = "ParsedCallArgument"
+
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
 type internal ParsedExpression =
     | IntegerLiteral of int
     | StringLiteral of string
     | TraitCall of
         receiverName: string *
         memberName: string *
-        argumentNames: string list
+        arguments: ParsedCallArgument list
 
     override _.ToString() = "ParsedExpression"
 
@@ -290,16 +297,24 @@ type internal CliType =
     | CliInt32
     | CliBoolean
     | CliString
+    | CliVoid
     | CliMethodTypeParameter of int
+    | CliByRef of CliType
 
     override _.ToString() = "CliType"
+
+type internal TypedCallArgument =
+    | TypedValueArgument of string
+    | TypedAddressOfArgument of string
+
+    override _.ToString() = "TypedCallArgument"
 
 type internal TypedExpression =
     | TypedIntegerLiteral of int
     | TypedTraitCall of
         receiverName: string *
         memberName: string *
-        argumentNames: string list
+        arguments: TypedCallArgument list
 
     override _.ToString() = "TypedExpression"
 
@@ -310,6 +325,7 @@ type internal TypedTypeExpression =
     | TypedGenericTypeApplication of
         genericType: TypedTypeExpression *
         arguments: TypedTypeExpression list
+    | TypedByRefType of TypedTypeExpression
     | TypedFunctionType of TypedTypeExpression * TypedTypeExpression
 
     override _.ToString() = "TypedTypeExpression"

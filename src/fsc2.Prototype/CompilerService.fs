@@ -56,6 +56,11 @@ module private TypeIdentity =
                     arguments
                     |> List.map expression
             ]
+        | TypedByRefType elementType ->
+            Fingerprint.parts [
+                "byref"
+                expression elementType
+            ]
         | TypedFunctionType(domain, range) ->
             Fingerprint.parts [
                 "function"
@@ -92,14 +97,31 @@ module private TypeIdentity =
                 constraintIdentity constraint'
             ]
 
-    let cliType =
+    let rec cliType =
         function
         | CliInt32 -> "int32"
         | CliBoolean -> "bool"
         | CliString -> "string"
+        | CliVoid -> "void"
         | CliMethodTypeParameter index ->
             "method-parameter:"
             + index.ToString(CultureInfo.InvariantCulture)
+        | CliByRef elementType ->
+            "byref:"
+            + cliType elementType
+
+    let callArgument =
+        function
+        | TypedValueArgument name ->
+            Fingerprint.parts [
+                "value"
+                name
+            ]
+        | TypedAddressOfArgument name ->
+            Fingerprint.parts [
+                "address-of"
+                name
+            ]
 
 /// A deliberately small in-memory query owner. Query identities and cached
 /// values are semantic/compiler state; final SRM state never enters these maps.
@@ -244,6 +266,16 @@ type internal CompilerService() =
                         with
                         | Ok resolved -> Ok(TypedNamedType resolved)
                         | Error message -> diagnostic range message
+                | ParsedGenericTypeApplication(
+                    ParsedNamedType(typeName, _),
+                    [ argument ],
+                    _
+                  ) when
+                    String.IsNullOrEmpty(typeName.Namespace)
+                    && typeName.Name = "byref"
+                    ->
+                    resolveType declaredParameters argument
+                    |> Result.map TypedByRefType
                 | ParsedGenericTypeApplication(genericType, arguments, _) ->
                     match resolveType declaredParameters genericType with
                     | Error error -> Error error
@@ -481,7 +513,7 @@ type internal CompilerService() =
                             |> List.mapi (fun index name -> name, index)
                             |> Map.ofList
 
-                        let toCliType range =
+                        let rec toCliType range =
                             function
                             | TypedTypeParameter name ->
                                 match methodParameterIndex |> Map.tryFind name with
@@ -492,6 +524,19 @@ type internal CompilerService() =
                                 && typeName.Name = "Boolean"
                                 ->
                                 Ok CliBoolean
+                            | TypedNamedType typeName when
+                                typeName.Namespace = "Microsoft.FSharp.Core"
+                                && typeName.Name = "Unit"
+                                ->
+                                Ok CliVoid
+                            | TypedByRefType elementType ->
+                                toCliType range elementType
+                                |> Result.bind (fun cliElementType ->
+                                    match cliElementType with
+                                    | CliVoid ->
+                                        diagnostic range "a byref element cannot be void"
+                                    | _ -> Ok(CliByRef cliElementType)
+                                )
                             | typedType ->
                                 diagnostic
                                     range
@@ -655,7 +700,20 @@ type internal CompilerService() =
                             | _, Error error, _ -> Error error
                             | Ok constraints,
                               Ok parameters,
-                              TraitCall(receiverName, memberName, argumentNames) ->
+                              TraitCall(receiverName, memberName, arguments) ->
+                                let argumentName =
+                                    function
+                                    | ParsedValueArgument name
+                                    | ParsedAddressOfArgument name -> name
+
+                                let typedArguments =
+                                    arguments
+                                    |> List.map (function
+                                        | ParsedValueArgument name -> TypedValueArgument name
+                                        | ParsedAddressOfArgument name ->
+                                            TypedAddressOfArgument name
+                                    )
+
                                 if
                                     parameters
                                     |> List.exists (fun parameter -> parameter.Name = receiverName)
@@ -665,8 +723,10 @@ type internal CompilerService() =
                                         methodDeclaration.BodyRange
                                         $"the receiver '{receiverName}' is not a method parameter"
                                 elif
-                                    argumentNames
-                                    |> List.exists (fun argumentName ->
+                                    arguments
+                                    |> List.exists (fun argument ->
+                                        let argumentName = argumentName argument
+
                                         parameters
                                         |> List.exists (fun parameter ->
                                             parameter.Name = argumentName
@@ -711,7 +771,10 @@ type internal CompilerService() =
                                                 "trait-call"
                                                 receiverName
                                                 memberName
-                                                yield! argumentNames
+
+                                                yield!
+                                                    typedArguments
+                                                    |> List.map TypeIdentity.callArgument
                                             ]
 
                                         Ok {
@@ -725,7 +788,7 @@ type internal CompilerService() =
                                                 TypedTraitCall(
                                                     receiverName,
                                                     memberName,
-                                                    argumentNames
+                                                    typedArguments
                                                 )
                                             ExportFingerprint = exportFingerprint
                                             Range = methodDeclaration.Range
@@ -951,13 +1014,16 @@ type internal CompilerService() =
                                     methodDeclaration.StableId
                                     + "="
                                     + value.ToString()
-                                | TypedTraitCall(receiverName, memberName, argumentNames) ->
+                                | TypedTraitCall(receiverName, memberName, arguments) ->
                                     Fingerprint.parts [
                                         methodDeclaration.StableId
                                         "trait-call"
                                         receiverName
                                         memberName
-                                        yield! argumentNames
+
+                                        yield!
+                                            arguments
+                                            |> List.map TypeIdentity.callArgument
                                     ]
                             | TypedLiteralField fieldDeclaration ->
                                 fieldDeclaration.StableId

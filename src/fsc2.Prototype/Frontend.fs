@@ -686,10 +686,25 @@ module internal Frontend =
 
                         let rec parseCallArguments arguments =
                             parseResult {
+                                let isAddressOf =
+                                    match (current ()).Kind with
+                                    | Ampersand ->
+                                        consume ()
+                                        |> ignore
+
+                                        true
+                                    | _ -> false
+
                                 let! argumentName, _ =
                                     identifier "expected a trait-call argument"
 
-                                let arguments = argumentName :: arguments
+                                let argument =
+                                    if isAddressOf then
+                                        ParsedAddressOfArgument argumentName
+                                    else
+                                        ParsedValueArgument argumentName
+
+                                let arguments = argument :: arguments
 
                                 return!
                                     match (current ()).Kind with
