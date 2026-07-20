@@ -1007,6 +1007,17 @@ module internal Frontend =
                                             End = valueRange.End
                                         }
                                 }
+                            | Identifier _ when memberPath.Length = 1 ->
+                                parseResult {
+                                    let! argument, argumentRange = parseExpression ()
+
+                                    return
+                                        MemberCall(receiverName, memberPath.Head, [ argument ]),
+                                        {
+                                            Start = expressionToken.Range.Start
+                                            End = argumentRange.End
+                                        }
+                                }
                             | _ ->
                                 Error(
                                     prototypeDiagnostic
