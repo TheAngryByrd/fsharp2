@@ -47,7 +47,24 @@ module internal CompilationPipeline =
         let compileStarted = Stopwatch.GetTimestamp()
         let assemblyName = Path.GetFileNameWithoutExtension(invocation.AssemblyPath)
 
-        match service.Compile(assemblyName, invocation.Defines, sources) with
+        let query =
+            match ReferenceTypeIndex.Create(invocation.ReferencePaths) with
+            | Ok references ->
+                service.Compile(
+                    assemblyName,
+                    invocation.Defines,
+                    references,
+                    sources
+                )
+            | Error message ->
+                Error {
+                    Code = "FSC2P1001"
+                    Message = message
+                    Path = None
+                    Range = None
+                }
+
+        match query with
         | Error diagnostic ->
             diagnostic
             |> DiagnosticFormatter.format invocation

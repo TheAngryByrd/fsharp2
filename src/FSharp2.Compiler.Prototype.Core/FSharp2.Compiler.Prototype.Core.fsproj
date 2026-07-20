@@ -17,6 +17,7 @@
     <Compile Include="../fsc2.Prototype/Diagnostics.fs" Link="Diagnostics.fs" />
     <Compile Include="../fsc2.Prototype/CommandLine.fs" Link="CommandLine.fs" />
     <Compile Include="../fsc2.Prototype/Frontend.fs" Link="Frontend.fs" />
+    <Compile Include="../fsc2.Prototype/ReferenceIndex.fs" Link="ReferenceIndex.fs" />
     <Compile Include="../fsc2.Prototype/CompilerService.fs" Link="CompilerService.fs" />
     <Compile Include="../fsc2.Prototype/StrongName.fs" Link="StrongName.fs" />
     <Compile Include="../fsc2.Prototype/Linker.fs" Link="Linker.fs" />

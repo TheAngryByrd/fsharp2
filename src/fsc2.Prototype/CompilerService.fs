@@ -26,6 +26,50 @@ module private Fingerprint =
         |> String.concat String.Empty
         |> text
 
+module private TypeIdentity =
+    let qualifiedName (typeName: QualifiedTypeName) =
+        if String.IsNullOrEmpty(typeName.Namespace) then
+            typeName.Name
+        else
+            typeName.Namespace
+            + "."
+            + typeName.Name
+
+    let rec expression =
+        function
+        | TypedNamedType typeName ->
+            Fingerprint.parts [
+                "named"
+                qualifiedName typeName
+            ]
+        | TypedTypeParameter name ->
+            Fingerprint.parts [
+                "parameter"
+                name
+            ]
+        | TypedFunctionType(domain, range) ->
+            Fingerprint.parts [
+                "function"
+                expression domain
+                expression range
+            ]
+
+    let constraintIdentity =
+        function
+        | TypedSubtypeConstraint(typeParameter, superType) ->
+            Fingerprint.parts [
+                "subtype"
+                typeParameter
+                expression superType
+            ]
+        | TypedMemberConstraint(typeParameter, memberName, memberType) ->
+            Fingerprint.parts [
+                "member"
+                typeParameter
+                memberName
+                expression memberType
+            ]
+
 /// A deliberately small in-memory query owner. Query identities and cached
 /// values are semantic/compiler state; final SRM state never enters these maps.
 type internal CompilerService() =
@@ -81,10 +125,15 @@ type internal CompilerService() =
                 parseCache.Add(key, parsed)
                 Ok(parsed, key)
 
-    let check (sourcePath: string) (parsed: ParsedModule) =
+    let check
+        (references: ReferenceTypeIndex)
+        (sourcePath: string)
+        (parsed: ParsedModule)
+        =
         let key =
             Fingerprint.parts [
                 querySchema.ToString(CultureInfo.InvariantCulture)
+                references.Fingerprint
                 parsed.StableId
                 parsed.ContentFingerprint
             ]
@@ -175,51 +224,129 @@ type internal CompilerService() =
                         }
                     )
                 | ParsedTypeAbbreviation declaration ->
-                    let targetType =
-                        if
-                            String.IsNullOrEmpty(declaration.Target.TypeName.Namespace)
-                        then
-                            match parsed.OpenedNamespaces |> List.tryLast with
-                            | Some openedNamespace -> {
-                                Namespace = openedNamespace
-                                Name = declaration.Target.TypeName.Name
-                              }
-                            | None -> declaration.Target.TypeName
-                        else
-                            declaration.Target.TypeName
-
                     let stableId =
                         parsed.StableId
                         + "/type-abbreviation:"
                         + declaration.Name
 
-                    let targetIdentity =
-                        (if String.IsNullOrEmpty(targetType.Namespace) then
-                             targetType.Name
-                         else
-                             targetType.Namespace
-                             + "."
-                             + targetType.Name)
-                        + (if declaration.Target.AllowsNull then
-                               "|null"
-                           else
-                               String.Empty)
+                    let declaredParameters =
+                        HashSet<string>(declaration.TypeParameters, StringComparer.Ordinal)
 
-                    Ok(
-                        TypedTypeAbbreviation {
-                            StableId = stableId
-                            Name = declaration.Name
-                            TargetType = targetType
-                            AllowsNull = declaration.Target.AllowsNull
-                            ExportFingerprint =
-                                Fingerprint.text (
-                                    stableId
-                                    + "="
-                                    + targetIdentity
-                                )
-                            Range = declaration.Range
+                    let diagnostic range message =
+                        Error {
+                            Code = "FSC2P1001"
+                            Message = message
+                            Path = Some sourcePath
+                            Range = Some range
                         }
-                    )
+
+                    let rec resolveType =
+                        function
+                        | ParsedTypeParameter(name, range) ->
+                            if declaredParameters.Contains(name) then
+                                Ok(TypedTypeParameter name)
+                            else
+                                diagnostic range $"the type parameter '{name}' is not declared"
+                        | ParsedNamedType(typeName, range) ->
+                            match
+                                references.Resolve(
+                                    parsed.Namespace,
+                                    parsed.OpenedNamespaces,
+                                    typeName
+                                )
+                            with
+                            | Ok resolved -> Ok(TypedNamedType resolved)
+                            | Error message -> diagnostic range message
+                        | ParsedFunctionType(domain, range, _) ->
+                            match resolveType domain with
+                            | Error error -> Error error
+                            | Ok typedDomain ->
+                                resolveType range
+                                |> Result.map (fun typedRange ->
+                                    TypedFunctionType(typedDomain, typedRange)
+                                )
+
+                    let resolveConstraint =
+                        function
+                        | ParsedSubtypeConstraint(typeParameter, superType, range) ->
+                            if not (declaredParameters.Contains(typeParameter)) then
+                                diagnostic
+                                    range
+                                    $"the constrained type parameter '{typeParameter}' is not declared"
+                            else
+                                resolveType superType
+                                |> Result.map (fun typedSuperType ->
+                                    TypedSubtypeConstraint(typeParameter, typedSuperType)
+                                )
+                        | ParsedMemberConstraint(typeParameter, memberName, memberType, range) ->
+                            if not (declaredParameters.Contains(typeParameter)) then
+                                diagnostic
+                                    range
+                                    $"the constrained type parameter '{typeParameter}' is not declared"
+                            else
+                                resolveType memberType
+                                |> Result.map (fun typedMemberType ->
+                                    TypedMemberConstraint(
+                                        typeParameter,
+                                        memberName,
+                                        typedMemberType
+                                    )
+                                )
+
+                    let rec resolveConstraints resolved =
+                        function
+                        | [] -> Ok(List.rev resolved)
+                        | constraint' :: remaining ->
+                            match resolveConstraint constraint' with
+                            | Error error -> Error error
+                            | Ok typedConstraint ->
+                                resolveConstraints
+                                    (typedConstraint :: resolved)
+                                    remaining
+
+                    if
+                        declaredParameters.Count
+                        <> declaration.TypeParameters.Length
+                    then
+                        diagnostic declaration.Range "generic type parameters must be unique"
+                    else
+                        match resolveConstraints [] declaration.Constraints with
+                        | Error error -> Error error
+                        | Ok constraints ->
+                            match resolveType declaration.Target.Type with
+                            | Error error -> Error error
+                            | Ok targetType ->
+                                let targetIdentity =
+                                    Fingerprint.parts [
+                                        stableId
+                                        "parameters"
+                                        yield! declaration.TypeParameters
+                                        "constraints"
+
+                                        yield!
+                                            constraints
+                                            |> List.map TypeIdentity.constraintIdentity
+
+                                        "target"
+                                        TypeIdentity.expression targetType
+                                        if declaration.Target.AllowsNull then
+                                            "null"
+                                        else
+                                            "non-null"
+                                    ]
+
+                                Ok(
+                                    TypedTypeAbbreviation {
+                                        StableId = stableId
+                                        Name = declaration.Name
+                                        TypeParameters = declaration.TypeParameters
+                                        Constraints = constraints
+                                        TargetType = targetType
+                                        AllowsNull = declaration.Target.AllowsNull
+                                        ExportFingerprint = targetIdentity
+                                        Range = declaration.Range
+                                    }
+                                )
 
             let typeAssemblyAttribute index (attribute: ParsedAssemblyAttribute) =
                 let attributeTypeName =
@@ -414,15 +541,24 @@ type internal CompilerService() =
                                 + "="
                                 + fieldDeclaration.Value
                             | TypedTypeAbbreviation typeDeclaration ->
-                                typeDeclaration.StableId
-                                + "="
-                                + typeDeclaration.TargetType.Namespace
-                                + "."
-                                + typeDeclaration.TargetType.Name
-                                + (if typeDeclaration.AllowsNull then
-                                       "|null"
-                                   else
-                                       String.Empty)
+                                Fingerprint.parts [
+                                    typeDeclaration.StableId
+                                    "parameters"
+                                    yield! typeDeclaration.TypeParameters
+                                    "constraints"
+
+                                    yield!
+                                        typeDeclaration.Constraints
+                                        |> List.map TypeIdentity.constraintIdentity
+
+                                    "target"
+                                    TypeIdentity.expression typeDeclaration.TargetType
+
+                                    if typeDeclaration.AllowsNull then
+                                        "null"
+                                    else
+                                        "non-null"
+                                ]
 
                         declaration, Fingerprint.text implementation
                     )
@@ -558,6 +694,8 @@ type internal CompilerService() =
                                 SchemaVersion = querySchema
                                 StableId = typeDeclaration.StableId
                                 Name = typeDeclaration.Name
+                                TypeParameters = typeDeclaration.TypeParameters
+                                Constraints = typeDeclaration.Constraints
                                 TargetType = typeDeclaration.TargetType
                                 AllowsNull = typeDeclaration.AllowsNull
                                 ContentHash = contentHash
@@ -666,7 +804,12 @@ type internal CompilerService() =
             lowerCache.Add(key, symbolic)
             symbolic, key
 
-    member _.Compile(assemblyName: string, defines: string list, sources: SourceInput list) =
+    member _.Compile(
+        assemblyName: string,
+        defines: string list,
+        references: ReferenceTypeIndex,
+        sources: SourceInput list
+    ) =
         let combine values =
             match values with
             | [ value ] -> value
@@ -677,6 +820,8 @@ type internal CompilerService() =
 
         let stateKey =
             assemblyName
+            + "\n"
+            + references.Fingerprint
             + "\n"
             + (sources
                |> List.map _.Path
@@ -733,7 +878,7 @@ type internal CompilerService() =
             match remaining with
             | [] -> Ok(List.rev typed, List.rev keys)
             | (source, parsedModule) :: tail ->
-                match check source.Path parsedModule with
+                match check references source.Path parsedModule with
                 | Error diagnostic -> Error diagnostic
                 | Ok(typedModule, key) ->
                     checkAll
@@ -760,8 +905,9 @@ type internal CompilerService() =
                 let lowerElapsedMicroseconds = elapsedMicroseconds lowerStarted
 
                 let contentFingerprint =
-                    parsedModules
-                    |> List.map (fun (_, parsedModule) -> parsedModule.ContentFingerprint)
+                    references.Fingerprint
+                    :: (parsedModules
+                        |> List.map (fun (_, parsedModule) -> parsedModule.ContentFingerprint))
                     |> combine
 
                 let invalidationReason =

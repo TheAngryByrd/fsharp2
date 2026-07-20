@@ -603,6 +603,7 @@ module CompilerTargetTests =
                     let outputPath = Path.Combine(root, "Aliases.dll")
                     let pdbPath = Path.Combine(root, "Aliases.pdb")
                     let responsePath = Path.Combine(root, "compile.rsp")
+                    let systemRuntimePath = Assembly.Load("System.Runtime").Location
 
                     File.WriteAllText(
                         sourcePath,
@@ -616,6 +617,8 @@ module CompilerTargetTests =
                             "--deterministic+"
                             "--debug:portable"
                             "--define:NULLABLE"
+                            $"--reference:{typeof<Exception>.Assembly.Location}"
+                            $"--reference:{systemRuntimePath}"
                             $"--out:{outputPath}"
                             $"--pdb:{pdbPath}"
                             sourcePath
@@ -641,6 +644,120 @@ module CompilerTargetTests =
                         typeNames
                         [| "<Module>" |]
                         "an F# type abbreviation should not add a CLI runtime type"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "generic type abbreviations preserve parameter and constraint semantics"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-generic-type-abbreviations",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "TaskLike.fs")
+                    let outputPath = Path.Combine(root, "TaskLike.dll")
+                    let pdbPath = Path.Combine(root, "TaskLike.pdb")
+                    let responsePath = Path.Combine(root, "compile.rsp")
+                    let tracePath = Path.Combine(root, "compile.trace")
+                    let systemRuntimePath = Assembly.Load("System.Runtime").Location
+
+                    File.WriteAllLines(
+                        responsePath,
+                        [|
+                            "--target:library"
+                            "--deterministic+"
+                            "--debug:portable"
+                            $"--reference:{typeof<System.Runtime.CompilerServices.ICriticalNotifyCompletion>.Assembly.Location}"
+                            $"--reference:{typeof<Microsoft.FSharp.Core.Unit>.Assembly.Location}"
+                            $"--reference:{systemRuntimePath}"
+                            $"--out:{outputPath}"
+                            $"--pdb:{pdbPath}"
+                            $"--fsharp2-trace:{tracePath}"
+                            sourcePath
+                        |]
+                    )
+
+                    let compile (source: string) =
+                        File.WriteAllText(sourcePath, source)
+                        let result = invokeFsc2 root responsePath
+
+                        Expect.equal
+                            result.ExitCode
+                            0
+                            (result.StandardOutput
+                             + result.StandardError)
+
+                        (readTrace tracePath).["exportFingerprint"]
+
+                    let multilineSource =
+                        "namespace IcedTasks.TaskLike\n\nopen System.Runtime.CompilerServices\n\ntype Awaiter<'Awaiter, 'TResult\n    when 'Awaiter :> ICriticalNotifyCompletion\n    and 'Awaiter: (member get_IsCompleted: unit -> bool)\n    and 'Awaiter: (member GetResult: unit -> 'TResult)> = 'Awaiter\n"
+
+                    let compactSource =
+                        "namespace IcedTasks.TaskLike\nopen System.Runtime.CompilerServices\ntype Awaiter<'Awaiter, 'TResult when 'Awaiter :> ICriticalNotifyCompletion and 'Awaiter: (member get_IsCompleted: unit -> bool) and 'Awaiter: (member GetResult: unit -> 'TResult)> = 'Awaiter\n"
+
+                    let changedConstraintSource =
+                        compactSource.Replace(
+                            "ICriticalNotifyCompletion",
+                            "INotifyCompletion",
+                            StringComparison.Ordinal
+                        )
+
+                    let qualifiedSource =
+                        compactSource
+                            .Replace(
+                                "ICriticalNotifyCompletion",
+                                "System.Runtime.CompilerServices.ICriticalNotifyCompletion",
+                                StringComparison.Ordinal
+                            )
+                            .Replace(
+                                "unit ->",
+                                "Microsoft.FSharp.Core.Unit ->",
+                                StringComparison.Ordinal
+                            )
+                            .Replace("bool", "System.Boolean", StringComparison.Ordinal)
+
+                    let multilineFingerprint = compile multilineSource
+                    let compactFingerprint = compile compactSource
+                    let qualifiedFingerprint = compile qualifiedSource
+                    let changedConstraintFingerprint = compile changedConstraintSource
+
+                    Expect.equal
+                        compactFingerprint
+                        multilineFingerprint
+                        "formatting must not change a generic abbreviation's exported meaning"
+
+                    Expect.equal
+                        qualifiedFingerprint
+                        compactFingerprint
+                        "aliases and opened names must resolve to the same target-reference identities"
+
+                    Expect.notEqual
+                        changedConstraintFingerprint
+                        compactFingerprint
+                        "a changed generic constraint must change the exported semantic fingerprint"
+
+                    use implementationStream = File.OpenRead(outputPath)
+                    use implementation = new PEReader(implementationStream)
+                    let metadata = implementation.GetMetadataReader()
+
+                    let typeNames =
+                        metadata.TypeDefinitions
+                        |> Seq.map (fun handle ->
+                            let definition = metadata.GetTypeDefinition(handle)
+                            metadata.GetString(definition.Name)
+                        )
+                        |> Seq.toArray
+
+                    Expect.sequenceEqual
+                        typeNames
+                        [| "<Module>" |]
+                        "an F# generic type abbreviation should not add a CLI runtime type"
                 finally
                     Directory.Delete(root, true)
 
@@ -2493,7 +2610,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "2"
+                        "3"
                         "query cache evidence should be versioned"
 
                     Expect.equal

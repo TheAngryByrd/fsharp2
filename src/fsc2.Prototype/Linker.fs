@@ -369,6 +369,24 @@ module internal Linker =
             typeFragments
             |> List.collect _.LiteralFields
 
+        let rec invalidTypeExpression =
+            function
+            | TypedNamedType typeName -> String.IsNullOrWhiteSpace(typeName.Name)
+            | TypedTypeParameter name -> String.IsNullOrWhiteSpace(name)
+            | TypedFunctionType(domain, range) ->
+                invalidTypeExpression domain
+                || invalidTypeExpression range
+
+        let invalidTypeConstraint =
+            function
+            | TypedSubtypeConstraint(typeParameter, superType) ->
+                String.IsNullOrWhiteSpace(typeParameter)
+                || invalidTypeExpression superType
+            | TypedMemberConstraint(typeParameter, memberName, memberType) ->
+                String.IsNullOrWhiteSpace(typeParameter)
+                || String.IsNullOrWhiteSpace(memberName)
+                || invalidTypeExpression memberType
+
         if
             symbolic.SchemaVersion
             <> symbolic.Module.SchemaVersion
@@ -416,7 +434,11 @@ module internal Linker =
                 |> List.exists (fun typeAbbreviation ->
                     String.IsNullOrWhiteSpace(typeAbbreviation.StableId)
                     || String.IsNullOrWhiteSpace(typeAbbreviation.Name)
-                    || String.IsNullOrWhiteSpace(typeAbbreviation.TargetType.Name)
+                    || (typeAbbreviation.TypeParameters
+                        |> List.exists String.IsNullOrWhiteSpace)
+                    || (typeAbbreviation.Constraints
+                        |> List.exists invalidTypeConstraint)
+                    || invalidTypeExpression typeAbbreviation.TargetType
                 ))
             || (typeFragments
                 |> List.exists (fun typeFragment ->

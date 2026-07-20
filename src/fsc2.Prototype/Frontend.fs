@@ -15,10 +15,14 @@ module internal Frontend =
         | AssemblyKeyword
         | InternalKeyword
         | TypeKeyword
+        | WhenKeyword
+        | AndKeyword
+        | MemberKeyword
         | NullKeyword
         | LetKeyword
         | DoKeyword
         | Identifier of string
+        | TypeParameter of string
         | Integer of int
         | StringLiteralToken of string
         | AttributeStart
@@ -26,8 +30,14 @@ module internal Frontend =
         | LeftParenthesis
         | RightParenthesis
         | Colon
+        | Subtype
         | Comma
         | Dot
+        | LessThan
+        | GreaterThan
+        | Arrow
+        | Ampersand
+        | Star
         | Equals
         | Bar
         | EndOfFile
@@ -273,6 +283,31 @@ module internal Frontend =
                          <> '\n' do
                     advance ()
             elif
+                current = '\''
+                && offset + 1 < text.Length
+                && (Char.IsLetter(text.[offset + 1])
+                    || text.[offset + 1] = '_')
+            then
+                let start = position ()
+                advance ()
+                let first = offset
+
+                while offset < text.Length
+                      && (Char.IsLetterOrDigit(text.[offset])
+                          || text.[offset] = '_'
+                          || text.[offset] = '\'') do
+                    advance ()
+
+                add
+                    (TypeParameter(
+                        text.Substring(
+                            first,
+                            offset
+                            - first
+                        )
+                    ))
+                    start
+            elif
                 Char.IsLetter(current)
                 || current = '_'
             then
@@ -299,6 +334,9 @@ module internal Frontend =
                 | "assembly" -> add AssemblyKeyword start
                 | "internal" -> add InternalKeyword start
                 | "type" -> add TypeKeyword start
+                | "when" -> add WhenKeyword start
+                | "and" -> add AndKeyword start
+                | "member" -> add MemberKeyword start
                 | "null" -> add NullKeyword start
                 | "let" -> add LetKeyword start
                 | "do" -> add DoKeyword start
@@ -375,6 +413,22 @@ module internal Frontend =
                     advance ()
                     advance ()
                     add AttributeEnd start
+                elif
+                    current = ':'
+                    && offset + 1 < text.Length
+                    && text.[offset + 1] = '>'
+                then
+                    advance ()
+                    advance ()
+                    add Subtype start
+                elif
+                    current = '-'
+                    && offset + 1 < text.Length
+                    && text.[offset + 1] = '>'
+                then
+                    advance ()
+                    advance ()
+                    add Arrow start
                 else
                     advance ()
 
@@ -384,6 +438,10 @@ module internal Frontend =
                     | ':' -> add Colon start
                     | ',' -> add Comma start
                     | '.' -> add Dot start
+                    | '<' -> add LessThan start
+                    | '>' -> add GreaterThan start
+                    | '&' -> add Ampersand start
+                    | '*' -> add Star start
                     | '=' -> add Equals start
                     | '|' -> add Bar start
                     | _ ->
@@ -505,6 +563,61 @@ module internal Frontend =
                                 + 1
                             )
                     }
+
+            let typeParameter message =
+                let token = consume ()
+
+                match token.Kind with
+                | TypeParameter value -> Ok(value, token)
+                | _ -> Error(prototypeDiagnostic source.Path token.Range message)
+
+            let rec parseTypeExpression () =
+                parseResult {
+                    let! left =
+                        match (current ()).Kind with
+                        | TypeParameter value ->
+                            let token = consume ()
+                            Ok(ParsedTypeParameter(value, token.Range))
+                        | Identifier _ ->
+                            let start = (current ()).Range.Start
+
+                            qualifiedIdentifier "expected a type"
+                            |> Result.map (fun name ->
+                                ParsedNamedType(
+                                    qualifiedTypeName name,
+                                    {
+                                        Start = start
+                                        End = input.[index - 1].Range.End
+                                    }
+                                )
+                            )
+                        | _ ->
+                            Error(
+                                prototypeDiagnostic
+                                    source.Path
+                                    (current ()).Range
+                                    "expected a type"
+                            )
+
+                    return!
+                        match (current ()).Kind with
+                        | Arrow ->
+                            consume ()
+                            |> ignore
+
+                            parseTypeExpression ()
+                            |> Result.map (fun right ->
+                                ParsedFunctionType(
+                                    left,
+                                    right,
+                                    {
+                                        Start = left.Range.Start
+                                        End = right.Range.End
+                                    }
+                                )
+                            )
+                        | _ -> Ok left
+                }
 
             let parseExpression () =
                 let expressionToken = consume ()
@@ -871,13 +984,130 @@ module internal Frontend =
                         let! declarationName, _ =
                             identifier "expected a type-abbreviation name"
 
+                        let parseConstraint () =
+                            parseResult {
+                                let! constrainedParameter, parameterToken =
+                                    typeParameter "expected a constrained type parameter"
+
+                                return!
+                                    match (current ()).Kind with
+                                    | Subtype ->
+                                        consume ()
+                                        |> ignore
+
+                                        parseTypeExpression ()
+                                        |> Result.map (fun superType ->
+                                            ParsedSubtypeConstraint(
+                                                constrainedParameter,
+                                                superType,
+                                                {
+                                                    Start = parameterToken.Range.Start
+                                                    End = superType.Range.End
+                                                }
+                                            )
+                                        )
+                                    | Colon ->
+                                        parseResult {
+                                            let! _ = expected Colon "expected ':'"
+                                            let! _ = expected LeftParenthesis "expected '('"
+                                            let! _ = expected MemberKeyword "expected 'member'"
+
+                                            let! memberName, _ =
+                                                identifier "expected a member name"
+
+                                            let! _ = expected Colon "expected ':'"
+                                            let! memberType = parseTypeExpression ()
+                                            let! closeToken = expected RightParenthesis "expected ')'"
+
+                                            return
+                                                ParsedMemberConstraint(
+                                                    constrainedParameter,
+                                                    memberName,
+                                                    memberType,
+                                                    {
+                                                        Start = parameterToken.Range.Start
+                                                        End = closeToken.Range.End
+                                                    }
+                                                )
+                                        }
+                                    | _ ->
+                                        Error(
+                                            prototypeDiagnostic
+                                                source.Path
+                                                (current ()).Range
+                                                "expected ':>' or a member constraint"
+                                        )
+                            }
+
+                        let rec parseConstraints constraints =
+                            parseResult {
+                                let! constraint' = parseConstraint ()
+                                let constraints = constraint' :: constraints
+
+                                return!
+                                    match (current ()).Kind with
+                                    | AndKeyword ->
+                                        consume ()
+                                        |> ignore
+
+                                        parseConstraints constraints
+                                    | GreaterThan -> Ok(List.rev constraints)
+                                    | _ ->
+                                        Error(
+                                            prototypeDiagnostic
+                                                source.Path
+                                                (current ()).Range
+                                                "expected 'and' or '>' after a type constraint"
+                                        )
+                            }
+
+                        let rec parseTypeParameters parameters =
+                            parseResult {
+                                let! parameter, _ = typeParameter "expected a type parameter"
+                                let parameters = parameter :: parameters
+
+                                return!
+                                    match (current ()).Kind with
+                                    | Comma ->
+                                        consume ()
+                                        |> ignore
+
+                                        parseTypeParameters parameters
+                                    | WhenKeyword ->
+                                        consume ()
+                                        |> ignore
+
+                                        parseConstraints []
+                                        |> Result.map (fun constraints ->
+                                            List.rev parameters, constraints
+                                        )
+                                    | GreaterThan -> Ok(List.rev parameters, [])
+                                    | _ ->
+                                        Error(
+                                            prototypeDiagnostic
+                                                source.Path
+                                                (current ()).Range
+                                                "expected ',', 'when', or '>' after a type parameter"
+                                        )
+                            }
+
+                        let! typeParameters, constraints =
+                            match (current ()).Kind with
+                            | LessThan ->
+                                consume ()
+                                |> ignore
+
+                                parseResult {
+                                    let! parameters, constraints = parseTypeParameters []
+                                    let! _ = expected GreaterThan "expected '>'"
+                                    return parameters, constraints
+                                }
+                            | _ -> Ok([], [])
+
                         let! _ = expected Equals "expected '='"
                         let targetStart = (current ()).Range.Start
 
-                        let! targetName =
-                            qualifiedIdentifier "expected an abbreviated type"
-
-                        let targetName = qualifiedTypeName targetName
+                        let! targetType = parseTypeExpression ()
 
                         let! allowsNull, targetEnd =
                             match (current ()).Kind with
@@ -893,8 +1123,10 @@ module internal Frontend =
                         return
                             ParsedTypeAbbreviation {
                                 Name = declarationName
+                                TypeParameters = typeParameters
+                                Constraints = constraints
                                 Target = {
-                                    TypeName = targetName
+                                    Type = targetType
                                     AllowsNull = allowsNull
                                     Range = {
                                         Start = targetStart

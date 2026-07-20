@@ -5,7 +5,7 @@ open System.Collections.Immutable
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 2
+    let Query = 3
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -122,6 +122,39 @@ type internal QualifiedTypeName = {
 
     override _.ToString() = "QualifiedTypeName"
 
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal ParsedTypeExpression =
+    | ParsedNamedType of QualifiedTypeName * SourceRange
+    | ParsedTypeParameter of string * SourceRange
+    | ParsedFunctionType of ParsedTypeExpression * ParsedTypeExpression * SourceRange
+
+    member this.Range =
+        match this with
+        | ParsedNamedType(_, range)
+        | ParsedTypeParameter(_, range)
+        | ParsedFunctionType(_, _, range) -> range
+
+    override _.ToString() = "ParsedTypeExpression"
+
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal ParsedTypeConstraint =
+    | ParsedSubtypeConstraint of
+        typeParameter: string *
+        superType: ParsedTypeExpression *
+        range: SourceRange
+    | ParsedMemberConstraint of
+        typeParameter: string *
+        memberName: string *
+        memberType: ParsedTypeExpression *
+        range: SourceRange
+
+    member this.Range =
+        match this with
+        | ParsedSubtypeConstraint(_, _, range)
+        | ParsedMemberConstraint(_, _, _, range) -> range
+
+    override _.ToString() = "ParsedTypeConstraint"
+
 type internal ParsedMethodDeclaration = {
     Name: string
     IsUnitFunction: bool
@@ -143,7 +176,7 @@ type internal ParsedLiteralFieldDeclaration = {
     override _.ToString() = "ParsedLiteralFieldDeclaration"
 
 type internal ParsedTypeReference = {
-    TypeName: QualifiedTypeName
+    Type: ParsedTypeExpression
     AllowsNull: bool
     Range: SourceRange
 } with
@@ -152,6 +185,8 @@ type internal ParsedTypeReference = {
 
 type internal ParsedTypeAbbreviationDeclaration = {
     Name: string
+    TypeParameters: string list
+    Constraints: ParsedTypeConstraint list
     Target: ParsedTypeReference
     Range: SourceRange
 } with
@@ -236,10 +271,30 @@ type internal TypedLiteralFieldDeclaration = {
 
     override _.ToString() = "TypedLiteralFieldDeclaration"
 
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal TypedTypeExpression =
+    | TypedNamedType of QualifiedTypeName
+    | TypedTypeParameter of string
+    | TypedFunctionType of TypedTypeExpression * TypedTypeExpression
+
+    override _.ToString() = "TypedTypeExpression"
+
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal TypedTypeConstraint =
+    | TypedSubtypeConstraint of typeParameter: string * superType: TypedTypeExpression
+    | TypedMemberConstraint of
+        typeParameter: string *
+        memberName: string *
+        memberType: TypedTypeExpression
+
+    override _.ToString() = "TypedTypeConstraint"
+
 type internal TypedTypeAbbreviationDeclaration = {
     StableId: string
     Name: string
-    TargetType: QualifiedTypeName
+    TypeParameters: string list
+    Constraints: TypedTypeConstraint list
+    TargetType: TypedTypeExpression
     AllowsNull: bool
     ExportFingerprint: string
     Range: SourceRange
@@ -348,7 +403,9 @@ type internal SymbolicTypeAbbreviationFragment = {
     SchemaVersion: int
     StableId: string
     Name: string
-    TargetType: QualifiedTypeName
+    TypeParameters: string list
+    Constraints: TypedTypeConstraint list
+    TargetType: TypedTypeExpression
     AllowsNull: bool
     ContentHash: string
 } with
