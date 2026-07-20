@@ -189,6 +189,24 @@ module private TypeIdentity =
                 inlineBody functionExpression
                 inlineBody argumentExpression
             ]
+        | TypedInstanceMethodCall(target, receiver, arguments) ->
+            Fingerprint.parts [
+                "instance-call"
+                cliType target.DeclaringType
+                target.Name
+
+                yield!
+                    target.ParameterTypes
+                    |> List.map cliType
+
+                cliType target.ReturnType
+                cliType target.ResultType
+                inlineBody receiver
+
+                yield!
+                    arguments
+                    |> List.map inlineBody
+            ]
         | TypedResumableCode expression -> resumableCode expression
         | TypedResumableTryFinally expression ->
             Fingerprint.parts [
@@ -998,6 +1016,7 @@ type internal CompilerService() =
                     | _, MemberAssignment _
                     | _, SequentialExpression _
                     | _, FunctionApplication _
+                    | _, ExpressionMemberCall _
                     | _, LetExpression _
                     | _, LambdaExpression _
                     | _, TypeConstruction _ ->
@@ -1433,6 +1452,7 @@ type internal CompilerService() =
                             | Ok _, Ok _, MemberAssignment _
                             | Ok _, Ok _, SequentialExpression _
                             | Ok _, Ok _, FunctionApplication _
+                            | Ok _, Ok _, ExpressionMemberCall _
                             | Ok _, Ok _, LetExpression _
                             | Ok _, Ok _, LambdaExpression _
                             | Ok _, Ok _, TypeConstruction _ ->
@@ -1914,6 +1934,111 @@ type internal CompilerService() =
                                             diagnostic
                                                 methodDeclaration.BodyRange
                                                 "this expression is not an F# function"
+                                    | ExpressionMemberCall(receiver, memberName, arguments) ->
+                                        match
+                                            typeStaticExpression
+                                                localBindings
+                                                nextLocalIndex
+                                                receiver
+                                        with
+                                        | Error error -> Error error
+                                        | Ok(typedReceiver,
+                                             (CliGenericType(typeReference, typeArguments) as receiverType),
+                                             nextReceiverLocalIndex) when
+                                            memberName = "Invoke"
+                                            && typeReference.TypeName.Namespace = "System"
+                                            && typeReference.TypeName.Name = "Func`"
+                                                                             + typeArguments
+                                                                                 .Length
+                                                                                 .ToString(
+                                                                                     CultureInfo.InvariantCulture
+                                                                                 )
+                                            && not (List.isEmpty typeArguments)
+                                            ->
+                                            let expectedArgumentTypes =
+                                                typeArguments
+                                                |> List.take (
+                                                    typeArguments.Length
+                                                    - 1
+                                                )
+
+                                            let resultType = List.last typeArguments
+
+                                            let rec typeArguments'
+                                                typedArguments
+                                                actualArgumentTypes
+                                                argumentLocalIndex
+                                                =
+                                                function
+                                                | [] ->
+                                                    Ok(
+                                                        List.rev typedArguments,
+                                                        List.rev actualArgumentTypes,
+                                                        argumentLocalIndex
+                                                    )
+                                                | argument :: remaining ->
+                                                    match
+                                                        typeStaticExpression
+                                                            localBindings
+                                                            argumentLocalIndex
+                                                            argument
+                                                    with
+                                                    | Error error -> Error error
+                                                    | Ok(typedArgument,
+                                                         argumentType,
+                                                         nextArgumentLocalIndex) ->
+                                                        typeArguments'
+                                                            (typedArgument
+                                                             :: typedArguments)
+                                                            (argumentType
+                                                             :: actualArgumentTypes)
+                                                            nextArgumentLocalIndex
+                                                            remaining
+
+                                            match
+                                                typeArguments'
+                                                    []
+                                                    []
+                                                    nextReceiverLocalIndex
+                                                    arguments
+                                            with
+                                            | Error error -> Error error
+                                            | Ok(typedArguments,
+                                                 actualArgumentTypes,
+                                                 nextArgumentLocalIndex) when
+                                                actualArgumentTypes = expectedArgumentTypes
+                                                ->
+                                                Ok(
+                                                    TypedInstanceMethodCall(
+                                                        {
+                                                            DeclaringType = receiverType
+                                                            Name = memberName
+                                                            ParameterTypes =
+                                                                expectedArgumentTypes
+                                                                |> List.mapi (fun index _ ->
+                                                                    CliTypeParameter index
+                                                                )
+                                                            ReturnType =
+                                                                CliTypeParameter(
+                                                                    typeArguments.Length
+                                                                    - 1
+                                                                )
+                                                            ResultType = resultType
+                                                        },
+                                                        typedReceiver,
+                                                        typedArguments
+                                                    ),
+                                                    resultType,
+                                                    nextArgumentLocalIndex
+                                                )
+                                            | Ok _ ->
+                                                diagnostic
+                                                    methodDeclaration.BodyRange
+                                                    "the instance-member arguments do not match System.Func.Invoke"
+                                        | Ok _ ->
+                                            diagnostic
+                                                methodDeclaration.BodyRange
+                                                "this expression member call is not yet supported"
                                     | LetExpression(bindingName,
                                                     value,
                                                     body,
@@ -2583,6 +2708,7 @@ type internal CompilerService() =
                                 | MemberAssignment _
                                 | SequentialExpression _
                                 | FunctionApplication _
+                                | ExpressionMemberCall _
                                 | LetExpression _
                                 | LambdaExpression _
                                 | TypeConstruction _ ->
@@ -2620,6 +2746,7 @@ type internal CompilerService() =
                                     | TypedLet _
                                     | TypedStaticMethodCall _
                                     | TypedFunctionApplication _
+                                    | TypedInstanceMethodCall _
                                     | TypedResumableTryFinally _
                                     | TypedTraitCall _ -> methodDeclaration.BodyRange
 
@@ -3530,6 +3657,31 @@ type internal CompilerService() =
                     @ [ CallVirtualMethod invoke ],
                     functionLocals
                     @ argumentLocals
+                | TypedInstanceMethodCall(target, receiver, arguments) ->
+                    let receiverInstructions, receiverLocals =
+                        valueExpressionInstructions kind receiver
+
+                    let loweredArguments =
+                        arguments
+                        |> List.map (valueExpressionInstructions kind)
+
+                    let methodReference = {
+                        DeclaringType = CliDeclaringType target.DeclaringType
+                        Name = target.Name
+                        GenericArity = 0
+                        IsInstance = true
+                        ParameterTypes = target.ParameterTypes
+                        ReturnType = target.ReturnType
+                        TargetStableId = None
+                    }
+
+                    receiverInstructions
+                    @ (loweredArguments
+                       |> List.collect fst)
+                    @ [ CallVirtualMethod methodReference ],
+                    receiverLocals
+                    @ (loweredArguments
+                       |> List.collect snd)
                 | TypedResumableCode _
                 | TypedResumableTryFinally _
                 | TypedTraitCall _ -> invalidOp "this expression cannot be lowered as a local value"
@@ -3548,7 +3700,7 @@ type internal CompilerService() =
                         Return
                     ],
                     []
-                | (TypedLocalReference _ | TypedLet _ | TypedStaticMethodCall _ | TypedFunctionApplication _) as expression ->
+                | (TypedLocalReference _ | TypedLet _ | TypedStaticMethodCall _ | TypedFunctionApplication _ | TypedInstanceMethodCall _) as expression ->
                     let instructions, locals = valueExpressionInstructions kind expression
 
                     instructions
@@ -3816,7 +3968,8 @@ type internal CompilerService() =
                         | TypedLet _
                         | TypedTraitCall _ -> 1
                         | TypedStaticMethodCall _
-                        | TypedFunctionApplication _ -> 8
+                        | TypedFunctionApplication _
+                        | TypedInstanceMethodCall _ -> 8
                     DependencyIds =
                         methodDependencies methodDeclaration
                         @ instructionDependencies
@@ -4116,6 +4269,7 @@ type internal CompilerService() =
                                     | TypedLet _
                                     | TypedStaticMethodCall _
                                     | TypedFunctionApplication _
+                                    | TypedInstanceMethodCall _
                                     | TypedTraitCall _ -> None
 
                                 match closureExpression with

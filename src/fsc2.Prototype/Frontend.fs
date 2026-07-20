@@ -850,7 +850,38 @@ module internal Frontend =
                                         consume ()
                                         |> ignore
 
-                                        Ok(expression, expressionRange)
+                                        match (current ()).Kind with
+                                        | Dot ->
+                                            parseResult {
+                                                let! _ = expected Dot "expected '.'"
+
+                                                let! memberName, _ =
+                                                    identifier "expected a member name"
+
+                                                let! _ =
+                                                    expected
+                                                        LeftParenthesis
+                                                        "expected '(' after a member name"
+
+                                                let! arguments = parseCallArguments ()
+
+                                                let! closeToken =
+                                                    expected
+                                                        RightParenthesis
+                                                        "expected ')' after member arguments"
+
+                                                return
+                                                    ExpressionMemberCall(
+                                                        expression,
+                                                        memberName,
+                                                        arguments
+                                                    ),
+                                                    {
+                                                        Start = expressionToken.Range.Start
+                                                        End = closeToken.Range.End
+                                                    }
+                                            }
+                                        | _ -> Ok(expression, expressionRange)
                                     | EndOfFile ->
                                         Error(
                                             prototypeDiagnostic

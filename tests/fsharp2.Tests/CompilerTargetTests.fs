@@ -4062,6 +4062,47 @@ module CompilerTargetTests =
 
                     Expect.equal fsharp2Behavior "42" "Apply should invoke its function argument"
 
+            testCase "executes a member call on a grouped expression"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Run(factory: ('T -> System.Func<'U>), value: 'T) : 'U =\n            (factory value).Invoke()\n"
+
+                withObjectMemberDifferential "fsharp2-expression-member-call" sourceText "Run"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeRun assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        let factory: int -> Func<string> =
+                            fun value -> Func<string>(fun () -> string value)
+
+                        builderType
+                            .GetMethod("Run")
+                            .MakeGenericMethod(typeof<int>, typeof<string>)
+                            .Invoke(
+                                null,
+                                [|
+                                    box factory
+                                    box 42
+                                |]
+                            )
+                        :?> string
+
+                    let oracleBehavior = invokeRun oracleOutputPath
+                    let fsharp2Behavior = invokeRun outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the emitted member call should behave like the Compatibility Oracle"
+
+                    Expect.equal fsharp2Behavior "42" "Run should invoke the returned delegate"
+
             testCase "retained service invalidates an IcedTasks inline object-member edit"
             <| fun _ ->
                 let root =
@@ -6169,7 +6210,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "26"
+                        "27"
                         "query cache evidence should be versioned"
 
                     Expect.equal
