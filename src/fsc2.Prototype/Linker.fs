@@ -520,13 +520,38 @@ module internal Linker =
 
     let private knownAttributeTypeName =
         function
-        | AutoOpenAttribute -> "AutoOpenAttribute"
-        | StructAttribute -> "StructAttribute"
-        | NoComparisonAttribute -> "NoComparisonAttribute"
-        | NoEqualityAttribute -> "NoEqualityAttribute"
-        | DefaultValueAttribute -> "DefaultValueAttribute"
-        | InlineIfLambdaAttribute -> "InlineIfLambdaAttribute"
-        | CompilationMappingAttribute -> "CompilationMappingAttribute"
+        | AutoOpenAttribute -> {
+            Namespace = "Microsoft.FSharp.Core"
+            Name = "AutoOpenAttribute"
+          }
+        | StructAttribute -> {
+            Namespace = "Microsoft.FSharp.Core"
+            Name = "StructAttribute"
+          }
+        | NoComparisonAttribute -> {
+            Namespace = "Microsoft.FSharp.Core"
+            Name = "NoComparisonAttribute"
+          }
+        | NoEqualityAttribute -> {
+            Namespace = "Microsoft.FSharp.Core"
+            Name = "NoEqualityAttribute"
+          }
+        | DefaultValueAttribute -> {
+            Namespace = "Microsoft.FSharp.Core"
+            Name = "DefaultValueAttribute"
+          }
+        | InlineIfLambdaAttribute -> {
+            Namespace = "Microsoft.FSharp.Core"
+            Name = "InlineIfLambdaAttribute"
+          }
+        | NoEagerConstraintApplicationAttribute -> {
+            Namespace = "Microsoft.FSharp.Core.CompilerServices"
+            Name = "NoEagerConstraintApplicationAttribute"
+          }
+        | CompilationMappingAttribute -> {
+            Namespace = "Microsoft.FSharp.Core"
+            Name = "CompilationMappingAttribute"
+          }
 
     let private encodeKnownAttributeConstructorSignature
         (sourceConstructFlags: TypeReferenceHandle)
@@ -1029,11 +1054,13 @@ module internal Linker =
             (parent: EntityHandle)
             (attribute: SymbolicCustomAttributeFragment)
             =
+            let attributeTypeName = knownAttributeTypeName attribute.Kind
+
             let attributeType =
                 metadata.AddTypeReference(
                     fsharpCore,
-                    metadata.GetOrAddString("Microsoft.FSharp.Core"),
-                    metadata.GetOrAddString(knownAttributeTypeName attribute.Kind)
+                    metadata.GetOrAddString(attributeTypeName.Namespace),
+                    metadata.GetOrAddString(attributeTypeName.Name)
                 )
 
             let constructor =

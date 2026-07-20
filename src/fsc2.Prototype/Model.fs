@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 21
+    let Query = 22
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -248,10 +248,12 @@ type internal ParsedParameter = {
     override _.ToString() = "ParsedParameter"
 
 type internal ParsedStaticMethodDeclaration = {
+    Attributes: ParsedAttribute list
     Name: string
     TypeParameters: string list
     Constraints: ParsedMethodConstraint list
     Parameters: ParsedParameter list
+    ReturnType: ParsedTypeExpression option
     Body: ParsedExpression
     BodyRange: SourceRange
     Range: SourceRange
@@ -280,9 +282,20 @@ type internal ParsedInstanceMethodDeclaration = {
 
     override _.ToString() = "ParsedInstanceMethodDeclaration"
 
+type internal ParsedObjectMethodDeclaration =
+    | ParsedInstanceObjectMethod of ParsedInstanceMethodDeclaration
+    | ParsedStaticObjectMethod of ParsedStaticMethodDeclaration
+
+    member this.Range =
+        match this with
+        | ParsedInstanceObjectMethod declaration -> declaration.Range
+        | ParsedStaticObjectMethod declaration -> declaration.Range
+
+    override _.ToString() = "ParsedObjectMethodDeclaration"
+
 type internal ParsedObjectTypeDeclaration = {
     Name: string
-    Methods: ParsedInstanceMethodDeclaration list
+    Methods: ParsedObjectMethodDeclaration list
     ConstructorRange: SourceRange
     Range: SourceRange
 } with
@@ -645,6 +658,7 @@ type internal KnownAttributeKind =
     | NoEqualityAttribute
     | DefaultValueAttribute
     | InlineIfLambdaAttribute
+    | NoEagerConstraintApplicationAttribute
     | CompilationMappingAttribute
 
     override _.ToString() = "KnownAttributeKind"
@@ -694,6 +708,17 @@ type internal TypedMethodDeclaration = {
 } with
 
     override _.ToString() = "TypedMethodDeclaration"
+
+type internal TypedObjectMethodDeclaration =
+    | TypedInstanceObjectMethod of TypedMethodDeclaration
+    | TypedStaticObjectMethod of TypedMethodDeclaration
+
+    member this.Method =
+        match this with
+        | TypedInstanceObjectMethod declaration
+        | TypedStaticObjectMethod declaration -> declaration
+
+    override _.ToString() = "TypedObjectMethodDeclaration"
 
 type internal TypedLiteralFieldDeclaration = {
     StableId: string
@@ -753,7 +778,7 @@ type internal TypedStaticTypeDeclaration = {
 type internal TypedObjectTypeDeclaration = {
     StableId: string
     Name: string
-    Methods: TypedMethodDeclaration list
+    Methods: TypedObjectMethodDeclaration list
     ExportFingerprint: string
     ConstructorRange: SourceRange
     Range: SourceRange

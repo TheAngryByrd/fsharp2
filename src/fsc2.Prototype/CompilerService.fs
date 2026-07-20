@@ -180,6 +180,7 @@ module private TypeIdentity =
         | NoEqualityAttribute -> "no-equality"
         | DefaultValueAttribute -> "default-value"
         | InlineIfLambdaAttribute -> "inline-if-lambda"
+        | NoEagerConstraintApplicationAttribute -> "no-eager-constraint-application"
         | CompilationMappingAttribute -> "compilation-mapping"
 
     let attributeArgument =
@@ -208,6 +209,33 @@ module private TypeIdentity =
                 parameter.Attributes
                 |> List.map customAttribute
         ]
+
+type private ObjectMethodKind =
+    | InstanceObjectMethod
+    | StaticObjectMethod
+
+    member this.ExportIdentity =
+        match this with
+        | InstanceObjectMethod -> "instance"
+        | StaticObjectMethod -> "static"
+
+    member this.AllowedAttributeKinds =
+        match this with
+        | InstanceObjectMethod -> [ DefaultValueAttribute ]
+        | StaticObjectMethod -> [ NoEagerConstraintApplicationAttribute ]
+
+type private ObjectMethodCompletion = {
+    Kind: ObjectMethodKind
+    Name: string
+    GenericParameters: string list
+    Constraints: TypedMethodConstraint list
+    ParsedAttributes: ParsedAttribute list
+    ParsedParameters: ParsedParameter list
+    Parameters: TypedParameter list
+    ReturnType: CliType
+    Body: TypedExpression
+    Range: SourceRange
+}
 
 /// A deliberately small in-memory query owner. Query identities and cached
 /// values are semantic/compiler state; final SRM state never enters these maps.
@@ -564,6 +592,9 @@ type internal CompilerService() =
                 | "DefaultValueAttribute" -> Some DefaultValueAttribute
                 | "InlineIfLambda"
                 | "InlineIfLambdaAttribute" -> Some InlineIfLambdaAttribute
+                | "NoEagerConstraintApplication"
+                | "NoEagerConstraintApplicationAttribute" ->
+                    Some NoEagerConstraintApplicationAttribute
                 | _ -> None
 
             let typeCustomAttribute
@@ -1353,6 +1384,248 @@ type internal CompilerService() =
                             Ok CliVoid
                         | _ -> toCliType methodParameterIndex range typedType
 
+                    let collectMethodTypeParameters
+                        explicitTypeParameters
+                        (parameters: ParsedParameter list)
+                        returnType
+                        =
+                        let fromParameters =
+                            (explicitTypeParameters, parameters)
+                            ||> List.fold (fun collected parameter ->
+                                collectTypeParameters collected parameter.Type
+                            )
+
+                        match returnType with
+                        | Some returnType -> collectTypeParameters fromParameters returnType
+                        | None -> fromParameters
+
+                    let typeObjectMethodParameters
+                        methodParameterIndex
+                        declaredMethodParameters
+                        (parameters: ParsedParameter list)
+                        =
+                        parameters
+                        |> List.map (fun parameter ->
+                            parameter.Type
+                            |> expandTypeAbbreviations Set.empty
+                            |> resolveType declaredMethodParameters
+                            |> Result.bind (toCliType methodParameterIndex parameter.Range)
+                            |> Result.map (fun parameterType ->
+                                ({
+                                    Name = parameter.Name
+                                    Type = parameterType
+                                    Attributes = []
+                                }
+                                : TypedParameter)
+                            )
+                        )
+                        |> collectResults []
+
+                    let typeObjectMethodReturnType
+                        methodParameterIndex
+                        declaredMethodParameters
+                        returnType
+                        =
+                        match returnType with
+                        | None -> Ok None
+                        | Some returnType ->
+                            returnType
+                            |> expandTypeAbbreviations Set.empty
+                            |> resolveType declaredMethodParameters
+                            |> Result.bind (toCliReturnType methodParameterIndex returnType.Range)
+                            |> Result.map Some
+
+                    let finishObjectMethod (completion: ObjectMethodCompletion) =
+                        let parameterIdentity =
+                            match completion.Parameters with
+                            | [] -> "unit"
+                            | _ ->
+                                completion.Parameters
+                                |> List.map (fun parameter -> TypeIdentity.cliType parameter.Type)
+                                |> String.concat "*"
+
+                        let methodStableId =
+                            stableId
+                            + "/method:"
+                            + completion.Name
+                            + ":"
+                            + parameterIdentity
+                            + "->"
+                            + TypeIdentity.cliType completion.ReturnType
+
+                        match
+                            typeCustomAttributes
+                                methodStableId
+                                completion.Kind.AllowedAttributeKinds
+                                completion.ParsedAttributes,
+                            attachTypedParameterAttributes
+                                methodStableId
+                                completion.ParsedParameters
+                                completion.Parameters
+                        with
+                        | Error error, _
+                        | _, Error error -> Error error
+                        | Ok attributes, Ok parameters ->
+                            let exportFingerprint =
+                                Fingerprint.parts [
+                                    methodStableId
+                                    completion.Kind.ExportIdentity
+                                    "generic-parameters"
+                                    yield! completion.GenericParameters
+                                    "constraints"
+
+                                    yield!
+                                        completion.Constraints
+                                        |> List.map TypeIdentity.methodConstraintIdentity
+
+                                    "attributes"
+
+                                    yield!
+                                        attributes
+                                        |> List.map TypeIdentity.customAttribute
+
+                                    "parameters"
+
+                                    yield!
+                                        parameters
+                                        |> List.map TypeIdentity.parameter
+
+                                    "return"
+                                    TypeIdentity.cliType completion.ReturnType
+                                    "inline-body"
+                                    TypeIdentity.inlineBody completion.Body
+                                ]
+
+                            Ok {
+                                StableId = methodStableId
+                                Name = completion.Name
+                                GenericParameters = completion.GenericParameters
+                                Constraints = completion.Constraints
+                                Attributes = attributes
+                                Parameters = parameters
+                                ReturnType = completion.ReturnType
+                                Body = completion.Body
+                                ExportFingerprint = exportFingerprint
+                                Range = completion.Range
+                            }
+
+                    let typeStaticMethod (methodDeclaration: ParsedStaticMethodDeclaration) =
+                        let explicitTypeParametersAreUnique =
+                            (methodDeclaration.TypeParameters
+                             |> Set.ofList
+                             |> Set.count) = methodDeclaration.TypeParameters.Length
+
+                        if not explicitTypeParametersAreUnique then
+                            diagnostic
+                                methodDeclaration.Range
+                                "method type parameters must be unique"
+                        elif not (List.isEmpty methodDeclaration.Constraints) then
+                            diagnostic
+                                methodDeclaration.Range
+                                "constraints on static object members are not yet supported"
+                        else
+                            let methodTypeParameters =
+                                collectMethodTypeParameters
+                                    methodDeclaration.TypeParameters
+                                    methodDeclaration.Parameters
+                                    methodDeclaration.ReturnType
+
+                            let declaredMethodParameters =
+                                HashSet<string>(methodTypeParameters, StringComparer.Ordinal)
+
+                            let methodParameterIndex =
+                                methodTypeParameters
+                                |> List.mapi (fun index name -> name, index)
+                                |> Map.ofList
+
+                            let typedParameters =
+                                typeObjectMethodParameters
+                                    methodParameterIndex
+                                    declaredMethodParameters
+                                    methodDeclaration.Parameters
+
+                            let declaredReturnType =
+                                typeObjectMethodReturnType
+                                    methodParameterIndex
+                                    declaredMethodParameters
+                                    methodDeclaration.ReturnType
+
+                            match typedParameters, declaredReturnType with
+                            | Error error, _
+                            | _, Error error -> Error error
+                            | Ok parameters, Ok _ when
+                                (parameters
+                                 |> List.map _.Name
+                                 |> Set.ofList
+                                 |> Set.count)
+                                <> parameters.Length
+                                ->
+                                diagnostic
+                                    methodDeclaration.Range
+                                    "static-member parameter names must be unique"
+                            | Ok parameters, Ok declaredReturnType ->
+                                let typedBody =
+                                    match methodDeclaration.Body with
+                                    | IntegerLiteral value ->
+                                        Ok(TypedIntegerLiteral value, CliInt32)
+                                    | ValueReference name ->
+                                        match
+                                            parameters
+                                            |> List.tryFindIndex (fun parameter ->
+                                                parameter.Name = name
+                                            )
+                                        with
+                                        | Some index ->
+                                            Ok(
+                                                TypedParameterReference index,
+                                                parameters.[index].Type
+                                            )
+                                        | None ->
+                                            diagnostic
+                                                methodDeclaration.BodyRange
+                                                $"the value '{name}' is not a static-member parameter"
+                                    | BooleanLiteral _
+                                    | StringLiteral _
+                                    | MemberCall _
+                                    | AddressOfExpression _
+                                    | UnitApplication _
+                                    | MemberAssignment _
+                                    | SequentialExpression _
+                                    | LambdaExpression _
+                                    | TypeConstruction _ ->
+                                        diagnostic
+                                            methodDeclaration.BodyRange
+                                            "this static-member expression is not yet supported"
+
+                                match typedBody with
+                                | Error error -> Error error
+                                | Ok(body, inferredReturnType) ->
+                                    match declaredReturnType with
+                                    | Some returnType when
+                                        returnType
+                                        <> inferredReturnType
+                                        ->
+                                        diagnostic
+                                            methodDeclaration.BodyRange
+                                            "the static-member body does not match its declared return type"
+                                    | _ ->
+                                        let returnType =
+                                            declaredReturnType
+                                            |> Option.defaultValue inferredReturnType
+
+                                        finishObjectMethod {
+                                            Kind = StaticObjectMethod
+                                            Name = methodDeclaration.Name
+                                            GenericParameters = methodTypeParameters
+                                            Constraints = []
+                                            ParsedAttributes = methodDeclaration.Attributes
+                                            ParsedParameters = methodDeclaration.Parameters
+                                            Parameters = parameters
+                                            ReturnType = returnType
+                                            Body = body
+                                            Range = methodDeclaration.BodyRange
+                                        }
+
                     let typeMethod (methodDeclaration: ParsedInstanceMethodDeclaration) =
                         let usedTypeParameterNames = HashSet<string>(StringComparer.Ordinal)
 
@@ -1436,15 +1709,10 @@ type internal CompilerService() =
                             |> Option.map generalizeFlexibleTypes
 
                         let methodTypeParameters =
-                            let fromParameters =
-                                ([], generalizedParameters)
-                                ||> List.fold (fun collected parameter ->
-                                    collectTypeParameters collected parameter.Type
-                                )
-
-                            match generalizedReturnType with
-                            | Some returnType -> collectTypeParameters fromParameters returnType
-                            | None -> fromParameters
+                            collectMethodTypeParameters
+                                []
+                                generalizedParameters
+                                generalizedReturnType
 
                         let declaredMethodParameters =
                             HashSet<string>(methodTypeParameters, StringComparer.Ordinal)
@@ -1455,22 +1723,10 @@ type internal CompilerService() =
                             |> Map.ofList
 
                         let typedParameters =
-                            generalizedParameters
-                            |> List.map (fun parameter ->
-                                parameter.Type
-                                |> expandTypeAbbreviations Set.empty
-                                |> resolveType declaredMethodParameters
-                                |> Result.bind (toCliType methodParameterIndex parameter.Range)
-                                |> Result.map (fun parameterType ->
-                                    ({
-                                        Name = parameter.Name
-                                        Type = parameterType
-                                        Attributes = []
-                                    }
-                                    : TypedParameter)
-                                )
-                            )
-                            |> collectResults []
+                            typeObjectMethodParameters
+                                methodParameterIndex
+                                declaredMethodParameters
+                                generalizedParameters
 
                         let typedFlexibleConstraints =
                             flexibleConstraints
@@ -1966,16 +2222,10 @@ type internal CompilerService() =
                                         "this instance-member expression is not yet supported"
 
                             let declaredReturnType =
-                                match generalizedReturnType with
-                                | None -> Ok None
-                                | Some returnType ->
-                                    returnType
-                                    |> expandTypeAbbreviations Set.empty
-                                    |> resolveType declaredMethodParameters
-                                    |> Result.bind (
-                                        toCliReturnType methodParameterIndex returnType.Range
-                                    )
-                                    |> Result.map Some
+                                typeObjectMethodReturnType
+                                    methodParameterIndex
+                                    declaredMethodParameters
+                                    generalizedReturnType
 
                             match typedBody, declaredReturnType with
                             | Error error, _
@@ -1992,90 +2242,39 @@ type internal CompilerService() =
                                     declaredReturnType
                                     |> Option.defaultValue inferredReturnType
 
-                                let parameterIdentity =
-                                    match parameters with
-                                    | [] -> "unit"
-                                    | _ ->
-                                        parameters
-                                        |> List.map (fun parameter ->
-                                            TypeIdentity.cliType parameter.Type
-                                        )
-                                        |> String.concat "*"
+                                let range =
+                                    match body with
+                                    | TypedResumableCode expression -> expression.Range
+                                    | TypedIntegerLiteral _
+                                    | TypedParameterReference _
+                                    | TypedResumableTryFinally _
+                                    | TypedTraitCall _ -> methodDeclaration.BodyRange
 
-                                let methodStableId =
-                                    stableId
-                                    + "/method:"
-                                    + methodDeclaration.Name
-                                    + ":"
-                                    + parameterIdentity
-                                    + "->"
-                                    + TypeIdentity.cliType returnType
+                                finishObjectMethod {
+                                    Kind = InstanceObjectMethod
+                                    Name = methodDeclaration.Name
+                                    GenericParameters = methodTypeParameters
+                                    Constraints = constraints
+                                    ParsedAttributes = methodDeclaration.Attributes
+                                    ParsedParameters = generalizedParameters
+                                    Parameters = parameters
+                                    ReturnType = returnType
+                                    Body = body
+                                    Range = range
+                                }
 
-                                match
-                                    typeCustomAttributes
-                                        methodStableId
-                                        [ DefaultValueAttribute ]
-                                        methodDeclaration.Attributes,
-                                    attachTypedParameterAttributes
-                                        methodStableId
-                                        generalizedParameters
-                                        parameters
-                                with
-                                | Error error, _
-                                | _, Error error -> Error error
-                                | Ok attributes, Ok parameters ->
-                                    let exportFingerprint =
-                                        Fingerprint.parts [
-                                            methodStableId
-                                            "instance"
-                                            "generic-parameters"
-                                            yield! methodTypeParameters
-                                            "constraints"
-
-                                            yield!
-                                                constraints
-                                                |> List.map TypeIdentity.methodConstraintIdentity
-
-                                            "attributes"
-
-                                            yield!
-                                                attributes
-                                                |> List.map TypeIdentity.customAttribute
-
-                                            "parameters"
-
-                                            yield!
-                                                parameters
-                                                |> List.map TypeIdentity.parameter
-
-                                            "return"
-                                            TypeIdentity.cliType returnType
-                                            "inline-body"
-                                            TypeIdentity.inlineBody body
-                                        ]
-
-                                    Ok {
-                                        StableId = methodStableId
-                                        Name = methodDeclaration.Name
-                                        GenericParameters = methodTypeParameters
-                                        Constraints = constraints
-                                        Attributes = attributes
-                                        Parameters = parameters
-                                        ReturnType = returnType
-                                        Body = body
-                                        ExportFingerprint = exportFingerprint
-                                        Range =
-                                            match body with
-                                            | TypedResumableCode expression -> expression.Range
-                                            | TypedIntegerLiteral _
-                                            | TypedParameterReference _
-                                            | TypedResumableTryFinally _
-                                            | TypedTraitCall _ -> methodDeclaration.BodyRange
-                                    }
+                    let typeObjectMethod =
+                        function
+                        | ParsedInstanceObjectMethod methodDeclaration ->
+                            typeMethod methodDeclaration
+                            |> Result.map TypedInstanceObjectMethod
+                        | ParsedStaticObjectMethod methodDeclaration ->
+                            typeStaticMethod methodDeclaration
+                            |> Result.map TypedStaticObjectMethod
 
                     match
                         declaration.Methods
-                        |> List.map typeMethod
+                        |> List.map typeObjectMethod
                         |> collectResults []
                     with
                     | Error error -> Error error
@@ -2092,7 +2291,9 @@ type internal CompilerService() =
 
                                         yield!
                                             methods
-                                            |> List.map _.ExportFingerprint
+                                            |> List.map (fun methodDeclaration ->
+                                                methodDeclaration.Method.ExportFingerprint
+                                            )
                                     ]
                                 ConstructorRange = declaration.ConstructorRange
                                 Range = declaration.Range
@@ -2460,11 +2661,16 @@ type internal CompilerService() =
 
                                     yield!
                                         typeDeclaration.Methods
-                                        |> List.collect (fun methodDeclaration -> [
-                                            methodDeclaration.StableId
-                                            methodDeclaration.ExportFingerprint
-                                            methodImplementationHash methodDeclaration
-                                        ])
+                                        |> List.collect (fun objectMethodDeclaration ->
+                                            let methodDeclaration =
+                                                objectMethodDeclaration.Method
+
+                                            [
+                                                methodDeclaration.StableId
+                                                methodDeclaration.ExportFingerprint
+                                                methodImplementationHash methodDeclaration
+                                            ]
+                                        )
                                 ]
                                 |> Fingerprint.text
                             | TypedStructType typeDeclaration ->
@@ -3342,9 +3548,16 @@ type internal CompilerService() =
 
                             let methods =
                                 typeDeclaration.Methods
-                                |> List.map (fun methodDeclaration ->
+                                |> List.map (fun objectMethodDeclaration ->
+                                    let kind, methodDeclaration =
+                                        match objectMethodDeclaration with
+                                        | TypedInstanceObjectMethod methodDeclaration ->
+                                            InstanceInlineMember, methodDeclaration
+                                        | TypedStaticObjectMethod methodDeclaration ->
+                                            StaticInlineMemberStub, methodDeclaration
+
                                     methodFragment
-                                        InstanceInlineMember
+                                        kind
                                         documentIndex
                                         typed.SourceChecksum
                                         methodDeclaration.StableId
@@ -3397,7 +3610,9 @@ type internal CompilerService() =
                         match declaration with
                         | TypedObjectType typeDeclaration ->
                             typeDeclaration.Methods
-                            |> List.choose (fun methodDeclaration ->
+                            |> List.choose (fun objectMethodDeclaration ->
+                                let methodDeclaration = objectMethodDeclaration.Method
+
                                 let closureExpression =
                                     match methodDeclaration.Body with
                                     | TypedResumableCode expression -> Some expression

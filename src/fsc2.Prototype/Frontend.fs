@@ -1722,7 +1722,7 @@ module internal Frontend =
                                         )
                                 )
 
-                        let parseStaticMethod () =
+                        let parseStaticMethod attributes allowDeclaredReturnType =
                             parseResult {
                                 let! staticToken = expected StaticKeyword "expected 'static'"
                                 let! _ = expected MemberKeyword "expected 'member'"
@@ -1748,14 +1748,27 @@ module internal Frontend =
                                 let! _ = expected LeftParenthesis "expected '('"
                                 let! parameters = parseParameters []
                                 let! _ = expected RightParenthesis "expected ')'"
+
+                                let! returnType =
+                                    match allowDeclaredReturnType, (current ()).Kind with
+                                    | true, Colon ->
+                                        consume ()
+                                        |> ignore
+
+                                        parseTypeExpression ()
+                                        |> Result.map Some
+                                    | _ -> Ok None
+
                                 let! _ = expected Equals "expected '='"
                                 let! body, bodyRange = parseExpression ()
 
                                 return {
+                                    Attributes = attributes
                                     Name = methodName
                                     TypeParameters = methodTypeParameters
                                     Constraints = methodConstraints
                                     Parameters = parameters
+                                    ReturnType = returnType
                                     Body = body
                                     BodyRange = bodyRange
                                     Range = {
@@ -1769,7 +1782,7 @@ module internal Frontend =
                             match (current ()).Kind with
                             | StaticKeyword ->
                                 parseResult {
-                                    let! methodDeclaration = parseStaticMethod ()
+                                    let! methodDeclaration = parseStaticMethod [] false
 
                                     return!
                                         parseStaticMethods (
@@ -1829,15 +1842,30 @@ module internal Frontend =
                                 }
                             }
 
-                        let rec parseInstanceMethods methods =
+                        let rec parseObjectMethods methods =
                             match (current ()).Kind with
                             | AttributeStart ->
                                 parseResult {
                                     let! attributes = parseDeclarationAttributes ()
-                                    let! methodDeclaration = parseInstanceMethod attributes
+
+                                    let! methodDeclaration =
+                                        match (current ()).Kind with
+                                        | MemberKeyword ->
+                                            parseInstanceMethod attributes
+                                            |> Result.map ParsedInstanceObjectMethod
+                                        | StaticKeyword ->
+                                            parseStaticMethod attributes true
+                                            |> Result.map ParsedStaticObjectMethod
+                                        | _ ->
+                                            Error(
+                                                prototypeDiagnostic
+                                                    source.Path
+                                                    (current ()).Range
+                                                    "expected 'member' or 'static' after member attributes"
+                                            )
 
                                     return!
-                                        parseInstanceMethods (
+                                        parseObjectMethods (
                                             methodDeclaration
                                             :: methods
                                         )
@@ -1847,8 +1875,18 @@ module internal Frontend =
                                     let! methodDeclaration = parseInstanceMethod []
 
                                     return!
-                                        parseInstanceMethods (
-                                            methodDeclaration
+                                        parseObjectMethods (
+                                            ParsedInstanceObjectMethod methodDeclaration
+                                            :: methods
+                                        )
+                                }
+                            | StaticKeyword ->
+                                parseResult {
+                                    let! methodDeclaration = parseStaticMethod [] true
+
+                                    return!
+                                        parseObjectMethods (
+                                            ParsedStaticObjectMethod methodDeclaration
                                             :: methods
                                         )
                                 }
@@ -1860,7 +1898,7 @@ module internal Frontend =
                                     prototypeDiagnostic
                                         source.Path
                                         (current ()).Range
-                                        "expected an instance member, type declaration, or end of file"
+                                        "expected an object member, type declaration, or end of file"
                                 )
 
                         let parseField fieldAttributes =
@@ -1933,8 +1971,9 @@ module internal Frontend =
                                         "attributed or generic object types are not yet supported"
                                 )
                             | true, MemberKeyword
+                            | true, StaticKeyword
                             | true, AttributeStart ->
-                                parseInstanceMethods []
+                                parseObjectMethods []
                                 |> Result.bind (fun methods ->
                                     match List.tryLast methods with
                                     | Some lastMethod ->
