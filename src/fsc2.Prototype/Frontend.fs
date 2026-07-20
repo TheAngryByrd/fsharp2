@@ -1486,6 +1486,11 @@ module internal Frontend =
                     |> ignore
 
                     Ok(StringLiteral value, expressionToken.Range)
+                | NullKeyword ->
+                    consume ()
+                    |> ignore
+
+                    Ok(NullLiteral, expressionToken.Range)
                 | Identifier "true" ->
                     consume ()
                     |> ignore

@@ -151,6 +151,7 @@ module private TypeIdentity =
                 "string"
                 value
             ]
+        | TypedNullLiteral -> "null"
         | TypedUnitLiteral -> "unit"
         | TypedParameterReference index ->
             Fingerprint.parts [
@@ -1496,6 +1497,7 @@ type internal CompilerService() =
                             "value references are supported only in parameterized members"
                     | _, UnitLiteral
                     | _, BooleanLiteral _
+                    | _, NullLiteral
                     | _, GenericMemberCall _
                     | _, BoundInstanceMember _
                     | _, MemberAssignment _
@@ -1945,6 +1947,7 @@ type internal CompilerService() =
                             | Ok _, Ok _, UnitLiteral
                             | Ok _, Ok _, BooleanLiteral _
                             | Ok _, Ok _, StringLiteral _
+                            | Ok _, Ok _, NullLiteral
                             | Ok _, Ok _, GenericMemberCall _
                             | Ok _, Ok _, ValueReference _
                             | Ok _, Ok _, AddressOfExpression _
@@ -2333,6 +2336,7 @@ type internal CompilerService() =
                             | UnitLiteral
                             | BooleanLiteral _
                             | StringLiteral _
+                            | NullLiteral
                             | ValueReference _
                             | AddressOfExpression _
                             | UnitApplication _
@@ -2637,6 +2641,8 @@ type internal CompilerService() =
                                         )
                                     | StringLiteral value ->
                                         Ok(TypedStringLiteral value, CliString, nextLocalIndex)
+                                    | NullLiteral ->
+                                        Ok(TypedNullLiteral, CliObject, nextLocalIndex)
                                     | UnitLiteral -> Ok(TypedUnitLiteral, CliVoid, nextLocalIndex)
                                     | ValueReference name ->
                                         match
@@ -3818,6 +3824,7 @@ type internal CompilerService() =
                                         )
                                     | TypedIntegerLiteral _
                                     | TypedStringLiteral _
+                                    | TypedNullLiteral
                                     | TypedUnitLiteral
                                     | TypedParameterReference _
                                     | TypedLocalReference _
@@ -4744,6 +4751,7 @@ type internal CompilerService() =
                             let typedBody =
                                 match methodDeclaration.Body with
                                 | IntegerLiteral value -> Ok(TypedIntegerLiteral value, CliInt32)
+                                | NullLiteral -> Ok(TypedNullLiteral, CliObject)
                                 | ValueReference name ->
                                     match
                                         parameters
@@ -4847,6 +4855,7 @@ type internal CompilerService() =
                                     | TypedResumableCode expression -> expression.Range
                                     | TypedIntegerLiteral _
                                     | TypedStringLiteral _
+                                    | TypedNullLiteral
                                     | TypedUnitLiteral
                                     | TypedParameterReference _
                                     | TypedLocalReference _
@@ -6138,6 +6147,7 @@ type internal CompilerService() =
                 function
                 | TypedIntegerLiteral value -> [ LoadInt32 value ], []
                 | TypedStringLiteral value -> [ LoadString value ], []
+                | TypedNullLiteral -> [ LoadNull ], []
                 | TypedUnitLiteral -> [], []
                 | TypedParameterReference index ->
                     [ LoadArgument(methodArgumentIndex kind index) ], []
@@ -6517,7 +6527,7 @@ type internal CompilerService() =
                         Return
                     ],
                     []
-                | (TypedStringLiteral _ | TypedUnitLiteral | TypedLocalReference _ | TypedLet _ | TypedLocalAssignment _ | TypedAddressOf _ | TypedStaticMethodCall _ | TypedObjectConstruction _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _ | TypedUpcast _ | TypedSequential _ | TypedBooleanNegation _ | TypedTypeTestMatch _ | TypedObjectExpression _) as expression ->
+                | (TypedStringLiteral _ | TypedNullLiteral | TypedUnitLiteral | TypedLocalReference _ | TypedLet _ | TypedLocalAssignment _ | TypedAddressOf _ | TypedStaticMethodCall _ | TypedObjectConstruction _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _ | TypedUpcast _ | TypedSequential _ | TypedBooleanNegation _ | TypedTypeTestMatch _ | TypedObjectExpression _) as expression ->
                     let instructions, locals =
                         valueExpressionInstructions freshLabel kind expression
 
@@ -6806,6 +6816,7 @@ type internal CompilerService() =
                         | TypedResumableTryFinally _ -> 8
                         | TypedIntegerLiteral _
                         | TypedStringLiteral _
+                        | TypedNullLiteral
                         | TypedUnitLiteral
                         | TypedParameterReference _
                         | TypedLocalReference _
@@ -7093,6 +7104,7 @@ type internal CompilerService() =
                     |> List.collect (fun (expression, _, _) -> objectExpressions expression)
                 | TypedIntegerLiteral _
                 | TypedStringLiteral _
+                | TypedNullLiteral
                 | TypedUnitLiteral
                 | TypedParameterReference _
                 | TypedLocalReference _
@@ -7513,6 +7525,7 @@ type internal CompilerService() =
                                         Some expression.Compensation
                                     | TypedIntegerLiteral _
                                     | TypedStringLiteral _
+                                    | TypedNullLiteral
                                     | TypedUnitLiteral
                                     | TypedParameterReference _
                                     | TypedLocalReference _
@@ -7898,6 +7911,7 @@ type internal CompilerService() =
                                     }
                                 | TypedIntegerLiteral _
                                 | TypedStringLiteral _
+                                | TypedNullLiteral
                                 | TypedUnitLiteral
                                 | TypedParameterReference _
                                 | TypedLocalReference _
@@ -8083,6 +8097,7 @@ type internal CompilerService() =
                                     }
                                 | TypedIntegerLiteral _
                                 | TypedStringLiteral _
+                                | TypedNullLiteral
                                 | TypedUnitLiteral
                                 | TypedParameterReference _
                                 | TypedLocalReference _

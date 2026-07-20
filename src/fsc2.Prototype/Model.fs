@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 52
+    let Query = 53
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -194,6 +194,7 @@ type internal ParsedExpression =
     | UnitLiteral
     | BooleanLiteral of bool
     | StringLiteral of string
+    | NullLiteral
     | ValueReference of string
     | AddressOfExpression of rootName: string * memberPath: string list
     | UnitApplication of functionName: string
@@ -810,6 +811,7 @@ type internal TypedParameter = {
 type internal TypedExpression =
     | TypedIntegerLiteral of int
     | TypedStringLiteral of string
+    | TypedNullLiteral
     | TypedUnitLiteral
     | TypedParameterReference of int
     | TypedLocalReference of int

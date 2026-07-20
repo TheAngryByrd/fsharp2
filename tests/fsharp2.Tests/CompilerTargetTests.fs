@@ -5448,6 +5448,37 @@ module CompilerTargetTests =
                     let _, _, _, result = fsharp2Shape
                     Expect.isTrue result "the override should execute its body"
 
+            testCase "emits a null object result"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        static member inline Make() : System.Object = null\n"
+
+                withObjectMemberDifferential "fsharp2-null-object-result" sourceText "Make"
+                <| fun oracleOutputPath outputPath ->
+                    let inspectAndInvoke assemblyPath =
+                        let assembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            assembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        let make = builderType.GetMethod("Make")
+                        make.ReturnType.FullName, make.Invoke(null, null)
+
+                    let oracleShape = inspectAndInvoke oracleOutputPath
+                    let fsharp2Shape = inspectAndInvoke outputPath
+
+                    Expect.equal
+                        (fst fsharp2Shape)
+                        (fst oracleShape)
+                        "the null-producing member signature should match the Compatibility Oracle"
+
+                    Expect.isNull
+                        (snd fsharp2Shape)
+                        "the emitted member should return a null object reference"
+
             testCase "emits and executes a runtime type-test match"
             <| fun _ ->
                 let sourceText =
@@ -7591,7 +7622,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "52"
+                        "53"
                         "query cache evidence should be versioned"
 
                     Expect.equal
