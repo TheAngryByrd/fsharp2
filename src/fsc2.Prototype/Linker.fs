@@ -324,6 +324,12 @@ module internal Linker =
                 MethodAttributes.Public
                 ||| MethodAttributes.HideBySig
           }
+        | InternalInstanceInlineMember -> {
+            IsInstance = true
+            Attributes =
+                MethodAttributes.Assembly
+                ||| MethodAttributes.HideBySig
+          }
         | ClosureConstructor -> {
             IsInstance = true
             Attributes =
@@ -507,7 +513,9 @@ module internal Linker =
                 |> instructions.LoadString
             | LoadNull -> instructions.OpCode(ILOpCode.Ldnull)
             | LoadArgument index -> instructions.LoadArgument(index)
+            | LoadArgumentAddress index -> instructions.LoadArgumentAddress(index)
             | LoadLocal index -> instructions.LoadLocal(index)
+            | LoadLocalAddress index -> instructions.LoadLocalAddress(index)
             | StoreLocal index -> instructions.StoreLocal(index)
             | LoadField fieldReference ->
                 instructions.OpCode(ILOpCode.Ldfld)

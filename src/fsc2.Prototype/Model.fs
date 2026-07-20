@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 34
+    let Query = 38
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -180,9 +180,10 @@ type internal ParsedExpression =
     | BooleanLiteral of bool
     | StringLiteral of string
     | ValueReference of string
-    | AddressOfExpression of string
+    | AddressOfExpression of rootName: string * memberPath: string list
     | UnitApplication of functionName: string
     | MemberCall of receiverName: string * memberName: string * arguments: ParsedExpression list
+    | BoundInstanceMember of receiverName: string * memberName: string
     | MemberAssignment of rootName: string * memberPath: string list * value: ParsedExpression
     | SequentialExpression of ParsedExpression list
     | FunctionApplication of
@@ -297,6 +298,7 @@ type internal ParsedStaticTypeDeclaration = {
 
 type internal ParsedInstanceMethodDeclaration = {
     Attributes: ParsedAttribute list
+    IsPublic: bool
     ReceiverName: string
     Name: string
     Parameters: ParsedParameter list
@@ -595,9 +597,24 @@ type internal SymbolicMethodReference = {
 
 type internal TypedCallArgument =
     | TypedValueArgument of string
-    | TypedAddressOfArgument of string
+    | TypedAddressOfArgument of rootName: string * memberPath: string list
 
     override _.ToString() = "TypedCallArgument"
+
+type internal TypedAddressSource =
+    | TypedParameterAddress of parameterIndex: int * parameterType: CliType
+    | TypedLocalAddress of localIndex: int * localType: CliType
+
+    override _.ToString() = "TypedAddressSource"
+
+type internal TypedFieldAddress = {
+    DeclaringType: CliType
+    Name: string
+    FieldType: CliType
+    TargetStableId: string option
+} with
+
+    override _.ToString() = "TypedFieldAddress"
 
 type internal TypedResumableCodeBody =
     | TypedStoreCapturedResult of
@@ -655,6 +672,20 @@ type internal TypedInstanceMethodCallTarget = {
 
     override _.ToString() = "TypedInstanceMethodCallTarget"
 
+type internal TypedBoundInstanceMethodExpression = {
+    FunctionType: CliType
+    DelegateType: CliType
+    ReceiverType: CliType
+    TargetStableId: string
+    Target: TypedInstanceMethodCallTarget
+    DomainType: CliType
+    RangeType: CliType
+    SourceLine: int
+    Range: SourceRange
+} with
+
+    override _.ToString() = "TypedBoundInstanceMethodExpression"
+
 type internal TypedExpression =
     | TypedIntegerLiteral of int
     | TypedUnitLiteral
@@ -670,6 +701,7 @@ type internal TypedExpression =
         bindingRange: SourceRange *
         bodyRange: SourceRange
     | TypedLocalAssignment of localIndex: int * localType: CliType * value: TypedExpression
+    | TypedAddressOf of source: TypedAddressSource * fields: TypedFieldAddress list
     | TypedStaticMethodCall of
         target: TypedStaticMethodCallTarget *
         genericArguments: CliType list *
@@ -684,6 +716,7 @@ type internal TypedExpression =
         target: TypedInstanceMethodCallTarget *
         receiver: TypedExpression *
         arguments: TypedExpression list
+    | TypedBoundInstanceMethod of TypedBoundInstanceMethodExpression
     | TypedConditional of
         condition: TypedExpression *
         ifTrue: TypedExpression *
@@ -784,6 +817,7 @@ type internal TypedParameter = {
 type internal TypedMethodDeclaration = {
     StableId: string
     Name: string
+    IsPublic: bool
     GenericParameters: string list
     Constraints: TypedMethodConstraint list
     Attributes: TypedCustomAttribute list
@@ -964,7 +998,9 @@ type internal SymbolicInstruction =
     | LoadString of string
     | LoadNull
     | LoadArgument of int
+    | LoadArgumentAddress of int
     | LoadLocal of int
+    | LoadLocalAddress of int
     | StoreLocal of int
     | LoadField of SymbolicFieldReference
     | LoadFieldAddress of SymbolicFieldReference
@@ -986,6 +1022,7 @@ type internal SymbolicMethodKind =
     | StaticInlineMemberStub
     | InstanceConstructor
     | InstanceInlineMember
+    | InternalInstanceInlineMember
     | ClosureConstructor
     | ClosureInvoke
 

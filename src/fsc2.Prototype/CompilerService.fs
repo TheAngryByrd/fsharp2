@@ -109,10 +109,11 @@ module private TypeIdentity =
                 "value"
                 name
             ]
-        | TypedAddressOfArgument name ->
+        | TypedAddressOfArgument(rootName, memberPath) ->
             Fingerprint.parts [
                 "address-of"
-                name
+                rootName
+                yield! memberPath
             ]
 
     let resumableCodeBody =
@@ -172,6 +173,36 @@ module private TypeIdentity =
                 cliType localType
                 inlineBody value
             ]
+        | TypedAddressOf(source, fields) ->
+            let sourceIdentity =
+                match source with
+                | TypedParameterAddress(index, parameterType) ->
+                    Fingerprint.parts [
+                        "parameter"
+                        index.ToString(CultureInfo.InvariantCulture)
+                        cliType parameterType
+                    ]
+                | TypedLocalAddress(index, localType) ->
+                    Fingerprint.parts [
+                        "local"
+                        index.ToString(CultureInfo.InvariantCulture)
+                        cliType localType
+                    ]
+
+            Fingerprint.parts [
+                "address-of"
+                sourceIdentity
+
+                yield!
+                    fields
+                    |> List.collect (fun field -> [
+                        cliType field.DeclaringType
+                        field.Name
+                        cliType field.FieldType
+                        field.TargetStableId
+                        |> Option.defaultValue String.Empty
+                    ])
+            ]
         | TypedStaticMethodCall(target, genericArguments, arguments) ->
             Fingerprint.parts [
                 "static-call"
@@ -215,6 +246,17 @@ module private TypeIdentity =
                 yield!
                     arguments
                     |> List.map inlineBody
+            ]
+        | TypedBoundInstanceMethod expression ->
+            Fingerprint.parts [
+                "bound-instance-member"
+                cliType expression.FunctionType
+                cliType expression.DelegateType
+                cliType expression.ReceiverType
+                expression.TargetStableId
+                expression.Target.Name
+                cliType expression.DomainType
+                cliType expression.RangeType
             ]
         | TypedConditional(condition, ifTrue, ifFalse, _, _, _) ->
             Fingerprint.parts [
@@ -323,6 +365,7 @@ type private ObjectMethodKind =
 type private ObjectMethodCompletion = {
     Kind: ObjectMethodKind
     Name: string
+    IsPublic: bool
     GenericParameters: string list
     Constraints: TypedMethodConstraint list
     ParsedAttributes: ParsedAttribute list
@@ -338,6 +381,11 @@ type private CheckedSourceType = {
     Name: string
     StableId: string
     Methods: TypedMethodDeclaration list
+}
+
+type private CheckedSourceStruct = {
+    Namespace: string
+    Declaration: TypedStructTypeDeclaration
 }
 
 /// A deliberately small in-memory query owner. Query identities and cached
@@ -429,6 +477,7 @@ type internal CompilerService() =
                 }
 
             let checkedSourceTypes = ResizeArray<CheckedSourceType>()
+            let checkedSourceStructs = ResizeArray<CheckedSourceStruct>()
 
             let addCheckedDeclaration namespaceName =
                 function
@@ -453,10 +502,14 @@ type internal CompilerService() =
                                 | TypedInstanceObjectMethod _ -> None
                             )
                     }
+                | TypedStructType declaration ->
+                    checkedSourceStructs.Add {
+                        Namespace = namespaceName
+                        Declaration = declaration
+                    }
                 | TypedMethod _
                 | TypedLiteralField _
-                | TypedTypeAbbreviation _
-                | TypedStructType _ -> ()
+                | TypedTypeAbbreviation _ -> ()
 
             let typeAbbreviations =
                 parsed.Declarations
@@ -1023,6 +1076,7 @@ type internal CompilerService() =
                             TypedMethod {
                                 StableId = stableId
                                 Name = declaration.Name
+                                IsPublic = true
                                 GenericParameters = []
                                 Constraints = []
                                 Attributes = []
@@ -1053,6 +1107,7 @@ type internal CompilerService() =
                             "value references are supported only in parameterized members"
                     | _, UnitLiteral
                     | _, BooleanLiteral _
+                    | _, BoundInstanceMember _
                     | _, MemberAssignment _
                     | _, SequentialExpression _
                     | _, FunctionApplication _
@@ -1383,15 +1438,15 @@ type internal CompilerService() =
                                 let argumentName =
                                     function
                                     | TypedValueArgument name
-                                    | TypedAddressOfArgument name -> name
+                                    | TypedAddressOfArgument(name, _) -> name
 
                                 let typedArguments =
                                     arguments
                                     |> List.choose (
                                         function
                                         | ValueReference name -> Some(TypedValueArgument name)
-                                        | AddressOfExpression name ->
-                                            Some(TypedAddressOfArgument name)
+                                        | AddressOfExpression(rootName, memberPath) ->
+                                            Some(TypedAddressOfArgument(rootName, memberPath))
                                         | _ -> None
                                     )
 
@@ -1474,6 +1529,7 @@ type internal CompilerService() =
                                             Ok {
                                                 StableId = methodStableId
                                                 Name = methodDeclaration.Name
+                                                IsPublic = true
                                                 GenericParameters = methodDeclaration.TypeParameters
                                                 Constraints = constraints
                                                 Attributes = []
@@ -1495,6 +1551,7 @@ type internal CompilerService() =
                             | Ok _, Ok _, ValueReference _
                             | Ok _, Ok _, AddressOfExpression _
                             | Ok _, Ok _, UnitApplication _
+                            | Ok _, Ok _, BoundInstanceMember _
                             | Ok _, Ok _, MemberAssignment _
                             | Ok _, Ok _, SequentialExpression _
                             | Ok _, Ok _, FunctionApplication _
@@ -1664,6 +1721,13 @@ type internal CompilerService() =
                                         ]
                                     )
                                 )
+                        | TypedByRefType elementType ->
+                            toCliType methodParameterIndex range elementType
+                            |> Result.bind (fun cliElementType ->
+                                match cliElementType with
+                                | CliVoid -> diagnostic range "a byref element cannot be void"
+                                | _ -> Ok(CliByRef cliElementType)
+                            )
                         | typedType ->
                             diagnostic
                                 range
@@ -1764,6 +1828,7 @@ type internal CompilerService() =
                                 Fingerprint.parts [
                                     methodStableId
                                     completion.Kind.ExportIdentity
+                                    if completion.IsPublic then "public" else "internal"
                                     "generic-parameters"
                                     yield! completion.GenericParameters
                                     "constraints"
@@ -1793,6 +1858,7 @@ type internal CompilerService() =
                             Ok {
                                 StableId = methodStableId
                                 Name = completion.Name
+                                IsPublic = completion.IsPublic
                                 GenericParameters = completion.GenericParameters
                                 Constraints = completion.Constraints
                                 Attributes = attributes
@@ -1858,6 +1924,83 @@ type internal CompilerService() =
                                     methodDeclaration.Range
                                     "static-member parameter names must be unique"
                             | Ok parameters, Ok declaredReturnType ->
+                                let rec substituteTypeArguments (arguments: CliType list) =
+                                    function
+                                    | CliTypeParameter index when index < arguments.Length ->
+                                        arguments.[index]
+                                    | CliGenericType(typeReference, typeArguments) ->
+                                        CliGenericType(
+                                            typeReference,
+                                            typeArguments
+                                            |> List.map (substituteTypeArguments arguments)
+                                        )
+                                    | CliByRef elementType ->
+                                        CliByRef(substituteTypeArguments arguments elementType)
+                                    | cliType -> cliType
+
+                                let rec resolveAddressFields
+                                    (fields: TypedFieldAddress list)
+                                    (ownerType: CliType)
+                                    =
+                                    function
+                                    | [] -> Ok(List.rev fields, ownerType)
+                                    | fieldName :: remaining ->
+                                        let ownerType =
+                                            match ownerType with
+                                            | CliByRef elementType -> elementType
+                                            | cliType -> cliType
+
+                                        let ownerReference, typeArguments =
+                                            (match ownerType with
+                                             | CliNamedType typeReference -> Some(typeReference, [])
+                                             | CliGenericType(typeReference, arguments) ->
+                                                 Some(typeReference, arguments)
+                                             | _ -> None)
+                                            |> Option.defaultWith (fun () ->
+                                                invalidOp "an address-of field owner must be a named type"
+                                            )
+
+                                        match
+                                            checkedSourceStructs
+                                            |> Seq.tryFind (fun sourceStruct ->
+                                                sourceStruct.Declaration.StableId =
+                                                    ownerReference.DeclarationId
+                                            )
+                                        with
+                                        | None ->
+                                            diagnostic
+                                                methodDeclaration.BodyRange
+                                                $"the address-of field owner '{TypeIdentity.cliType ownerType}' is not a local struct"
+                                        | Some sourceStruct ->
+                                            match
+                                                sourceStruct.Declaration.Fields
+                                                |> List.tryFind (fun field -> field.Name = fieldName)
+                                            with
+                                            | None ->
+                                                diagnostic
+                                                    methodDeclaration.BodyRange
+                                                    $"the struct '{sourceStruct.Declaration.Name}' has no field '{fieldName}'"
+                                            | Some field when not field.IsMutable ->
+                                                diagnostic
+                                                    methodDeclaration.BodyRange
+                                                    $"the address-of field '{fieldName}' is not mutable"
+                                            | Some field ->
+                                                let fieldType =
+                                                    field.Type
+                                                    |> substituteTypeArguments typeArguments
+
+                                                resolveAddressFields
+                                                    (({
+                                                        DeclaringType = ownerType
+                                                        Name = field.Name
+                                                        FieldType = field.Type
+                                                        TargetStableId = Some field.StableId
+                                                      }
+                                                      : TypedFieldAddress)
+                                                     :: fields)
+                                                    fieldType
+                                                    remaining
+
                                 let rec typeStaticExpression localBindings nextLocalIndex =
                                     function
                                     | IntegerLiteral value ->
@@ -1891,6 +2034,55 @@ type internal CompilerService() =
                                                 diagnostic
                                                     methodDeclaration.BodyRange
                                                     $"the value '{name}' is not a static-member parameter or local binding"
+                                    | AddressOfExpression(rootName, memberPath) ->
+                                        let source =
+                                            match
+                                                localBindings
+                                                |> Map.tryFind rootName
+                                            with
+                                            | Some(localIndex, localType, isMutable) ->
+                                                if List.isEmpty memberPath && not isMutable then
+                                                    None
+                                                else
+                                                    Some(TypedLocalAddress(localIndex, localType), localType)
+                                            | None ->
+                                                parameters
+                                                |> List.tryFindIndex (fun parameter ->
+                                                    parameter.Name = rootName
+                                                )
+                                                |> Option.map (fun parameterIndex ->
+                                                    let parameterType =
+                                                        parameters.[parameterIndex].Type
+
+                                                    TypedParameterAddress(
+                                                        parameterIndex,
+                                                        parameterType
+                                                    ),
+                                                    parameterType
+                                                )
+
+                                        match source with
+                                        | None ->
+                                            diagnostic
+                                                methodDeclaration.BodyRange
+                                                $"the address-of root '{rootName}' is not a mutable local or parameter"
+                                        | Some(typedSource, sourceType) ->
+                                            match
+                                                resolveAddressFields [] sourceType memberPath
+                                            with
+                                            | Error error -> Error error
+                                            | Ok(fields, addressedType) ->
+                                                let addressedType =
+                                                    match addressedType with
+                                                    | CliByRef _ as byrefType when List.isEmpty fields ->
+                                                        byrefType
+                                                    | cliType -> CliByRef cliType
+
+                                                Ok(
+                                                    TypedAddressOf(typedSource, fields),
+                                                    addressedType,
+                                                    nextLocalIndex
+                                                )
                                     | MemberCall(receiverName, memberName, arguments) ->
                                         let rec typeArguments
                                             typedArguments
@@ -2325,8 +2517,8 @@ type internal CompilerService() =
                                                 )
                                     | BooleanLiteral _
                                     | StringLiteral _
-                                    | AddressOfExpression _
                                     | UnitApplication _
+                                    | BoundInstanceMember _
                                     | MemberAssignment _
                                     | SequentialExpression _
                                     | LambdaExpression _
@@ -2384,6 +2576,8 @@ type internal CompilerService() =
                                     | TypedUnitLiteral
                                     | TypedParameterReference _
                                     | TypedLocalReference _
+                                    | TypedAddressOf _
+                                    | TypedBoundInstanceMethod _
                                     | TypedResumableCode _
                                     | TypedResumableTryFinally _
                                     | TypedTraitCall _ -> []
@@ -2410,6 +2604,7 @@ type internal CompilerService() =
                                         finishObjectMethod {
                                             Kind = StaticObjectMethod
                                             Name = methodDeclaration.Name
+                                            IsPublic = true
                                             GenericParameters = methodTypeParameters
                                             Constraints =
                                                 body
@@ -2962,6 +3157,175 @@ type internal CompilerService() =
                                             methodDeclaration.BodyRange
                                             "the computation must have type ResumableCode<'Data, 'T>"
 
+                            let typeBoundInstanceMember receiverName memberName =
+                                if receiverName <> methodDeclaration.ReceiverName then
+                                    diagnostic
+                                        methodDeclaration.BodyRange
+                                        $"the bound member receiver '{receiverName}' is not this instance"
+                                else
+                                    let targetMethod =
+                                        declaration.Methods
+                                        |> List.tryPick (
+                                            function
+                                            | ParsedInstanceObjectMethod target when
+                                                target.Name = memberName
+                                                && List.isEmpty target.Parameters
+                                                ->
+                                                Some target
+                                            | ParsedInstanceObjectMethod _
+                                            | ParsedStaticObjectMethod _ -> None
+                                        )
+
+                                    match targetMethod with
+                                    | None ->
+                                        diagnostic
+                                            methodDeclaration.BodyRange
+                                            $"the instance has no unit member named '{memberName}'"
+                                    | Some targetMethod ->
+                                        let targetTypeParameters =
+                                            collectMethodTypeParameters
+                                                []
+                                                targetMethod.Parameters
+                                                targetMethod.ReturnType
+
+                                        if not (List.isEmpty targetTypeParameters) then
+                                            diagnostic
+                                                methodDeclaration.BodyRange
+                                                "generic bound instance members are not yet supported"
+                                        else
+                                            let targetReturnType =
+                                                typeObjectMethodReturnType
+                                                    Map.empty
+                                                    (HashSet<string>(StringComparer.Ordinal))
+                                                    targetMethod.ReturnType
+                                                |> Result.bind (fun declaredTargetReturnType ->
+                                                    match
+                                                        declaredTargetReturnType,
+                                                        targetMethod.Body
+                                                    with
+                                                    | Some returnType, _ -> Ok returnType
+                                                    | None, IntegerLiteral _ -> Ok CliInt32
+                                                    | None, UnitLiteral -> Ok CliVoid
+                                                    | None, _ ->
+                                                        diagnostic
+                                                            targetMethod.BodyRange
+                                                            "the bound member needs an explicit return type"
+                                                )
+
+                                            let functionReturnType =
+                                                typeObjectMethodReturnType
+                                                    methodParameterIndex
+                                                    declaredMethodParameters
+                                                    generalizedReturnType
+
+                                            match functionReturnType, targetReturnType with
+                                            | Error error, _
+                                            | _, Error error -> Error error
+                                            | Ok None, _ ->
+                                                diagnostic
+                                                    methodDeclaration.BodyRange
+                                                    "a bound member result needs an explicit function return type"
+                                            | Ok(Some(CliGenericType(functionReference,
+                                                                     [ domainType
+                                                                       rangeType ]) as functionType)),
+                                              Ok targetReturnType when
+                                                functionReference.DeclarationId =
+                                                    fsharpFunctionType.DeclarationId
+                                                ->
+                                                let unitType = CliNamedType fsharpUnitType
+
+                                                if domainType <> unitType then
+                                                    diagnostic
+                                                        methodDeclaration.BodyRange
+                                                        "a unit member can only bind to a unit-domain F# function"
+                                                elif rangeType <> targetReturnType then
+                                                    diagnostic
+                                                        methodDeclaration.BodyRange
+                                                        "the bound member return type does not match the F# function range"
+                                                else
+                                                    let converterName = {
+                                                        Namespace = "System"
+                                                        Name = "Converter"
+                                                    }
+
+                                                    match
+                                                        resolveNamedType
+                                                            2
+                                                            converterName
+                                                            methodDeclaration.BodyRange
+                                                    with
+                                                    | Error error -> Error error
+                                                    | Ok(TypedNamedType resolvedConverter) ->
+                                                        let converterReference = {
+                                                            DeclarationId =
+                                                                resolvedConverter.DeclarationId
+                                                            AssemblyName =
+                                                                resolvedConverter.AssemblyName
+                                                            TypeName = {
+                                                                Namespace =
+                                                                    resolvedConverter.TypeName.Namespace
+                                                                Name =
+                                                                    resolvedConverter.TypeName.Name
+                                                                    + "`2"
+                                                            }
+                                                            IsValueType = false
+                                                        }
+
+                                                        let receiverType =
+                                                            CliNamedType {
+                                                                DeclarationId = stableId
+                                                                AssemblyName = String.Empty
+                                                                TypeName = {
+                                                                    Namespace = parsed.Namespace
+                                                                    Name = declaration.Name
+                                                                }
+                                                                IsValueType = false
+                                                            }
+
+                                                        let targetStableId =
+                                                            stableId
+                                                            + "/method:"
+                                                            + targetMethod.Name
+                                                            + ":unit->"
+                                                            + TypeIdentity.cliType targetReturnType
+
+                                                        Ok(
+                                                            TypedBoundInstanceMethod {
+                                                                FunctionType = functionType
+                                                                DelegateType =
+                                                                    CliGenericType(
+                                                                        converterReference,
+                                                                        [
+                                                                            domainType
+                                                                            rangeType
+                                                                        ]
+                                                                    )
+                                                                ReceiverType = receiverType
+                                                                TargetStableId = targetStableId
+                                                                Target = {
+                                                                    DeclaringType = receiverType
+                                                                    Name = targetMethod.Name
+                                                                    ParameterTypes = []
+                                                                    ReturnType = targetReturnType
+                                                                    ResultType = targetReturnType
+                                                                }
+                                                                DomainType = domainType
+                                                                RangeType = rangeType
+                                                                SourceLine =
+                                                                    methodDeclaration.BodyRange.Start.Line
+                                                                Range = methodDeclaration.BodyRange
+                                                            },
+                                                            functionType
+                                                        )
+                                                    | Ok _ ->
+                                                        diagnostic
+                                                            methodDeclaration.BodyRange
+                                                            "System.Converter did not resolve to a named CLI type"
+                                            | Ok(Some _), Ok _ ->
+                                                diagnostic
+                                                    methodDeclaration.BodyRange
+                                                    "the bound member result must be an F# function"
+
                             let typedBody =
                                 match methodDeclaration.Body with
                                 | IntegerLiteral value -> Ok(TypedIntegerLiteral value, CliInt32)
@@ -2978,6 +3342,8 @@ type internal CompilerService() =
                                         diagnostic
                                             methodDeclaration.BodyRange
                                             $"the value '{name}' is not an instance-member parameter"
+                                | BoundInstanceMember(receiverName, memberName) ->
+                                    typeBoundInstanceMember receiverName memberName
                                 | StringLiteral _ ->
                                     diagnostic
                                         methodDeclaration.BodyRange
@@ -3057,9 +3423,11 @@ type internal CompilerService() =
                                     | TypedParameterReference _
                                     | TypedLocalReference _
                                     | TypedLet _
+                                    | TypedAddressOf _
                                     | TypedStaticMethodCall _
                                     | TypedFunctionApplication _
                                     | TypedInstanceMethodCall _
+                                    | TypedBoundInstanceMethod _
                                     | TypedConditional _
                                     | TypedUpcast _
                                     | TypedSequential _
@@ -3071,6 +3439,7 @@ type internal CompilerService() =
                                 finishObjectMethod {
                                     Kind = InstanceObjectMethod
                                     Name = methodDeclaration.Name
+                                    IsPublic = methodDeclaration.IsPublic
                                     GenericParameters = methodTypeParameters
                                     Constraints = constraints
                                     ParsedAttributes = methodDeclaration.Attributes
@@ -3722,7 +4091,10 @@ type internal CompilerService() =
                 | (CliInt32 | CliBoolean | CliString | CliObject | CliNativeInt | CliVoid | CliTypeParameter _ | CliNamedType _) as cliType ->
                     cliType
 
-            let closureName (methodDeclaration: TypedMethodDeclaration) expression =
+            let closureName
+                (methodDeclaration: TypedMethodDeclaration)
+                (expression: TypedResumableCodeExpression)
+                =
                 methodDeclaration.Name
                 + "@"
                 + expression.SourceLine.ToString(CultureInfo.InvariantCulture)
@@ -3731,7 +4103,10 @@ type internal CompilerService() =
                 methodDeclaration.StableId
                 + "/closure:resumable-code"
 
-            let closureTypeReference (methodDeclaration: TypedMethodDeclaration) expression =
+            let closureTypeReference
+                (methodDeclaration: TypedMethodDeclaration)
+                (expression: TypedResumableCodeExpression)
+                =
                 let name = closureName methodDeclaration expression
 
                 {
@@ -3838,10 +4213,88 @@ type internal CompilerService() =
                     ResultFieldReference = resultFieldReference
                 |}
 
+            let boundMemberClosureLayout
+                (methodDeclaration: TypedMethodDeclaration)
+                (expression: TypedBoundInstanceMethodExpression)
+                =
+                let stableId =
+                    methodDeclaration.StableId
+                    + "/closure:bound-instance-member"
+
+                let name =
+                    methodDeclaration.Name
+                    + "@"
+                    + expression.SourceLine.ToString(CultureInfo.InvariantCulture)
+
+                let typeReference = {
+                    DeclarationId = stableId
+                    AssemblyName = String.Empty
+                    TypeName = {
+                        Namespace = String.Empty
+                        Name =
+                            if List.isEmpty methodDeclaration.GenericParameters then
+                                name
+                            else
+                                name
+                                + "`"
+                                + methodDeclaration.GenericParameters.Length.ToString(
+                                    CultureInfo.InvariantCulture
+                                )
+                    }
+                    IsValueType = false
+                }
+
+                let methodArguments =
+                    methodDeclaration.GenericParameters
+                    |> List.mapi (fun index _ -> CliMethodTypeParameter index)
+
+                let definitionArguments =
+                    methodDeclaration.GenericParameters
+                    |> List.mapi (fun index _ -> CliTypeParameter index)
+
+                let methodType = instantiateClosure typeReference methodArguments
+                let definitionType = instantiateClosure typeReference definitionArguments
+
+                let captureType =
+                    expression.ReceiverType
+                    |> methodTypeParametersToTypeParameters
+
+                let domainType =
+                    expression.DomainType
+                    |> methodTypeParametersToTypeParameters
+
+                let rangeType =
+                    expression.RangeType
+                    |> methodTypeParametersToTypeParameters
+
+                let captureFieldStableId =
+                    stableId
+                    + "/field:receiver"
+
+                {|
+                    StableId = stableId
+                    Name = name
+                    MethodType = methodType
+                    DefinitionType = definitionType
+                    CaptureType = captureType
+                    DomainType = domainType
+                    RangeType = rangeType
+                    CaptureFieldStableId = captureFieldStableId
+                    CaptureFieldReference = {
+                        DeclaringType = CliDeclaringType definitionType
+                        Name = "receiver"
+                        FieldType = captureType
+                        TargetStableId = Some captureFieldStableId
+                    }
+                    ConstructorStableId = stableId + "/constructor"
+                    InvokeStableId = stableId + "/method:Invoke"
+                |}
+
             let methodArgumentIndex kind parameterIndex =
                 match kind with
                 | InstanceConstructor
-                | InstanceInlineMember ->
+                | InstanceInlineMember
+                | InternalInstanceInlineMember ->
                     parameterIndex
                     + 1
                 | ModuleFunction
@@ -3896,6 +4349,85 @@ type internal CompilerService() =
                     NewObject delegateConstructor
                 ]
 
+            let boundInstanceMethodConstructionInstructions
+                (methodDeclaration: TypedMethodDeclaration)
+                (expression: TypedBoundInstanceMethodExpression)
+                =
+                let layout = boundMemberClosureLayout methodDeclaration expression
+
+                let constructor = {
+                    DeclaringType = CliDeclaringType layout.MethodType
+                    Name = ".ctor"
+                    GenericArity = 0
+                    IsInstance = true
+                    ParameterTypes = [ layout.CaptureType ]
+                    ReturnType = CliVoid
+                    TargetStableId = Some layout.ConstructorStableId
+                }
+
+                let invoke = {
+                    DeclaringType = CliDeclaringType layout.MethodType
+                    Name = "Invoke"
+                    GenericArity = 0
+                    IsInstance = true
+                    ParameterTypes = [ layout.DomainType ]
+                    ReturnType = layout.RangeType
+                    TargetStableId = Some layout.InvokeStableId
+                }
+
+                let delegateConstructor = {
+                    DeclaringType = CliDeclaringType expression.DelegateType
+                    Name = ".ctor"
+                    GenericArity = 0
+                    IsInstance = true
+                    ParameterTypes = [
+                        CliObject
+                        CliNativeInt
+                    ]
+                    ReturnType = CliVoid
+                    TargetStableId = None
+                }
+
+                let fromConverter =
+                    match expression.FunctionType, expression.DelegateType with
+                    | CliGenericType(functionReference, _),
+                      CliGenericType(delegateReference, _) ->
+                        {
+                            DeclaringType = CliDeclaringType expression.FunctionType
+                            Name = "FromConverter"
+                            GenericArity = 0
+                            IsInstance = false
+                            ParameterTypes = [
+                                CliGenericType(
+                                    delegateReference,
+                                    [
+                                        CliTypeParameter 0
+                                        CliTypeParameter 1
+                                    ]
+                                )
+                            ]
+                            ReturnType =
+                                CliGenericType(
+                                    functionReference,
+                                    [
+                                        CliTypeParameter 0
+                                        CliTypeParameter 1
+                                    ]
+                                )
+                            TargetStableId = None
+                        }
+                    | _ ->
+                        invalidOp
+                            "bound member conversion requires generic F# function and converter types"
+
+                [
+                    LoadArgument 0
+                    NewObject constructor
+                    LoadFunctionPointer invoke
+                    NewObject delegateConstructor
+                    CallMethod fromConverter
+                ]
+
             let rec valueExpressionInstructions freshLabel kind =
                 function
                 | TypedIntegerLiteral value -> [ LoadInt32 value ], []
@@ -3910,6 +4442,27 @@ type internal CompilerService() =
                     valueInstructions
                     @ [ StoreLocal localIndex ],
                     valueLocals
+                | TypedAddressOf(source, fields) ->
+                    let sourceInstruction =
+                        match source with
+                        | TypedParameterAddress(index, CliByRef _) ->
+                            LoadArgument(methodArgumentIndex kind index)
+                        | TypedParameterAddress(index, _) ->
+                            LoadArgumentAddress(methodArgumentIndex kind index)
+                        | TypedLocalAddress(index, CliByRef _) -> LoadLocal index
+                        | TypedLocalAddress(index, _) -> LoadLocalAddress index
+
+                    sourceInstruction
+                    :: (fields
+                        |> List.map (fun field ->
+                            LoadFieldAddress {
+                                DeclaringType = CliDeclaringType field.DeclaringType
+                                Name = field.Name
+                                FieldType = field.FieldType
+                                TargetStableId = field.TargetStableId
+                            }
+                        )),
+                    []
                 | TypedBooleanNegation(expression, range) ->
                     let expressionInstructions, expressionLocals =
                         valueExpressionInstructions freshLabel kind expression
@@ -4129,6 +4682,7 @@ type internal CompilerService() =
                     conditionLocals
                     @ ifTrueLocals
                     @ ifFalseLocals
+                | TypedBoundInstanceMethod _
                 | TypedResumableCode _
                 | TypedResumableTryFinally _
                 | TypedTraitCall _ -> invalidOp "this expression cannot be lowered as a local value"
@@ -4158,7 +4712,7 @@ type internal CompilerService() =
                         Return
                     ],
                     []
-                | (TypedUnitLiteral | TypedLocalReference _ | TypedLet _ | TypedLocalAssignment _ | TypedStaticMethodCall _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _ | TypedUpcast _ | TypedSequential _ | TypedBooleanNegation _) as expression ->
+                | (TypedUnitLiteral | TypedLocalReference _ | TypedLet _ | TypedLocalAssignment _ | TypedAddressOf _ | TypedStaticMethodCall _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _ | TypedUpcast _ | TypedSequential _ | TypedBooleanNegation _) as expression ->
                     let instructions, locals =
                         valueExpressionInstructions freshLabel kind expression
 
@@ -4167,6 +4721,10 @@ type internal CompilerService() =
                     locals
                 | TypedResumableCode expression ->
                     resumableCodeConstructionInstructions kind methodDeclaration expression
+                    @ [ Return ],
+                    []
+                | TypedBoundInstanceMethod expression ->
+                    boundInstanceMethodConstructionInstructions methodDeclaration expression
                     @ [ Return ],
                     []
                 | TypedResumableTryFinally expression ->
@@ -4399,7 +4957,9 @@ type internal CompilerService() =
                         | LoadString _
                         | LoadNull
                         | LoadArgument _
+                        | LoadArgumentAddress _
                         | LoadLocal _
+                        | LoadLocalAddress _
                         | StoreLocal _
                         | MarkSequencePoint _
                         | Pop
@@ -4427,12 +4987,14 @@ type internal CompilerService() =
                     MaxStack =
                         match methodDeclaration.Body with
                         | TypedResumableCode _
+                        | TypedBoundInstanceMethod _
                         | TypedResumableTryFinally _ -> 8
                         | TypedIntegerLiteral _
                         | TypedUnitLiteral
                         | TypedParameterReference _
                         | TypedLocalReference _
                         | TypedLet _
+                        | TypedAddressOf _
                         | TypedTraitCall _ -> 1
                         | TypedStaticMethodCall _
                         | TypedFunctionApplication _
@@ -4668,6 +5230,10 @@ type internal CompilerService() =
                                 |> List.map (fun objectMethodDeclaration ->
                                     let kind, methodDeclaration =
                                         match objectMethodDeclaration with
+                                        | TypedInstanceObjectMethod methodDeclaration when
+                                            not methodDeclaration.IsPublic
+                                            ->
+                                            InternalInstanceInlineMember, methodDeclaration
                                         | TypedInstanceObjectMethod methodDeclaration ->
                                             InstanceInlineMember, methodDeclaration
                                         | TypedStaticObjectMethod methodDeclaration ->
@@ -4740,9 +5306,11 @@ type internal CompilerService() =
                                     | TypedParameterReference _
                                     | TypedLocalReference _
                                     | TypedLet _
+                                    | TypedAddressOf _
                                     | TypedStaticMethodCall _
                                     | TypedFunctionApplication _
                                     | TypedInstanceMethodCall _
+                                    | TypedBoundInstanceMethod _
                                     | TypedConditional _
                                     | TypedUpcast _
                                     | TypedSequential _
@@ -4946,6 +5514,195 @@ type internal CompilerService() =
                 )
                 |> List.collect id
 
+            let boundMemberClosureTypes =
+                modulesWithContentHashes
+                |> List.mapi (fun documentIndex (typed, declarationsWithContentHashes) ->
+                    let moduleTypeStableId =
+                        moduleStableId
+                        + "/type:"
+                        + typed.StableId
+
+                    let isNested = typed.ContainerKind = ModuleSource
+
+                    declarationsWithContentHashes
+                    |> List.collect (fun (declaration, _) ->
+                        match declaration with
+                        | TypedObjectType typeDeclaration ->
+                            typeDeclaration.Methods
+                            |> List.choose (fun objectMethodDeclaration ->
+                                let methodDeclaration = objectMethodDeclaration.Method
+
+                                match methodDeclaration.Body with
+                                | TypedBoundInstanceMethod expression ->
+                                    let layout =
+                                        boundMemberClosureLayout methodDeclaration expression
+
+                                    let objectConstructor = {
+                                        DeclaringType =
+                                            CoreDeclaringType {
+                                                Namespace = "System"
+                                                Name = "Object"
+                                            }
+                                        Name = ".ctor"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType = CliVoid
+                                        TargetStableId = None
+                                    }
+
+                                    let constructor = {
+                                        SchemaVersion = querySchema
+                                        StableId = layout.ConstructorStableId
+                                        Name = ".ctor"
+                                        Kind = ClosureConstructor
+                                        GenericParameters = []
+                                        Constraints = []
+                                        GenericParameterConstraints = []
+                                        Attributes = []
+                                        Parameters = [
+                                            {
+                                                Name = "receiver"
+                                                Type = layout.CaptureType
+                                                Attributes = []
+                                            }
+                                        ]
+                                        Locals = []
+                                        ReturnType = CliVoid
+                                        Instructions = [
+                                            LoadArgument 0
+                                            LoadArgument 1
+                                            StoreField layout.CaptureFieldReference
+                                            LoadArgument 0
+                                            CallMethod objectConstructor
+                                            Return
+                                        ]
+                                        MaxStack = 8
+                                        DependencyIds = [
+                                            layout.CaptureFieldReference.DependencyId
+                                            objectConstructor.DependencyId
+                                        ]
+                                        ContentHash =
+                                            Fingerprint.parts [
+                                                layout.ConstructorStableId
+                                                layout.CaptureFieldStableId
+                                                objectConstructor.StableId
+                                            ]
+                                        DocumentIndex = documentIndex
+                                        DocumentChecksum = typed.SourceChecksum
+                                        Range = expression.Range
+                                    }
+
+                                    let targetMethod = {
+                                        DeclaringType =
+                                            CliDeclaringType layout.CaptureType
+                                        Name = expression.Target.Name
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType = layout.RangeType
+                                        TargetStableId = Some expression.TargetStableId
+                                    }
+
+                                    let invoke = {
+                                        SchemaVersion = querySchema
+                                        StableId = layout.InvokeStableId
+                                        Name = "Invoke"
+                                        Kind = ClosureInvoke
+                                        GenericParameters = []
+                                        Constraints = []
+                                        GenericParameterConstraints = []
+                                        Attributes = []
+                                        Parameters = [
+                                            {
+                                                Name = "unitVar"
+                                                Type = layout.DomainType
+                                                Attributes = []
+                                            }
+                                        ]
+                                        Locals = []
+                                        ReturnType = layout.RangeType
+                                        Instructions = [
+                                            LoadArgument 0
+                                            LoadField layout.CaptureFieldReference
+                                            CallMethod targetMethod
+                                            Return
+                                        ]
+                                        MaxStack = 8
+                                        DependencyIds = [
+                                            layout.CaptureFieldReference.DependencyId
+                                            targetMethod.DependencyId
+                                        ]
+                                        ContentHash =
+                                            Fingerprint.parts [
+                                                layout.InvokeStableId
+                                                methodImplementationHash methodDeclaration
+                                                expression.TargetStableId
+                                            ]
+                                        DocumentIndex = documentIndex
+                                        DocumentChecksum = typed.SourceChecksum
+                                        Range = expression.Range
+                                    }
+
+                                    Some {
+                                        SchemaVersion = querySchema
+                                        StableId = layout.StableId
+                                        Namespace =
+                                            if isNested then String.Empty else typed.Namespace
+                                        Name = layout.Name
+                                        IsPublic = false
+                                        EnclosingTypeStableId =
+                                            if isNested then Some moduleTypeStableId else None
+                                        Kind = ClosureContainer
+                                        GenericParameters = methodDeclaration.GenericParameters
+                                        Attributes = []
+                                        LiteralFields = []
+                                        InstanceFields = [
+                                            {
+                                                SchemaVersion = querySchema
+                                                StableId = layout.CaptureFieldStableId
+                                                Name = "receiver"
+                                                Type = layout.CaptureType
+                                                Attributes = []
+                                                ContentHash =
+                                                    Fingerprint.parts [
+                                                        layout.CaptureFieldStableId
+                                                        TypeIdentity.cliType layout.CaptureType
+                                                    ]
+                                            }
+                                        ]
+                                        Methods = [
+                                            constructor
+                                            invoke
+                                        ]
+                                    }
+                                | TypedIntegerLiteral _
+                                | TypedUnitLiteral
+                                | TypedParameterReference _
+                                | TypedLocalReference _
+                                | TypedLet _
+                                | TypedLocalAssignment _
+                                | TypedAddressOf _
+                                | TypedStaticMethodCall _
+                                | TypedFunctionApplication _
+                                | TypedInstanceMethodCall _
+                                | TypedConditional _
+                                | TypedUpcast _
+                                | TypedSequential _
+                                | TypedBooleanNegation _
+                                | TypedResumableCode _
+                                | TypedResumableTryFinally _
+                                | TypedTraitCall _ -> None
+                            )
+                        | TypedMethod _
+                        | TypedLiteralField _
+                        | TypedTypeAbbreviation _
+                        | TypedStaticType _
+                        | TypedStructType _ -> []
+                    )
+                )
+                |> List.collect id
+
             let structTypes =
                 modulesWithContentHashes
                 |> List.collect (fun (typed, declarationsWithContentHashes) ->
@@ -5009,6 +5766,7 @@ type internal CompilerService() =
                 @ objectTypes
                 @ structTypes
                 @ closureTypes
+                @ boundMemberClosureTypes
 
             let symbolic: SymbolicAssembly = {
                 SchemaVersion = querySchema

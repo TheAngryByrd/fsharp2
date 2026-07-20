@@ -791,14 +791,48 @@ module internal Frontend =
                                     consume ()
                                     |> ignore
 
-                                    identifier "expected a trait-call argument"
-                                    |> Result.map (
-                                        fst
-                                        >> AddressOfExpression
-                                    )
+                                    parseResult {
+                                        let! rootName, _ =
+                                            identifier "expected an address-of expression"
+
+                                        let rec parseMemberPath members =
+                                            match (current ()).Kind with
+                                            | Dot ->
+                                                parseResult {
+                                                    let! _ = expected Dot "expected '.'"
+
+                                                    let! memberName, _ =
+                                                        identifier
+                                                            "expected a member name after '.'"
+
+                                                    return! parseMemberPath (memberName :: members)
+                                                }
+                                            | _ -> Ok(List.rev members)
+
+                                        let! memberPath = parseMemberPath []
+                                        return AddressOfExpression(rootName, memberPath)
+                                    }
                                 | _ ->
-                                    parseExpression ()
-                                    |> Result.map fst
+                                    parseResult {
+                                        let! firstExpression, _ = parseExpression ()
+
+                                        let rec parseApplications expression =
+                                            match (current ()).Kind with
+                                            | Comma
+                                            | RightParenthesis -> Ok expression
+                                            | _ ->
+                                                parseExpression ()
+                                                |> Result.bind (fun (argument, _) ->
+                                                    parseApplications (
+                                                        FunctionApplication(
+                                                            expression,
+                                                            argument
+                                                        )
+                                                    )
+                                                )
+
+                                        return! parseApplications firstExpression
+                                    }
 
                             let arguments =
                                 argument
@@ -1304,6 +1338,16 @@ module internal Frontend =
                                             End = argumentRange.End
                                         }
                                 }
+                            | _ when memberPath.Length = 1 ->
+                                let memberToken = input.[index - 1]
+
+                                Ok(
+                                    BoundInstanceMember(receiverName, memberPath.Head),
+                                    {
+                                        Start = expressionToken.Range.Start
+                                        End = memberToken.Range.End
+                                    }
+                                )
                             | _ ->
                                 Error(
                                     prototypeDiagnostic
@@ -1316,7 +1360,20 @@ module internal Frontend =
                     consume ()
                     |> ignore
 
-                    Ok(ValueReference value, expressionToken.Range)
+                    match (current ()).Kind with
+                    | Subtype ->
+                        parseResult {
+                            let! _ = expected Subtype "expected ':>'"
+                            let! targetType = parseTypeExpression ()
+
+                            return
+                                ExplicitUpcastExpression(ValueReference value, targetType),
+                                {
+                                    Start = expressionToken.Range.Start
+                                    End = targetType.Range.End
+                                }
+                        }
+                    | _ -> Ok(ValueReference value, expressionToken.Range)
                 | RightParenthesis ->
                     consume ()
                     |> ignore
@@ -2129,6 +2186,15 @@ module internal Frontend =
                                 let! memberToken = expected MemberKeyword "expected 'member'"
                                 let! _ = expected InlineKeyword "expected 'inline'"
 
+                                let isPublic =
+                                    match (current ()).Kind with
+                                    | InternalKeyword ->
+                                        consume ()
+                                        |> ignore
+
+                                        false
+                                    | _ -> true
+
                                 let! receiverName, _ =
                                     identifier "expected an instance member receiver"
 
@@ -2153,6 +2219,7 @@ module internal Frontend =
 
                                 return {
                                     Attributes = attributes
+                                    IsPublic = isPublic
                                     ReceiverName = receiverName
                                     Name = methodName
                                     Parameters = parameters

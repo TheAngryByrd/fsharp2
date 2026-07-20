@@ -4144,6 +4144,49 @@ module CompilerTargetTests =
 
                     Expect.equal fsharp2Behavior "42" "Apply should invoke its function argument"
 
+            testCase "executes an ungrouped FSharp function application as a call argument"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type Helper() =\n        static member inline Identity(value: 'T) : 'T = value\n\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Apply(mapper: ('T -> 'U), value: 'T) : 'U =\n            Helper.Identity(mapper value)\n"
+
+                withObjectMemberDifferential
+                    "fsharp2-ungrouped-function-call-argument"
+                    sourceText
+                    "Apply"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeApply assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        let mapper: int -> string = fun value -> string value
+
+                        builderType
+                            .GetMethod("Apply")
+                            .MakeGenericMethod(typeof<int>, typeof<string>)
+                            .Invoke(
+                                null,
+                                [|
+                                    box mapper
+                                    box 42
+                                |]
+                            )
+                        :?> string
+
+                    let oracleBehavior = invokeApply oracleOutputPath
+                    let fsharp2Behavior = invokeApply outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the call-argument application should behave like the Compatibility Oracle"
+
+                    Expect.equal fsharp2Behavior "42" "Apply should pass the mapped value"
+
             testCase "executes a member call on a grouped expression"
             <| fun _ ->
                 let sourceText =
@@ -4358,6 +4401,172 @@ module CompilerTargetTests =
                         fsharp2Behavior
                         (typeof<System.Runtime.CompilerServices.TaskAwaiter>.FullName, true)
                         "Upcast should box the constrained value type as the target interface"
+
+            testCase "executes an unparenthesized upcast in a local binding"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen System.Runtime.CompilerServices\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline UpcastLocal(awaiter: 'TAwaiter) : ICriticalNotifyCompletion =\n            let mutable boxed = awaiter :> ICriticalNotifyCompletion\n            boxed\n"
+
+                withObjectMemberDifferential
+                    "fsharp2-unparenthesized-upcast"
+                    sourceText
+                    "UpcastLocal"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeUpcastLocal assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        let awaiter = System.Threading.Tasks.Task.CompletedTask.GetAwaiter()
+
+                        let result =
+                            builderType
+                                .GetMethod("UpcastLocal")
+                                .MakeGenericMethod(
+                                    typeof<System.Runtime.CompilerServices.TaskAwaiter>
+                                )
+                                .Invoke(null, [| box awaiter |])
+
+                        result.GetType().FullName,
+                        result :? System.Runtime.CompilerServices.ICriticalNotifyCompletion
+
+                    let oracleBehavior = invokeUpcastLocal oracleOutputPath
+                    let fsharp2Behavior = invokeUpcastLocal outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the local upcast should behave like the Compatibility Oracle"
+
+                    Expect.equal
+                        fsharp2Behavior
+                        (typeof<System.Runtime.CompilerServices.TaskAwaiter>.FullName, true)
+                        "UpcastLocal should retain the boxed constrained value"
+
+            testCase "executes an internal inline instance member"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        member inline internal _.Hidden(value: int) : int = value\n"
+
+                withObjectMemberDifferential "fsharp2-internal-instance-member" sourceText "Hidden"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeHidden assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        let instance = Activator.CreateInstance(builderType)
+
+                        builderType
+                            .GetMethod(
+                                "Hidden",
+                                BindingFlags.Instance
+                                ||| BindingFlags.NonPublic
+                            )
+                            .Invoke(instance, [| box 42 |])
+                        :?> int
+
+                    let oracleBehavior = invokeHidden oracleOutputPath
+                    let fsharp2Behavior = invokeHidden outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the internal member should behave like the Compatibility Oracle"
+
+                    Expect.equal fsharp2Behavior 42 "Hidden should return its argument"
+
+            testCase "returns a bound unit instance member as an FSharp function"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 42\n\n        member inline this.GetZero() : (unit -> int) = this.Zero\n"
+
+                withObjectMemberDifferential
+                    "fsharp2-bound-unit-instance-member"
+                    sourceText
+                    "GetZero"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeBoundZero assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        let instance = Activator.CreateInstance(builderType)
+
+                        let zero =
+                            try
+                                builderType.GetMethod("GetZero").Invoke(instance, Array.empty)
+                                :?> (unit -> int)
+                            with :? TargetInvocationException as error when
+                                not (isNull error.InnerException) ->
+                                raise error.InnerException
+
+                        zero ()
+
+                    let oracleBehavior = invokeBoundZero oracleOutputPath
+                    let fsharp2Behavior = invokeBoundZero outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the bound instance member should behave like the Compatibility Oracle"
+
+                    Expect.equal fsharp2Behavior 42 "the bound Zero member should remain callable"
+
+            testCase "executes a static call with an address-of struct field"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    [<Struct; NoComparison; NoEquality>]\n    type Data<'T> =\n        [<DefaultValue(false)>]\n        val mutable Value: 'T\n\n    type Helper() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Ignore(value: byref<'T>) : int = 42\n\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Touch(data: byref<Data<'T>>) : int =\n            Helper.Ignore(&data.Value)\n"
+
+                withObjectMemberDifferential "fsharp2-address-of-struct-field" sourceText "Touch"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeTouch assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        let dataType =
+                            emittedAssembly
+                                .GetType("IcedTasks.TaskBase.TaskBase+Data`1", throwOnError = true)
+                                .MakeGenericType(typeof<int>)
+
+                        let arguments = [| Activator.CreateInstance(dataType) |]
+
+                        try
+                            builderType
+                                .GetMethod("Touch")
+                                .MakeGenericMethod(typeof<int>)
+                                .Invoke(null, arguments)
+                            :?> int
+                        with :? TargetInvocationException as error when
+                            not (isNull error.InnerException) ->
+                            raise error.InnerException
+
+                    let oracleBehavior = invokeTouch oracleOutputPath
+                    let fsharp2Behavior = invokeTouch outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the address-of field call should behave like the Compatibility Oracle"
+
+                    Expect.equal fsharp2Behavior 42 "Touch should pass the field address to Helper"
 
             testCase "retained service invalidates an IcedTasks inline object-member edit"
             <| fun _ ->
@@ -6466,7 +6675,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "34"
+                        "38"
                         "query cache evidence should be versioned"
 
                     Expect.equal
