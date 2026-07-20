@@ -3,6 +3,7 @@ namespace FSharp2.Compiler
 open System
 open System.Collections.Generic
 open System.Collections.Immutable
+open System.Globalization
 open System.IO
 open System.Reflection
 open System.Reflection.Metadata
@@ -201,6 +202,19 @@ module internal Linker =
                 + "'"
             )
 
+    let private resolveRequiredReference invocation expectedName =
+        match
+            invocation.ReferencePaths
+            |> List.tryPick (tryReadTargetReference expectedName)
+        with
+        | Some reference -> reference
+        | None ->
+            invalidOp (
+                "the target reference set does not contain assembly '"
+                + expectedName
+                + "'"
+            )
+
     let private addManagedResource
         (metadata: MetadataBuilder)
         (resource: ManagedResourceInput option)
@@ -244,6 +258,7 @@ module internal Linker =
         | CliInt32 -> encoder.Int32()
         | CliBoolean -> encoder.Boolean()
         | CliString -> encoder.String()
+        | CliTypeParameter index -> encoder.GenericTypeParameter(index)
         | CliMethodTypeParameter index -> encoder.GenericMethodTypeParameter(index)
         | CliVoid -> invalidOp "void is valid only as a method return type"
         | CliByRef _ -> invalidOp "byref must be encoded by a return or parameter encoder"
@@ -273,12 +288,15 @@ module internal Linker =
                 (fun returnType -> encodeReturnType returnType methodFragment.ReturnType),
                 (fun parameters ->
                     for parameter in methodFragment.Parameters do
-                        encodeParameterType
-                            (parameters.AddParameter())
-                            parameter.Type
+                        encodeParameterType (parameters.AddParameter()) parameter.Type
                 )
             )
 
+        signature
+
+    let private encodeFieldSignature fieldType =
+        let signature = BlobBuilder()
+        encodeCliType (BlobEncoder(signature).FieldSignature()) fieldType
         signature
 
     let private encodeConstructorSignature parameterTypes =
@@ -292,9 +310,7 @@ module internal Linker =
                 (fun returnType -> returnType.Void()),
                 (fun parameters ->
                     for parameterType in parameterTypes do
-                        encodeParameterType
-                            (parameters.AddParameter())
-                            parameterType
+                        encodeParameterType (parameters.AddParameter()) parameterType
                 )
             )
 
@@ -381,6 +397,72 @@ module internal Linker =
 
         value
 
+    let private knownAttributeTypeName =
+        function
+        | AutoOpenAttribute -> "AutoOpenAttribute"
+        | StructAttribute -> "StructAttribute"
+        | NoComparisonAttribute -> "NoComparisonAttribute"
+        | NoEqualityAttribute -> "NoEqualityAttribute"
+        | DefaultValueAttribute -> "DefaultValueAttribute"
+        | CompilationMappingAttribute -> "CompilationMappingAttribute"
+
+    let private encodeKnownAttributeConstructorSignature
+        (sourceConstructFlags: TypeReferenceHandle)
+        (attribute: SymbolicCustomAttributeFragment)
+        =
+        let signature = BlobBuilder()
+
+        BlobEncoder(signature)
+            .MethodSignature(isInstanceMethod = true)
+            .Parameters(
+                attribute.ConstructorArguments.Length,
+                (fun returnType -> returnType.Void()),
+                (fun parameters ->
+                    for argument in attribute.ConstructorArguments do
+                        let parameter = parameters.AddParameter().Type()
+
+                        match attribute.Kind, argument with
+                        | DefaultValueAttribute, TypedBooleanAttributeArgument _ ->
+                            parameter.Boolean()
+                        | CompilationMappingAttribute,
+                          TypedSourceConstructAttributeArgument _ ->
+                            parameter.Type(sourceConstructFlags, true)
+                        | _ ->
+                            invalidOp
+                                "the symbolic custom attribute has an invalid constructor argument"
+                )
+            )
+
+        signature
+
+    let private encodeKnownAttributeValue (attribute: SymbolicCustomAttributeFragment) =
+        let value = BlobBuilder()
+
+        BlobEncoder(value)
+            .CustomAttributeSignature(
+                (fun fixedArguments ->
+                    for argument in attribute.ConstructorArguments do
+                        let scalar = fixedArguments.AddArgument().Scalar()
+
+                        match argument with
+                        | TypedBooleanAttributeArgument argumentValue ->
+                            scalar.Constant(argumentValue)
+                        | TypedSourceConstructAttributeArgument sourceConstruct ->
+                            let argumentValue =
+                                match sourceConstruct with
+                                | ObjectTypeConstruct -> 3
+                                | ModuleConstruct -> 7
+
+                            scalar.Constant(argumentValue)
+                ),
+                (fun namedArguments ->
+                    namedArguments.Count(0)
+                    |> ignore
+                )
+            )
+
+        value
+
     let private encodeSequencePoint (methodFragment: SymbolicMethodFragment) =
         let sequencePoints = BlobBuilder()
         let range = methodFragment.Range
@@ -443,9 +525,13 @@ module internal Linker =
             typeFragments
             |> List.collect _.Methods
 
-        let literalFieldFragments =
-            typeFragments
-            |> List.collect _.LiteralFields
+        let customAttributeFragments = [
+            for typeFragment in typeFragments do
+                yield! typeFragment.Attributes
+
+                for fieldFragment in typeFragment.InstanceFields do
+                    yield! fieldFragment.Attributes
+        ]
 
         let rec invalidTypeExpression =
             function
@@ -495,10 +581,25 @@ module internal Linker =
                 |> List.exists (fun typeFragment ->
                     symbolic.SchemaVersion
                     <> typeFragment.SchemaVersion
+                    || (typeFragment.Attributes
+                        |> List.exists (fun attribute ->
+                            symbolic.SchemaVersion
+                            <> attribute.SchemaVersion
+                        ))
                     || (typeFragment.LiteralFields
                         |> List.exists (fun fieldFragment ->
                             symbolic.SchemaVersion
                             <> fieldFragment.SchemaVersion
+                        ))
+                    || (typeFragment.InstanceFields
+                        |> List.exists (fun fieldFragment ->
+                            symbolic.SchemaVersion
+                            <> fieldFragment.SchemaVersion
+                            || (fieldFragment.Attributes
+                                |> List.exists (fun attribute ->
+                                    symbolic.SchemaVersion
+                                    <> attribute.SchemaVersion
+                                ))
                         ))
                     || (typeFragment.Methods
                         |> List.exists (fun methodFragment ->
@@ -529,9 +630,24 @@ module internal Linker =
             || (typeFragments
                 |> List.exists (fun typeFragment ->
                     String.IsNullOrWhiteSpace(typeFragment.StableId)
+                    || (typeFragment.GenericParameters
+                        |> List.exists String.IsNullOrWhiteSpace)
+                    || (typeFragment.Attributes
+                        |> List.exists (fun attribute ->
+                            String.IsNullOrWhiteSpace(attribute.StableId)
+                        ))
                     || (typeFragment.LiteralFields
                         |> List.exists (fun fieldFragment ->
                             String.IsNullOrWhiteSpace(fieldFragment.StableId)
+                        ))
+                    || (typeFragment.InstanceFields
+                        |> List.exists (fun fieldFragment ->
+                            String.IsNullOrWhiteSpace(fieldFragment.StableId)
+                            || String.IsNullOrWhiteSpace(fieldFragment.Name)
+                            || (fieldFragment.Attributes
+                                |> List.exists (fun attribute ->
+                                    String.IsNullOrWhiteSpace(attribute.StableId)
+                                ))
                         ))
                     || (typeFragment.Methods
                         |> List.exists (fun methodFragment ->
@@ -540,6 +656,26 @@ module internal Linker =
                 ))
         then
             invalidOp "the symbolic emission graph contains an empty stable identity"
+
+        let typeStableIds =
+            HashSet<string>(
+                typeFragments
+                |> List.map _.StableId,
+                StringComparer.Ordinal
+            )
+
+        if
+            typeStableIds.Count
+            <> typeFragments.Length
+            || (typeFragments
+                |> List.exists (fun typeFragment ->
+                    match typeFragment.EnclosingTypeStableId with
+                    | Some enclosingTypeStableId ->
+                        not (typeStableIds.Contains(enclosingTypeStableId))
+                    | None -> false
+                ))
+        then
+            invalidOp "the symbolic type graph has duplicate or missing nesting identities"
 
         if
             invocation.DebugDocumentPaths.Length
@@ -574,23 +710,34 @@ module internal Linker =
 
         let targetReference = resolveTargetReference invocation symbolic
 
-        let targetReferenceCulture =
-            if String.IsNullOrEmpty(targetReference.Culture) then
-                Unchecked.defaultof<StringHandle>
-            else
-                metadata.GetOrAddString(targetReference.Culture)
+        let addAssemblyReference (reference: TargetReferenceIdentity) =
+            let culture =
+                if String.IsNullOrEmpty(reference.Culture) then
+                    Unchecked.defaultof<StringHandle>
+                else
+                    metadata.GetOrAddString(reference.Culture)
 
-        let coreLibrary =
             metadata.AddAssemblyReference(
-                metadata.GetOrAddString(targetReference.Name),
-                targetReference.Version,
-                targetReferenceCulture,
-                targetReference.PublicKeyToken
+                metadata.GetOrAddString(reference.Name),
+                reference.Version,
+                culture,
+                reference.PublicKeyToken
                 |> immutableBytes
                 |> metadata.GetOrAddBlob,
-                targetReference.Flags,
+                reference.Flags,
                 Unchecked.defaultof<BlobHandle>
             )
+
+        let coreLibrary = addAssemblyReference targetReference
+
+        let fsharpCore =
+            if List.isEmpty customAttributeFragments then
+                Unchecked.defaultof<AssemblyReferenceHandle>
+            elif targetReference.Name = "FSharp.Core" then
+                coreLibrary
+            else
+                resolveRequiredReference invocation "FSharp.Core"
+                |> addAssemblyReference
 
         let systemObject =
             metadata.AddTypeReference(
@@ -599,15 +746,56 @@ module internal Linker =
                 metadata.GetOrAddString("Object")
             )
 
+        let systemValueType =
+            metadata.AddTypeReference(
+                coreLibrary,
+                metadata.GetOrAddString("System"),
+                metadata.GetOrAddString("ValueType")
+            )
+
+        let sourceConstructFlags =
+            if List.isEmpty customAttributeFragments then
+                Unchecked.defaultof<TypeReferenceHandle>
+            else
+                metadata.AddTypeReference(
+                    fsharpCore,
+                    metadata.GetOrAddString("Microsoft.FSharp.Core"),
+                    metadata.GetOrAddString("SourceConstructFlags")
+                )
+
+        let addKnownCustomAttribute
+            (parent: EntityHandle)
+            (attribute: SymbolicCustomAttributeFragment)
+            =
+            let attributeType =
+                metadata.AddTypeReference(
+                    fsharpCore,
+                    metadata.GetOrAddString("Microsoft.FSharp.Core"),
+                    metadata.GetOrAddString(knownAttributeTypeName attribute.Kind)
+                )
+
+            let constructor =
+                metadata.AddMemberReference(
+                    attributeType,
+                    metadata.GetOrAddString(".ctor"),
+                    encodeKnownAttributeConstructorSignature sourceConstructFlags attribute
+                    |> metadata.GetOrAddBlob
+                )
+
+            metadata.AddCustomAttribute(
+                parent,
+                constructor,
+                attribute
+                |> encodeKnownAttributeValue
+                |> metadata.GetOrAddBlob
+            )
+            |> ignore
+
         let encodedMethods =
             methodFragments
             |> List.map (fun methodFragment ->
                 let bodyOffset, codeSize =
-                    encodeMethodBody
-                        metadata
-                        coreLibrary
-                        methodBodies
-                        methodFragment
+                    encodeMethodBody metadata coreLibrary methodBodies methodFragment
 
                 methodFragment, bodyOffset, codeSize
             )
@@ -682,12 +870,27 @@ module internal Linker =
         let mutable nextFieldRow = 1
         let mutable nextMethodRow = 1
 
+        let typeDefinitionHandles =
+            typeFragments
+            |> List.mapi (fun index typeFragment ->
+                typeFragment.StableId, MetadataTokens.TypeDefinitionHandle(index + 2)
+            )
+            |> Map.ofList
+
+        let typeDefinitionEntities =
+            typeFragments
+            |> List.mapi (fun index typeFragment ->
+                typeFragment.StableId, MetadataTokens.EntityHandle(TableIndex.TypeDef, index + 2)
+            )
+            |> Map.ofList
+
         for typeFragment in typeFragments do
             let visibility =
-                if typeFragment.IsPublic then
-                    TypeAttributes.Public
-                else
-                    TypeAttributes.NotPublic
+                match typeFragment.EnclosingTypeStableId, typeFragment.IsPublic with
+                | Some _, true -> TypeAttributes.NestedPublic
+                | Some _, false -> TypeAttributes.NestedAssembly
+                | None, true -> TypeAttributes.Public
+                | None, false -> TypeAttributes.NotPublic
 
             let attributes =
                 match typeFragment.Kind with
@@ -704,19 +907,45 @@ module internal Linker =
                 | StaticMemberContainer ->
                     visibility
                     ||| enum<TypeAttributes> 0x00002000
+                | StructContainer ->
+                    visibility
+                    ||| TypeAttributes.SequentialLayout
+                    ||| TypeAttributes.Sealed
+                    ||| enum<TypeAttributes> 0x00002000
+                    ||| TypeAttributes.BeforeFieldInit
 
-            metadata.AddTypeDefinition(
-                attributes,
-                (if String.IsNullOrEmpty(typeFragment.Namespace) then
-                     Unchecked.defaultof<StringHandle>
-                 else
-                     metadata.GetOrAddString(typeFragment.Namespace)),
-                metadata.GetOrAddString(typeFragment.Name),
-                systemObject,
-                MetadataTokens.FieldDefinitionHandle(nextFieldRow),
-                MetadataTokens.MethodDefinitionHandle(nextMethodRow)
-            )
-            |> ignore
+            let name =
+                if List.isEmpty typeFragment.GenericParameters then
+                    typeFragment.Name
+                else
+                    typeFragment.Name
+                    + "`"
+                    + typeFragment.GenericParameters.Length.ToString(CultureInfo.InvariantCulture)
+
+            let baseType =
+                match typeFragment.Kind with
+                | StructContainer -> systemValueType
+                | ModuleContainer
+                | StaticMemberContainer -> systemObject
+
+            let typeDefinition =
+                metadata.AddTypeDefinition(
+                    attributes,
+                    (if String.IsNullOrEmpty(typeFragment.Namespace) then
+                         Unchecked.defaultof<StringHandle>
+                     else
+                         metadata.GetOrAddString(typeFragment.Namespace)),
+                    metadata.GetOrAddString(name),
+                    baseType,
+                    MetadataTokens.FieldDefinitionHandle(nextFieldRow),
+                    MetadataTokens.MethodDefinitionHandle(nextMethodRow)
+                )
+
+            if
+                typeDefinition
+                <> typeDefinitionHandles.[typeFragment.StableId]
+            then
+                invalidOp "the planned type-definition row does not match the emitted row"
 
             nextMethodRow <-
                 nextMethodRow
@@ -725,22 +954,88 @@ module internal Linker =
             nextFieldRow <-
                 nextFieldRow
                 + typeFragment.LiteralFields.Length
+                + typeFragment.InstanceFields.Length
+
+        for typeFragment in typeFragments do
+            match typeFragment.EnclosingTypeStableId with
+            | Some enclosingTypeStableId ->
+                metadata.AddNestedType(
+                    typeDefinitionHandles.[typeFragment.StableId],
+                    typeDefinitionHandles.[enclosingTypeStableId]
+                )
+            | None -> ()
+
+        for typeFragment in typeFragments do
+            let typeDefinition = typeDefinitionHandles.[typeFragment.StableId]
+
+            typeFragment.GenericParameters
+            |> List.iteri (fun index name ->
+                metadata.AddGenericParameter(
+                    typeDefinition,
+                    GenericParameterAttributes.None,
+                    metadata.GetOrAddString(name),
+                    index
+                )
+                |> ignore
+            )
+
+            let parent = typeDefinitionEntities.[typeFragment.StableId]
+
+            for attribute in typeFragment.Attributes do
+                addKnownCustomAttribute parent attribute
 
         let literalFieldSignature = metadata.GetOrAddBlob(stringFieldSignature)
 
-        for fieldFragment in literalFieldFragments do
-            let field =
-                metadata.AddFieldDefinition(
-                    FieldAttributes.Assembly
-                    ||| FieldAttributes.Static
-                    ||| FieldAttributes.Literal
-                    ||| FieldAttributes.HasDefault,
-                    metadata.GetOrAddString(fieldFragment.Name),
-                    literalFieldSignature
+        let fieldDefinitionEntities =
+            Dictionary<string, EntityHandle>(StringComparer.Ordinal)
+
+        for typeFragment in typeFragments do
+            for fieldFragment in typeFragment.LiteralFields do
+                let field =
+                    metadata.AddFieldDefinition(
+                        FieldAttributes.Assembly
+                        ||| FieldAttributes.Static
+                        ||| FieldAttributes.Literal
+                        ||| FieldAttributes.HasDefault,
+                        metadata.GetOrAddString(fieldFragment.Name),
+                        literalFieldSignature
+                    )
+
+                fieldDefinitionEntities.Add(
+                    fieldFragment.StableId,
+                    MetadataTokens.EntityHandle(
+                        TableIndex.Field,
+                        metadata.GetRowCount(TableIndex.Field)
+                    )
                 )
 
-            metadata.AddConstant(field, fieldFragment.Value)
-            |> ignore
+                metadata.AddConstant(field, fieldFragment.Value)
+                |> ignore
+
+            for fieldFragment in typeFragment.InstanceFields do
+                let field =
+                    metadata.AddFieldDefinition(
+                        FieldAttributes.Public,
+                        metadata.GetOrAddString(fieldFragment.Name),
+                        fieldFragment.Type
+                        |> encodeFieldSignature
+                        |> metadata.GetOrAddBlob
+                    )
+
+                fieldDefinitionEntities.Add(
+                    fieldFragment.StableId,
+                    MetadataTokens.EntityHandle(
+                        TableIndex.Field,
+                        metadata.GetRowCount(TableIndex.Field)
+                    )
+                )
+
+        for typeFragment in typeFragments do
+            for fieldFragment in typeFragment.InstanceFields do
+                let parent = fieldDefinitionEntities.[fieldFragment.StableId]
+
+                for attribute in fieldFragment.Attributes do
+                    addKnownCustomAttribute parent attribute
 
         let mutable nextParameterRow = 1
 
@@ -784,8 +1079,7 @@ module internal Linker =
                 metadata.AddParameter(
                     ParameterAttributes.None,
                     metadata.GetOrAddString(parameter.Name),
-                    index
-                    + 1
+                    index + 1
                 )
                 |> ignore
 

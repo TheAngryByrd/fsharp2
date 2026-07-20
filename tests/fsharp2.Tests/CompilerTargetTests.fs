@@ -262,6 +262,49 @@ module CompilerTargetTests =
         findAssemblyAttributes metadata expectedTypeName
         |> Seq.exactlyOne
 
+    let private readCustomAttributes
+        (metadata: MetadataReader)
+        (handles: CustomAttributeHandleCollection)
+        =
+        handles
+        |> Seq.map (fun handle ->
+            let attribute = metadata.GetCustomAttribute(handle)
+
+            if
+                attribute.Constructor.Kind
+                <> HandleKind.MemberReference
+            then
+                failtest "the custom attribute constructor should be a member reference"
+
+            let constructor =
+                attribute.Constructor
+                |> MetadataTokens.GetRowNumber
+                |> MetadataTokens.MemberReferenceHandle
+                |> metadata.GetMemberReference
+
+            if
+                constructor.Parent.Kind
+                <> HandleKind.TypeReference
+            then
+                failtest "the custom attribute should be declared by a referenced type"
+
+            let attributeType =
+                constructor.Parent
+                |> MetadataTokens.GetRowNumber
+                |> MetadataTokens.TypeReferenceHandle
+                |> metadata.GetTypeReference
+
+            let fullName =
+                metadata.GetString(attributeType.Namespace)
+                + "."
+                + metadata.GetString(attributeType.Name)
+
+            fullName,
+            metadata.GetBlobBytes(constructor.Signature),
+            metadata.GetBlobBytes(attribute.Value)
+        )
+        |> Seq.toArray
+
     let private rvaToFileOffset (headers: PEHeaders) relativeVirtualAddress =
         headers.SectionHeaders
         |> Seq.find (fun section ->
@@ -1363,6 +1406,269 @@ module CompilerTargetTests =
                         message
                         "Dynamic invocation of AwaitUnsafeOnCompleted is not supported"
                         "the tupled constraint should preserve the Oracle trait identity"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "emits semicolon-separated type attributes on the IcedTasks state-data struct"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-icedtasks-struct-attributes",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "TaskBuilderBase.fs")
+                    let outputPath = Path.Combine(root, "TaskBuilderBase.dll")
+                    let pdbPath = Path.Combine(root, "TaskBuilderBase.pdb")
+                    let responsePath = Path.Combine(root, "compile.rsp")
+                    let systemRuntimePath = Assembly.Load("System.Runtime").Location
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "namespace IcedTasks.TaskBase\n\n[<AutoOpen>]\nmodule TaskBase =\n    [<Struct; NoComparison; NoEquality>]\n    type TaskBaseStateMachineData<'T, 'Builder> =\n        [<DefaultValue(false)>]\n        val mutable Result: 'T\n\n        [<DefaultValue(false)>]\n        val mutable MethodBuilder: 'Builder\n"
+                    )
+
+                    File.WriteAllLines(
+                        responsePath,
+                        [|
+                            "--target:library"
+                            "--deterministic+"
+                            "--debug:portable"
+                            $"--reference:{typeof<Microsoft.FSharp.Core.StructAttribute>.Assembly.Location}"
+                            $"--reference:{systemRuntimePath}"
+                            $"--out:{outputPath}"
+                            $"--pdb:{pdbPath}"
+                            sourcePath
+                        |]
+                    )
+
+                    let result = invokeFsc2 root responsePath
+
+                    Expect.equal
+                        result.ExitCode
+                        0
+                        (result.StandardOutput
+                         + result.StandardError)
+
+                    use implementationStream = File.OpenRead(outputPath)
+                    use implementation = new PEReader(implementationStream)
+                    let metadata = implementation.GetMetadataReader()
+
+                    let moduleHandle =
+                        metadata.TypeDefinitions
+                        |> Seq.find (fun handle ->
+                            let definition = metadata.GetTypeDefinition(handle)
+
+                            metadata.GetString(definition.Namespace) = "IcedTasks.TaskBase"
+                            && metadata.GetString(definition.Name) = "TaskBase"
+                        )
+
+                    let moduleDefinition = metadata.GetTypeDefinition(moduleHandle)
+
+                    Expect.equal
+                        moduleDefinition.Attributes
+                        (TypeAttributes.Public
+                         ||| TypeAttributes.Abstract
+                         ||| TypeAttributes.Sealed)
+                        "the AutoOpen module container should match the Oracle flags"
+
+                    let moduleAttributes =
+                        moduleDefinition.GetCustomAttributes()
+                        |> readCustomAttributes metadata
+
+                    Expect.sequenceEqual
+                        (moduleAttributes
+                         |> Array.map (fun (name, _, _) -> name))
+                        [|
+                            "Microsoft.FSharp.Core.AutoOpenAttribute"
+                            "Microsoft.FSharp.Core.CompilationMappingAttribute"
+                        |]
+                        "the module should preserve its authored and compiler mapping attributes"
+
+                    Expect.sequenceEqual
+                        (let _, _, value = moduleAttributes.[1] in value)
+                        (Convert.FromHexString("0100070000000000"))
+                        "the module mapping should use the Oracle Module construct flag"
+
+                    let stateDataHandle =
+                        metadata.TypeDefinitions
+                        |> Seq.find (fun handle ->
+                            let definition = metadata.GetTypeDefinition(handle)
+                            metadata.GetString(definition.Name) = "TaskBaseStateMachineData`2"
+                        )
+
+                    let stateData = metadata.GetTypeDefinition(stateDataHandle)
+
+                    Expect.isTrue
+                        stateData.Namespace.IsNil
+                        "the nested state-data type should not repeat its enclosing namespace"
+
+                    Expect.equal
+                        (stateData.GetDeclaringType())
+                        moduleHandle
+                        "the state-data struct should be nested under the TaskBase module"
+
+                    Expect.equal
+                        stateData.Attributes
+                        (TypeAttributes.NestedPublic
+                         ||| TypeAttributes.SequentialLayout
+                         ||| TypeAttributes.Sealed
+                         ||| enum<TypeAttributes> 0x00002000
+                         ||| TypeAttributes.BeforeFieldInit)
+                        "the state-data struct flags should match the Compatibility Oracle"
+
+                    let typeParameters =
+                        stateData.GetGenericParameters()
+                        |> Seq.map (
+                            metadata.GetGenericParameter
+                            >> fun parameter ->
+                                parameter.Index,
+                                metadata.GetString(parameter.Name),
+                                parameter.Attributes
+                        )
+                        |> Seq.toArray
+
+                    Expect.sequenceEqual
+                        typeParameters
+                        [|
+                            0, "T", GenericParameterAttributes.None
+                            1, "Builder", GenericParameterAttributes.None
+                        |]
+                        "the nested struct generic parameters should preserve Oracle order"
+
+                    let typeAttributes =
+                        stateData.GetCustomAttributes()
+                        |> readCustomAttributes metadata
+
+                    Expect.sequenceEqual
+                        (typeAttributes
+                         |> Array.map (fun (name, _, _) -> name))
+                        [|
+                            "Microsoft.FSharp.Core.StructAttribute"
+                            "Microsoft.FSharp.Core.NoComparisonAttribute"
+                            "Microsoft.FSharp.Core.NoEqualityAttribute"
+                            "Microsoft.FSharp.Core.CompilationMappingAttribute"
+                        |]
+                        "the semicolon-separated type attributes should preserve Oracle order"
+
+                    Expect.sequenceEqual
+                        (let _, _, value = typeAttributes.[3] in value)
+                        (Convert.FromHexString("0100030000000000"))
+                        "the state-data mapping should use the Oracle ObjectType construct flag"
+
+                    let fields =
+                        stateData.GetFields()
+                        |> Seq.map (fun handle ->
+                            let field = metadata.GetFieldDefinition(handle)
+
+                            let customAttributes =
+                                field.GetCustomAttributes()
+                                |> readCustomAttributes metadata
+
+                            metadata.GetString(field.Name),
+                            field.Attributes,
+                            metadata.GetBlobBytes(field.Signature),
+                            customAttributes
+                        )
+                        |> Seq.toArray
+
+                    Expect.sequenceEqual
+                        (fields
+                         |> Array.map (fun (name, attributes, signature, _) ->
+                             name, attributes, Convert.ToHexString(signature)
+                         ))
+                        [|
+                            "Result", FieldAttributes.Public, "061300"
+                            "MethodBuilder", FieldAttributes.Public, "061301"
+                        |]
+                        "the public mutable fields should reference the enclosing generic parameters"
+
+                    for _, _, _, customAttributes in fields do
+                        Expect.sequenceEqual
+                            (customAttributes
+                             |> Array.map (fun (name, _, _) -> name))
+                            [| "Microsoft.FSharp.Core.DefaultValueAttribute" |]
+                            "each field should carry DefaultValueAttribute"
+
+                        let _, constructor, value = customAttributes.[0]
+
+                        Expect.sequenceEqual
+                            constructor
+                            (Convert.FromHexString("20010102"))
+                            "DefaultValueAttribute should use its bool constructor"
+
+                        Expect.sequenceEqual
+                            value
+                            (Convert.FromHexString("0100000000"))
+                            "DefaultValue(false) should preserve the Oracle fixed argument"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "attribute edits change IcedTasks struct export fingerprints"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-icedtasks-struct-attribute-fingerprint",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "TaskBuilderBase.fs")
+                    let responsePath = Path.Combine(root, "compile.rsp")
+                    let systemRuntimePath = Assembly.Load("System.Runtime").Location
+
+                    let compile suffix typeAttributes =
+                        let outputPath = Path.Combine(root, $"TaskBuilderBase-{suffix}.dll")
+                        let pdbPath = Path.Combine(root, $"TaskBuilderBase-{suffix}.pdb")
+                        let tracePath = Path.Combine(root, $"TaskBuilderBase-{suffix}.trace")
+
+                        File.WriteAllText(
+                            sourcePath,
+                            $"namespace IcedTasks.TaskBase\n\n[<AutoOpen>]\nmodule TaskBase =\n    [<{typeAttributes}>]\n    type TaskBaseStateMachineData<'T, 'Builder> =\n        [<DefaultValue(false)>]\n        val mutable Result: 'T\n"
+                        )
+
+                        File.WriteAllLines(
+                            responsePath,
+                            [|
+                                "--target:library"
+                                "--deterministic+"
+                                "--debug:portable"
+                                $"--reference:{typeof<Microsoft.FSharp.Core.StructAttribute>.Assembly.Location}"
+                                $"--reference:{systemRuntimePath}"
+                                $"--out:{outputPath}"
+                                $"--pdb:{pdbPath}"
+                                $"--fsharp2-trace:{tracePath}"
+                                sourcePath
+                            |]
+                        )
+
+                        let result = invokeFsc2 root responsePath
+
+                        Expect.equal
+                            result.ExitCode
+                            0
+                            (result.StandardOutput
+                             + result.StandardError)
+
+                        (readTrace tracePath).["exportFingerprint"]
+
+                    let baseline = compile "baseline" "Struct; NoComparison; NoEquality"
+
+                    let reordered = compile "reordered" "Struct; NoEquality; NoComparison"
+
+                    Expect.notEqual
+                        reordered
+                        baseline
+                        "consumer-visible attribute order must invalidate the exported semantic fingerprint"
                 finally
                     Directory.Delete(root, true)
 
@@ -3215,7 +3521,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "9"
+                        "10"
                         "query cache evidence should be versioned"
 
                     Expect.equal

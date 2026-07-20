@@ -5,7 +5,7 @@ open System.Collections.Immutable
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 9
+    let Query = 10
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -114,10 +114,7 @@ type internal ParsedCallArgument =
 type internal ParsedExpression =
     | IntegerLiteral of int
     | StringLiteral of string
-    | TraitCall of
-        receiverName: string *
-        memberName: string *
-        arguments: ParsedCallArgument list
+    | TraitCall of receiverName: string * memberName: string * arguments: ParsedCallArgument list
 
     override _.ToString() = "ParsedExpression"
 
@@ -132,6 +129,21 @@ type internal QualifiedTypeName = {
 } with
 
     override _.ToString() = "QualifiedTypeName"
+
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal ParsedAttributeArgument =
+    | ParsedBooleanAttributeArgument of bool
+    | ParsedStringAttributeArgument of string
+
+    override _.ToString() = "ParsedAttributeArgument"
+
+type internal ParsedAttribute = {
+    AttributeType: QualifiedTypeName
+    ConstructorArguments: ParsedAttributeArgument list
+    Range: SourceRange
+} with
+
+    override _.ToString() = "ParsedAttribute"
 
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
 type internal ParsedTypeExpression =
@@ -228,6 +240,26 @@ type internal ParsedStaticTypeDeclaration = {
 
     override _.ToString() = "ParsedStaticTypeDeclaration"
 
+type internal ParsedFieldDeclaration = {
+    Name: string
+    IsMutable: bool
+    Type: ParsedTypeExpression
+    Attributes: ParsedAttribute list
+    Range: SourceRange
+} with
+
+    override _.ToString() = "ParsedFieldDeclaration"
+
+type internal ParsedStructTypeDeclaration = {
+    Name: string
+    TypeParameters: string list
+    Attributes: ParsedAttribute list
+    Fields: ParsedFieldDeclaration list
+    Range: SourceRange
+} with
+
+    override _.ToString() = "ParsedStructTypeDeclaration"
+
 type internal ParsedTypeReference = {
     Type: ParsedTypeExpression
     AllowsNull: bool
@@ -251,6 +283,7 @@ type internal ParsedDeclaration =
     | ParsedLiteralField of ParsedLiteralFieldDeclaration
     | ParsedTypeAbbreviation of ParsedTypeAbbreviationDeclaration
     | ParsedStaticType of ParsedStaticTypeDeclaration
+    | ParsedStructType of ParsedStructTypeDeclaration
 
     override _.ToString() = "ParsedDeclaration"
 
@@ -289,6 +322,7 @@ type internal ParsedModule = {
     OpenedNamespaces: string list
     SourceChecksum: ImmutableArray<byte>
     ContentFingerprint: string
+    Attributes: ParsedAttribute list
     AssemblyAttributes: ParsedAssemblyAttribute list
     Declarations: ParsedDeclaration list
 } with
@@ -300,6 +334,7 @@ type internal CliType =
     | CliBoolean
     | CliString
     | CliVoid
+    | CliTypeParameter of int
     | CliMethodTypeParameter of int
     | CliByRef of CliType
 
@@ -393,6 +428,63 @@ type internal TypedTypeAbbreviationDeclaration = {
 
     override _.ToString() = "TypedTypeAbbreviationDeclaration"
 
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal KnownAttributeKind =
+    | AutoOpenAttribute
+    | StructAttribute
+    | NoComparisonAttribute
+    | NoEqualityAttribute
+    | DefaultValueAttribute
+    | CompilationMappingAttribute
+
+    override _.ToString() = "KnownAttributeKind"
+
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal SourceConstructKind =
+    | ObjectTypeConstruct
+    | ModuleConstruct
+
+    override _.ToString() = "SourceConstructKind"
+
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal TypedAttributeArgument =
+    | TypedBooleanAttributeArgument of bool
+    | TypedSourceConstructAttributeArgument of SourceConstructKind
+
+    override _.ToString() = "TypedAttributeArgument"
+
+type internal TypedCustomAttribute = {
+    StableId: string
+    Kind: KnownAttributeKind
+    ConstructorArguments: TypedAttributeArgument list
+    ExportFingerprint: string
+} with
+
+    override _.ToString() = "TypedCustomAttribute"
+
+type internal TypedFieldDeclaration = {
+    StableId: string
+    Name: string
+    IsMutable: bool
+    Type: CliType
+    Attributes: TypedCustomAttribute list
+    ExportFingerprint: string
+} with
+
+    override _.ToString() = "TypedFieldDeclaration"
+
+type internal TypedStructTypeDeclaration = {
+    StableId: string
+    Name: string
+    GenericParameters: string list
+    Attributes: TypedCustomAttribute list
+    Fields: TypedFieldDeclaration list
+    ExportFingerprint: string
+    Range: SourceRange
+} with
+
+    override _.ToString() = "TypedStructTypeDeclaration"
+
 type internal TypedStaticTypeDeclaration = {
     StableId: string
     Name: string
@@ -408,6 +500,7 @@ type internal TypedDeclaration =
     | TypedLiteralField of TypedLiteralFieldDeclaration
     | TypedTypeAbbreviation of TypedTypeAbbreviationDeclaration
     | TypedStaticType of TypedStaticTypeDeclaration
+    | TypedStructType of TypedStructTypeDeclaration
 
     member this.StableId =
         match this with
@@ -415,6 +508,7 @@ type internal TypedDeclaration =
         | TypedLiteralField declaration -> declaration.StableId
         | TypedTypeAbbreviation declaration -> declaration.StableId
         | TypedStaticType declaration -> declaration.StableId
+        | TypedStructType declaration -> declaration.StableId
 
     member this.ExportFingerprint =
         match this with
@@ -422,6 +516,7 @@ type internal TypedDeclaration =
         | TypedLiteralField declaration -> declaration.ExportFingerprint
         | TypedTypeAbbreviation declaration -> declaration.ExportFingerprint
         | TypedStaticType declaration -> declaration.ExportFingerprint
+        | TypedStructType declaration -> declaration.ExportFingerprint
 
     override _.ToString() = "TypedDeclaration"
 
@@ -444,6 +539,7 @@ type internal TypedModule = {
     IsPublic: bool
     SourceChecksum: ImmutableArray<byte>
     ContentFingerprint: string
+    Attributes: TypedCustomAttribute list
     AssemblyAttributes: TypedAssemblyAttribute list
     Declarations: TypedDeclaration list
     ExportFingerprint: string
@@ -497,10 +593,32 @@ type internal SymbolicLiteralFieldFragment = {
 
     override _.ToString() = "SymbolicLiteralFieldFragment"
 
+type internal SymbolicCustomAttributeFragment = {
+    SchemaVersion: int
+    StableId: string
+    Kind: KnownAttributeKind
+    ConstructorArguments: TypedAttributeArgument list
+    ContentHash: string
+} with
+
+    override _.ToString() = "SymbolicCustomAttributeFragment"
+
+type internal SymbolicInstanceFieldFragment = {
+    SchemaVersion: int
+    StableId: string
+    Name: string
+    Type: CliType
+    Attributes: SymbolicCustomAttributeFragment list
+    ContentHash: string
+} with
+
+    override _.ToString() = "SymbolicInstanceFieldFragment"
+
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
 type internal SymbolicTypeKind =
     | ModuleContainer
     | StaticMemberContainer
+    | StructContainer
 
     override _.ToString() = "SymbolicTypeKind"
 
@@ -510,8 +628,12 @@ type internal SymbolicTypeFragment = {
     Namespace: string
     Name: string
     IsPublic: bool
+    EnclosingTypeStableId: string option
     Kind: SymbolicTypeKind
+    GenericParameters: string list
+    Attributes: SymbolicCustomAttributeFragment list
     LiteralFields: SymbolicLiteralFieldFragment list
+    InstanceFields: SymbolicInstanceFieldFragment list
     Methods: SymbolicMethodFragment list
 } with
 

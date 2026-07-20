@@ -23,6 +23,8 @@ module internal Frontend =
         | NullKeyword
         | LetKeyword
         | DoKeyword
+        | ValKeyword
+        | MutableKeyword
         | Identifier of string
         | TypeParameter of string
         | Integer of int
@@ -34,6 +36,7 @@ module internal Frontend =
         | Colon
         | Subtype
         | Comma
+        | Semicolon
         | Dot
         | LessThan
         | GreaterThan
@@ -102,7 +105,9 @@ module internal Frontend =
         }
 
         let blank startOffset endOffset =
-            for offset in startOffset .. endOffset - 1 do
+            for offset in
+                startOffset .. endOffset
+                               - 1 do
                 if
                     output.[offset]
                     <> '\r'
@@ -125,33 +130,48 @@ module internal Frontend =
               && error.IsNone do
             let newline = text.IndexOf('\n', lineStart)
 
-            let lineEnd =
-                if newline < 0 then
-                    text.Length
-                else
-                    newline
+            let lineEnd = if newline < 0 then text.Length else newline
 
             let contentEnd =
                 if
                     lineEnd > lineStart
-                    && text.[lineEnd - 1] = '\r'
+                    && text.[lineEnd
+                             - 1] = '\r'
                 then
-                    lineEnd - 1
+                    lineEnd
+                    - 1
                 else
                     lineEnd
 
-            let lineText = text.Substring(lineStart, contentEnd - lineStart)
+            let lineText =
+                text.Substring(
+                    lineStart,
+                    contentEnd
+                    - lineStart
+                )
+
             let trimmed = lineText.TrimStart()
-            let leading = lineText.Length - trimmed.Length
-            let directiveOffset = lineStart + leading
-            let directiveColumn = leading + 1
+
+            let leading =
+                lineText.Length
+                - trimmed.Length
+
+            let directiveOffset =
+                lineStart
+                + leading
+
+            let directiveColumn =
+                leading
+                + 1
 
             let directiveRange =
                 range
                     directiveOffset
                     directiveColumn
                     contentEnd
-                    (contentEnd - lineStart + 1)
+                    (contentEnd
+                     - lineStart
+                     + 1)
 
             if
                 trimmed.StartsWith("#if", StringComparison.Ordinal)
@@ -181,7 +201,9 @@ module internal Frontend =
                         }
                         :: frames
 
-                    isActive <- isActive && conditionIsTrue
+                    isActive <-
+                        isActive
+                        && conditionIsTrue
             elif trimmed = "#else" then
                 blank lineStart contentEnd
 
@@ -203,8 +225,13 @@ module internal Frontend =
                                 "a conditional-compilation block can contain only one '#else'"
                         )
                 | frame :: tail ->
-                    frames <- { frame with HasElse = true } :: tail
-                    isActive <- frame.ParentIsActive && not frame.ConditionIsTrue
+                    frames <-
+                        { frame with HasElse = true }
+                        :: tail
+
+                    isActive <-
+                        frame.ParentIsActive
+                        && not frame.ConditionIsTrue
             elif trimmed = "#endif" then
                 blank lineStart contentEnd
 
@@ -226,7 +253,10 @@ module internal Frontend =
             if newline < 0 then
                 lineStart <- text.Length
             else
-                lineStart <- newline + 1
+                lineStart <-
+                    newline
+                    + 1
+
                 line <- line + 1
 
         match error, frames with
@@ -344,6 +374,8 @@ module internal Frontend =
                 | "null" -> add NullKeyword start
                 | "let" -> add LetKeyword start
                 | "do" -> add DoKeyword start
+                | "val" -> add ValKeyword start
+                | "mutable" -> add MutableKeyword start
                 | _ -> add (Identifier value) start
             elif Char.IsDigit(current) then
                 let start = position ()
@@ -441,6 +473,7 @@ module internal Frontend =
                     | ')' -> add RightParenthesis start
                     | ':' -> add Colon start
                     | ',' -> add Comma start
+                    | ';' -> add Semicolon start
                     | '.' -> add Dot start
                     | '<' -> add LessThan start
                     | '>' -> add GreaterThan start
@@ -478,7 +511,9 @@ module internal Frontend =
             |> Encoding.UTF8.GetBytes
             |> SHA256.HashData
 
-        let defines = defines |> Set.ofList
+        let defines =
+            defines
+            |> Set.ofList
 
         let preprocessingResult = preprocessConditionals defines source
 
@@ -497,8 +532,7 @@ module internal Frontend =
         let tokenizationResult =
             match preprocessingResult with
             | Error error -> Error error
-            | Ok preprocessedText ->
-                tokenize { source with Text = preprocessedText }
+            | Ok preprocessedText -> tokenize { source with Text = preprocessedText }
 
         match tokenizationResult with
         | Error error -> Error error
@@ -587,7 +621,10 @@ module internal Frontend =
 
                             parseTypeAtom ()
                             |> Result.bind (fun element ->
-                                parseTupleElements (element :: elements)
+                                parseTupleElements (
+                                    element
+                                    :: elements
+                                )
                             )
                         | _ ->
                             match List.rev elements with
@@ -647,10 +684,7 @@ module internal Frontend =
                             )
                         | _ ->
                             Error(
-                                prototypeDiagnostic
-                                    source.Path
-                                    (current ()).Range
-                                    "expected a type"
+                                prototypeDiagnostic source.Path (current ()).Range "expected a type"
                             )
 
                     return!
@@ -679,7 +713,10 @@ module internal Frontend =
             and parseTypeArguments arguments =
                 parseResult {
                     let! argument = parseTypeExpression ()
-                    let arguments = argument :: arguments
+
+                    let arguments =
+                        argument
+                        :: arguments
 
                     return!
                         match (current ()).Kind with
@@ -721,8 +758,7 @@ module internal Frontend =
                                         true
                                     | _ -> false
 
-                                let! argumentName, _ =
-                                    identifier "expected a trait-call argument"
+                                let! argumentName, _ = identifier "expected a trait-call argument"
 
                                 let argument =
                                     if isAddressOf then
@@ -730,7 +766,9 @@ module internal Frontend =
                                     else
                                         ParsedValueArgument argumentName
 
-                                let arguments = argument :: arguments
+                                let arguments =
+                                    argument
+                                    :: arguments
 
                                 return!
                                     match (current ()).Kind with
@@ -757,11 +795,7 @@ module internal Frontend =
                         let! closeToken = expected RightParenthesis "expected ')'"
 
                         return
-                            TraitCall(
-                                receiverName,
-                                memberName,
-                                argumentNames
-                            ),
+                            TraitCall(receiverName, memberName, argumentNames),
                             {
                                 Start = expressionToken.Range.Start
                                 End = closeToken.Range.End
@@ -811,6 +845,7 @@ module internal Frontend =
                                     sourceChecksum
                                     |> ImmutableArray.CreateRange<byte>
                                 ContentFingerprint = contentFingerprint
+                                Attributes = []
                                 AssemblyAttributes = []
                                 Declarations = [
                                     ParsedMethod {
@@ -919,6 +954,114 @@ module internal Frontend =
                                 )
                         }
                     | _ -> Ok(List.rev namespaces)
+
+                let parseDeclarationAttribute () =
+                    parseResult {
+                        let start = (current ()).Range.Start
+
+                        let! attributeTypeName =
+                            qualifiedIdentifier "expected an attribute type name"
+
+                        let parseArgument () =
+                            let token = consume ()
+
+                            match token.Kind with
+                            | Identifier "false" -> Ok(ParsedBooleanAttributeArgument false)
+                            | Identifier "true" -> Ok(ParsedBooleanAttributeArgument true)
+                            | StringLiteralToken value -> Ok(ParsedStringAttributeArgument value)
+                            | _ ->
+                                Error(
+                                    prototypeDiagnostic
+                                        source.Path
+                                        token.Range
+                                        "expected a boolean or string attribute argument"
+                                )
+
+                        let rec parseArguments arguments =
+                            parseResult {
+                                let! argument = parseArgument ()
+
+                                let arguments =
+                                    argument
+                                    :: arguments
+
+                                return!
+                                    match (current ()).Kind with
+                                    | Comma ->
+                                        consume ()
+                                        |> ignore
+
+                                        parseArguments arguments
+                                    | RightParenthesis -> Ok(List.rev arguments)
+                                    | _ ->
+                                        Error(
+                                            prototypeDiagnostic
+                                                source.Path
+                                                (current ()).Range
+                                                "expected ',' or ')' after an attribute argument"
+                                        )
+                            }
+
+                        let! constructorArguments =
+                            match (current ()).Kind with
+                            | LeftParenthesis ->
+                                consume ()
+                                |> ignore
+
+                                parseResult {
+                                    let! arguments =
+                                        match (current ()).Kind with
+                                        | RightParenthesis -> Ok []
+                                        | _ -> parseArguments []
+
+                                    let! _ = expected RightParenthesis "expected ')'"
+                                    return arguments
+                                }
+                            | _ -> Ok []
+
+                        return {
+                            AttributeType = qualifiedTypeName attributeTypeName
+                            ConstructorArguments = constructorArguments
+                            Range = {
+                                Start = start
+                                End = input.[index - 1].Range.End
+                            }
+                        }
+                    }
+
+                let parseDeclarationAttributes () =
+                    parseResult {
+                        let! _ = expected AttributeStart "expected '[<'"
+
+                        let rec parseAttributes attributes =
+                            parseResult {
+                                let! attribute = parseDeclarationAttribute ()
+
+                                let attributes =
+                                    attribute
+                                    :: attributes
+
+                                return!
+                                    match (current ()).Kind with
+                                    | Semicolon ->
+                                        consume ()
+                                        |> ignore
+
+                                        parseAttributes attributes
+                                    | AttributeEnd -> Ok(List.rev attributes)
+                                    | _ ->
+                                        Error(
+                                            prototypeDiagnostic
+                                                source.Path
+                                                (current ()).Range
+                                                "expected ';' or '>]' after an attribute"
+                                        )
+                            }
+
+                        let! attributes = parseAttributes []
+                        let! _ = expected AttributeEnd "expected '>]'"
+                        return attributes
+                    }
 
                 let rec parseAttributeArguments constructorArguments namedArguments =
                     match (current ()).Kind with
@@ -1119,12 +1262,11 @@ module internal Frontend =
                                 "expected a literal declaration or end of file"
                         )
 
-                let parseTypeAbbreviation () =
+                let parseTypeDeclaration attributes =
                     parseResult {
                         let! typeToken = expected TypeKeyword "expected 'type'"
 
-                        let! declarationName, _ =
-                            identifier "expected a type-abbreviation name"
+                        let! declarationName, _ = identifier "expected a type-abbreviation name"
 
                         let parseConstraint () =
                             parseResult {
@@ -1154,12 +1296,13 @@ module internal Frontend =
                                             let! _ = expected LeftParenthesis "expected '('"
                                             let! _ = expected MemberKeyword "expected 'member'"
 
-                                            let! memberName, _ =
-                                                identifier "expected a member name"
+                                            let! memberName, _ = identifier "expected a member name"
 
                                             let! _ = expected Colon "expected ':'"
                                             let! memberType = parseTypeExpression ()
-                                            let! closeToken = expected RightParenthesis "expected ')'"
+
+                                            let! closeToken =
+                                                expected RightParenthesis "expected ')'"
 
                                             return
                                                 ParsedMemberConstraint(
@@ -1184,7 +1327,10 @@ module internal Frontend =
                         let rec parseConstraints constraints =
                             parseResult {
                                 let! constraint' = parseConstraint ()
-                                let constraints = constraint' :: constraints
+
+                                let constraints =
+                                    constraint'
+                                    :: constraints
 
                                 return!
                                     match (current ()).Kind with
@@ -1206,7 +1352,10 @@ module internal Frontend =
                         let rec parseTypeParameters parameters =
                             parseResult {
                                 let! parameter, _ = typeParameter "expected a type parameter"
-                                let parameters = parameter :: parameters
+
+                                let parameters =
+                                    parameter
+                                    :: parameters
 
                                 return!
                                     match (current ()).Kind with
@@ -1257,7 +1406,9 @@ module internal Frontend =
                                         parseTypeExpression ()
                                         |> Result.map ParsedAbbreviationConstraint
 
-                                let constraints = constraint' :: constraints
+                                let constraints =
+                                    constraint'
+                                    :: constraints
 
                                 return!
                                     match (current ()).Kind with
@@ -1279,7 +1430,10 @@ module internal Frontend =
                         let rec parseMethodTypeParameters parameters =
                             parseResult {
                                 let! parameter, _ = typeParameter "expected a method type parameter"
-                                let parameters = parameter :: parameters
+
+                                let parameters =
+                                    parameter
+                                    :: parameters
 
                                 return!
                                     match (current ()).Kind with
@@ -1312,8 +1466,7 @@ module internal Frontend =
                                 let! _ = expected MemberKeyword "expected 'member'"
                                 let! _ = expected InlineKeyword "expected 'inline'"
 
-                                let! methodName, _ =
-                                    identifier "expected a static member name"
+                                let! methodName, _ = identifier "expected a static member name"
 
                                 let! methodTypeParameters, methodConstraints =
                                     match (current ()).Kind with
@@ -1353,7 +1506,10 @@ module internal Frontend =
                                 let rec parseParameters parameters =
                                     parseResult {
                                         let! parameter = parseParameter ()
-                                        let parameters = parameter :: parameters
+
+                                        let parameters =
+                                            parameter
+                                            :: parameters
 
                                         return!
                                             match (current ()).Kind with
@@ -1413,10 +1569,79 @@ module internal Frontend =
                                         "expected a static member, type declaration, or end of file"
                                 )
 
+                        let parseField fieldAttributes =
+                            parseResult {
+                                let! fieldToken = expected ValKeyword "expected 'val'"
+
+                                let isMutable =
+                                    match (current ()).Kind with
+                                    | MutableKeyword ->
+                                        consume ()
+                                        |> ignore
+
+                                        true
+                                    | _ -> false
+
+                                let! fieldName, _ = identifier "expected a field name"
+                                let! _ = expected Colon "expected ':'"
+                                let! fieldType = parseTypeExpression ()
+
+                                return {
+                                    Name = fieldName
+                                    IsMutable = isMutable
+                                    Type = fieldType
+                                    Attributes = fieldAttributes
+                                    Range = {
+                                        Start = fieldToken.Range.Start
+                                        End = fieldType.Range.End
+                                    }
+                                }
+                            }
+
+                        let rec parseFields fields =
+                            match (current ()).Kind with
+                            | AttributeStart ->
+                                parseResult {
+                                    let! fieldAttributes = parseDeclarationAttributes ()
+                                    let! field = parseField fieldAttributes
+
+                                    return!
+                                        parseFields (
+                                            field
+                                            :: fields
+                                        )
+                                }
+                            | _ -> Ok(List.rev fields)
+
                         let! _ = expected Equals "expected '='"
 
                         return!
                             match (current ()).Kind with
+                            | AttributeStart when not (List.isEmpty attributes) ->
+                                parseFields []
+                                |> Result.bind (fun fields ->
+                                    match List.tryLast fields with
+                                    | Some lastField ->
+                                        Ok(
+                                            ParsedStructType {
+                                                Name = declarationName
+                                                TypeParameters = typeParameters
+                                                Attributes = attributes
+                                                Fields = fields
+                                                Range = {
+                                                    Start = typeToken.Range.Start
+                                                    End = lastField.Range.End
+                                                }
+                                            }
+                                        )
+                                    | None ->
+                                        Error(
+                                            prototypeDiagnostic
+                                                source.Path
+                                                (current ()).Range
+                                                "an attributed struct type must declare a field"
+                                        )
+                                )
                             | StaticKeyword when
                                 List.isEmpty typeParameters
                                 && List.isEmpty constraints
@@ -1454,7 +1679,9 @@ module internal Frontend =
                                             consume ()
                                             |> ignore
 
-                                            match expected NullKeyword "expected 'null' after '|'" with
+                                            match
+                                                expected NullKeyword "expected 'null' after '|'"
+                                            with
                                             | Error error -> Error error
                                             | Ok nullToken -> Ok(true, nullToken.Range.End)
                                         | _ -> Ok(false, input.[index - 1].Range.End)
@@ -1467,10 +1694,7 @@ module internal Frontend =
                                             Target = {
                                                 Type = targetType
                                                 AllowsNull = allowsNull
-                                                Range = {
-                                                    Start = targetStart
-                                                    End = targetEnd
-                                                }
+                                                Range = { Start = targetStart; End = targetEnd }
                                             }
                                             Range = {
                                                 Start = typeToken.Range.Start
@@ -1484,7 +1708,7 @@ module internal Frontend =
                     match (current ()).Kind with
                     | TypeKeyword ->
                         parseResult {
-                            let! declaration = parseTypeAbbreviation ()
+                            let! declaration = parseTypeDeclaration []
 
                             return!
                                 parseTypeAbbreviations (
@@ -1501,6 +1725,58 @@ module internal Frontend =
                                 "expected a type declaration or end of file"
                         )
 
+                let rec parseModuleDeclarations declarations =
+                    match (current ()).Kind with
+                    | LetKeyword ->
+                        parseResult {
+                            let! declaration = parseLiteralDeclaration ()
+
+                            return!
+                                parseModuleDeclarations (
+                                    declaration
+                                    :: declarations
+                                )
+                        }
+                    | TypeKeyword ->
+                        parseResult {
+                            let! declaration = parseTypeDeclaration []
+
+                            return!
+                                parseModuleDeclarations (
+                                    declaration
+                                    :: declarations
+                                )
+                        }
+                    | AttributeStart ->
+                        parseResult {
+                            let! attributes = parseDeclarationAttributes ()
+
+                            let! declaration =
+                                match (current ()).Kind with
+                                | TypeKeyword -> parseTypeDeclaration attributes
+                                | _ ->
+                                    Error(
+                                        prototypeDiagnostic
+                                            source.Path
+                                            (current ()).Range
+                                            "expected a type declaration after attributes"
+                                    )
+
+                            return!
+                                parseModuleDeclarations (
+                                    declaration
+                                    :: declarations
+                                )
+                        }
+                    | EndOfFile -> Ok(List.rev declarations)
+                    | _ ->
+                        Error(
+                            prototypeDiagnostic
+                                source.Path
+                                (current ()).Range
+                                "expected a module declaration or end of file"
+                        )
+
                 let namespaceFile namespaceName openNamespaces assemblyAttributes declarations = {
                     StableId =
                         "namespace:"
@@ -1513,11 +1789,17 @@ module internal Frontend =
                         sourceChecksum
                         |> ImmutableArray.CreateRange<byte>
                     ContentFingerprint = contentFingerprint
+                    Attributes = []
                     AssemblyAttributes = assemblyAttributes
                     Declarations = declarations
                 }
 
-                let finishNamespaceFile namespaceName openNamespaces assemblyAttributes =
+                let finishNamespaceFile
+                    namespaceName
+                    openNamespaces
+                    assemblyAttributes
+                    moduleAttributes
+                    =
                     let sourceChecksum =
                         sourceChecksum
                         |> ImmutableArray.CreateRange<byte>
@@ -1534,6 +1816,7 @@ module internal Frontend =
                             OpenedNamespaces = openNamespaces
                             SourceChecksum = sourceChecksum
                             ContentFingerprint = contentFingerprint
+                            Attributes = []
                             AssemblyAttributes = assemblyAttributes
                             Declarations = []
                         }
@@ -1553,7 +1836,8 @@ module internal Frontend =
 
                             let! moduleName, _ = identifier "expected a module name"
                             let! _ = expected Equals "expected '='"
-                            let! declarations = parseLiteralDeclarations []
+                            let! moduleOpenNamespaces = parseOpenNamespaces []
+                            let! declarations = parseModuleDeclarations []
 
                             return {
                                 StableId =
@@ -1564,9 +1848,12 @@ module internal Frontend =
                                 Namespace = namespaceName
                                 Name = moduleName
                                 IsPublic = isPublic
-                                OpenedNamespaces = openNamespaces
+                                OpenedNamespaces =
+                                    openNamespaces
+                                    @ moduleOpenNamespaces
                                 SourceChecksum = sourceChecksum
                                 ContentFingerprint = contentFingerprint
+                                Attributes = moduleAttributes
                                 AssemblyAttributes = assemblyAttributes
                                 Declarations = declarations
                             }
@@ -1579,20 +1866,52 @@ module internal Frontend =
                                 "expected a module or end of file"
                         )
 
+                let rec attributeSequenceIsFollowedByDo attributeStartIndex =
+                    let rec afterAttribute tokenIndex =
+                        if
+                            tokenIndex
+                            >= input.Length
+                        then
+                            tokenIndex
+                        elif input.[tokenIndex].Kind = AttributeEnd then
+                            tokenIndex
+                            + 1
+                        else
+                            afterAttribute (
+                                tokenIndex
+                                + 1
+                            )
+
+                    let nextIndex = afterAttribute attributeStartIndex
+
+                    if
+                        nextIndex
+                        >= input.Length
+                    then
+                        false
+                    elif input.[nextIndex].Kind = AttributeStart then
+                        attributeSequenceIsFollowedByDo nextIndex
+                    else
+                        input.[nextIndex].Kind = DoKeyword
+
                 parseResult {
                     let! namespaceName = qualifiedIdentifier "expected a namespace name"
                     let! openNamespaces = parseOpenNamespaces []
 
                     return!
                         match (current ()).Kind with
-                        | AttributeStart ->
+                        | AttributeStart when
+                            (index + 1 < input.Length
+                             && input.[index + 1].Kind = AssemblyKeyword)
+                            || attributeSequenceIsFollowedByDo index
+                            ->
                             parseResult {
                                 let! firstAttribute = parseAssemblyAttribute openNamespaces
 
                                 let! assemblyAttributes =
-                                    parseRemainingAssemblyAttributes
-                                        openNamespaces
-                                        [ firstAttribute ]
+                                    parseRemainingAssemblyAttributes openNamespaces [
+                                        firstAttribute
+                                    ]
 
                                 let! _ = expected DoKeyword "expected 'do'"
                                 let! _ = expected LeftParenthesis "expected '('"
@@ -1603,20 +1922,27 @@ module internal Frontend =
                                         namespaceName
                                         openNamespaces
                                         assemblyAttributes
+                                        []
+                            }
+                        | AttributeStart ->
+                            parseResult {
+                                let! moduleAttributes = parseDeclarationAttributes ()
+
+                                return!
+                                    finishNamespaceFile
+                                        namespaceName
+                                        openNamespaces
+                                        []
+                                        moduleAttributes
                             }
                         | TypeKeyword ->
                             parseResult {
                                 let! declarations = parseTypeAbbreviations []
 
-                                return
-                                    namespaceFile
-                                        namespaceName
-                                        openNamespaces
-                                        []
-                                        declarations
+                                return namespaceFile namespaceName openNamespaces [] declarations
                             }
-                        | EndOfFile ->
-                            Ok(namespaceFile namespaceName openNamespaces [] [])
+                        | ModuleKeyword -> finishNamespaceFile namespaceName openNamespaces [] []
+                        | EndOfFile -> Ok(namespaceFile namespaceName openNamespaces [] [])
                         | _ ->
                             Error(
                                 prototypeDiagnostic

@@ -111,6 +111,9 @@ module private TypeIdentity =
         | CliBoolean -> "bool"
         | CliString -> "string"
         | CliVoid -> "void"
+        | CliTypeParameter index ->
+            "type-parameter:"
+            + index.ToString(CultureInfo.InvariantCulture)
         | CliMethodTypeParameter index ->
             "method-parameter:"
             + index.ToString(CultureInfo.InvariantCulture)
@@ -130,6 +133,30 @@ module private TypeIdentity =
                 "address-of"
                 name
             ]
+
+    let attributeKind =
+        function
+        | AutoOpenAttribute -> "auto-open"
+        | StructAttribute -> "struct"
+        | NoComparisonAttribute -> "no-comparison"
+        | NoEqualityAttribute -> "no-equality"
+        | DefaultValueAttribute -> "default-value"
+        | CompilationMappingAttribute -> "compilation-mapping"
+
+    let attributeArgument =
+        function
+        | TypedBooleanAttributeArgument value -> if value then "bool:true" else "bool:false"
+        | TypedSourceConstructAttributeArgument ObjectTypeConstruct -> "source-construct:object-type"
+        | TypedSourceConstructAttributeArgument ModuleConstruct -> "source-construct:module"
+
+    let customAttribute (attribute: TypedCustomAttribute) =
+        Fingerprint.parts [
+            attributeKind attribute.Kind
+
+            yield!
+                attribute.ConstructorArguments
+                |> List.map attributeArgument
+        ]
 
 /// A deliberately small in-memory query owner. Query identities and cached
 /// values are semantic/compiler state; final SRM state never enters these maps.
@@ -154,9 +181,7 @@ type internal CompilerService() =
         let normalizedDefines =
             defines
             |> List.distinct
-            |> List.sortWith (fun left right ->
-                StringComparer.Ordinal.Compare(left, right)
-            )
+            |> List.sortWith (fun left right -> StringComparer.Ordinal.Compare(left, right))
 
         let key =
             Fingerprint.parts [
@@ -186,11 +211,7 @@ type internal CompilerService() =
                 parseCache.Add(key, parsed)
                 Ok(parsed, key)
 
-    let check
-        (references: ReferenceTypeIndex)
-        (sourcePath: string)
-        (parsed: ParsedModule)
-        =
+    let check (references: ReferenceTypeIndex) (sourcePath: string) (parsed: ParsedModule) =
         let key =
             Fingerprint.parts [
                 querySchema.ToString(CultureInfo.InvariantCulture)
@@ -227,20 +248,23 @@ type internal CompilerService() =
 
             let typeAbbreviations =
                 parsed.Declarations
-                |> List.choose (function
-                    | ParsedTypeAbbreviation declaration ->
-                        Some(declaration.Name, declaration)
+                |> List.choose (
+                    function
+                    | ParsedTypeAbbreviation declaration -> Some(declaration.Name, declaration)
                     | ParsedMethod _
                     | ParsedLiteralField _
-                    | ParsedStaticType _ -> None
+                    | ParsedStaticType _
+                    | ParsedStructType _ -> None
                 )
                 |> Map.ofList
 
             let localTypeNames =
                 parsed.Declarations
-                |> List.choose (function
+                |> List.choose (
+                    function
                     | ParsedTypeAbbreviation declaration -> Some declaration.Name
                     | ParsedStaticType declaration -> Some declaration.Name
+                    | ParsedStructType declaration -> Some declaration.Name
                     | ParsedMethod _
                     | ParsedLiteralField _ -> None
                 )
@@ -266,19 +290,11 @@ type internal CompilerService() =
                         )
                     else
                         match
-                            references.Resolve(
-                                parsed.Namespace,
-                                parsed.OpenedNamespaces,
-                                typeName
-                            )
+                            references.Resolve(parsed.Namespace, parsed.OpenedNamespaces, typeName)
                         with
                         | Ok resolved -> Ok(TypedNamedType resolved)
                         | Error message -> diagnostic range message
-                | ParsedGenericTypeApplication(
-                    ParsedNamedType(typeName, _),
-                    [ argument ],
-                    _
-                  ) when
+                | ParsedGenericTypeApplication(ParsedNamedType(typeName, _), [ argument ], _) when
                     String.IsNullOrEmpty(typeName.Namespace)
                     && typeName.Name = "byref"
                     ->
@@ -296,15 +312,13 @@ type internal CompilerService() =
                                 | Error error -> Error error
                                 | Ok typedArgument ->
                                     resolveArguments
-                                        (typedArgument :: resolved)
+                                        (typedArgument
+                                         :: resolved)
                                         remaining
 
                         resolveArguments [] arguments
                         |> Result.map (fun typedArguments ->
-                            TypedGenericTypeApplication(
-                                typedGenericType,
-                                typedArguments
-                            )
+                            TypedGenericTypeApplication(typedGenericType, typedArguments)
                         )
                 | ParsedTupleType(elements, _) ->
                     let rec resolveElements resolved =
@@ -315,7 +329,8 @@ type internal CompilerService() =
                             | Error error -> Error error
                             | Ok typedElement ->
                                 resolveElements
-                                    (typedElement :: resolved)
+                                    (typedElement
+                                     :: resolved)
                                     remaining
 
                     resolveElements [] elements
@@ -325,9 +340,101 @@ type internal CompilerService() =
                     | Error error -> Error error
                     | Ok typedDomain ->
                         resolveType declaredParameters range
-                        |> Result.map (fun typedRange ->
-                            TypedFunctionType(typedDomain, typedRange)
-                        )
+                        |> Result.map (fun typedRange -> TypedFunctionType(typedDomain, typedRange))
+
+            let rec collectResults completed remaining =
+                match remaining with
+                | [] -> Ok(List.rev completed)
+                | result :: tail ->
+                    match result with
+                    | Error diagnostic -> Error diagnostic
+                    | Ok value ->
+                        collectResults
+                            (value
+                             :: completed)
+                            tail
+
+            let knownAttributeKind (attribute: ParsedAttribute) =
+                let name = attribute.AttributeType.Name
+
+                match name with
+                | "AutoOpen"
+                | "AutoOpenAttribute" -> Some AutoOpenAttribute
+                | "Struct"
+                | "StructAttribute" -> Some StructAttribute
+                | "NoComparison"
+                | "NoComparisonAttribute" -> Some NoComparisonAttribute
+                | "NoEquality"
+                | "NoEqualityAttribute" -> Some NoEqualityAttribute
+                | "DefaultValue"
+                | "DefaultValueAttribute" -> Some DefaultValueAttribute
+                | _ -> None
+
+            let typeCustomAttribute
+                ownerStableId
+                allowedKinds
+                (index: int)
+                (attribute: ParsedAttribute)
+                =
+                let unsupported message = diagnostic attribute.Range message
+
+                match knownAttributeKind attribute with
+                | None -> unsupported "the declaration attribute is not yet supported"
+                | Some kind when
+                    not (
+                        allowedKinds
+                        |> List.contains kind
+                    )
+                    ->
+                    unsupported "the attribute is not valid on this declaration"
+                | Some DefaultValueAttribute ->
+                    match attribute.ConstructorArguments with
+                    | [ ParsedBooleanAttributeArgument value ] ->
+                        let stableId =
+                            ownerStableId
+                            + "/attribute:"
+                            + index.ToString(CultureInfo.InvariantCulture)
+
+                        let arguments = [ TypedBooleanAttributeArgument value ]
+
+                        Ok {
+                            StableId = stableId
+                            Kind = DefaultValueAttribute
+                            ConstructorArguments = arguments
+                            ExportFingerprint =
+                                Fingerprint.parts [
+                                    stableId
+                                    TypeIdentity.attributeKind DefaultValueAttribute
+                                    yield!
+                                        arguments
+                                        |> List.map TypeIdentity.attributeArgument
+                                ]
+                        }
+                    | _ -> unsupported "DefaultValueAttribute requires one boolean argument"
+                | Some kind ->
+                    if List.isEmpty attribute.ConstructorArguments then
+                        let stableId =
+                            ownerStableId
+                            + "/attribute:"
+                            + index.ToString(CultureInfo.InvariantCulture)
+
+                        Ok {
+                            StableId = stableId
+                            Kind = kind
+                            ConstructorArguments = []
+                            ExportFingerprint =
+                                Fingerprint.parts [
+                                    stableId
+                                    TypeIdentity.attributeKind kind
+                                ]
+                        }
+                    else
+                        unsupported "the declaration attribute does not accept arguments"
+
+            let typeCustomAttributes ownerStableId allowedKinds attributes =
+                attributes
+                |> List.mapi (typeCustomAttribute ownerStableId allowedKinds)
+                |> collectResults []
 
             let typeDeclaration =
                 function
@@ -447,7 +554,8 @@ type internal CompilerService() =
                             | Error error -> Error error
                             | Ok typedConstraint ->
                                 resolveConstraints
-                                    (typedConstraint :: resolved)
+                                    (typedConstraint
+                                     :: resolved)
                                     remaining
 
                     if
@@ -475,10 +583,7 @@ type internal CompilerService() =
 
                                         "target"
                                         TypeIdentity.expression targetType
-                                        if declaration.Target.AllowsNull then
-                                            "null"
-                                        else
-                                            "non-null"
+                                        if declaration.Target.AllowsNull then "null" else "non-null"
                                     ]
 
                                 Ok(
@@ -544,9 +649,15 @@ type internal CompilerService() =
                         let rec toCliType range =
                             function
                             | TypedTypeParameter name ->
-                                match methodParameterIndex |> Map.tryFind name with
+                                match
+                                    methodParameterIndex
+                                    |> Map.tryFind name
+                                with
                                 | Some index -> Ok(CliMethodTypeParameter index)
-                                | None -> diagnostic range $"the method type parameter '{name}' is not declared"
+                                | None ->
+                                    diagnostic
+                                        range
+                                        $"the method type parameter '{name}' is not declared"
                             | TypedNamedType typeName when
                                 typeName.Namespace = "System"
                                 && typeName.Name = "Boolean"
@@ -561,8 +672,7 @@ type internal CompilerService() =
                                 toCliType range elementType
                                 |> Result.bind (fun cliElementType ->
                                     match cliElementType with
-                                    | CliVoid ->
-                                        diagnostic range "a byref element cannot be void"
+                                    | CliVoid -> diagnostic range "a byref element cannot be void"
                                     | _ -> Ok(CliByRef cliElementType)
                                 )
                             | typedType ->
@@ -592,12 +702,10 @@ type internal CompilerService() =
                                                 )
                                             )
                                         )
-                                | ParsedMemberConstraint(
-                                    typeParameter,
-                                    memberName,
-                                    memberType,
-                                    range
-                                  ) ->
+                                | ParsedMemberConstraint(typeParameter,
+                                                         memberName,
+                                                         memberType,
+                                                         range) ->
                                     if not (methodParameters.Contains(typeParameter)) then
                                         diagnostic
                                             range
@@ -622,7 +730,8 @@ type internal CompilerService() =
                                 | Error error -> Error error
                                 | Ok typedConstraint ->
                                     resolveMethodConstraints
-                                        (typedConstraint :: resolved)
+                                        (typedConstraint
+                                         :: resolved)
                                         remaining
 
                         let rec typeParameters
@@ -651,47 +760,41 @@ type internal CompilerService() =
                                 methodDeclaration.Constraints
                                 |> List.tryPick (fun constraint' ->
                                     match constraint' with
-                                    | ParsedAbbreviationConstraint(
-                                        ParsedGenericTypeApplication(
-                                            ParsedNamedType(aliasName, _),
-                                            arguments,
-                                            _
-                                        )
-                                      ) ->
-                                        match typeAbbreviations |> Map.tryFind aliasName.Name with
+                                    | ParsedAbbreviationConstraint(ParsedGenericTypeApplication(ParsedNamedType(aliasName,
+                                                                                                                _),
+                                                                                                arguments,
+                                                                                                _)) ->
+                                        match
+                                            typeAbbreviations
+                                            |> Map.tryFind aliasName.Name
+                                        with
                                         | Some abbreviation when
                                             abbreviation.TypeParameters.Length = arguments.Length
                                             ->
                                             let substitutions =
-                                                List.zip
-                                                    abbreviation.TypeParameters
-                                                    arguments
+                                                List.zip abbreviation.TypeParameters arguments
                                                 |> Map.ofList
 
                                             abbreviation.Constraints
-                                            |> List.tryPick (function
-                                                | ParsedMemberConstraint(
-                                                    _,
-                                                    constrainedMemberName,
-                                                    memberType,
-                                                    _
-                                                  ) when constrainedMemberName = memberName ->
-                                                    Some(
-                                                        substituteType
-                                                            substitutions
-                                                            memberType
-                                                    )
+                                            |> List.tryPick (
+                                                function
+                                                | ParsedMemberConstraint(_,
+                                                                         constrainedMemberName,
+                                                                         memberType,
+                                                                         _) when
+                                                    constrainedMemberName = memberName
+                                                    ->
+                                                    Some(substituteType substitutions memberType)
                                                 | _ -> None
                                             )
                                         | _ -> None
-                                    | ParsedDirectConstraint(
-                                        ParsedMemberConstraint(
-                                            _,
-                                            constrainedMemberName,
-                                            memberType,
-                                            _
-                                        )
-                                      ) when constrainedMemberName = memberName -> Some memberType
+                                    | ParsedDirectConstraint(ParsedMemberConstraint(_,
+                                                                                    constrainedMemberName,
+                                                                                    memberType,
+                                                                                    _)) when
+                                        constrainedMemberName = memberName
+                                        ->
+                                        Some memberType
                                     | _ -> None
                                 )
 
@@ -736,7 +839,8 @@ type internal CompilerService() =
 
                                 let typedArguments =
                                     arguments
-                                    |> List.map (function
+                                    |> List.map (
+                                        function
                                         | ParsedValueArgument name -> TypedValueArgument name
                                         | ParsedAddressOfArgument name ->
                                             TypedAddressOfArgument name
@@ -783,7 +887,8 @@ type internal CompilerService() =
 
                                                 yield!
                                                     constraints
-                                                    |> List.map TypeIdentity.methodConstraintIdentity
+                                                    |> List.map
+                                                        TypeIdentity.methodConstraintIdentity
 
                                                 "parameters"
 
@@ -835,7 +940,8 @@ type internal CompilerService() =
                             | Error error -> Error error
                             | Ok typedMethod ->
                                 typeMethods
-                                    (typedMethod :: typedMethods)
+                                    (typedMethod
+                                     :: typedMethods)
                                     remaining
 
                     match typeMethods [] declaration.Methods with
@@ -853,6 +959,146 @@ type internal CompilerService() =
                                 Range = declaration.Range
                             }
                         )
+                | ParsedStructType declaration ->
+                    let stableId =
+                        parsed.StableId
+                        + "/type:"
+                        + declaration.Name
+
+                    let declaredParameters =
+                        HashSet<string>(declaration.TypeParameters, StringComparer.Ordinal)
+
+                    let parameterIndex =
+                        declaration.TypeParameters
+                        |> List.mapi (fun index name -> name, index)
+                        |> Map.ofList
+
+                    let toFieldCliType range =
+                        function
+                        | TypedTypeParameter name ->
+                            match
+                                parameterIndex
+                                |> Map.tryFind name
+                            with
+                            | Some index -> Ok(CliTypeParameter index)
+                            | None ->
+                                diagnostic range $"the type parameter '{name}' is not declared"
+                        | TypedNamedType typeName when
+                            typeName.Namespace = "System"
+                            && typeName.Name = "Int32"
+                            ->
+                            Ok CliInt32
+                        | TypedNamedType typeName when
+                            typeName.Namespace = "System"
+                            && typeName.Name = "Boolean"
+                            ->
+                            Ok CliBoolean
+                        | TypedNamedType typeName when
+                            typeName.Namespace = "System"
+                            && typeName.Name = "String"
+                            ->
+                            Ok CliString
+                        | typedType ->
+                            diagnostic
+                                range
+                                $"the field type '{TypeIdentity.expression typedType}' is not yet supported"
+
+                    let typeField (index: int) (field: ParsedFieldDeclaration) =
+                        let fieldStableId =
+                            stableId
+                            + "/field:"
+                            + index.ToString(CultureInfo.InvariantCulture)
+                            + ":"
+                            + field.Name
+
+                        match
+                            resolveType declaredParameters field.Type,
+                            typeCustomAttributes
+                                fieldStableId
+                                [ DefaultValueAttribute ]
+                                field.Attributes
+                        with
+                        | Error error, _
+                        | _, Error error -> Error error
+                        | Ok typedType, Ok attributes ->
+                            match toFieldCliType field.Range typedType with
+                            | Error error -> Error error
+                            | Ok cliType ->
+                                Ok {
+                                    StableId = fieldStableId
+                                    Name = field.Name
+                                    IsMutable = field.IsMutable
+                                    Type = cliType
+                                    Attributes = attributes
+                                    ExportFingerprint =
+                                        Fingerprint.parts [
+                                            fieldStableId
+                                            if field.IsMutable then "mutable" else "immutable"
+                                            TypeIdentity.cliType cliType
+
+                                            yield!
+                                                attributes
+                                                |> List.map TypeIdentity.customAttribute
+                                        ]
+                                }
+
+                    if
+                        declaredParameters.Count
+                        <> declaration.TypeParameters.Length
+                    then
+                        diagnostic declaration.Range "generic type parameters must be unique"
+                    else
+                        match
+                            typeCustomAttributes
+                                stableId
+                                [
+                                    StructAttribute
+                                    NoComparisonAttribute
+                                    NoEqualityAttribute
+                                ]
+                                declaration.Attributes,
+                            declaration.Fields
+                            |> List.mapi typeField
+                            |> collectResults []
+                        with
+                        | Error error, _
+                        | _, Error error -> Error error
+                        | Ok attributes, Ok fields when
+                            attributes
+                            |> List.exists (fun attribute -> attribute.Kind = StructAttribute)
+                            |> not
+                            ->
+                            diagnostic
+                                declaration.Range
+                                "the explicit-field type requires StructAttribute"
+                        | Ok attributes, Ok fields ->
+                            let exportFingerprint =
+                                Fingerprint.parts [
+                                    stableId
+                                    "generic-parameters"
+                                    yield! declaration.TypeParameters
+                                    "attributes"
+                                    yield!
+                                        attributes
+                                        |> List.map TypeIdentity.customAttribute
+                                    "fields"
+
+                                    yield!
+                                        fields
+                                        |> List.map _.ExportFingerprint
+                                ]
+
+                            Ok(
+                                TypedStructType {
+                                    StableId = stableId
+                                    Name = declaration.Name
+                                    GenericParameters = declaration.TypeParameters
+                                    Attributes = attributes
+                                    Fields = fields
+                                    ExportFingerprint = exportFingerprint
+                                    Range = declaration.Range
+                                }
+                            )
 
             let typeAssemblyAttribute index (attribute: ParsedAssemblyAttribute) =
                 let attributeTypeName =
@@ -900,12 +1146,9 @@ type internal CompilerService() =
                     function
                     | "System.Runtime.Versioning.TargetFrameworkAttribute" ->
                         Some TargetFrameworkAttribute
-                    | "System.Reflection.AssemblyTitleAttribute" ->
-                        Some AssemblyTitleAttribute
-                    | "System.Reflection.AssemblyProductAttribute" ->
-                        Some AssemblyProductAttribute
-                    | "System.Reflection.AssemblyVersionAttribute" ->
-                        Some AssemblyVersionAttribute
+                    | "System.Reflection.AssemblyTitleAttribute" -> Some AssemblyTitleAttribute
+                    | "System.Reflection.AssemblyProductAttribute" -> Some AssemblyProductAttribute
+                    | "System.Reflection.AssemblyVersionAttribute" -> Some AssemblyVersionAttribute
                     | "System.Reflection.AssemblyMetadataAttribute" ->
                         Some AssemblyMetadataAttribute
                     | "System.Reflection.AssemblyFileVersionAttribute" ->
@@ -919,9 +1162,7 @@ type internal CompilerService() =
                     attribute.ConstructorArguments,
                     attribute.NamedArguments
                 with
-                | Some TargetFrameworkAttribute,
-                  [ _ ],
-                  [ { Name = "FrameworkDisplayName" } ] ->
+                | Some TargetFrameworkAttribute, [ _ ], [ { Name = "FrameworkDisplayName" } ] ->
                     typedAttribute TargetFrameworkAttribute
                 | Some AssemblyVersionAttribute, [ value ], [] ->
                     match Version.TryParse(value) with
@@ -933,8 +1174,7 @@ type internal CompilerService() =
                             Path = Some sourcePath
                             Range = Some attribute.Range
                         }
-                | Some AssemblyTitleAttribute, [ _ ], [] ->
-                    typedAttribute AssemblyTitleAttribute
+                | Some AssemblyTitleAttribute, [ _ ], [] -> typedAttribute AssemblyTitleAttribute
                 | Some AssemblyProductAttribute, [ _ ], [] ->
                     typedAttribute AssemblyProductAttribute
                 | Some AssemblyFileVersionAttribute, [ _ ], [] ->
@@ -966,26 +1206,18 @@ type internal CompilerService() =
                         Range = Some attribute.Range
                     }
 
-            let rec collectResults completed remaining =
-                match remaining with
-                | [] -> Ok(List.rev completed)
-                | result :: tail ->
-                    match result with
-                    | Error diagnostic -> Error diagnostic
-                    | Ok value ->
-                        collectResults
-                            (value
-                             :: completed)
-                            tail
-
             let typedAssemblyAttributes =
                 parsed.AssemblyAttributes
                 |> List.mapi typeAssemblyAttribute
                 |> collectResults []
 
-            match typedAssemblyAttributes with
-            | Error diagnostic -> Error diagnostic
-            | Ok assemblyAttributes ->
+            let typedModuleAttributes =
+                typeCustomAttributes parsed.StableId [ AutoOpenAttribute ] parsed.Attributes
+
+            match typedModuleAttributes, typedAssemblyAttributes with
+            | Error diagnostic, _
+            | _, Error diagnostic -> Error diagnostic
+            | Ok moduleAttributes, Ok assemblyAttributes ->
                 let typedDeclarations =
                     parsed.Declarations
                     |> List.map typeDeclaration
@@ -1001,16 +1233,18 @@ type internal CompilerService() =
                         IsPublic = parsed.IsPublic
                         SourceChecksum = parsed.SourceChecksum
                         ContentFingerprint = parsed.ContentFingerprint
+                        Attributes = moduleAttributes
                         AssemblyAttributes = assemblyAttributes
                         Declarations = declarations
                         ExportFingerprint =
                             [
                                 parsed.StableId
 
-                                if parsed.IsPublic then
-                                    "public"
-                                else
-                                    "internal"
+                                if parsed.IsPublic then "public" else "internal"
+
+                                yield!
+                                    moduleAttributes
+                                    |> List.map _.ExportFingerprint
 
                                 yield!
                                     assemblyAttributes
@@ -1071,10 +1305,7 @@ type internal CompilerService() =
                                     "target"
                                     TypeIdentity.expression typeDeclaration.TargetType
 
-                                    if typeDeclaration.AllowsNull then
-                                        "null"
-                                    else
-                                        "non-null"
+                                    if typeDeclaration.AllowsNull then "null" else "non-null"
                                 ]
                             | TypedStaticType typeDeclaration ->
                                 Fingerprint.parts [
@@ -1086,6 +1317,23 @@ type internal CompilerService() =
                                             methodDeclaration.StableId
                                             methodDeclaration.ExportFingerprint
                                         ])
+                                ]
+                            | TypedStructType typeDeclaration ->
+                                Fingerprint.parts [
+                                    typeDeclaration.StableId
+                                    "generic-parameters"
+                                    yield! typeDeclaration.GenericParameters
+                                    "attributes"
+
+                                    yield!
+                                        typeDeclaration.Attributes
+                                        |> List.map TypeIdentity.customAttribute
+
+                                    "fields"
+
+                                    yield!
+                                        typeDeclaration.Fields
+                                        |> List.map _.ExportFingerprint
                                 ]
 
                         declaration, Fingerprint.text implementation
@@ -1230,9 +1478,40 @@ type internal CompilerService() =
                             }
                         | TypedMethod _
                         | TypedLiteralField _
-                        | TypedStaticType _ -> None
+                        | TypedStaticType _
+                        | TypedStructType _ -> None
                     )
                 )
+
+            let customAttributeFragment (attribute: TypedCustomAttribute) = {
+                SchemaVersion = querySchema
+                StableId = attribute.StableId
+                Kind = attribute.Kind
+                ConstructorArguments = attribute.ConstructorArguments
+                ContentHash = attribute.ExportFingerprint
+            }
+
+            let compilationMappingAttribute ownerStableId sourceConstruct =
+                let stableId =
+                    ownerStableId
+                    + "/attribute:compilation-mapping"
+
+                let arguments = [ TypedSourceConstructAttributeArgument sourceConstruct ]
+
+                {
+                    SchemaVersion = querySchema
+                    StableId = stableId
+                    Kind = CompilationMappingAttribute
+                    ConstructorArguments = arguments
+                    ContentHash =
+                        Fingerprint.parts [
+                            stableId
+                            TypeIdentity.attributeKind CompilationMappingAttribute
+                            yield!
+                                arguments
+                                |> List.map TypeIdentity.attributeArgument
+                        ]
+                }
 
             let methodInstructions (methodDeclaration: TypedMethodDeclaration) =
                 match methodDeclaration.Body with
@@ -1258,10 +1537,10 @@ type internal CompilerService() =
 
             let methodDependencies (methodDeclaration: TypedMethodDeclaration) =
                 methodDeclaration.Constraints
-                |> List.choose (function
-                    | TypedAbbreviationConstraint(
-                        TypedGenericTypeApplication(TypedNamedType typeName, _)
-                      ) ->
+                |> List.choose (
+                    function
+                    | TypedAbbreviationConstraint(TypedGenericTypeApplication(TypedNamedType typeName,
+                                                                              _)) ->
                         Some(
                             "type-abbreviation:"
                             + TypeIdentity.qualifiedName typeName
@@ -1320,7 +1599,8 @@ type internal CompilerService() =
                                 }
                             | TypedMethod _
                             | TypedTypeAbbreviation _
-                            | TypedStaticType _ -> None
+                            | TypedStaticType _
+                            | TypedStructType _ -> None
                         )
 
                     let methods =
@@ -1340,10 +1620,39 @@ type internal CompilerService() =
                                 |> Some
                             | TypedLiteralField _
                             | TypedTypeAbbreviation _
-                            | TypedStaticType _ -> None
+                            | TypedStaticType _
+                            | TypedStructType _ -> None
                         )
 
-                    if List.isEmpty literalFields && List.isEmpty methods then
+                    let containsNestedStruct =
+                        declarationsWithContentHashes
+                        |> List.exists (
+                            fst
+                            >> function
+                                | TypedStructType _ -> true
+                                | _ -> false
+                        )
+
+                    let customAttributes =
+                        if
+                            List.isEmpty typed.Attributes
+                            && not containsNestedStruct
+                        then
+                            []
+                        else
+                            [
+                                yield!
+                                    typed.Attributes
+                                    |> List.map customAttributeFragment
+                                compilationMappingAttribute typeStableId ModuleConstruct
+                            ]
+
+                    if
+                        List.isEmpty literalFields
+                        && List.isEmpty methods
+                        && not containsNestedStruct
+                        && List.isEmpty customAttributes
+                    then
                         None
                     else
                         Some {
@@ -1352,8 +1661,12 @@ type internal CompilerService() =
                             Namespace = typed.Namespace
                             Name = typed.Name
                             IsPublic = typed.IsPublic
+                            EnclosingTypeStableId = None
                             Kind = ModuleContainer
+                            GenericParameters = []
+                            Attributes = customAttributes
                             LiteralFields = literalFields
+                            InstanceFields = []
                             Methods = methods
                         }
                 )
@@ -1390,18 +1703,82 @@ type internal CompilerService() =
                                 Namespace = typed.Namespace
                                 Name = typeDeclaration.Name
                                 IsPublic = true
+                                EnclosingTypeStableId = None
                                 Kind = StaticMemberContainer
+                                GenericParameters = []
+                                Attributes = []
                                 LiteralFields = []
+                                InstanceFields = []
                                 Methods = methods
                             }
                         | TypedMethod _
                         | TypedLiteralField _
-                        | TypedTypeAbbreviation _ -> None
+                        | TypedTypeAbbreviation _
+                        | TypedStructType _ -> None
                     )
                 )
                 |> List.collect id
 
-            let types = moduleTypes @ staticTypes
+            let structTypes =
+                modulesWithContentHashes
+                |> List.collect (fun (typed, declarationsWithContentHashes) ->
+                    let enclosingTypeStableId =
+                        moduleStableId
+                        + "/type:"
+                        + typed.StableId
+
+                    declarationsWithContentHashes
+                    |> List.choose (fun (declaration, typeContentHash) ->
+                        match declaration with
+                        | TypedStructType typeDeclaration ->
+                            let attributes = [
+                                yield!
+                                    typeDeclaration.Attributes
+                                    |> List.map customAttributeFragment
+
+                                compilationMappingAttribute
+                                    typeDeclaration.StableId
+                                    ObjectTypeConstruct
+                            ]
+
+                            let fields =
+                                typeDeclaration.Fields
+                                |> List.map (fun field -> {
+                                    SchemaVersion = querySchema
+                                    StableId = field.StableId
+                                    Name = field.Name
+                                    Type = field.Type
+                                    Attributes =
+                                        field.Attributes
+                                        |> List.map customAttributeFragment
+                                    ContentHash = field.ExportFingerprint
+                                })
+
+                            Some {
+                                SchemaVersion = querySchema
+                                StableId = typeDeclaration.StableId
+                                Namespace = String.Empty
+                                Name = typeDeclaration.Name
+                                IsPublic = true
+                                EnclosingTypeStableId = Some enclosingTypeStableId
+                                Kind = StructContainer
+                                GenericParameters = typeDeclaration.GenericParameters
+                                Attributes = attributes
+                                LiteralFields = []
+                                InstanceFields = fields
+                                Methods = []
+                            }
+                        | TypedMethod _
+                        | TypedLiteralField _
+                        | TypedTypeAbbreviation _
+                        | TypedStaticType _ -> None
+                    )
+                )
+
+            let types =
+                moduleTypes
+                @ staticTypes
+                @ structTypes
 
             let symbolic: SymbolicAssembly = {
                 SchemaVersion = querySchema
@@ -1427,12 +1804,13 @@ type internal CompilerService() =
             lowerCache.Add(key, symbolic)
             symbolic, key
 
-    member _.Compile(
-        assemblyName: string,
-        defines: string list,
-        references: ReferenceTypeIndex,
-        sources: SourceInput list
-    ) =
+    member _.Compile
+        (
+            assemblyName: string,
+            defines: string list,
+            references: ReferenceTypeIndex,
+            sources: SourceInput list
+        ) =
         let combine values =
             match values with
             | [ value ] -> value
@@ -1561,8 +1939,7 @@ type internal CompilerService() =
                                |> List.sumBy (fun methodFragment ->
                                    methodFragment.DependencyIds.Length
                                )
-                            )
-                          )
+                           ))
                     ParseDecision =
                         decision before.ParseHits parseHits before.ParseMisses parseMisses
                     CheckDecision =
