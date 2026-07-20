@@ -2785,6 +2785,141 @@ module CompilerTargetTests =
                 finally
                     Directory.Delete(root, true)
 
+            testCase "executes an IcedTasks resumable Return member"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-resumable-return-member",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "TaskBuilderBase.fs")
+
+                    let sourceText =
+                        "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    [<Struct; NoComparison; NoEquality>]\n    type Data<'T> =\n        [<DefaultValue(false)>]\n        val mutable Result: 'T\n\n    type Code<'T> = ResumableCode<Data<'T>, 'T>\n\n    type TaskBuilderBase() =\n        member inline _.Return(value: 'T) : Code<'T> =\n            Code<'T>(fun sm ->\n                sm.Data.Result <- value\n                true\n            )\n"
+
+                    File.WriteAllText(sourcePath, sourceText)
+
+                    let oracleOutputPath = Path.Combine(root, "TaskBuilderBase-oracle.dll")
+                    let oraclePdbPath = Path.Combine(root, "TaskBuilderBase-oracle.pdb")
+                    let oracleResponsePath = Path.Combine(root, "oracle.rsp")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root oracleResponsePath [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{oracleOutputPath}"
+                            $"--pdb:{oraclePdbPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let responsePath = Path.Combine(root, "fsharp2.rsp")
+
+                    let outputPath, baselineExportFingerprint =
+                        compileForExportFingerprint
+                            root
+                            responsePath
+                            sourcePath
+                            "TaskBuilderBase-fsharp2"
+                            []
+
+                    let pdbPath = Path.ChangeExtension(outputPath, ".pdb")
+
+                    Expect.equal
+                        (objectTypeMetadataShape outputPath pdbPath "Return")
+                        (objectTypeMetadataShape oracleOutputPath oraclePdbPath "Return")
+                        "the resumable Return member should match the Compatibility Oracle's CLR and portable-PDB surface"
+
+                    let invokeReturn assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        let dataTypeDefinition =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+Data`1",
+                                throwOnError = true
+                            )
+
+                        let dataType = dataTypeDefinition.MakeGenericType(typeof<int>)
+
+                        let stateMachineType =
+                            typedefof<
+                                Microsoft.FSharp.Core.CompilerServices.ResumableStateMachine<_>
+                             >
+                                .MakeGenericType(dataType)
+
+                        let builder = Activator.CreateInstance(builderType)
+
+                        let returnMethod =
+                            builderType.GetMethod("Return").MakeGenericMethod(typeof<int>)
+
+                        let code = returnMethod.Invoke(builder, [| box 42 |])
+                        let invokeMethod = code.GetType().GetMethod("Invoke")
+                        let invokeArguments = [| Activator.CreateInstance(stateMachineType) |]
+
+                        let completed = invokeMethod.Invoke(code, invokeArguments) :?> bool
+
+                        let data = stateMachineType.GetField("Data").GetValue(invokeArguments.[0])
+
+                        let result = dataType.GetField("Result").GetValue(data) :?> int
+                        completed, result
+
+                    let oracleBehavior = invokeReturn oracleOutputPath
+                    let fsharp2Behavior = invokeReturn outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the emitted resumable function should behave like the Compatibility Oracle"
+
+                    Expect.equal
+                        fsharp2Behavior
+                        (true, 42)
+                        "Return should complete and store its captured value in the state-machine data"
+
+                    File.WriteAllText(
+                        sourcePath,
+                        sourceText.Replace(
+                            "    type TaskBuilderBase() =",
+                            "\n    type TaskBuilderBase() =",
+                            StringComparison.Ordinal
+                        )
+                    )
+
+                    let _, shiftedExportFingerprint =
+                        compileForExportFingerprint
+                            root
+                            (Path.Combine(root, "fsharp2-shifted.rsp"))
+                            sourcePath
+                            "TaskBuilderBase-fsharp2-shifted"
+                            []
+
+                    Expect.equal
+                        shiftedExportFingerprint
+                        baselineExportFingerprint
+                        "a source-only line shift should preserve the resumable member's semantic export fingerprint"
+                finally
+                    Directory.Delete(root, true)
+
             testCase "retained service invalidates an IcedTasks inline object-member edit"
             <| fun _ ->
                 let root =
@@ -4892,7 +5027,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "16"
+                        "17"
                         "query cache evidence should be versioned"
 
                     Expect.equal

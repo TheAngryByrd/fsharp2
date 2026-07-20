@@ -127,6 +127,19 @@ module private TypeIdentity =
                 "parameter"
                 index.ToString(CultureInfo.InvariantCulture)
             ]
+        | TypedResumableCode expression ->
+            Fingerprint.parts [
+                "resumable-code"
+                cliType expression.DelegateType
+                cliType expression.StateMachineType
+                cliType expression.DataType
+                expression.CaptureParameterIndex.ToString(CultureInfo.InvariantCulture)
+                expression.CaptureName
+                expression.StateMachineParameterName
+                expression.DataFieldName
+                expression.ResultFieldName
+                expression.ResultFieldStableId
+            ]
         | TypedTraitCall(receiverName, memberName, arguments) ->
             Fingerprint.parts [
                 "trait-call"
@@ -610,6 +623,14 @@ type internal CompilerService() =
                         diagnostic
                             declaration.BodyRange
                             "value references are supported only in parameterized members"
+                    | _, BooleanLiteral _
+                    | _, MemberAssignment _
+                    | _, SequentialExpression _
+                    | _, LambdaExpression _
+                    | _, TypeConstruction _ ->
+                        diagnostic
+                            declaration.BodyRange
+                            "this expression form is supported only in instance members"
                 | ParsedLiteralField declaration ->
                     let stableId =
                         parsed.StableId
@@ -1016,8 +1037,13 @@ type internal CompilerService() =
                                             Range = methodDeclaration.Range
                                         }
                             | Ok _, Ok _, IntegerLiteral _
+                            | Ok _, Ok _, BooleanLiteral _
                             | Ok _, Ok _, StringLiteral _
-                            | Ok _, Ok _, ValueReference _ ->
+                            | Ok _, Ok _, ValueReference _
+                            | Ok _, Ok _, MemberAssignment _
+                            | Ok _, Ok _, SequentialExpression _
+                            | Ok _, Ok _, LambdaExpression _
+                            | Ok _, Ok _, TypeConstruction _ ->
                                 diagnostic
                                     methodDeclaration.BodyRange
                                     "static inline members require a constrained trait call"
@@ -1231,6 +1257,221 @@ type internal CompilerService() =
                                 methodDeclaration.Range
                                 "instance-member parameter names must be unique"
                         | Ok parameters ->
+                            let typeResumableCode
+                                constructedType
+                                lambdaParameter
+                                lambdaBody
+                                argumentRange
+                                =
+                                let unsupported () =
+                                    diagnostic
+                                        methodDeclaration.BodyRange
+                                        "only the IcedTasks resumable Return lambda shape is supported"
+
+                                let constructedCliType =
+                                    constructedType
+                                    |> expandTypeAbbreviations Set.empty
+                                    |> resolveType declaredMethodParameters
+                                    |> Result.bind (
+                                        toCliType
+                                            methodParameterIndex
+                                            methodDeclaration.BodyRange
+                                    )
+
+                                match constructedCliType with
+                                | Error error -> Error error
+                                | Ok(
+                                    CliGenericType(
+                                        delegateReference,
+                                        [ dataType; resultType ]
+                                    ) as delegateType
+                                  ) when
+                                    delegateReference.AssemblyName = "FSharp.Core"
+                                    && delegateReference.TypeName.Namespace
+                                       = "Microsoft.FSharp.Core.CompilerServices"
+                                    && delegateReference.TypeName.Name = "ResumableCode`2"
+                                    ->
+                                    match lambdaBody with
+                                    | SequentialExpression [
+                                        MemberAssignment(
+                                            assignmentRoot,
+                                            [ dataFieldName; resultFieldName ],
+                                            ValueReference captureName
+                                        )
+                                        BooleanLiteral true
+                                      ] when assignmentRoot = lambdaParameter ->
+                                        match
+                                            parameters
+                                            |> List.tryFindIndex (fun parameter ->
+                                                parameter.Name = captureName
+                                            )
+                                        with
+                                        | None ->
+                                            diagnostic
+                                                methodDeclaration.BodyRange
+                                                $"the captured value '{captureName}' is not an instance-member parameter"
+                                        | Some captureParameterIndex when
+                                            parameters.[captureParameterIndex].Type <> resultType
+                                            ->
+                                            diagnostic
+                                                methodDeclaration.BodyRange
+                                                "the resumable result type does not match the captured parameter"
+                                        | Some captureParameterIndex ->
+                                            let localDataShape =
+                                                match dataType with
+                                                | CliGenericType(dataReference, dataArguments) when
+                                                    String.IsNullOrEmpty(
+                                                        dataReference.AssemblyName
+                                                    )
+                                                    && dataReference.IsValueType
+                                                    ->
+                                                    parsed.Declarations
+                                                    |> List.tryPick (fun declaration ->
+                                                        match
+                                                            declaration,
+                                                            ParsedDeclaration.tryTypeIdentity
+                                                                parsed.StableId
+                                                                declaration
+                                                        with
+                                                        | ParsedStructType structDeclaration,
+                                                          Some(_, declarationId) when
+                                                            declarationId
+                                                            = dataReference.DeclarationId
+                                                            ->
+                                                            Some(
+                                                                structDeclaration,
+                                                                dataArguments,
+                                                                dataReference.DeclarationId
+                                                            )
+                                                        | _ -> None
+                                                    )
+                                                | _ -> None
+
+                                            match localDataShape with
+                                            | None ->
+                                                diagnostic
+                                                    methodDeclaration.BodyRange
+                                                    "the resumable data type must be a local struct"
+                                            | Some(
+                                                dataDeclaration,
+                                                dataArguments,
+                                                dataDeclarationId
+                                              ) ->
+                                                let resultFieldIndex =
+                                                    dataDeclaration.Fields
+                                                    |> List.tryFindIndex (fun field ->
+                                                        field.Name = resultFieldName
+                                                    )
+
+                                                let matchingResultFieldIndex =
+                                                    match resultFieldIndex with
+                                                    | Some index when
+                                                        dataDeclaration.Fields.[index].IsMutable
+                                                        ->
+                                                        let field =
+                                                            dataDeclaration.Fields.[index]
+
+                                                        match field.Type with
+                                                        | ParsedTypeParameter(name, _) ->
+                                                            dataDeclaration.TypeParameters
+                                                            |> List.tryFindIndex ((=) name)
+                                                            |> Option.bind (fun typeIndex ->
+                                                                if
+                                                                    typeIndex
+                                                                    < dataArguments.Length
+                                                                    && dataArguments.[typeIndex]
+                                                                   = resultType
+                                                                then
+                                                                    Some index
+                                                                else
+                                                                    None
+                                                            )
+                                                        | _ -> None
+                                                    | _ -> None
+
+                                                match matchingResultFieldIndex with
+                                                | None ->
+                                                    diagnostic
+                                                        methodDeclaration.BodyRange
+                                                        $"the resumable data field '{resultFieldName}' must be mutable and match the result type"
+                                                | Some _ when dataFieldName <> "Data" ->
+                                                    diagnostic
+                                                        methodDeclaration.BodyRange
+                                                        "the resumable state-machine field must be 'Data'"
+                                                | Some resultFieldIndex ->
+                                                    let resultFieldStableId =
+                                                        dataDeclarationId
+                                                        + "/field:"
+                                                        + resultFieldIndex.ToString(
+                                                            CultureInfo.InvariantCulture
+                                                        )
+                                                        + ":"
+                                                        + resultFieldName
+
+                                                    let stateMachineName = {
+                                                        Namespace =
+                                                            "Microsoft.FSharp.Core.CompilerServices"
+                                                        Name = "ResumableStateMachine"
+                                                    }
+
+                                                    match
+                                                        resolveNamedType
+                                                            1
+                                                            stateMachineName
+                                                            methodDeclaration.BodyRange
+                                                    with
+                                                    | Error error -> Error error
+                                                    | Ok(TypedNamedType resolvedStateMachine) ->
+                                                        let stateMachineReference = {
+                                                            DeclarationId =
+                                                                resolvedStateMachine.DeclarationId
+                                                            AssemblyName =
+                                                                resolvedStateMachine.AssemblyName
+                                                            TypeName = {
+                                                                Namespace =
+                                                                    resolvedStateMachine.TypeName.Namespace
+                                                                Name =
+                                                                    resolvedStateMachine.TypeName.Name
+                                                                    + "`1"
+                                                            }
+                                                            IsValueType =
+                                                                resolvedStateMachine.IsValueType
+                                                        }
+
+                                                        Ok(
+                                                            TypedResumableCode {
+                                                                DelegateType = delegateType
+                                                                StateMachineType =
+                                                                    CliGenericType(
+                                                                        stateMachineReference,
+                                                                        [ dataType ]
+                                                                    )
+                                                                DataType = dataType
+                                                                CaptureParameterIndex =
+                                                                    captureParameterIndex
+                                                                CaptureName = captureName
+                                                                StateMachineParameterName =
+                                                                    lambdaParameter
+                                                                DataFieldName = dataFieldName
+                                                                ResultFieldName = resultFieldName
+                                                                ResultFieldStableId =
+                                                                    resultFieldStableId
+                                                                SourceLine =
+                                                                    argumentRange.Start.Line
+                                                                Range = argumentRange
+                                                            },
+                                                            delegateType
+                                                        )
+                                                    | Ok _ ->
+                                                        diagnostic
+                                                            methodDeclaration.BodyRange
+                                                            "the resumable state-machine type did not resolve to a named CLI type"
+                                    | _ -> unsupported ()
+                                | Ok _ ->
+                                    diagnostic
+                                        methodDeclaration.BodyRange
+                                        "the constructed expression must produce ResumableCode<'Data, 'T>"
+
                             let typedBody =
                                 match methodDeclaration.Body with
                                 | IntegerLiteral value ->
@@ -1256,6 +1497,24 @@ type internal CompilerService() =
                                     diagnostic
                                         methodDeclaration.BodyRange
                                         "trait calls are not yet supported in instance members"
+                                | TypeConstruction(
+                                    constructedType,
+                                    LambdaExpression(lambdaParameter, lambdaBody),
+                                    argumentRange
+                                  ) ->
+                                    typeResumableCode
+                                        constructedType
+                                        lambdaParameter
+                                        lambdaBody
+                                        argumentRange
+                                | BooleanLiteral _
+                                | MemberAssignment _
+                                | SequentialExpression _
+                                | LambdaExpression _
+                                | TypeConstruction _ ->
+                                    diagnostic
+                                        methodDeclaration.BodyRange
+                                        "this instance-member expression is not yet supported"
 
                             let declaredReturnType =
                                 match methodDeclaration.ReturnType with
@@ -1332,7 +1591,14 @@ type internal CompilerService() =
                                     ReturnType = returnType
                                     Body = body
                                     ExportFingerprint = exportFingerprint
-                                    Range = methodDeclaration.BodyRange
+                                    Range =
+                                        match body with
+                                        | TypedResumableCode expression ->
+                                            expression.Range
+                                        | TypedIntegerLiteral _
+                                        | TypedParameterReference _
+                                        | TypedTraitCall _ ->
+                                            methodDeclaration.BodyRange
                                 }
 
                     match
@@ -1925,6 +2191,138 @@ type internal CompilerService() =
                         ]
                 }
 
+            let rec methodTypeParametersToTypeParameters =
+                function
+                | CliMethodTypeParameter index -> CliTypeParameter index
+                | CliByRef elementType ->
+                    CliByRef(methodTypeParametersToTypeParameters elementType)
+                | CliGenericType(typeReference, arguments) ->
+                    CliGenericType(
+                        typeReference,
+                        arguments
+                        |> List.map methodTypeParametersToTypeParameters
+                    )
+                | (CliInt32
+                  | CliBoolean
+                  | CliString
+                  | CliObject
+                  | CliNativeInt
+                  | CliVoid
+                  | CliTypeParameter _
+                  | CliNamedType _) as cliType -> cliType
+
+            let closureName (methodDeclaration: TypedMethodDeclaration) expression =
+                methodDeclaration.Name
+                + "@"
+                + expression.SourceLine.ToString(CultureInfo.InvariantCulture)
+
+            let closureStableId (methodDeclaration: TypedMethodDeclaration) =
+                methodDeclaration.StableId
+                + "/closure:resumable-code"
+
+            let closureTypeReference
+                (methodDeclaration: TypedMethodDeclaration)
+                expression
+                =
+                let name = closureName methodDeclaration expression
+
+                {
+                    DeclarationId = closureStableId methodDeclaration
+                    AssemblyName = String.Empty
+                    TypeName = {
+                        Namespace = String.Empty
+                        Name =
+                            if List.isEmpty methodDeclaration.GenericParameters then
+                                name
+                            else
+                                name
+                                + "`"
+                                + methodDeclaration.GenericParameters.Length.ToString(
+                                    CultureInfo.InvariantCulture
+                                )
+                    }
+                    IsValueType = false
+                }
+
+            let instantiateClosure typeReference genericArguments =
+                match genericArguments with
+                | [] -> CliNamedType typeReference
+                | _ -> CliGenericType(typeReference, genericArguments)
+
+            let closureLayout
+                (methodDeclaration: TypedMethodDeclaration)
+                (expression: TypedResumableCodeExpression)
+                =
+                let stableId = closureStableId methodDeclaration
+                let name = closureName methodDeclaration expression
+                let typeReference = closureTypeReference methodDeclaration expression
+
+                let methodArguments =
+                    methodDeclaration.GenericParameters
+                    |> List.mapi (fun index _ -> CliMethodTypeParameter index)
+
+                let definitionArguments =
+                    methodDeclaration.GenericParameters
+                    |> List.mapi (fun index _ -> CliTypeParameter index)
+
+                let methodType = instantiateClosure typeReference methodArguments
+                let definitionType = instantiateClosure typeReference definitionArguments
+
+                let captureType =
+                    methodDeclaration.Parameters.[expression.CaptureParameterIndex].Type
+                    |> methodTypeParametersToTypeParameters
+
+                let dataType =
+                    expression.DataType
+                    |> methodTypeParametersToTypeParameters
+
+                let stateMachineType =
+                    expression.StateMachineType
+                    |> methodTypeParametersToTypeParameters
+
+                let captureFieldReference = {
+                    DeclaringType = CliDeclaringType definitionType
+                    Name = expression.CaptureName
+                    FieldType = captureType
+                    TargetStableId =
+                        Some(
+                            stableId
+                            + "/field:"
+                            + expression.CaptureName
+                        )
+                }
+
+                let dataFieldReference = {
+                    DeclaringType = CliDeclaringType stateMachineType
+                    Name = expression.DataFieldName
+                    FieldType = CliTypeParameter 0
+                    TargetStableId = None
+                }
+
+                let resultFieldReference = {
+                    DeclaringType = CliDeclaringType dataType
+                    Name = expression.ResultFieldName
+                    FieldType = captureType
+                    TargetStableId = Some expression.ResultFieldStableId
+                }
+
+                {|
+                    StableId = stableId
+                    Name = name
+                    CaptureFieldStableId =
+                        stableId
+                        + "/field:"
+                        + expression.CaptureName
+                    ConstructorStableId = stableId + "/constructor"
+                    InvokeStableId = stableId + "/method:Invoke"
+                    MethodType = methodType
+                    CaptureType = captureType
+                    StateMachineType = stateMachineType
+                    CaptureFieldReference = captureFieldReference
+                    DataFieldReference = dataFieldReference
+                    ResultFieldReference = resultFieldReference
+                |}
+
             let methodInstructions kind (methodDeclaration: TypedMethodDeclaration) =
                 match methodDeclaration.Body with
                 | TypedIntegerLiteral value -> [
@@ -1939,10 +2337,58 @@ type internal CompilerService() =
                             index
                             + 1
                         | ModuleFunction
-                        | StaticInlineMemberStub -> index
+                        | StaticInlineMemberStub
+                        | ClosureConstructor
+                        | ClosureInvoke -> index
 
                     [
                         LoadArgument argumentIndex
+                        Return
+                    ]
+                | TypedResumableCode expression ->
+                    let layout = closureLayout methodDeclaration expression
+
+                    let constructor = {
+                        DeclaringType = CliDeclaringType layout.MethodType
+                        Name = ".ctor"
+                        IsInstance = true
+                        ParameterTypes = [ layout.CaptureType ]
+                        ReturnType = CliVoid
+                        TargetStableId = Some layout.ConstructorStableId
+                    }
+
+                    let invoke = {
+                        DeclaringType = CliDeclaringType layout.MethodType
+                        Name = "Invoke"
+                        IsInstance = true
+                        ParameterTypes = [ CliByRef layout.StateMachineType ]
+                        ReturnType = CliBoolean
+                        TargetStableId = Some layout.InvokeStableId
+                    }
+
+                    let delegateConstructor = {
+                        DeclaringType = CliDeclaringType expression.DelegateType
+                        Name = ".ctor"
+                        IsInstance = true
+                        ParameterTypes = [ CliObject; CliNativeInt ]
+                        ReturnType = CliVoid
+                        TargetStableId = None
+                    }
+
+                    let captureArgumentIndex =
+                        match kind with
+                        | InstanceConstructor
+                        | InstanceInlineMember -> expression.CaptureParameterIndex + 1
+                        | ModuleFunction
+                        | StaticInlineMemberStub
+                        | ClosureConstructor
+                        | ClosureInvoke -> expression.CaptureParameterIndex
+
+                    [
+                        LoadArgument captureArgumentIndex
+                        NewObject constructor
+                        LoadFunctionPointer invoke
+                        NewObject delegateConstructor
                         Return
                     ]
                 | TypedTraitCall(_, memberName, _) -> [
@@ -1953,10 +2399,17 @@ type internal CompilerService() =
                     )
                     NewObject(
                         {
-                            Namespace = "System"
-                            Name = "NotSupportedException"
-                        },
-                        [ CliString ]
+                            DeclaringType =
+                                CoreDeclaringType {
+                                    Namespace = "System"
+                                    Name = "NotSupportedException"
+                                }
+                            Name = ".ctor"
+                            IsInstance = true
+                            ParameterTypes = [ CliString ]
+                            ReturnType = CliVoid
+                            TargetStableId = None
+                        }
                     )
                     Throw
                   ]
@@ -1980,6 +2433,24 @@ type internal CompilerService() =
                 contentHash
                 (methodDeclaration: TypedMethodDeclaration)
                 =
+                let instructions = methodInstructions kind methodDeclaration
+
+                let instructionDependencies =
+                    instructions
+                    |> List.choose (function
+                        | LoadField fieldReference
+                        | LoadFieldAddress fieldReference
+                        | StoreField fieldReference -> Some fieldReference.DependencyId
+                        | CallMethod methodReference
+                        | LoadFunctionPointer methodReference
+                        | NewObject methodReference -> Some methodReference.DependencyId
+                        | LoadInt32 _
+                        | LoadString _
+                        | LoadArgument _
+                        | Throw
+                        | Return -> None
+                    )
+
                 {
                     SchemaVersion = querySchema
                     StableId = fragmentStableId
@@ -1989,8 +2460,17 @@ type internal CompilerService() =
                     Constraints = methodDeclaration.Constraints
                     Parameters = methodDeclaration.Parameters
                     ReturnType = methodDeclaration.ReturnType
-                    Instructions = methodInstructions kind methodDeclaration
-                    DependencyIds = methodDependencies methodDeclaration
+                    Instructions = instructions
+                    MaxStack =
+                        match methodDeclaration.Body with
+                        | TypedResumableCode _ -> 8
+                        | TypedIntegerLiteral _
+                        | TypedParameterReference _
+                        | TypedTraitCall _ -> 1
+                    DependencyIds =
+                        methodDependencies methodDeclaration
+                        @ instructionDependencies
+                        |> List.distinct
                     ContentHash = contentHash
                     DocumentIndex = documentIndex
                     DocumentChecksum = documentChecksum
@@ -2167,14 +2647,16 @@ type internal CompilerService() =
                                 + "/constructor:unit"
 
                             let objectConstructor = {
-                                DeclaringType = {
-                                    Namespace = "System"
-                                    Name = "Object"
-                                }
+                                DeclaringType =
+                                    CoreDeclaringType {
+                                        Namespace = "System"
+                                        Name = "Object"
+                                    }
                                 Name = ".ctor"
                                 IsInstance = true
                                 ParameterTypes = []
                                 ReturnType = CliVoid
+                                TargetStableId = None
                             }
 
                             let constructor = {
@@ -2191,6 +2673,7 @@ type internal CompilerService() =
                                     CallMethod objectConstructor
                                     Return
                                 ]
+                                MaxStack = 1
                                 DependencyIds = [ objectConstructor.StableId ]
                                 ContentHash =
                                     Fingerprint.parts [
@@ -2238,6 +2721,170 @@ type internal CompilerService() =
                         | TypedTypeAbbreviation _
                         | TypedStaticType _
                         | TypedStructType _ -> None
+                    )
+                )
+                |> List.collect id
+
+            let closureTypes =
+                modulesWithContentHashes
+                |> List.mapi (fun documentIndex (typed, declarationsWithContentHashes) ->
+                    let moduleTypeStableId =
+                        moduleStableId
+                        + "/type:"
+                        + typed.StableId
+
+                    let isNested = typed.ContainerKind = ModuleSource
+
+                    declarationsWithContentHashes
+                    |> List.collect (fun (declaration, _) ->
+                        match declaration with
+                        | TypedObjectType typeDeclaration ->
+                            typeDeclaration.Methods
+                            |> List.choose (fun methodDeclaration ->
+                                match methodDeclaration.Body with
+                                | TypedResumableCode expression ->
+                                    let layout =
+                                        closureLayout methodDeclaration expression
+
+                                    let objectConstructor = {
+                                        DeclaringType =
+                                            CoreDeclaringType {
+                                                Namespace = "System"
+                                                Name = "Object"
+                                            }
+                                        Name = ".ctor"
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType = CliVoid
+                                        TargetStableId = None
+                                    }
+
+                                    let constructor = {
+                                        SchemaVersion = querySchema
+                                        StableId = layout.ConstructorStableId
+                                        Name = ".ctor"
+                                        Kind = ClosureConstructor
+                                        GenericParameters = []
+                                        Constraints = []
+                                        Parameters = [
+                                            {
+                                                Name = expression.CaptureName
+                                                Type = layout.CaptureType
+                                            }
+                                        ]
+                                        ReturnType = CliVoid
+                                        Instructions = [
+                                            LoadArgument 0
+                                            LoadArgument 1
+                                            StoreField layout.CaptureFieldReference
+                                            LoadArgument 0
+                                            CallMethod objectConstructor
+                                            Return
+                                        ]
+                                        MaxStack = 8
+                                        DependencyIds = [
+                                            layout.CaptureFieldReference.DependencyId
+                                            objectConstructor.DependencyId
+                                        ]
+                                        ContentHash =
+                                            Fingerprint.parts [
+                                                layout.ConstructorStableId
+                                                layout.CaptureFieldReference.StableId
+                                                objectConstructor.StableId
+                                            ]
+                                        DocumentIndex = documentIndex
+                                        DocumentChecksum = typed.SourceChecksum
+                                        Range = methodDeclaration.Range
+                                    }
+
+                                    let invoke = {
+                                        SchemaVersion = querySchema
+                                        StableId = layout.InvokeStableId
+                                        Name = "Invoke"
+                                        Kind = ClosureInvoke
+                                        GenericParameters = []
+                                        Constraints = []
+                                        Parameters = [
+                                            {
+                                                Name =
+                                                    expression.StateMachineParameterName
+                                                Type = CliByRef layout.StateMachineType
+                                            }
+                                        ]
+                                        ReturnType = CliBoolean
+                                        Instructions = [
+                                            LoadArgument 1
+                                            LoadFieldAddress layout.DataFieldReference
+                                            LoadArgument 0
+                                            LoadField layout.CaptureFieldReference
+                                            StoreField layout.ResultFieldReference
+                                            LoadInt32 1
+                                            Return
+                                        ]
+                                        MaxStack = 8
+                                        DependencyIds = [
+                                            layout.DataFieldReference.DependencyId
+                                            layout.CaptureFieldReference.DependencyId
+                                            layout.ResultFieldReference.DependencyId
+                                        ]
+                                        ContentHash =
+                                            Fingerprint.parts [
+                                                layout.InvokeStableId
+                                                methodImplementationHash methodDeclaration
+                                                layout.DataFieldReference.StableId
+                                                layout.CaptureFieldReference.StableId
+                                                layout.ResultFieldReference.StableId
+                                            ]
+                                        DocumentIndex = documentIndex
+                                        DocumentChecksum = typed.SourceChecksum
+                                        Range = methodDeclaration.Range
+                                    }
+
+                                    Some {
+                                        SchemaVersion = querySchema
+                                        StableId = layout.StableId
+                                        Namespace =
+                                            if isNested then
+                                                String.Empty
+                                            else
+                                                typed.Namespace
+                                        Name = layout.Name
+                                        IsPublic = false
+                                        EnclosingTypeStableId =
+                                            if isNested then
+                                                Some moduleTypeStableId
+                                            else
+                                                None
+                                        Kind = ClosureContainer
+                                        GenericParameters =
+                                            methodDeclaration.GenericParameters
+                                        Attributes = []
+                                        LiteralFields = []
+                                        InstanceFields = [
+                                            {
+                                                SchemaVersion = querySchema
+                                                StableId = layout.CaptureFieldStableId
+                                                Name = expression.CaptureName
+                                                Type = layout.CaptureType
+                                                Attributes = []
+                                                ContentHash =
+                                                    Fingerprint.parts [
+                                                        layout.CaptureFieldStableId
+                                                        TypeIdentity.cliType layout.CaptureType
+                                                    ]
+                                            }
+                                        ]
+                                        Methods = [ constructor; invoke ]
+                                    }
+                                | TypedIntegerLiteral _
+                                | TypedParameterReference _
+                                | TypedTraitCall _ -> None
+                            )
+                        | TypedMethod _
+                        | TypedLiteralField _
+                        | TypedTypeAbbreviation _
+                        | TypedStaticType _
+                        | TypedStructType _ -> []
                     )
                 )
                 |> List.collect id
@@ -2304,6 +2951,7 @@ type internal CompilerService() =
                 @ staticTypes
                 @ objectTypes
                 @ structTypes
+                @ closureTypes
 
             let symbolic: SymbolicAssembly = {
                 SchemaVersion = querySchema

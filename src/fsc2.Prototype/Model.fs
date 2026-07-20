@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 16
+    let Query = 17
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -111,15 +111,6 @@ type internal ParsedCallArgument =
 
     override _.ToString() = "ParsedCallArgument"
 
-[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
-type internal ParsedExpression =
-    | IntegerLiteral of int
-    | StringLiteral of string
-    | ValueReference of string
-    | TraitCall of receiverName: string * memberName: string * arguments: ParsedCallArgument list
-
-    override _.ToString() = "ParsedExpression"
-
 type internal ParsedType =
     | ParsedInt32
 
@@ -184,6 +175,26 @@ type internal ParsedTypeExpression =
         | ParsedFunctionType(_, _, range) -> range
 
     override _.ToString() = "ParsedTypeExpression"
+
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal ParsedExpression =
+    | IntegerLiteral of int
+    | BooleanLiteral of bool
+    | StringLiteral of string
+    | ValueReference of string
+    | TraitCall of receiverName: string * memberName: string * arguments: ParsedCallArgument list
+    | MemberAssignment of
+        rootName: string *
+        memberPath: string list *
+        value: ParsedExpression
+    | SequentialExpression of ParsedExpression list
+    | LambdaExpression of parameterName: string * body: ParsedExpression
+    | TypeConstruction of
+        constructedType: ParsedTypeExpression *
+        argument: ParsedExpression *
+        argumentRange: SourceRange
+
+    override _.ToString() = "ParsedExpression"
 
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
 type internal ParsedTypeConstraint =
@@ -441,6 +452,8 @@ type internal CliType =
     | CliInt32
     | CliBoolean
     | CliString
+    | CliObject
+    | CliNativeInt
     | CliVoid
     | CliTypeParameter of int
     | CliMethodTypeParameter of int
@@ -449,6 +462,13 @@ type internal CliType =
     | CliGenericType of genericType: CliTypeReference * arguments: CliType list
 
     override _.ToString() = "CliType"
+
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal SymbolicDeclaringType =
+    | CoreDeclaringType of QualifiedTypeName
+    | CliDeclaringType of CliType
+
+    override _.ToString() = "SymbolicDeclaringType"
 
 module internal StableIdentity =
     let qualifiedTypeName (typeName: QualifiedTypeName) =
@@ -464,6 +484,8 @@ module internal StableIdentity =
         | CliInt32 -> "int32"
         | CliBoolean -> "bool"
         | CliString -> "string"
+        | CliObject -> "object"
+        | CliNativeInt -> "native-int"
         | CliVoid -> "void"
         | CliTypeParameter index ->
             "type-parameter:"
@@ -492,12 +514,22 @@ module internal StableIdentity =
                 yield! arguments |> List.map cliType
             ]
 
+    let symbolicDeclaringType =
+        function
+        | CoreDeclaringType typeName ->
+            "core:"
+            + qualifiedTypeName typeName
+        | CliDeclaringType declaringCliType ->
+            "cli:"
+            + cliType declaringCliType
+
 type internal SymbolicMethodReference = {
-    DeclaringType: QualifiedTypeName
+    DeclaringType: SymbolicDeclaringType
     Name: string
     IsInstance: bool
     ParameterTypes: CliType list
     ReturnType: CliType
+    TargetStableId: string option
 } with
 
     member this.StableId =
@@ -505,13 +537,17 @@ type internal SymbolicMethodReference = {
             "|"
             [
                 "method-reference"
-                StableIdentity.qualifiedTypeName this.DeclaringType
+                StableIdentity.symbolicDeclaringType this.DeclaringType
                 this.Name
                 if this.IsInstance then "instance" else "static"
                 yield! this.ParameterTypes |> List.map StableIdentity.cliType
                 "return"
                 StableIdentity.cliType this.ReturnType
             ]
+
+    member this.DependencyId =
+        this.TargetStableId
+        |> Option.defaultValue this.StableId
 
     override _.ToString() = "SymbolicMethodReference"
 
@@ -521,9 +557,26 @@ type internal TypedCallArgument =
 
     override _.ToString() = "TypedCallArgument"
 
+type internal TypedResumableCodeExpression = {
+    DelegateType: CliType
+    StateMachineType: CliType
+    DataType: CliType
+    CaptureParameterIndex: int
+    CaptureName: string
+    StateMachineParameterName: string
+    DataFieldName: string
+    ResultFieldName: string
+    ResultFieldStableId: string
+    SourceLine: int
+    Range: SourceRange
+} with
+
+    override _.ToString() = "TypedResumableCodeExpression"
+
 type internal TypedExpression =
     | TypedIntegerLiteral of int
     | TypedParameterReference of int
+    | TypedResumableCode of TypedResumableCodeExpression
     | TypedTraitCall of
         receiverName: string *
         memberName: string *
@@ -738,13 +791,40 @@ type internal TypedModule = {
 
     override _.ToString() = "TypedModule"
 
+type internal SymbolicFieldReference = {
+    DeclaringType: SymbolicDeclaringType
+    Name: string
+    FieldType: CliType
+    TargetStableId: string option
+} with
+
+    member this.StableId =
+        String.concat
+            "|"
+            [
+                "field-reference"
+                StableIdentity.symbolicDeclaringType this.DeclaringType
+                this.Name
+                StableIdentity.cliType this.FieldType
+            ]
+
+    member this.DependencyId =
+        this.TargetStableId
+        |> Option.defaultValue this.StableId
+
+    override _.ToString() = "SymbolicFieldReference"
+
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
 type internal SymbolicInstruction =
     | LoadInt32 of int
     | LoadString of string
     | LoadArgument of int
+    | LoadField of SymbolicFieldReference
+    | LoadFieldAddress of SymbolicFieldReference
+    | StoreField of SymbolicFieldReference
     | CallMethod of SymbolicMethodReference
-    | NewObject of declaringType: QualifiedTypeName * parameterTypes: CliType list
+    | LoadFunctionPointer of SymbolicMethodReference
+    | NewObject of SymbolicMethodReference
     | Throw
     | Return
 
@@ -756,6 +836,8 @@ type internal SymbolicMethodKind =
     | StaticInlineMemberStub
     | InstanceConstructor
     | InstanceInlineMember
+    | ClosureConstructor
+    | ClosureInvoke
 
     override _.ToString() = "SymbolicMethodKind"
 
@@ -769,6 +851,7 @@ type internal SymbolicMethodFragment = {
     Parameters: TypedParameter list
     ReturnType: CliType
     Instructions: SymbolicInstruction list
+    MaxStack: int
     DependencyIds: string list
     ContentHash: string
     DocumentIndex: int
@@ -815,6 +898,7 @@ type internal SymbolicTypeKind =
     | StaticMemberContainer
     | ObjectContainer
     | StructContainer
+    | ClosureContainer
 
     override _.ToString() = "SymbolicTypeKind"
 

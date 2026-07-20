@@ -25,6 +25,7 @@ module internal Frontend =
         | DoKeyword
         | ValKeyword
         | MutableKeyword
+        | FunKeyword
         | Identifier of string
         | TypeParameter of string
         | Integer of int
@@ -41,6 +42,7 @@ module internal Frontend =
         | LessThan
         | GreaterThan
         | Arrow
+        | LeftArrow
         | Ampersand
         | Star
         | Equals
@@ -376,6 +378,7 @@ module internal Frontend =
                 | "do" -> add DoKeyword start
                 | "val" -> add ValKeyword start
                 | "mutable" -> add MutableKeyword start
+                | "fun" -> add FunKeyword start
                 | _ -> add (Identifier value) start
             elif Char.IsDigit(current) then
                 let start = position ()
@@ -465,6 +468,14 @@ module internal Frontend =
                     advance ()
                     advance ()
                     add Arrow start
+                elif
+                    current = '<'
+                    && offset + 1 < text.Length
+                    && text.[offset + 1] = '-'
+                then
+                    advance ()
+                    advance ()
+                    add LeftArrow start
                 else
                     advance ()
 
@@ -735,74 +746,229 @@ module internal Frontend =
                             )
                 }
 
-            let parseExpression () =
-                let expressionToken = consume ()
+            let rec parseExpression () =
+                let expressionToken = current ()
+
+                let parseCallArguments () =
+                    let rec loop arguments =
+                        parseResult {
+                            let isAddressOf =
+                                match (current ()).Kind with
+                                | Ampersand ->
+                                    consume ()
+                                    |> ignore
+
+                                    true
+                                | _ -> false
+
+                            let! argumentName, _ =
+                                identifier "expected a trait-call argument"
+
+                            let argument =
+                                if isAddressOf then
+                                    ParsedAddressOfArgument argumentName
+                                else
+                                    ParsedValueArgument argumentName
+
+                            let arguments =
+                                argument
+                                :: arguments
+
+                            return!
+                                match (current ()).Kind with
+                                | Comma ->
+                                    consume ()
+                                    |> ignore
+
+                                    loop arguments
+                                | RightParenthesis -> Ok(List.rev arguments)
+                                | _ ->
+                                    Error(
+                                        prototypeDiagnostic
+                                            source.Path
+                                            (current ()).Range
+                                            "expected ',' or ')' after a trait-call argument"
+                                    )
+                        }
+
+                    match (current ()).Kind with
+                    | RightParenthesis -> Ok []
+                    | _ -> loop []
+
+                let parseMemberPath rootName =
+                    let rec loop members =
+                        parseResult {
+                            let! _ = expected Dot "expected '.'"
+                            let! memberName, _ = identifier "expected a member name"
+
+                            let members =
+                                memberName
+                                :: members
+
+                            return!
+                                match (current ()).Kind with
+                                | Dot -> loop members
+                                | _ -> Ok(List.rev members)
+                        }
+
+                    loop []
+                    |> Result.map (fun members -> rootName, members)
 
                 match expressionToken.Kind with
-                | Integer value -> Ok(IntegerLiteral value, expressionToken.Range)
-                | StringLiteralToken value -> Ok(StringLiteral value, expressionToken.Range)
-                | Identifier receiverName when (current ()).Kind = Dot ->
+                | Integer value ->
+                    consume ()
+                    |> ignore
+
+                    Ok(IntegerLiteral value, expressionToken.Range)
+                | StringLiteralToken value ->
+                    consume ()
+                    |> ignore
+
+                    Ok(StringLiteral value, expressionToken.Range)
+                | Identifier "true" ->
+                    consume ()
+                    |> ignore
+
+                    Ok(BooleanLiteral true, expressionToken.Range)
+                | Identifier "false" ->
+                    consume ()
+                    |> ignore
+
+                    Ok(BooleanLiteral false, expressionToken.Range)
+                | FunKeyword ->
                     parseResult {
-                        let! _ = expected Dot "expected '.'"
-                        let! memberName, _ = identifier "expected a member name"
-                        let! _ = expected LeftParenthesis "expected '('"
+                        let! funToken = expected FunKeyword "expected 'fun'"
+                        let! parameterName, _ = identifier "expected a lambda parameter"
+                        let! _ = expected Arrow "expected '->'"
 
-                        let rec parseCallArguments arguments =
+                        let rec parseBody expressions firstRange =
                             parseResult {
-                                let isAddressOf =
-                                    match (current ()).Kind with
-                                    | Ampersand ->
-                                        consume ()
-                                        |> ignore
+                                let! expression, expressionRange = parseExpression ()
 
-                                        true
-                                    | _ -> false
+                                let expressions =
+                                    expression
+                                    :: expressions
 
-                                let! argumentName, _ = identifier "expected a trait-call argument"
-
-                                let argument =
-                                    if isAddressOf then
-                                        ParsedAddressOfArgument argumentName
-                                    else
-                                        ParsedValueArgument argumentName
-
-                                let arguments =
-                                    argument
-                                    :: arguments
+                                let firstRange =
+                                    firstRange
+                                    |> Option.defaultValue expressionRange
 
                                 return!
                                     match (current ()).Kind with
-                                    | Comma ->
-                                        consume ()
-                                        |> ignore
+                                    | RightParenthesis ->
+                                        let expressions = List.rev expressions
 
-                                        parseCallArguments arguments
-                                    | RightParenthesis -> Ok(List.rev arguments)
-                                    | _ ->
+                                        let body =
+                                            match expressions with
+                                            | [ expression ] -> expression
+                                            | _ -> SequentialExpression expressions
+
+                                        Ok(
+                                            body,
+                                            {
+                                                Start = firstRange.Start
+                                                End = expressionRange.End
+                                            }
+                                        )
+                                    | EndOfFile ->
                                         Error(
                                             prototypeDiagnostic
                                                 source.Path
                                                 (current ()).Range
-                                                "expected ',' or ')' after a trait-call argument"
+                                                "expected ')' after a lambda body"
                                         )
+                                    | _ -> parseBody expressions (Some firstRange)
                             }
 
-                        let! argumentNames =
-                            match (current ()).Kind with
-                            | RightParenthesis -> Ok []
-                            | _ -> parseCallArguments []
-
-                        let! closeToken = expected RightParenthesis "expected ')'"
+                        let! body, bodyRange = parseBody [] None
 
                         return
-                            TraitCall(receiverName, memberName, argumentNames),
+                            LambdaExpression(parameterName, body),
+                            {
+                                Start = funToken.Range.Start
+                                End = bodyRange.End
+                            }
+                    }
+                | Identifier _ when
+                    index + 1 < input.Length
+                    && input.[index + 1].Kind = LessThan
+                    ->
+                    parseResult {
+                        let! constructedType = parseTypeExpression ()
+                        let! openToken = expected LeftParenthesis "expected '('"
+                        let! argument, _ = parseExpression ()
+                        let! closeToken = expected RightParenthesis "expected ')'"
+
+                        let argumentRange = {
+                            Start = openToken.Range.Start
+                            End = closeToken.Range.End
+                        }
+
+                        return
+                            TypeConstruction(
+                                constructedType,
+                                argument,
+                                argumentRange
+                            ),
                             {
                                 Start = expressionToken.Range.Start
                                 End = closeToken.Range.End
                             }
                     }
-                | Identifier value -> Ok(ValueReference value, expressionToken.Range)
+                | Identifier receiverName when
+                    index + 1 < input.Length
+                    && input.[index + 1].Kind = Dot
+                    ->
+                    consume ()
+                    |> ignore
+
+                    parseResult {
+                        let! _, memberPath = parseMemberPath receiverName
+
+                        return!
+                            match (current ()).Kind with
+                            | LeftParenthesis when memberPath.Length = 1 ->
+                                parseResult {
+                                    let! _ = expected LeftParenthesis "expected '('"
+                                    let! arguments = parseCallArguments ()
+                                    let! closeToken = expected RightParenthesis "expected ')'"
+
+                                    return
+                                        TraitCall(receiverName, memberPath.Head, arguments),
+                                        {
+                                            Start = expressionToken.Range.Start
+                                            End = closeToken.Range.End
+                                        }
+                                }
+                            | LeftArrow ->
+                                parseResult {
+                                    let! _ = expected LeftArrow "expected '<-'"
+                                    let! value, valueRange = parseExpression ()
+
+                                    return
+                                        MemberAssignment(receiverName, memberPath, value),
+                                        {
+                                            Start = expressionToken.Range.Start
+                                            End = valueRange.End
+                                        }
+                                }
+                            | _ ->
+                                Error(
+                                    prototypeDiagnostic
+                                        source.Path
+                                        (current ()).Range
+                                        "expected a member call or assignment"
+                                )
+                    }
+                | Identifier value ->
+                    consume ()
+                    |> ignore
+
+                    Ok(ValueReference value, expressionToken.Range)
                 | RightParenthesis ->
+                    consume ()
+                    |> ignore
+
                     Error(
                         diagnostic
                             "FS0010"
@@ -811,6 +977,9 @@ module internal Frontend =
                             "Unexpected symbol ')' in binding"
                     )
                 | _ ->
+                    consume ()
+                    |> ignore
+
                     Error(
                         prototypeDiagnostic
                             source.Path

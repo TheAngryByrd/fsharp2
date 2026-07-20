@@ -258,6 +258,8 @@ module internal Linker =
         | CliInt32 -> encoder.Int32()
         | CliBoolean -> encoder.Boolean()
         | CliString -> encoder.String()
+        | CliObject -> encoder.Object()
+        | CliNativeInt -> encoder.IntPtr()
         | CliTypeParameter index -> encoder.GenericTypeParameter(index)
         | CliMethodTypeParameter index -> encoder.GenericMethodTypeParameter(index)
         | CliVoid -> invalidOp "void is valid only as a method return type"
@@ -323,6 +325,19 @@ module internal Linker =
                 MethodAttributes.Public
                 ||| MethodAttributes.HideBySig
           }
+        | ClosureConstructor -> {
+            IsInstance = true
+            Attributes =
+                MethodAttributes.Public
+                ||| MethodAttributes.SpecialName
+                ||| MethodAttributes.RTSpecialName
+          }
+        | ClosureInvoke -> {
+            IsInstance = true
+            Attributes =
+                MethodAttributes.Assembly
+                ||| MethodAttributes.HideBySig
+          }
 
     let private encodeCallableSignature
         resolveTypeReference
@@ -367,9 +382,6 @@ module internal Linker =
         encodeCliType resolveTypeReference (BlobEncoder(signature).FieldSignature()) fieldType
         signature
 
-    let private encodeConstructorSignature resolveTypeReference parameterTypes =
-        encodeCallableSignature resolveTypeReference 0 true parameterTypes CliVoid
-
     let private encodeMethodReferenceSignature
         resolveTypeReference
         (methodReference: SymbolicMethodReference)
@@ -383,13 +395,29 @@ module internal Linker =
 
     let private encodeMethodBody
         (metadata: MetadataBuilder)
-        (resolveCoreTypeReference: QualifiedTypeName -> TypeReferenceHandle)
+        (resolveDeclaringType: SymbolicDeclaringType -> EntityHandle)
         resolveTypeReference
         (stream: MethodBodyStreamEncoder)
         (methodFragment: SymbolicMethodFragment)
         =
         let code = BlobBuilder()
         let instructions = InstructionEncoder(code)
+
+        let addMethodReference (methodReference: SymbolicMethodReference) =
+            metadata.AddMemberReference(
+                resolveDeclaringType methodReference.DeclaringType,
+                metadata.GetOrAddString(methodReference.Name),
+                encodeMethodReferenceSignature resolveTypeReference methodReference
+                |> metadata.GetOrAddBlob
+            )
+
+        let addFieldReference (fieldReference: SymbolicFieldReference) =
+            metadata.AddMemberReference(
+                resolveDeclaringType fieldReference.DeclaringType,
+                metadata.GetOrAddString(fieldReference.Name),
+                encodeFieldSignature resolveTypeReference fieldReference.FieldType
+                |> metadata.GetOrAddBlob
+            )
 
         for instruction in methodFragment.Instructions do
             match instruction with
@@ -399,34 +427,29 @@ module internal Linker =
                 |> metadata.GetOrAddUserString
                 |> instructions.LoadString
             | LoadArgument index -> instructions.LoadArgument(index)
+            | LoadField fieldReference ->
+                instructions.OpCode(ILOpCode.Ldfld)
+                instructions.Token(addFieldReference fieldReference)
+            | LoadFieldAddress fieldReference ->
+                instructions.OpCode(ILOpCode.Ldflda)
+                instructions.Token(addFieldReference fieldReference)
+            | StoreField fieldReference ->
+                instructions.OpCode(ILOpCode.Stfld)
+                instructions.Token(addFieldReference fieldReference)
             | CallMethod methodReference ->
-                let target =
-                    metadata.AddMemberReference(
-                        resolveCoreTypeReference methodReference.DeclaringType,
-                        metadata.GetOrAddString(methodReference.Name),
-                        encodeMethodReferenceSignature resolveTypeReference methodReference
-                        |> metadata.GetOrAddBlob
-                    )
-
                 instructions.OpCode(ILOpCode.Call)
-                instructions.Token(target)
-            | NewObject(declaringType, parameterTypes) ->
-                let constructor =
-                    metadata.AddMemberReference(
-                        resolveCoreTypeReference declaringType,
-                        metadata.GetOrAddString(".ctor"),
-                        parameterTypes
-                        |> encodeConstructorSignature resolveTypeReference
-                        |> metadata.GetOrAddBlob
-                    )
-
+                instructions.Token(addMethodReference methodReference)
+            | LoadFunctionPointer methodReference ->
+                instructions.OpCode(ILOpCode.Ldftn)
+                instructions.Token(addMethodReference methodReference)
+            | NewObject methodReference ->
                 instructions.OpCode(ILOpCode.Newobj)
-                instructions.Token(constructor)
+                instructions.Token(addMethodReference methodReference)
             | Throw -> instructions.OpCode(ILOpCode.Throw)
             | Return -> instructions.OpCode(ILOpCode.Ret)
 
         let codeSize = code.Count
-        stream.AddMethodBody(instructions, maxStack = 1), codeSize
+        stream.AddMethodBody(instructions, maxStack = methodFragment.MaxStack), codeSize
 
     let private encodeStringConstructorSignature (parameterCount: int) =
         let signature = BlobBuilder()
@@ -870,6 +893,57 @@ module internal Linker =
                 cliTypeReferences.Add(typeReference, entityHandle)
                 entityHandle
 
+        let cliTypeSpecifications = Dictionary<CliType, EntityHandle>()
+
+        let resolveCliDeclaringType cliType =
+            match cliType with
+            | CliNamedType typeReference -> resolveCliTypeReference typeReference
+            | CliGenericType _ ->
+                match cliTypeSpecifications.TryGetValue(cliType) with
+                | true, handle -> handle
+                | false, _ ->
+                    let signature = BlobBuilder()
+
+                    encodeCliType
+                        resolveCliTypeReference
+                        (BlobEncoder(signature).TypeSpecificationSignature())
+                        cliType
+
+                    let handle =
+                        metadata.AddTypeSpecification(
+                            metadata.GetOrAddBlob(signature)
+                        )
+
+                    let entityHandle =
+                        MetadataTokens.EntityHandle(
+                            TableIndex.TypeSpec,
+                            MetadataTokens.GetRowNumber(handle)
+                        )
+
+                    cliTypeSpecifications.Add(cliType, entityHandle)
+                    entityHandle
+            | CliInt32
+            | CliBoolean
+            | CliString
+            | CliObject
+            | CliNativeInt
+            | CliVoid
+            | CliTypeParameter _
+            | CliMethodTypeParameter _
+            | CliByRef _ ->
+                invalidOp "a member declaring type must be a named or constructed CLI type"
+
+        let resolveDeclaringType =
+            function
+            | CoreDeclaringType typeName ->
+                let handle = resolveCoreTypeReference typeName
+
+                MetadataTokens.EntityHandle(
+                    TableIndex.TypeRef,
+                    MetadataTokens.GetRowNumber(handle)
+                )
+            | CliDeclaringType cliType -> resolveCliDeclaringType cliType
+
         let fsharpCore =
             if List.isEmpty customAttributeFragments then
                 Unchecked.defaultof<AssemblyReferenceHandle>
@@ -1020,7 +1094,7 @@ module internal Linker =
                 let bodyOffset, codeSize =
                     encodeMethodBody
                         metadata
-                        resolveCoreTypeReference
+                        resolveDeclaringType
                         resolveCliTypeReference
                         methodBodies
                         methodFragment
@@ -1060,6 +1134,12 @@ module internal Linker =
                     ||| TypeAttributes.Sealed
                     ||| enum<TypeAttributes> 0x00002000
                     ||| TypeAttributes.BeforeFieldInit
+                | ClosureContainer ->
+                    visibility
+                    ||| TypeAttributes.Sealed
+                    ||| TypeAttributes.SpecialName
+                    ||| enum<TypeAttributes> 0x00002000
+                    ||| TypeAttributes.BeforeFieldInit
 
             let name =
                 if List.isEmpty typeFragment.GenericParameters then
@@ -1074,7 +1154,8 @@ module internal Linker =
                 | StructContainer -> systemValueType
                 | ModuleContainer
                 | StaticMemberContainer
-                | ObjectContainer -> systemObject
+                | ObjectContainer
+                | ClosureContainer -> systemObject
 
             let typeDefinition =
                 metadata.AddTypeDefinition(
