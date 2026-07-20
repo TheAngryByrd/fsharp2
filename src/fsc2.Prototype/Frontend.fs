@@ -1764,11 +1764,22 @@ module internal Frontend =
                                     }
                                 )
                             | _ ->
-                                Error(
-                                    prototypeDiagnostic
-                                        source.Path
-                                        (current ()).Range
-                                        "expected a member call or assignment"
+                                let memberToken = input.[index - 1]
+
+                                let expression =
+                                    memberPath
+                                    |> List.fold
+                                        (fun expression name ->
+                                            ExpressionMemberAccess(expression, name)
+                                        )
+                                        (ValueReference receiverName)
+
+                                Ok(
+                                    expression,
+                                    {
+                                        Start = expressionToken.Range.Start
+                                        End = memberToken.Range.End
+                                    }
                                 )
                     }
                 | Identifier value ->

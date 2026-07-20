@@ -4472,6 +4472,51 @@ module CompilerTargetTests =
 
                     Expect.isTrue fsharp2Behavior "Run should return the resumption delegate"
 
+            testCase "reads a nested IcedTasks state-machine field"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    [<Struct; NoComparison; NoEquality>]\n    type StateData =\n        [<DefaultValue(false)>]\n        val mutable Result: int\n\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        static member inline Read(sm: byref<ResumableStateMachine<StateData>>) : int =\n            sm.Data.Result\n"
+
+                withObjectMemberDifferential "fsharp2-nested-state-machine-field" sourceText "Read"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeRead assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let dataType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+StateData",
+                                throwOnError = true
+                            )
+
+                        let data = Activator.CreateInstance(dataType)
+                        dataType.GetField("Result").SetValue(data, 42)
+
+                        let stateMachineType =
+                            typeof<Microsoft.FSharp.Core.CompilerServices.ResumableStateMachine<int>>
+                                .GetGenericTypeDefinition()
+                                .MakeGenericType(dataType)
+
+                        let stateMachine = Activator.CreateInstance(stateMachineType)
+                        stateMachineType.GetField("Data").SetValue(stateMachine, data)
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        builderType.GetMethod("Read").Invoke(null, [| stateMachine |]) :?> int
+
+                    let oracleBehavior = invokeRead oracleOutputPath
+                    let fsharp2Behavior = invokeRead outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the nested state-machine field read should match the Compatibility Oracle"
+
+                    Expect.equal fsharp2Behavior 42 "Read should return the nested Result field"
+
             testCase "executes an if-then-else expression"
             <| fun _ ->
                 let sourceText =
@@ -7672,7 +7717,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "55"
+                        "56"
                         "query cache evidence should be versioned"
 
                     Expect.equal

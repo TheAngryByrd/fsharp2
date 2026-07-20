@@ -210,6 +210,16 @@ module private TypeIdentity =
                         |> Option.defaultValue String.Empty
                     ])
             ]
+        | TypedInstanceFieldGet(receiver, field) ->
+            Fingerprint.parts [
+                "instance-field-get"
+                inlineBody receiver
+                cliType field.DeclaringType
+                field.Name
+                cliType field.FieldType
+                field.TargetStableId
+                |> Option.defaultValue String.Empty
+            ]
         | TypedStaticMethodCall(target, genericArguments, arguments) ->
             Fingerprint.parts [
                 "static-call"
@@ -3158,8 +3168,13 @@ type internal CompilerService() =
                                         | Ok(typedReceiver,
                                              receiverType,
                                              nextReceiverLocalIndex) ->
-                                            let declaringType, typeArguments =
+                                            let ownerType =
                                                 match receiverType with
+                                                | CliByRef elementType -> elementType
+                                                | cliType -> cliType
+
+                                            let declaringType, typeArguments =
+                                                match ownerType with
                                                 | CliNamedType typeReference ->
                                                     Some typeReference, []
                                                 | CliGenericType(typeReference, arguments) ->
@@ -3170,57 +3185,128 @@ type internal CompilerService() =
                                             | None ->
                                                 diagnostic
                                                     methodDeclaration.BodyRange
-                                                    $"the expression type has no readable property '{memberName}'"
+                                                    $"the expression type has no readable field or property '{memberName}'"
                                             | Some typeReference ->
-                                                let candidates =
-                                                    references.Methods(
-                                                        typeReference.DeclarationId,
-                                                        "get_"
-                                                        + memberName,
-                                                        false
-                                                    )
-                                                    |> List.filter (fun methodDefinition ->
-                                                        methodDefinition.GenericArity = 0
-                                                        && List.isEmpty
-                                                            methodDefinition.ParameterTypes
-                                                    )
-                                                    |> List.map (fun methodDefinition ->
-                                                        methodDefinition,
-                                                        substituteTypeArguments
-                                                            typeArguments
-                                                            methodDefinition.ReturnType
-                                                    )
-                                                    |> List.distinctBy (fun (methodDefinition, _) ->
-                                                        methodDefinition.StableId
+                                                let sourceFieldCandidates =
+                                                    checkedSourceStructs
+                                                    |> Seq.choose (fun sourceStruct ->
+                                                        if
+                                                            sourceStruct.Declaration.StableId
+                                                            <> typeReference.DeclarationId
+                                                        then
+                                                            None
+                                                        else
+                                                            sourceStruct.Declaration.Fields
+                                                            |> List.tryFind (fun field ->
+                                                                field.Name = memberName
+                                                            )
+                                                            |> Option.map (fun field ->
+                                                                ({
+                                                                    DeclaringType = ownerType
+                                                                    Name = field.Name
+                                                                    FieldType = field.Type
+                                                                    TargetStableId =
+                                                                        Some field.StableId
+                                                                 }
+                                                                 : TypedFieldAddress),
+                                                                substituteTypeArguments
+                                                                    typeArguments
+                                                                    field.Type
+                                                            )
                                                     )
 
-                                                match candidates with
-                                                | [ methodDefinition, resultType ] ->
+                                                let referenceFieldCandidates =
+                                                    references.Fields(
+                                                        typeReference.DeclarationId,
+                                                        memberName,
+                                                        false
+                                                    )
+                                                    |> List.map (fun field ->
+                                                        ({
+                                                            DeclaringType = ownerType
+                                                            Name = field.Name
+                                                            FieldType = field.FieldType
+                                                            TargetStableId = Some field.StableId
+                                                         }
+                                                         : TypedFieldAddress),
+                                                        substituteTypeArguments
+                                                            typeArguments
+                                                            field.FieldType
+                                                    )
+
+                                                let fieldCandidates =
+                                                    Seq.append
+                                                        sourceFieldCandidates
+                                                        referenceFieldCandidates
+                                                    |> Seq.distinctBy (fun (field, _) ->
+                                                        field.TargetStableId
+                                                    )
+                                                    |> Seq.toList
+
+                                                match fieldCandidates with
+                                                | [ field, resultType ] ->
                                                     Ok(
-                                                        TypedInstanceMethodCall(
-                                                            {
-                                                                DeclaringType = receiverType
-                                                                Name = methodDefinition.Name
-                                                                ParameterTypes =
-                                                                    methodDefinition.ParameterTypes
-                                                                ReturnType =
-                                                                    methodDefinition.ReturnType
-                                                                ResultType = resultType
-                                                            },
+                                                        TypedInstanceFieldGet(
                                                             typedReceiver,
-                                                            []
+                                                            field
                                                         ),
                                                         resultType,
                                                         nextReceiverLocalIndex
                                                     )
+                                                | _ :: _ ->
+                                                    diagnostic
+                                                        methodDeclaration.BodyRange
+                                                        $"the field access '{memberName}' is ambiguous"
                                                 | [] ->
-                                                    diagnostic
-                                                        methodDeclaration.BodyRange
-                                                        $"the expression type has no readable property '{memberName}'"
-                                                | _ ->
-                                                    diagnostic
-                                                        methodDeclaration.BodyRange
-                                                        $"the property access '{memberName}' is ambiguous"
+                                                    let propertyCandidates =
+                                                        references.Methods(
+                                                            typeReference.DeclarationId,
+                                                            "get_"
+                                                            + memberName,
+                                                            false
+                                                        )
+                                                        |> List.filter (fun methodDefinition ->
+                                                            methodDefinition.GenericArity = 0
+                                                            && List.isEmpty
+                                                                methodDefinition.ParameterTypes
+                                                        )
+                                                        |> List.map (fun methodDefinition ->
+                                                            methodDefinition,
+                                                            substituteTypeArguments
+                                                                typeArguments
+                                                                methodDefinition.ReturnType
+                                                        )
+                                                        |> List.distinctBy (fun (methodDefinition, _) ->
+                                                            methodDefinition.StableId
+                                                        )
+
+                                                    match propertyCandidates with
+                                                    | [ methodDefinition, resultType ] ->
+                                                        Ok(
+                                                            TypedInstanceMethodCall(
+                                                                {
+                                                                    DeclaringType = ownerType
+                                                                    Name = methodDefinition.Name
+                                                                    ParameterTypes =
+                                                                        methodDefinition.ParameterTypes
+                                                                    ReturnType =
+                                                                        methodDefinition.ReturnType
+                                                                    ResultType = resultType
+                                                                },
+                                                                typedReceiver,
+                                                                []
+                                                            ),
+                                                            resultType,
+                                                            nextReceiverLocalIndex
+                                                        )
+                                                    | [] ->
+                                                        diagnostic
+                                                            methodDeclaration.BodyRange
+                                                            $"the expression type has no readable field or property '{memberName}'"
+                                                    | _ ->
+                                                        diagnostic
+                                                            methodDeclaration.BodyRange
+                                                            $"the property access '{memberName}' is ambiguous"
                                     | ExpressionMemberCall(receiver, memberName, arguments) ->
                                         match
                                             typeStaticExpression
@@ -3895,6 +3981,8 @@ type internal CompilerService() =
                                                                argumentExpression) ->
                                         inferredSubtypeConstraints functionExpression
                                         @ inferredSubtypeConstraints argumentExpression
+                                    | TypedInstanceFieldGet(receiver, _) ->
+                                        inferredSubtypeConstraints receiver
                                     | TypedInstanceMethodCall(_, receiver, arguments) ->
                                         inferredSubtypeConstraints receiver
                                         @ (arguments
@@ -4967,6 +5055,7 @@ type internal CompilerService() =
                                     | TypedLocalReference _
                                     | TypedLet _
                                     | TypedAddressOf _
+                                    | TypedInstanceFieldGet _
                                     | TypedStaticMethodCall _
                                     | TypedObjectConstruction _
                                     | TypedFunctionApplication _
@@ -6287,6 +6376,20 @@ type internal CompilerService() =
                             }
                         )),
                     []
+                | TypedInstanceFieldGet(receiver, field) ->
+                    let receiverInstructions, receiverLocals =
+                        valueExpressionInstructions freshLabel kind receiver
+
+                    receiverInstructions
+                    @ [
+                        LoadField {
+                            DeclaringType = CliDeclaringType field.DeclaringType
+                            Name = field.Name
+                            FieldType = field.FieldType
+                            TargetStableId = field.TargetStableId
+                        }
+                    ],
+                    receiverLocals
                 | TypedBooleanNegation(expression, range) ->
                     let expressionInstructions, expressionLocals =
                         valueExpressionInstructions freshLabel kind expression
@@ -6634,7 +6737,7 @@ type internal CompilerService() =
                         Return
                     ],
                     []
-                | (TypedStringLiteral _ | TypedNullLiteral | TypedUnitLiteral | TypedReceiverReference | TypedLocalReference _ | TypedLet _ | TypedLocalAssignment _ | TypedAddressOf _ | TypedStaticMethodCall _ | TypedObjectConstruction _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _ | TypedUpcast _ | TypedSequential _ | TypedBooleanNegation _ | TypedTypeTestMatch _ | TypedObjectExpression _) as expression ->
+                | (TypedStringLiteral _ | TypedNullLiteral | TypedUnitLiteral | TypedReceiverReference | TypedLocalReference _ | TypedLet _ | TypedLocalAssignment _ | TypedAddressOf _ | TypedInstanceFieldGet _ | TypedStaticMethodCall _ | TypedObjectConstruction _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _ | TypedUpcast _ | TypedSequential _ | TypedBooleanNegation _ | TypedTypeTestMatch _ | TypedObjectExpression _) as expression ->
                     let instructions, locals =
                         valueExpressionInstructions freshLabel kind expression
 
@@ -6932,6 +7035,7 @@ type internal CompilerService() =
                         | TypedAddressOf _
                         | TypedObjectExpression _
                         | TypedTraitCall _ -> 1
+                        | TypedInstanceFieldGet _
                         | TypedStaticMethodCall _
                         | TypedObjectConstruction _
                         | TypedFunctionApplication _
@@ -7195,6 +7299,7 @@ type internal CompilerService() =
                 | TypedFunctionApplication(_, _, _, functionExpression, argumentExpression) ->
                     objectExpressions functionExpression
                     @ objectExpressions argumentExpression
+                | TypedInstanceFieldGet(receiver, _) -> objectExpressions receiver
                 | TypedInstanceMethodCall(_, receiver, arguments) ->
                     objectExpressions receiver
                     @ (arguments
@@ -7641,6 +7746,7 @@ type internal CompilerService() =
                                     | TypedLocalReference _
                                     | TypedLet _
                                     | TypedAddressOf _
+                                    | TypedInstanceFieldGet _
                                     | TypedStaticMethodCall _
                                     | TypedObjectConstruction _
                                     | TypedFunctionApplication _
@@ -8029,6 +8135,7 @@ type internal CompilerService() =
                                 | TypedLet _
                                 | TypedLocalAssignment _
                                 | TypedAddressOf _
+                                | TypedInstanceFieldGet _
                                 | TypedStaticMethodCall _
                                 | TypedObjectConstruction _
                                 | TypedFunctionApplication _
@@ -8216,6 +8323,7 @@ type internal CompilerService() =
                                 | TypedLet _
                                 | TypedLocalAssignment _
                                 | TypedAddressOf _
+                                | TypedInstanceFieldGet _
                                 | TypedStaticMethodCall _
                                 | TypedObjectConstruction _
                                 | TypedFunctionApplication _

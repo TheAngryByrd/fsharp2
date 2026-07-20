@@ -59,6 +59,16 @@ type internal ReferenceMethodDefinition = {
 
     override _.ToString() = "ReferenceMethodDefinition"
 
+type internal ReferenceFieldDefinition = {
+    DeclaringType: CliTypeReference
+    StableId: string
+    Name: string
+    IsStatic: bool
+    FieldType: CliType
+} with
+
+    override _.ToString() = "ReferenceFieldDefinition"
+
 type private ReferenceTypeLocation = {
     ReferencePath: string
     TypeRow: int
@@ -68,6 +78,14 @@ type private ReferenceTypeLocation = {
     override _.ToString() = "ReferenceTypeLocation"
 
 module private ReferenceMethodKey =
+    let create declarationId name isStatic =
+        String.concat "\u001f" [
+            declarationId
+            name
+            (if isStatic then "static" else "instance")
+        ]
+
+module private ReferenceFieldKey =
     let create declarationId name isStatic =
         String.concat "\u001f" [
             declarationId
@@ -185,6 +203,7 @@ type internal ReferenceTypeIndex
         typeLocations: Dictionary<string, ReferenceTypeLocation list>
     ) =
     let methodCache = Dictionary<string, ReferenceMethodDefinition list>()
+    let fieldCache = Dictionary<string, ReferenceFieldDefinition list>()
 
     let loadMethods declarationId name isStatic =
         let signatureProvider = ReferenceSignatureTypeProvider(types)
@@ -347,6 +366,65 @@ type internal ReferenceTypeIndex
         |> List.distinctBy _.StableId
         |> List.sortBy _.StableId
 
+    let loadFields declarationId name isStatic =
+        let signatureProvider = ReferenceSignatureTypeProvider(types)
+
+        let locations =
+            match typeLocations.TryGetValue(declarationId) with
+            | true, candidates -> candidates
+            | false, _ -> []
+
+        locations
+        |> List.collect (fun location ->
+            use metadataStream = File.OpenRead(location.ReferencePath)
+            use pe = new PEReader(metadataStream)
+            let metadata = pe.GetMetadataReader()
+
+            let typeDefinition =
+                location.TypeRow
+                |> MetadataTokens.TypeDefinitionHandle
+                |> metadata.GetTypeDefinition
+
+            typeDefinition.GetFields()
+            |> Seq.choose (fun fieldHandle ->
+                let fieldDefinition = metadata.GetFieldDefinition(fieldHandle)
+                let fieldName = metadata.GetString(fieldDefinition.Name)
+                let access = fieldDefinition.Attributes &&& FieldAttributes.FieldAccessMask
+
+                let fieldIsStatic =
+                    (fieldDefinition.Attributes &&& FieldAttributes.Static) <> enum 0
+
+                if
+                    fieldName <> name
+                    || access <> FieldAttributes.Public
+                    || fieldIsStatic <> isStatic
+                then
+                    None
+                else
+                    match fieldDefinition.DecodeSignature(signatureProvider, ()) with
+                    | None -> None
+                    | Some fieldType ->
+                        let stableId =
+                            String.concat "|" [
+                                location.DeclaringType.DeclarationId
+                                "field"
+                                fieldName
+                                StableIdentity.cliType fieldType
+                            ]
+
+                        Some {
+                            DeclaringType = location.DeclaringType
+                            StableId = stableId
+                            Name = fieldName
+                            IsStatic = fieldIsStatic
+                            FieldType = fieldType
+                        }
+            )
+            |> List.ofSeq
+        )
+        |> List.distinctBy _.StableId
+        |> List.sortBy _.StableId
+
     member _.Fingerprint = fingerprint
 
     member _.IsFSharpDelegate(declarationId: string) =
@@ -361,6 +439,18 @@ type internal ReferenceTypeIndex
             | false, _ ->
                 let candidates = loadMethods declarationId name isStatic
                 methodCache.Add(key, candidates)
+                candidates
+        )
+
+    member _.Fields(declarationId: string, name: string, isStatic: bool) =
+        let key = ReferenceFieldKey.create declarationId name isStatic
+
+        lock fieldCache (fun () ->
+            match fieldCache.TryGetValue(key) with
+            | true, candidates -> candidates
+            | false, _ ->
+                let candidates = loadFields declarationId name isStatic
+                fieldCache.Add(key, candidates)
                 candidates
         )
 
