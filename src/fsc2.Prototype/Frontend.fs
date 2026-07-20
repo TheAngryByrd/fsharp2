@@ -577,7 +577,33 @@ module internal Frontend =
 
             let rec parseTypeExpression () =
                 parseResult {
-                    let! left = parseTypeAtom ()
+                    let! first = parseTypeAtom ()
+
+                    let rec parseTupleElements elements =
+                        match (current ()).Kind with
+                        | Star ->
+                            consume ()
+                            |> ignore
+
+                            parseTypeAtom ()
+                            |> Result.bind (fun element ->
+                                parseTupleElements (element :: elements)
+                            )
+                        | _ ->
+                            match List.rev elements with
+                            | [ element ] -> Ok element
+                            | orderedElements ->
+                                Ok(
+                                    ParsedTupleType(
+                                        orderedElements,
+                                        {
+                                            Start = first.Range.Start
+                                            End = (List.last orderedElements).Range.End
+                                        }
+                                    )
+                                )
+
+                    let! left = parseTupleElements [ first ]
 
                     return!
                         match (current ()).Kind with

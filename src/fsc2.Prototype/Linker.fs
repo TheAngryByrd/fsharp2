@@ -456,6 +456,9 @@ module internal Linker =
                 || (arguments
                     |> List.exists invalidTypeExpression)
             | TypedByRefType elementType -> invalidTypeExpression elementType
+            | TypedTupleType elements ->
+                elements
+                |> List.exists invalidTypeExpression
             | TypedFunctionType(domain, range) ->
                 invalidTypeExpression domain
                 || invalidTypeExpression range

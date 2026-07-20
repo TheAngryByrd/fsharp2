@@ -1279,6 +1279,93 @@ module CompilerTargetTests =
                 finally
                     Directory.Delete(root, true)
 
+            testCase "emits the Oracle stub for a tupled member-constraint domain"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-inline-tupled-constraint-domain",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "TaskLike.fs")
+                    let outputPath = Path.Combine(root, "TaskLike.dll")
+                    let pdbPath = Path.Combine(root, "TaskLike.pdb")
+                    let responsePath = Path.Combine(root, "compile.rsp")
+                    let systemRuntimePath = Assembly.Load("System.Runtime").Location
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "namespace IcedTasks.TaskLike\n\nopen System.Runtime.CompilerServices\n\ntype MethodBuilder =\n    static member inline AwaitUnsafeOnCompleted<'Builder, 'TAwaiter, 'TStateMachine\n        when 'Builder: (member AwaitUnsafeOnCompleted:\n            byref<'TAwaiter> * byref<'TStateMachine> -> unit)\n        and 'TAwaiter :> ICriticalNotifyCompletion\n        and 'TStateMachine :> IAsyncStateMachine>\n        (builder: byref<'Builder>, awaiter: byref<'TAwaiter>, stateMachine: byref<'TStateMachine>)\n        =\n        builder.AwaitUnsafeOnCompleted(&awaiter, &stateMachine)\n"
+                    )
+
+                    File.WriteAllLines(
+                        responsePath,
+                        [|
+                            "--target:library"
+                            "--deterministic+"
+                            "--debug:portable"
+                            $"--reference:{typeof<System.Runtime.CompilerServices.ICriticalNotifyCompletion>.Assembly.Location}"
+                            $"--reference:{typeof<Microsoft.FSharp.Core.Unit>.Assembly.Location}"
+                            $"--reference:{systemRuntimePath}"
+                            $"--out:{outputPath}"
+                            $"--pdb:{pdbPath}"
+                            sourcePath
+                        |]
+                    )
+
+                    let result = invokeFsc2 root responsePath
+
+                    Expect.equal
+                        result.ExitCode
+                        0
+                        (result.StandardOutput
+                         + result.StandardError)
+
+                    use implementationStream = File.OpenRead(outputPath)
+                    use implementation = new PEReader(implementationStream)
+                    let metadata = implementation.GetMetadataReader()
+
+                    let methodDefinition =
+                        metadata.TypeDefinitions
+                        |> Seq.map metadata.GetTypeDefinition
+                        |> Seq.find (fun definition ->
+                            metadata.GetString(definition.Namespace) = "IcedTasks.TaskLike"
+                            && metadata.GetString(definition.Name) = "MethodBuilder"
+                        )
+                        |> _.GetMethods()
+                        |> Seq.map metadata.GetMethodDefinition
+                        |> Seq.find (fun definition ->
+                            metadata.GetString(definition.Name) = "AwaitUnsafeOnCompleted"
+                        )
+
+                    Expect.sequenceEqual
+                        (metadata.GetBlobBytes(methodDefinition.Signature))
+                        (Convert.FromHexString("10030301101E00101E01101E02"))
+                        "the tupled constraint should preserve all three Oracle byref parameters"
+
+                    let il =
+                        implementation
+                            .GetMethodBody(methodDefinition.RelativeVirtualAddress)
+                            .GetILBytes()
+
+                    let message =
+                        BitConverter.ToInt32(il, 1)
+                        &&& 0x00ffffff
+                        |> MetadataTokens.UserStringHandle
+                        |> metadata.GetUserString
+
+                    Expect.equal
+                        message
+                        "Dynamic invocation of AwaitUnsafeOnCompleted is not supported"
+                        "the tupled constraint should preserve the Oracle trait identity"
+                finally
+                    Directory.Delete(root, true)
+
             testCase "namespace moves change same-named module export fingerprints"
             <| fun _ ->
                 let root =
@@ -3128,7 +3215,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "8"
+                        "9"
                         "query cache evidence should be versioned"
 
                     Expect.equal

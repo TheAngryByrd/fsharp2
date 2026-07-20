@@ -5,7 +5,7 @@ open System.Collections.Immutable
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 8
+    let Query = 9
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -141,6 +141,7 @@ type internal ParsedTypeExpression =
         genericType: ParsedTypeExpression *
         arguments: ParsedTypeExpression list *
         range: SourceRange
+    | ParsedTupleType of elements: ParsedTypeExpression list * range: SourceRange
     | ParsedFunctionType of ParsedTypeExpression * ParsedTypeExpression * SourceRange
 
     member this.Range =
@@ -148,6 +149,7 @@ type internal ParsedTypeExpression =
         | ParsedNamedType(_, range)
         | ParsedTypeParameter(_, range)
         | ParsedGenericTypeApplication(_, _, range)
+        | ParsedTupleType(_, range)
         | ParsedFunctionType(_, _, range) -> range
 
     override _.ToString() = "ParsedTypeExpression"
@@ -326,6 +328,7 @@ type internal TypedTypeExpression =
         genericType: TypedTypeExpression *
         arguments: TypedTypeExpression list
     | TypedByRefType of TypedTypeExpression
+    | TypedTupleType of TypedTypeExpression list
     | TypedFunctionType of TypedTypeExpression * TypedTypeExpression
 
     override _.ToString() = "TypedTypeExpression"

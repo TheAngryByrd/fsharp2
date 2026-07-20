@@ -61,6 +61,14 @@ module private TypeIdentity =
                 "byref"
                 expression elementType
             ]
+        | TypedTupleType elements ->
+            Fingerprint.parts [
+                "tuple"
+
+                yield!
+                    elements
+                    |> List.map expression
+            ]
         | TypedFunctionType(domain, range) ->
             Fingerprint.parts [
                 "function"
@@ -298,6 +306,20 @@ type internal CompilerService() =
                                 typedArguments
                             )
                         )
+                | ParsedTupleType(elements, _) ->
+                    let rec resolveElements resolved =
+                        function
+                        | [] -> Ok(List.rev resolved)
+                        | element :: remaining ->
+                            match resolveType declaredParameters element with
+                            | Error error -> Error error
+                            | Ok typedElement ->
+                                resolveElements
+                                    (typedElement :: resolved)
+                                    remaining
+
+                    resolveElements [] elements
+                    |> Result.map TypedTupleType
                 | ParsedFunctionType(domain, range, _) ->
                     match resolveType declaredParameters domain with
                     | Error error -> Error error
@@ -491,6 +513,12 @@ type internal CompilerService() =
                             ParsedGenericTypeApplication(
                                 substituteType substitutions genericType,
                                 arguments
+                                |> List.map (substituteType substitutions),
+                                range
+                            )
+                        | ParsedTupleType(elements, range) ->
+                            ParsedTupleType(
+                                elements
                                 |> List.map (substituteType substitutions),
                                 range
                             )
