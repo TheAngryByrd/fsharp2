@@ -47,6 +47,15 @@ module private TypeIdentity =
                 "parameter"
                 name
             ]
+        | TypedGenericTypeApplication(genericType, arguments) ->
+            Fingerprint.parts [
+                "generic"
+                expression genericType
+
+                yield!
+                    arguments
+                    |> List.map expression
+            ]
         | TypedFunctionType(domain, range) ->
             Fingerprint.parts [
                 "function"
@@ -69,6 +78,15 @@ module private TypeIdentity =
                 memberName
                 expression memberType
             ]
+
+    let cliType =
+        function
+        | CliInt32 -> "int32"
+        | CliBoolean -> "bool"
+        | CliString -> "string"
+        | CliMethodTypeParameter index ->
+            "method-parameter:"
+            + index.ToString(CultureInfo.InvariantCulture)
 
 /// A deliberately small in-memory query owner. Query identities and cached
 /// values are semantic/compiler state; final SRM state never enters these maps.
@@ -156,6 +174,94 @@ type internal CompilerService() =
                 checkMisses
                 + 1
 
+            let diagnostic range message =
+                Error {
+                    Code = "FSC2P1001"
+                    Message = message
+                    Path = Some sourcePath
+                    Range = Some range
+                }
+
+            let typeAbbreviations =
+                parsed.Declarations
+                |> List.choose (function
+                    | ParsedTypeAbbreviation declaration ->
+                        Some(declaration.Name, declaration)
+                    | ParsedMethod _
+                    | ParsedLiteralField _
+                    | ParsedStaticType _ -> None
+                )
+                |> Map.ofList
+
+            let localTypeNames =
+                parsed.Declarations
+                |> List.choose (function
+                    | ParsedTypeAbbreviation declaration -> Some declaration.Name
+                    | ParsedStaticType declaration -> Some declaration.Name
+                    | ParsedMethod _
+                    | ParsedLiteralField _ -> None
+                )
+                |> HashSet<string>
+
+            let rec resolveType (declaredParameters: HashSet<string>) =
+                function
+                | ParsedTypeParameter(name, range) ->
+                    if declaredParameters.Contains(name) then
+                        Ok(TypedTypeParameter name)
+                    else
+                        diagnostic range $"the type parameter '{name}' is not declared"
+                | ParsedNamedType(typeName, range) ->
+                    if
+                        String.IsNullOrEmpty(typeName.Namespace)
+                        && localTypeNames.Contains(typeName.Name)
+                    then
+                        Ok(
+                            TypedNamedType {
+                                Namespace = parsed.Namespace
+                                Name = typeName.Name
+                            }
+                        )
+                    else
+                        match
+                            references.Resolve(
+                                parsed.Namespace,
+                                parsed.OpenedNamespaces,
+                                typeName
+                            )
+                        with
+                        | Ok resolved -> Ok(TypedNamedType resolved)
+                        | Error message -> diagnostic range message
+                | ParsedGenericTypeApplication(genericType, arguments, _) ->
+                    match resolveType declaredParameters genericType with
+                    | Error error -> Error error
+                    | Ok typedGenericType ->
+                        let rec resolveArguments resolved =
+                            function
+                            | [] -> Ok(List.rev resolved)
+                            | argument :: remaining ->
+                                match resolveType declaredParameters argument with
+                                | Error error -> Error error
+                                | Ok typedArgument ->
+                                    resolveArguments
+                                        (typedArgument :: resolved)
+                                        remaining
+
+                        resolveArguments [] arguments
+                        |> Result.map (fun typedArguments ->
+                            TypedGenericTypeApplication(
+                                typedGenericType,
+                                typedArguments
+                            )
+                        )
+                | ParsedFunctionType(domain, range, _) ->
+                    match resolveType declaredParameters domain with
+                    | Error error -> Error error
+                    | Ok typedDomain ->
+                        resolveType declaredParameters range
+                        |> Result.map (fun typedRange ->
+                            TypedFunctionType(typedDomain, typedRange)
+                        )
+
             let typeDeclaration =
                 function
                 | ParsedMethod declaration ->
@@ -190,7 +296,10 @@ type internal CompilerService() =
                             TypedMethod {
                                 StableId = stableId
                                 Name = declaration.Name
-                                ReturnType = ValueType.Int32
+                                GenericParameters = []
+                                Constraints = []
+                                Parameters = []
+                                ReturnType = CliInt32
                                 Body = TypedIntegerLiteral value
                                 ExportFingerprint = exportFingerprint
                                 Range = declaration.Range
@@ -204,6 +313,10 @@ type internal CompilerService() =
                             Path = Some sourcePath
                             Range = Some declaration.BodyRange
                         }
+                    | _, TraitCall _ ->
+                        diagnostic
+                            declaration.BodyRange
+                            "trait calls are supported only in static inline members"
                 | ParsedLiteralField declaration ->
                     let stableId =
                         parsed.StableId
@@ -232,40 +345,6 @@ type internal CompilerService() =
                     let declaredParameters =
                         HashSet<string>(declaration.TypeParameters, StringComparer.Ordinal)
 
-                    let diagnostic range message =
-                        Error {
-                            Code = "FSC2P1001"
-                            Message = message
-                            Path = Some sourcePath
-                            Range = Some range
-                        }
-
-                    let rec resolveType =
-                        function
-                        | ParsedTypeParameter(name, range) ->
-                            if declaredParameters.Contains(name) then
-                                Ok(TypedTypeParameter name)
-                            else
-                                diagnostic range $"the type parameter '{name}' is not declared"
-                        | ParsedNamedType(typeName, range) ->
-                            match
-                                references.Resolve(
-                                    parsed.Namespace,
-                                    parsed.OpenedNamespaces,
-                                    typeName
-                                )
-                            with
-                            | Ok resolved -> Ok(TypedNamedType resolved)
-                            | Error message -> diagnostic range message
-                        | ParsedFunctionType(domain, range, _) ->
-                            match resolveType domain with
-                            | Error error -> Error error
-                            | Ok typedDomain ->
-                                resolveType range
-                                |> Result.map (fun typedRange ->
-                                    TypedFunctionType(typedDomain, typedRange)
-                                )
-
                     let resolveConstraint =
                         function
                         | ParsedSubtypeConstraint(typeParameter, superType, range) ->
@@ -274,7 +353,7 @@ type internal CompilerService() =
                                     range
                                     $"the constrained type parameter '{typeParameter}' is not declared"
                             else
-                                resolveType superType
+                                resolveType declaredParameters superType
                                 |> Result.map (fun typedSuperType ->
                                     TypedSubtypeConstraint(typeParameter, typedSuperType)
                                 )
@@ -284,7 +363,7 @@ type internal CompilerService() =
                                     range
                                     $"the constrained type parameter '{typeParameter}' is not declared"
                             else
-                                resolveType memberType
+                                resolveType declaredParameters memberType
                                 |> Result.map (fun typedMemberType ->
                                     TypedMemberConstraint(
                                         typeParameter,
@@ -313,7 +392,7 @@ type internal CompilerService() =
                         match resolveConstraints [] declaration.Constraints with
                         | Error error -> Error error
                         | Ok constraints ->
-                            match resolveType declaration.Target.Type with
+                            match resolveType declaredParameters declaration.Target.Type with
                             | Error error -> Error error
                             | Ok targetType ->
                                 let targetIdentity =
@@ -347,6 +426,254 @@ type internal CompilerService() =
                                         Range = declaration.Range
                                     }
                                 )
+                | ParsedStaticType declaration ->
+                    let stableId =
+                        parsed.StableId
+                        + "/type:"
+                        + declaration.Name
+
+                    let rec substituteType
+                        (substitutions: Map<string, ParsedTypeExpression>)
+                        expression
+                        =
+                        match expression with
+                        | ParsedTypeParameter(name, _) ->
+                            substitutions
+                            |> Map.tryFind name
+                            |> Option.defaultValue expression
+                        | ParsedNamedType _ -> expression
+                        | ParsedGenericTypeApplication(genericType, arguments, range) ->
+                            ParsedGenericTypeApplication(
+                                substituteType substitutions genericType,
+                                arguments
+                                |> List.map (substituteType substitutions),
+                                range
+                            )
+                        | ParsedFunctionType(domain, range, sourceRange) ->
+                            ParsedFunctionType(
+                                substituteType substitutions domain,
+                                substituteType substitutions range,
+                                sourceRange
+                            )
+
+                    let typeMethod (methodDeclaration: ParsedStaticMethodDeclaration) =
+                        let methodParameters =
+                            HashSet<string>(
+                                methodDeclaration.TypeParameters,
+                                StringComparer.Ordinal
+                            )
+
+                        let methodParameterIndex =
+                            methodDeclaration.TypeParameters
+                            |> List.mapi (fun index name -> name, index)
+                            |> Map.ofList
+
+                        let toCliType range =
+                            function
+                            | TypedTypeParameter name ->
+                                match methodParameterIndex |> Map.tryFind name with
+                                | Some index -> Ok(CliMethodTypeParameter index)
+                                | None -> diagnostic range $"the method type parameter '{name}' is not declared"
+                            | TypedNamedType typeName when
+                                typeName.Namespace = "System"
+                                && typeName.Name = "Boolean"
+                                ->
+                                Ok CliBoolean
+                            | typedType ->
+                                diagnostic
+                                    range
+                                    $"the CLI type '{TypeIdentity.expression typedType}' is not yet supported"
+
+                        let rec resolveMethodConstraints resolved =
+                            function
+                            | [] -> Ok(List.rev resolved)
+                            | constraint' :: remaining ->
+                                match resolveType methodParameters constraint' with
+                                | Error error -> Error error
+                                | Ok typedConstraint ->
+                                    resolveMethodConstraints
+                                        (typedConstraint :: resolved)
+                                        remaining
+
+                        let rec typeParameters
+                            (typed: TypedParameter list)
+                            (remainingParameters: ParsedParameter list)
+                            =
+                            match remainingParameters with
+                            | [] -> Ok(List.rev typed)
+                            | parameter :: remaining ->
+                                match resolveType methodParameters parameter.Type with
+                                | Error error -> Error error
+                                | Ok typedType ->
+                                    match toCliType parameter.Range typedType with
+                                    | Error error -> Error error
+                                    | Ok cliType ->
+                                        typeParameters
+                                            ({
+                                                Name = parameter.Name
+                                                Type = cliType
+                                             }
+                                             :: typed)
+                                            remaining
+
+                        let inferTraitReturnType memberName =
+                            let matchingMemberType =
+                                methodDeclaration.Constraints
+                                |> List.tryPick (fun constraint' ->
+                                    match constraint' with
+                                    | ParsedGenericTypeApplication(
+                                        ParsedNamedType(aliasName, _),
+                                        arguments,
+                                        _
+                                      ) ->
+                                        match typeAbbreviations |> Map.tryFind aliasName.Name with
+                                        | Some abbreviation when
+                                            abbreviation.TypeParameters.Length = arguments.Length
+                                            ->
+                                            let substitutions =
+                                                List.zip
+                                                    abbreviation.TypeParameters
+                                                    arguments
+                                                |> Map.ofList
+
+                                            abbreviation.Constraints
+                                            |> List.tryPick (function
+                                                | ParsedMemberConstraint(
+                                                    _,
+                                                    constrainedMemberName,
+                                                    memberType,
+                                                    _
+                                                  ) when constrainedMemberName = memberName ->
+                                                    Some(
+                                                        substituteType
+                                                            substitutions
+                                                            memberType
+                                                    )
+                                                | _ -> None
+                                            )
+                                        | _ -> None
+                                    | _ -> None
+                                )
+
+                            match matchingMemberType with
+                            | Some(ParsedFunctionType(_, returnType, _)) ->
+                                match resolveType methodParameters returnType with
+                                | Error error -> Error error
+                                | Ok typedReturnType ->
+                                    toCliType methodDeclaration.BodyRange typedReturnType
+                            | Some returnType ->
+                                match resolveType methodParameters returnType with
+                                | Error error -> Error error
+                                | Ok typedReturnType ->
+                                    toCliType methodDeclaration.BodyRange typedReturnType
+                            | None ->
+                                diagnostic
+                                    methodDeclaration.BodyRange
+                                    $"no method constraint supplies '{memberName}'"
+
+                        if
+                            methodParameters.Count
+                            <> methodDeclaration.TypeParameters.Length
+                        then
+                            diagnostic
+                                methodDeclaration.Range
+                                "method type parameters must be unique"
+                        else
+                            match
+                                resolveMethodConstraints [] methodDeclaration.Constraints,
+                                typeParameters [] methodDeclaration.Parameters,
+                                methodDeclaration.Body
+                            with
+                            | Error error, _, _
+                            | _, Error error, _ -> Error error
+                            | Ok constraints, Ok parameters, TraitCall(receiverName, memberName) ->
+                                if
+                                    parameters
+                                    |> List.exists (fun parameter -> parameter.Name = receiverName)
+                                    |> not
+                                then
+                                    diagnostic
+                                        methodDeclaration.BodyRange
+                                        $"the receiver '{receiverName}' is not a method parameter"
+                                else
+                                    match inferTraitReturnType memberName with
+                                    | Error error -> Error error
+                                    | Ok returnType ->
+                                        let methodStableId =
+                                            stableId
+                                            + "/method:"
+                                            + methodDeclaration.Name
+
+                                        let exportFingerprint =
+                                            Fingerprint.parts [
+                                                methodStableId
+                                                "generic-parameters"
+                                                yield! methodDeclaration.TypeParameters
+                                                "constraints"
+
+                                                yield!
+                                                    constraints
+                                                    |> List.map TypeIdentity.expression
+
+                                                "parameters"
+
+                                                yield!
+                                                    parameters
+                                                    |> List.collect (fun parameter -> [
+                                                        parameter.Name
+                                                        TypeIdentity.cliType parameter.Type
+                                                    ])
+
+                                                "return"
+                                                TypeIdentity.cliType returnType
+                                                "trait-call"
+                                                receiverName
+                                                memberName
+                                            ]
+
+                                        Ok {
+                                            StableId = methodStableId
+                                            Name = methodDeclaration.Name
+                                            GenericParameters = methodDeclaration.TypeParameters
+                                            Constraints = constraints
+                                            Parameters = parameters
+                                            ReturnType = returnType
+                                            Body = TypedTraitCall(receiverName, memberName)
+                                            ExportFingerprint = exportFingerprint
+                                            Range = methodDeclaration.Range
+                                        }
+                            | Ok _, Ok _, IntegerLiteral _
+                            | Ok _, Ok _, StringLiteral _ ->
+                                diagnostic
+                                    methodDeclaration.BodyRange
+                                    "static inline members require a constrained trait call"
+
+                    let rec typeMethods typedMethods =
+                        function
+                        | [] -> Ok(List.rev typedMethods)
+                        | methodDeclaration :: remaining ->
+                            match typeMethod methodDeclaration with
+                            | Error error -> Error error
+                            | Ok typedMethod ->
+                                typeMethods
+                                    (typedMethod :: typedMethods)
+                                    remaining
+
+                    match typeMethods [] declaration.Methods with
+                    | Error error -> Error error
+                    | Ok methods ->
+                        Ok(
+                            TypedStaticType {
+                                StableId = stableId
+                                Name = declaration.Name
+                                Methods = methods
+                                ExportFingerprint =
+                                    methods
+                                    |> List.map _.ExportFingerprint
+                                    |> Fingerprint.parts
+                                Range = declaration.Range
+                            }
+                        )
 
             let typeAssemblyAttribute index (attribute: ParsedAssemblyAttribute) =
                 let attributeTypeName =
@@ -536,6 +863,13 @@ type internal CompilerService() =
                                     methodDeclaration.StableId
                                     + "="
                                     + value.ToString()
+                                | TypedTraitCall(receiverName, memberName) ->
+                                    Fingerprint.parts [
+                                        methodDeclaration.StableId
+                                        "trait-call"
+                                        receiverName
+                                        memberName
+                                    ]
                             | TypedLiteralField fieldDeclaration ->
                                 fieldDeclaration.StableId
                                 + "="
@@ -558,6 +892,17 @@ type internal CompilerService() =
                                         "null"
                                     else
                                         "non-null"
+                                ]
+                            | TypedStaticType typeDeclaration ->
+                                Fingerprint.parts [
+                                    typeDeclaration.StableId
+
+                                    yield!
+                                        typeDeclaration.Methods
+                                        |> List.collect (fun methodDeclaration -> [
+                                            methodDeclaration.StableId
+                                            methodDeclaration.ExportFingerprint
+                                        ])
                                 ]
 
                         declaration, Fingerprint.text implementation
@@ -701,11 +1046,70 @@ type internal CompilerService() =
                                 ContentHash = contentHash
                             }
                         | TypedMethod _
-                        | TypedLiteralField _ -> None
+                        | TypedLiteralField _
+                        | TypedStaticType _ -> None
                     )
                 )
 
-            let types =
+            let methodInstructions (methodDeclaration: TypedMethodDeclaration) =
+                match methodDeclaration.Body with
+                | TypedIntegerLiteral value -> [
+                    LoadInt32 value
+                    Return
+                  ]
+                | TypedTraitCall(_, memberName) -> [
+                    LoadString(
+                        "Dynamic invocation of "
+                        + memberName
+                        + " is not supported"
+                    )
+                    NewObject(
+                        {
+                            Namespace = "System"
+                            Name = "NotSupportedException"
+                        },
+                        [ CliString ]
+                    )
+                    Throw
+                  ]
+
+            let methodDependencies (methodDeclaration: TypedMethodDeclaration) =
+                methodDeclaration.Constraints
+                |> List.choose (function
+                    | TypedGenericTypeApplication(TypedNamedType typeName, _) ->
+                        Some(
+                            "type-abbreviation:"
+                            + TypeIdentity.qualifiedName typeName
+                        )
+                    | _ -> None
+                )
+
+            let methodFragment
+                kind
+                documentIndex
+                documentChecksum
+                fragmentStableId
+                contentHash
+                (methodDeclaration: TypedMethodDeclaration)
+                =
+                {
+                    SchemaVersion = querySchema
+                    StableId = fragmentStableId
+                    Name = methodDeclaration.Name
+                    Kind = kind
+                    GenericParameters = methodDeclaration.GenericParameters
+                    Constraints = methodDeclaration.Constraints
+                    Parameters = methodDeclaration.Parameters
+                    ReturnType = methodDeclaration.ReturnType
+                    Instructions = methodInstructions methodDeclaration
+                    DependencyIds = methodDependencies methodDeclaration
+                    ContentHash = contentHash
+                    DocumentIndex = documentIndex
+                    DocumentChecksum = documentChecksum
+                    Range = methodDeclaration.Range
+                }
+
+            let moduleTypes =
                 modulesWithContentHashes
                 |> List.mapi (fun documentIndex (typed, declarationsWithContentHashes) ->
                     let typeStableId =
@@ -729,7 +1133,8 @@ type internal CompilerService() =
                                     ContentHash = contentHash
                                 }
                             | TypedMethod _
-                            | TypedTypeAbbreviation _ -> None
+                            | TypedTypeAbbreviation _
+                            | TypedStaticType _ -> None
                         )
 
                     let methods =
@@ -737,32 +1142,19 @@ type internal CompilerService() =
                         |> List.choose (fun (declaration, contentHash) ->
                             match declaration with
                             | TypedMethod methodDeclaration ->
-                                let value =
-                                    match methodDeclaration.Body with
-                                    | TypedIntegerLiteral value -> value
-
-                                let instructions = [
-                                    LoadInt32 value
-                                    Return
-                                ]
-
-                                Some {
-                                    SchemaVersion = querySchema
-                                    StableId =
-                                        typeStableId
-                                        + "/method:"
-                                        + methodDeclaration.StableId
-                                    Name = methodDeclaration.Name
-                                    ReturnType = methodDeclaration.ReturnType
-                                    Instructions = instructions
-                                    DependencyIds = []
-                                    ContentHash = contentHash
-                                    DocumentIndex = documentIndex
-                                    DocumentChecksum = typed.SourceChecksum
-                                    Range = methodDeclaration.Range
-                                }
+                                methodFragment
+                                    ModuleFunction
+                                    documentIndex
+                                    typed.SourceChecksum
+                                    (typeStableId
+                                     + "/method:"
+                                     + methodDeclaration.StableId)
+                                    contentHash
+                                    methodDeclaration
+                                |> Some
                             | TypedLiteralField _
-                            | TypedTypeAbbreviation _ -> None
+                            | TypedTypeAbbreviation _
+                            | TypedStaticType _ -> None
                         )
 
                     if List.isEmpty literalFields && List.isEmpty methods then
@@ -774,11 +1166,56 @@ type internal CompilerService() =
                             Namespace = typed.Namespace
                             Name = typed.Name
                             IsPublic = typed.IsPublic
+                            Kind = ModuleContainer
                             LiteralFields = literalFields
                             Methods = methods
                         }
                 )
                 |> List.choose id
+
+            let staticTypes =
+                modulesWithContentHashes
+                |> List.mapi (fun documentIndex (typed, declarationsWithContentHashes) ->
+                    declarationsWithContentHashes
+                    |> List.choose (fun (declaration, typeContentHash) ->
+                        match declaration with
+                        | TypedStaticType typeDeclaration ->
+                            let methods =
+                                typeDeclaration.Methods
+                                |> List.map (fun methodDeclaration ->
+                                    let contentHash =
+                                        Fingerprint.parts [
+                                            typeContentHash
+                                            methodDeclaration.ExportFingerprint
+                                        ]
+
+                                    methodFragment
+                                        StaticInlineMemberStub
+                                        documentIndex
+                                        typed.SourceChecksum
+                                        methodDeclaration.StableId
+                                        contentHash
+                                        methodDeclaration
+                                )
+
+                            Some {
+                                SchemaVersion = querySchema
+                                StableId = typeDeclaration.StableId
+                                Namespace = typed.Namespace
+                                Name = typeDeclaration.Name
+                                IsPublic = true
+                                Kind = StaticMemberContainer
+                                LiteralFields = []
+                                Methods = methods
+                            }
+                        | TypedMethod _
+                        | TypedLiteralField _
+                        | TypedTypeAbbreviation _ -> None
+                    )
+                )
+                |> List.collect id
+
+            let types = moduleTypes @ staticTypes
 
             let symbolic: SymbolicAssembly = {
                 SchemaVersion = querySchema

@@ -239,7 +239,58 @@ module internal Linker =
         captureDigest digest
         BlobContentId.FromHash(digest)
 
+    let private encodeCliType (encoder: SignatureTypeEncoder) =
+        function
+        | CliInt32 -> encoder.Int32()
+        | CliBoolean -> encoder.Boolean()
+        | CliString -> encoder.String()
+        | CliMethodTypeParameter index -> encoder.GenericMethodTypeParameter(index)
+
+    let private encodeMethodSignature (methodFragment: SymbolicMethodFragment) =
+        let signature = BlobBuilder()
+
+        BlobEncoder(signature)
+            .MethodSignature(
+                genericParameterCount = methodFragment.GenericParameters.Length,
+                isInstanceMethod = false
+            )
+            .Parameters(
+                methodFragment.Parameters.Length,
+                (fun returnType ->
+                    encodeCliType (returnType.Type()) methodFragment.ReturnType
+                ),
+                (fun parameters ->
+                    for parameter in methodFragment.Parameters do
+                        encodeCliType
+                            (parameters.AddParameter().Type())
+                            parameter.Type
+                )
+            )
+
+        signature
+
+    let private encodeConstructorSignature parameterTypes =
+        let signature = BlobBuilder()
+
+        BlobEncoder(signature)
+            .MethodSignature(isInstanceMethod = true)
+            .Parameters(
+                parameterTypes
+                |> List.length,
+                (fun returnType -> returnType.Void()),
+                (fun parameters ->
+                    for parameterType in parameterTypes do
+                        encodeCliType
+                            (parameters.AddParameter().Type())
+                            parameterType
+                )
+            )
+
+        signature
+
     let private encodeMethodBody
+        (metadata: MetadataBuilder)
+        (coreLibrary: AssemblyReferenceHandle)
         (stream: MethodBodyStreamEncoder)
         (methodFragment: SymbolicMethodFragment)
         =
@@ -249,19 +300,34 @@ module internal Linker =
         for instruction in methodFragment.Instructions do
             match instruction with
             | LoadInt32 value -> instructions.LoadConstantI4(value)
+            | LoadString value ->
+                value
+                |> metadata.GetOrAddUserString
+                |> instructions.LoadString
+            | NewObject(declaringType, parameterTypes) ->
+                let typeReference =
+                    metadata.AddTypeReference(
+                        coreLibrary,
+                        metadata.GetOrAddString(declaringType.Namespace),
+                        metadata.GetOrAddString(declaringType.Name)
+                    )
+
+                let constructor =
+                    metadata.AddMemberReference(
+                        typeReference,
+                        metadata.GetOrAddString(".ctor"),
+                        parameterTypes
+                        |> encodeConstructorSignature
+                        |> metadata.GetOrAddBlob
+                    )
+
+                instructions.OpCode(ILOpCode.Newobj)
+                instructions.Token(constructor)
+            | Throw -> instructions.OpCode(ILOpCode.Throw)
             | Return -> instructions.OpCode(ILOpCode.Ret)
 
         let codeSize = code.Count
         stream.AddMethodBody(instructions, maxStack = 1), codeSize
-
-    let private encodeSignature () =
-        let signature = BlobBuilder()
-
-        BlobEncoder(signature)
-            .MethodSignature(isInstanceMethod = false)
-            .Parameters(0, (fun returnType -> returnType.Type().Int32()), (fun _ -> ()))
-
-        signature
 
     let private encodeStringConstructorSignature (parameterCount: int) =
         let signature = BlobBuilder()
@@ -373,6 +439,10 @@ module internal Linker =
             function
             | TypedNamedType typeName -> String.IsNullOrWhiteSpace(typeName.Name)
             | TypedTypeParameter name -> String.IsNullOrWhiteSpace(name)
+            | TypedGenericTypeApplication(genericType, arguments) ->
+                invalidTypeExpression genericType
+                || (arguments
+                    |> List.exists invalidTypeExpression)
             | TypedFunctionType(domain, range) ->
                 invalidTypeExpression domain
                 || invalidTypeExpression range
@@ -481,15 +551,6 @@ module internal Linker =
         let ilStream = BlobBuilder()
         let methodBodies = MethodBodyStreamEncoder(ilStream)
 
-        let encodedMethods =
-            methodFragments
-            |> List.map (fun methodFragment ->
-                let bodyOffset, codeSize = encodeMethodBody methodBodies methodFragment
-                methodFragment, bodyOffset, codeSize
-            )
-
-        let signature = encodeSignature ()
-
         let stringFieldSignature =
             let signature = BlobBuilder()
             BlobEncoder(signature).FieldSignature().String()
@@ -522,9 +583,21 @@ module internal Linker =
                 metadata.GetOrAddString("Object")
             )
 
+        let encodedMethods =
+            methodFragments
+            |> List.map (fun methodFragment ->
+                let bodyOffset, codeSize =
+                    encodeMethodBody
+                        metadata
+                        coreLibrary
+                        methodBodies
+                        methodFragment
+
+                methodFragment, bodyOffset, codeSize
+            )
+
         let firstField = MetadataTokens.FieldDefinitionHandle(1)
         let firstMethod = MetadataTokens.MethodDefinitionHandle(1)
-        let firstParameter = MetadataTokens.ParameterHandle(1)
         let reservedMvid = metadata.ReserveGuid()
 
         metadata.AddModule(
@@ -601,15 +674,20 @@ module internal Linker =
                     TypeAttributes.NotPublic
 
             let attributes =
-                if List.isEmpty typeFragment.Methods then
+                match typeFragment.Kind with
+                | ModuleContainer ->
+                    if List.isEmpty typeFragment.Methods then
+                        visibility
+                        ||| TypeAttributes.Abstract
+                        ||| TypeAttributes.Sealed
+                    else
+                        visibility
+                        ||| TypeAttributes.Abstract
+                        ||| TypeAttributes.Sealed
+                        ||| TypeAttributes.BeforeFieldInit
+                | StaticMemberContainer ->
                     visibility
-                    ||| TypeAttributes.Abstract
-                    ||| TypeAttributes.Sealed
-                else
-                    visibility
-                    ||| TypeAttributes.Abstract
-                    ||| TypeAttributes.Sealed
-                    ||| TypeAttributes.BeforeFieldInit
+                    ||| enum<TypeAttributes> 0x00002000
 
             metadata.AddTypeDefinition(
                 attributes,
@@ -648,21 +726,57 @@ module internal Linker =
             metadata.AddConstant(field, fieldFragment.Value)
             |> ignore
 
-        let methodSignature = metadata.GetOrAddBlob(signature)
+        let mutable nextParameterRow = 1
 
         for methodFragment, bodyOffset, _ in encodedMethods do
-            metadata.AddMethodDefinition(
-                MethodAttributes.Public
-                ||| MethodAttributes.Static
-                ||| MethodAttributes.HideBySig,
-                MethodImplAttributes.IL
-                ||| MethodImplAttributes.Managed,
-                metadata.GetOrAddString(methodFragment.Name),
-                methodSignature,
-                bodyOffset,
-                firstParameter
+            let attributes =
+                match methodFragment.Kind with
+                | ModuleFunction ->
+                    MethodAttributes.Public
+                    ||| MethodAttributes.Static
+                    ||| MethodAttributes.HideBySig
+                | StaticInlineMemberStub ->
+                    MethodAttributes.Public
+                    ||| MethodAttributes.Static
+
+            let methodDefinition =
+                metadata.AddMethodDefinition(
+                    attributes,
+                    MethodImplAttributes.IL
+                    ||| MethodImplAttributes.Managed,
+                    metadata.GetOrAddString(methodFragment.Name),
+                    methodFragment
+                    |> encodeMethodSignature
+                    |> metadata.GetOrAddBlob,
+                    bodyOffset,
+                    MetadataTokens.ParameterHandle(nextParameterRow)
+                )
+
+            methodFragment.GenericParameters
+            |> List.iteri (fun index name ->
+                metadata.AddGenericParameter(
+                    methodDefinition,
+                    GenericParameterAttributes.None,
+                    metadata.GetOrAddString(name),
+                    index
+                )
+                |> ignore
             )
-            |> ignore
+
+            methodFragment.Parameters
+            |> List.iteri (fun index parameter ->
+                metadata.AddParameter(
+                    ParameterAttributes.None,
+                    metadata.GetOrAddString(parameter.Name),
+                    index
+                    + 1
+                )
+                |> ignore
+
+                nextParameterRow <-
+                    nextParameterRow
+                    + 1
+            )
 
         let pdbMetadata = MetadataBuilder()
 

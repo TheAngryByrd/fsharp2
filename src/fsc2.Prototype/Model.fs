@@ -5,7 +5,7 @@ open System.Collections.Immutable
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 3
+    let Query = 4
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -107,6 +107,7 @@ type internal CompilerInvocation = {
 type internal ParsedExpression =
     | IntegerLiteral of int
     | StringLiteral of string
+    | TraitCall of receiverName: string * memberName: string
 
     override _.ToString() = "ParsedExpression"
 
@@ -126,12 +127,17 @@ type internal QualifiedTypeName = {
 type internal ParsedTypeExpression =
     | ParsedNamedType of QualifiedTypeName * SourceRange
     | ParsedTypeParameter of string * SourceRange
+    | ParsedGenericTypeApplication of
+        genericType: ParsedTypeExpression *
+        arguments: ParsedTypeExpression list *
+        range: SourceRange
     | ParsedFunctionType of ParsedTypeExpression * ParsedTypeExpression * SourceRange
 
     member this.Range =
         match this with
         | ParsedNamedType(_, range)
         | ParsedTypeParameter(_, range)
+        | ParsedGenericTypeApplication(_, _, range)
         | ParsedFunctionType(_, _, range) -> range
 
     override _.ToString() = "ParsedTypeExpression"
@@ -175,6 +181,34 @@ type internal ParsedLiteralFieldDeclaration = {
 
     override _.ToString() = "ParsedLiteralFieldDeclaration"
 
+type internal ParsedParameter = {
+    Name: string
+    Type: ParsedTypeExpression
+    Range: SourceRange
+} with
+
+    override _.ToString() = "ParsedParameter"
+
+type internal ParsedStaticMethodDeclaration = {
+    Name: string
+    TypeParameters: string list
+    Constraints: ParsedTypeExpression list
+    Parameters: ParsedParameter list
+    Body: ParsedExpression
+    BodyRange: SourceRange
+    Range: SourceRange
+} with
+
+    override _.ToString() = "ParsedStaticMethodDeclaration"
+
+type internal ParsedStaticTypeDeclaration = {
+    Name: string
+    Methods: ParsedStaticMethodDeclaration list
+    Range: SourceRange
+} with
+
+    override _.ToString() = "ParsedStaticTypeDeclaration"
+
 type internal ParsedTypeReference = {
     Type: ParsedTypeExpression
     AllowsNull: bool
@@ -197,6 +231,7 @@ type internal ParsedDeclaration =
     | ParsedMethod of ParsedMethodDeclaration
     | ParsedLiteralField of ParsedLiteralFieldDeclaration
     | ParsedTypeAbbreviation of ParsedTypeAbbreviationDeclaration
+    | ParsedStaticType of ParsedStaticTypeDeclaration
 
     override _.ToString() = "ParsedDeclaration"
 
@@ -241,20 +276,45 @@ type internal ParsedModule = {
 
     override _.ToString() = "ParsedModule"
 
-type internal ValueType =
-    | Int32
+type internal CliType =
+    | CliInt32
+    | CliBoolean
+    | CliString
+    | CliMethodTypeParameter of int
 
-    override _.ToString() = "ValueType"
+    override _.ToString() = "CliType"
 
 type internal TypedExpression =
     | TypedIntegerLiteral of int
+    | TypedTraitCall of receiverName: string * memberName: string
 
     override _.ToString() = "TypedExpression"
+
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal TypedTypeExpression =
+    | TypedNamedType of QualifiedTypeName
+    | TypedTypeParameter of string
+    | TypedGenericTypeApplication of
+        genericType: TypedTypeExpression *
+        arguments: TypedTypeExpression list
+    | TypedFunctionType of TypedTypeExpression * TypedTypeExpression
+
+    override _.ToString() = "TypedTypeExpression"
+
+type internal TypedParameter = {
+    Name: string
+    Type: CliType
+} with
+
+    override _.ToString() = "TypedParameter"
 
 type internal TypedMethodDeclaration = {
     StableId: string
     Name: string
-    ReturnType: ValueType
+    GenericParameters: string list
+    Constraints: TypedTypeExpression list
+    Parameters: TypedParameter list
+    ReturnType: CliType
     Body: TypedExpression
     ExportFingerprint: string
     Range: SourceRange
@@ -270,14 +330,6 @@ type internal TypedLiteralFieldDeclaration = {
 } with
 
     override _.ToString() = "TypedLiteralFieldDeclaration"
-
-[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
-type internal TypedTypeExpression =
-    | TypedNamedType of QualifiedTypeName
-    | TypedTypeParameter of string
-    | TypedFunctionType of TypedTypeExpression * TypedTypeExpression
-
-    override _.ToString() = "TypedTypeExpression"
 
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
 type internal TypedTypeConstraint =
@@ -302,22 +354,35 @@ type internal TypedTypeAbbreviationDeclaration = {
 
     override _.ToString() = "TypedTypeAbbreviationDeclaration"
 
+type internal TypedStaticTypeDeclaration = {
+    StableId: string
+    Name: string
+    Methods: TypedMethodDeclaration list
+    ExportFingerprint: string
+    Range: SourceRange
+} with
+
+    override _.ToString() = "TypedStaticTypeDeclaration"
+
 type internal TypedDeclaration =
     | TypedMethod of TypedMethodDeclaration
     | TypedLiteralField of TypedLiteralFieldDeclaration
     | TypedTypeAbbreviation of TypedTypeAbbreviationDeclaration
+    | TypedStaticType of TypedStaticTypeDeclaration
 
     member this.StableId =
         match this with
         | TypedMethod declaration -> declaration.StableId
         | TypedLiteralField declaration -> declaration.StableId
         | TypedTypeAbbreviation declaration -> declaration.StableId
+        | TypedStaticType declaration -> declaration.StableId
 
     member this.ExportFingerprint =
         match this with
         | TypedMethod declaration -> declaration.ExportFingerprint
         | TypedLiteralField declaration -> declaration.ExportFingerprint
         | TypedTypeAbbreviation declaration -> declaration.ExportFingerprint
+        | TypedStaticType declaration -> declaration.ExportFingerprint
 
     override _.ToString() = "TypedDeclaration"
 
@@ -350,15 +415,29 @@ type internal TypedModule = {
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
 type internal SymbolicInstruction =
     | LoadInt32 of int
+    | LoadString of string
+    | NewObject of declaringType: QualifiedTypeName * parameterTypes: CliType list
+    | Throw
     | Return
 
     override _.ToString() = "SymbolicInstruction"
+
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal SymbolicMethodKind =
+    | ModuleFunction
+    | StaticInlineMemberStub
+
+    override _.ToString() = "SymbolicMethodKind"
 
 type internal SymbolicMethodFragment = {
     SchemaVersion: int
     StableId: string
     Name: string
-    ReturnType: ValueType
+    Kind: SymbolicMethodKind
+    GenericParameters: string list
+    Constraints: TypedTypeExpression list
+    Parameters: TypedParameter list
+    ReturnType: CliType
     Instructions: SymbolicInstruction list
     DependencyIds: string list
     ContentHash: string
@@ -379,12 +458,20 @@ type internal SymbolicLiteralFieldFragment = {
 
     override _.ToString() = "SymbolicLiteralFieldFragment"
 
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal SymbolicTypeKind =
+    | ModuleContainer
+    | StaticMemberContainer
+
+    override _.ToString() = "SymbolicTypeKind"
+
 type internal SymbolicTypeFragment = {
     SchemaVersion: int
     StableId: string
     Namespace: string
     Name: string
     IsPublic: bool
+    Kind: SymbolicTypeKind
     LiteralFields: SymbolicLiteralFieldFragment list
     Methods: SymbolicMethodFragment list
 } with

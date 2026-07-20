@@ -15,6 +15,8 @@ module internal Frontend =
         | AssemblyKeyword
         | InternalKeyword
         | TypeKeyword
+        | StaticKeyword
+        | InlineKeyword
         | WhenKeyword
         | AndKeyword
         | MemberKeyword
@@ -334,6 +336,8 @@ module internal Frontend =
                 | "assembly" -> add AssemblyKeyword start
                 | "internal" -> add InternalKeyword start
                 | "type" -> add TypeKeyword start
+                | "static" -> add StaticKeyword start
+                | "inline" -> add InlineKeyword start
                 | "when" -> add WhenKeyword start
                 | "and" -> add AndKeyword start
                 | "member" -> add MemberKeyword start
@@ -573,7 +577,31 @@ module internal Frontend =
 
             let rec parseTypeExpression () =
                 parseResult {
-                    let! left =
+                    let! left = parseTypeAtom ()
+
+                    return!
+                        match (current ()).Kind with
+                        | Arrow ->
+                            consume ()
+                            |> ignore
+
+                            parseTypeExpression ()
+                            |> Result.map (fun right ->
+                                ParsedFunctionType(
+                                    left,
+                                    right,
+                                    {
+                                        Start = left.Range.Start
+                                        End = right.Range.End
+                                    }
+                                )
+                            )
+                        | _ -> Ok left
+                }
+
+            and parseTypeAtom () =
+                parseResult {
+                    let! atom =
                         match (current ()).Kind with
                         | TypeParameter value ->
                             let token = consume ()
@@ -601,22 +629,47 @@ module internal Frontend =
 
                     return!
                         match (current ()).Kind with
-                        | Arrow ->
+                        | LessThan ->
                             consume ()
                             |> ignore
 
-                            parseTypeExpression ()
-                            |> Result.map (fun right ->
-                                ParsedFunctionType(
-                                    left,
-                                    right,
-                                    {
-                                        Start = left.Range.Start
-                                        End = right.Range.End
-                                    }
+                            parseTypeArguments []
+                            |> Result.bind (fun arguments ->
+                                expected GreaterThan "expected '>'"
+                                |> Result.map (fun closeToken ->
+                                    ParsedGenericTypeApplication(
+                                        atom,
+                                        arguments,
+                                        {
+                                            Start = atom.Range.Start
+                                            End = closeToken.Range.End
+                                        }
+                                    )
                                 )
                             )
-                        | _ -> Ok left
+                        | _ -> Ok atom
+                }
+
+            and parseTypeArguments arguments =
+                parseResult {
+                    let! argument = parseTypeExpression ()
+                    let arguments = argument :: arguments
+
+                    return!
+                        match (current ()).Kind with
+                        | Comma ->
+                            consume ()
+                            |> ignore
+
+                            parseTypeArguments arguments
+                        | GreaterThan -> Ok(List.rev arguments)
+                        | _ ->
+                            Error(
+                                prototypeDiagnostic
+                                    source.Path
+                                    (current ()).Range
+                                    "expected ',' or '>' after a type argument"
+                            )
                 }
 
             let parseExpression () =
@@ -625,6 +678,23 @@ module internal Frontend =
                 match expressionToken.Kind with
                 | Integer value -> Ok(IntegerLiteral value, expressionToken.Range)
                 | StringLiteralToken value -> Ok(StringLiteral value, expressionToken.Range)
+                | Identifier receiverName when (current ()).Kind = Dot ->
+                    parseResult {
+                        let! _ = expected Dot "expected '.'"
+                        let! memberName, _ = identifier "expected a member name"
+                        let! _ = expected LeftParenthesis "expected '('"
+                        let! closeToken = expected RightParenthesis "expected ')'"
+
+                        return
+                            TraitCall(
+                                receiverName,
+                                memberName
+                            ),
+                            {
+                                Start = expressionToken.Range.Start
+                                End = closeToken.Range.End
+                            }
+                    }
                 | RightParenthesis ->
                     Error(
                         diagnostic
@@ -1104,40 +1174,203 @@ module internal Frontend =
                                 }
                             | _ -> Ok([], [])
 
-                        let! _ = expected Equals "expected '='"
-                        let targetStart = (current ()).Range.Start
+                        let rec parseMethodConstraints constraints =
+                            parseResult {
+                                let! constraint' = parseTypeExpression ()
+                                let constraints = constraint' :: constraints
 
-                        let! targetType = parseTypeExpression ()
+                                return!
+                                    match (current ()).Kind with
+                                    | AndKeyword ->
+                                        consume ()
+                                        |> ignore
 
-                        let! allowsNull, targetEnd =
-                            match (current ()).Kind with
-                            | Bar ->
-                                consume ()
-                                |> ignore
+                                        parseMethodConstraints constraints
+                                    | GreaterThan -> Ok(List.rev constraints)
+                                    | _ ->
+                                        Error(
+                                            prototypeDiagnostic
+                                                source.Path
+                                                (current ()).Range
+                                                "expected 'and' or '>' after a method constraint"
+                                        )
+                            }
 
-                                match expected NullKeyword "expected 'null' after '|'" with
-                                | Error error -> Error error
-                                | Ok nullToken -> Ok(true, nullToken.Range.End)
-                            | _ -> Ok(false, input.[index - 1].Range.End)
+                        let rec parseMethodTypeParameters parameters =
+                            parseResult {
+                                let! parameter, _ = typeParameter "expected a method type parameter"
+                                let parameters = parameter :: parameters
 
-                        return
-                            ParsedTypeAbbreviation {
-                                Name = declarationName
-                                TypeParameters = typeParameters
-                                Constraints = constraints
-                                Target = {
-                                    Type = targetType
-                                    AllowsNull = allowsNull
+                                return!
+                                    match (current ()).Kind with
+                                    | Comma ->
+                                        consume ()
+                                        |> ignore
+
+                                        parseMethodTypeParameters parameters
+                                    | WhenKeyword ->
+                                        consume ()
+                                        |> ignore
+
+                                        parseMethodConstraints []
+                                        |> Result.map (fun methodConstraints ->
+                                            List.rev parameters, methodConstraints
+                                        )
+                                    | GreaterThan -> Ok(List.rev parameters, [])
+                                    | _ ->
+                                        Error(
+                                            prototypeDiagnostic
+                                                source.Path
+                                                (current ()).Range
+                                                "expected ',', 'when', or '>' after a method type parameter"
+                                        )
+                            }
+
+                        let parseStaticMethod () =
+                            parseResult {
+                                let! staticToken = expected StaticKeyword "expected 'static'"
+                                let! _ = expected MemberKeyword "expected 'member'"
+                                let! _ = expected InlineKeyword "expected 'inline'"
+
+                                let! methodName, _ =
+                                    identifier "expected a static member name"
+
+                                let! methodTypeParameters, methodConstraints =
+                                    match (current ()).Kind with
+                                    | LessThan ->
+                                        consume ()
+                                        |> ignore
+
+                                        parseResult {
+                                            let! parameters, constraints =
+                                                parseMethodTypeParameters []
+
+                                            let! _ = expected GreaterThan "expected '>'"
+                                            return parameters, constraints
+                                        }
+                                    | _ -> Ok([], [])
+
+                                let! _ = expected LeftParenthesis "expected '('"
+
+                                let! parameterName, parameterToken =
+                                    identifier "expected a parameter name"
+
+                                let! _ = expected Colon "expected ':'"
+                                let! parameterType = parseTypeExpression ()
+                                let! _ = expected RightParenthesis "expected ')'"
+                                let! _ = expected Equals "expected '='"
+                                let! body, bodyRange = parseExpression ()
+
+                                return {
+                                    Name = methodName
+                                    TypeParameters = methodTypeParameters
+                                    Constraints = methodConstraints
+                                    Parameters = [
+                                        {
+                                            Name = parameterName
+                                            Type = parameterType
+                                            Range = {
+                                                Start = parameterToken.Range.Start
+                                                End = parameterType.Range.End
+                                            }
+                                        }
+                                    ]
+                                    Body = body
+                                    BodyRange = bodyRange
                                     Range = {
-                                        Start = targetStart
-                                        End = targetEnd
+                                        Start = staticToken.Range.Start
+                                        End = bodyRange.End
                                     }
                                 }
-                                Range = {
-                                    Start = typeToken.Range.Start
-                                    End = targetEnd
-                                }
                             }
+
+                        let rec parseStaticMethods methods =
+                            match (current ()).Kind with
+                            | StaticKeyword ->
+                                parseResult {
+                                    let! methodDeclaration = parseStaticMethod ()
+
+                                    return!
+                                        parseStaticMethods (
+                                            methodDeclaration
+                                            :: methods
+                                        )
+                                }
+                            | TypeKeyword
+                            | EndOfFile -> Ok(List.rev methods)
+                            | _ ->
+                                Error(
+                                    prototypeDiagnostic
+                                        source.Path
+                                        (current ()).Range
+                                        "expected a static member, type declaration, or end of file"
+                                )
+
+                        let! _ = expected Equals "expected '='"
+
+                        return!
+                            match (current ()).Kind with
+                            | StaticKeyword when
+                                List.isEmpty typeParameters
+                                && List.isEmpty constraints
+                                ->
+                                parseStaticMethods []
+                                |> Result.bind (fun methods ->
+                                    match List.tryLast methods with
+                                    | Some lastMethod ->
+                                        Ok(
+                                            ParsedStaticType {
+                                                Name = declarationName
+                                                Methods = methods
+                                                Range = {
+                                                    Start = typeToken.Range.Start
+                                                    End = lastMethod.Range.End
+                                                }
+                                            }
+                                        )
+                                    | None ->
+                                        Error(
+                                            prototypeDiagnostic
+                                                source.Path
+                                                (current ()).Range
+                                                "a static type must declare a member"
+                                        )
+                                )
+                            | _ ->
+                                parseResult {
+                                    let targetStart = (current ()).Range.Start
+                                    let! targetType = parseTypeExpression ()
+
+                                    let! allowsNull, targetEnd =
+                                        match (current ()).Kind with
+                                        | Bar ->
+                                            consume ()
+                                            |> ignore
+
+                                            match expected NullKeyword "expected 'null' after '|'" with
+                                            | Error error -> Error error
+                                            | Ok nullToken -> Ok(true, nullToken.Range.End)
+                                        | _ -> Ok(false, input.[index - 1].Range.End)
+
+                                    return
+                                        ParsedTypeAbbreviation {
+                                            Name = declarationName
+                                            TypeParameters = typeParameters
+                                            Constraints = constraints
+                                            Target = {
+                                                Type = targetType
+                                                AllowsNull = allowsNull
+                                                Range = {
+                                                    Start = targetStart
+                                                    End = targetEnd
+                                                }
+                                            }
+                                            Range = {
+                                                Start = typeToken.Range.Start
+                                                End = targetEnd
+                                            }
+                                        }
+                                }
                     }
 
                 let rec parseTypeAbbreviations declarations =
@@ -1158,7 +1391,7 @@ module internal Frontend =
                             prototypeDiagnostic
                                 source.Path
                                 (current ()).Range
-                                "expected a type abbreviation or end of file"
+                                "expected a type declaration or end of file"
                         )
 
                 let namespaceFile namespaceName openNamespaces assemblyAttributes declarations = {

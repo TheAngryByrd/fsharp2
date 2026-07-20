@@ -761,6 +761,181 @@ module CompilerTargetTests =
                 finally
                     Directory.Delete(root, true)
 
+            testCase "emits the Oracle CLR stub for an inline statically resolved member"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-inline-srtp-stub",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "TaskLike.fs")
+                    let outputPath = Path.Combine(root, "TaskLike.dll")
+                    let pdbPath = Path.Combine(root, "TaskLike.pdb")
+                    let responsePath = Path.Combine(root, "compile.rsp")
+                    let systemRuntimePath = Assembly.Load("System.Runtime").Location
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "namespace IcedTasks.TaskLike\n\nopen System.Runtime.CompilerServices\n\ntype Awaiter<'Awaiter, 'TResult\n    when 'Awaiter :> ICriticalNotifyCompletion\n    and 'Awaiter: (member get_IsCompleted: unit -> bool)\n    and 'Awaiter: (member GetResult: unit -> 'TResult)> = 'Awaiter\n\ntype Awaiter =\n    static member inline IsCompleted<'Awaiter, 'TResult when Awaiter<'Awaiter, 'TResult>>\n        (awaiter: 'Awaiter)\n        =\n        awaiter.get_IsCompleted ()\n"
+                    )
+
+                    File.WriteAllLines(
+                        responsePath,
+                        [|
+                            "--target:library"
+                            "--deterministic+"
+                            "--debug:portable"
+                            $"--reference:{typeof<System.Runtime.CompilerServices.ICriticalNotifyCompletion>.Assembly.Location}"
+                            $"--reference:{typeof<Microsoft.FSharp.Core.Unit>.Assembly.Location}"
+                            $"--reference:{systemRuntimePath}"
+                            $"--out:{outputPath}"
+                            $"--pdb:{pdbPath}"
+                            sourcePath
+                        |]
+                    )
+
+                    let result = invokeFsc2 root responsePath
+
+                    Expect.equal
+                        result.ExitCode
+                        0
+                        (result.StandardOutput
+                         + result.StandardError)
+
+                    use implementationStream = File.OpenRead(outputPath)
+                    use implementation = new PEReader(implementationStream)
+                    let metadata = implementation.GetMetadataReader()
+
+                    let awaiterType =
+                        metadata.TypeDefinitions
+                        |> Seq.map metadata.GetTypeDefinition
+                        |> Seq.find (fun definition ->
+                            metadata.GetString(definition.Namespace) = "IcedTasks.TaskLike"
+                            && metadata.GetString(definition.Name) = "Awaiter"
+                        )
+
+                    Expect.equal
+                        awaiterType.Attributes
+                        (enum<TypeAttributes> 0x00002001)
+                        "the CLR helper type attributes should match the Compatibility Oracle"
+
+                    let methodDefinition =
+                        awaiterType.GetMethods()
+                        |> Seq.map metadata.GetMethodDefinition
+                        |> Seq.find (fun methodDefinition ->
+                            metadata.GetString(methodDefinition.Name) = "IsCompleted"
+                        )
+
+                    Expect.equal
+                        methodDefinition.Attributes
+                        (MethodAttributes.Public
+                         ||| MethodAttributes.Static)
+                        "the inline member's callable CLR stub should match the Oracle surface"
+
+                    Expect.sequenceEqual
+                        (metadata.GetBlobBytes(methodDefinition.Signature))
+                        (Convert.FromHexString("100201021E00"))
+                        "the generic method signature should be bool IsCompleted<Awaiter,TResult>(Awaiter)"
+
+                    let genericParameters =
+                        methodDefinition.GetGenericParameters()
+                        |> Seq.map (fun handle ->
+                            let parameter = metadata.GetGenericParameter(handle)
+
+                            parameter.Index,
+                            metadata.GetString(parameter.Name),
+                            parameter.Attributes
+                        )
+                        |> Seq.toArray
+
+                    Expect.sequenceEqual
+                        genericParameters
+                        [|
+                            0, "Awaiter", GenericParameterAttributes.None
+                            1, "TResult", GenericParameterAttributes.None
+                        |]
+                        "the method generic parameters should preserve source order and names"
+
+                    let parameters =
+                        methodDefinition.GetParameters()
+                        |> Seq.map (fun handle ->
+                            let parameter = metadata.GetParameter(handle)
+
+                            parameter.SequenceNumber,
+                            metadata.GetString(parameter.Name),
+                            parameter.Attributes
+                        )
+                        |> Seq.toArray
+
+                    Expect.sequenceEqual
+                        parameters
+                        [| 1, "awaiter", ParameterAttributes.None |]
+                        "the CLR parameter row should match the Compatibility Oracle"
+
+                    let body = implementation.GetMethodBody(methodDefinition.RelativeVirtualAddress)
+                    let il = body.GetILBytes()
+
+                    Expect.sequenceEqual
+                        [|
+                            il.[0]
+                            il.[5]
+                            il.[10]
+                        |]
+                        [|
+                            0x72uy
+                            0x73uy
+                            0x7auy
+                        |]
+                        "the CLR stub should load the message, construct the exception, and throw"
+
+                    Expect.equal
+                        il.Length
+                        11
+                        "the CLR stub should contain only the Oracle throw path"
+
+                    let messageToken = BitConverter.ToInt32(il, 1)
+
+                    let message =
+                        messageToken
+                        &&& 0x00ffffff
+                        |> MetadataTokens.UserStringHandle
+                        |> metadata.GetUserString
+
+                    Expect.equal
+                        message
+                        "Dynamic invocation of get_IsCompleted is not supported"
+                        "the dynamic-invocation failure message should match the Compatibility Oracle"
+
+                    let constructor =
+                        metadata.MemberReferences
+                        |> Seq.exactlyOne
+                        |> metadata.GetMemberReference
+
+                    let declaringType =
+                        constructor.Parent
+                        |> MetadataTokens.GetRowNumber
+                        |> MetadataTokens.TypeReferenceHandle
+                        |> metadata.GetTypeReference
+
+                    Expect.equal
+                        (metadata.GetString(declaringType.Namespace),
+                         metadata.GetString(declaringType.Name))
+                        ("System", "NotSupportedException")
+                        "the CLR stub should construct System.NotSupportedException"
+
+                    Expect.equal
+                        (metadata.GetString(constructor.Name))
+                        ".ctor"
+                        "the CLR stub should call the exception constructor"
+                finally
+                    Directory.Delete(root, true)
+
             testCase "namespace moves change same-named module export fingerprints"
             <| fun _ ->
                 let root =
@@ -2610,7 +2785,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "3"
+                        "4"
                         "query cache evidence should be versioned"
 
                     Expect.equal
