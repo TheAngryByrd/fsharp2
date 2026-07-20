@@ -4900,7 +4900,7 @@ module CompilerTargetTests =
             testCase "emits a static type augmentation in the current module"
             <| fun _ ->
                 let sourceText =
-                    "namespace IcedTasks.ValueTasks\n\nopen System\nopen System.Threading\nopen System.Threading.Tasks\n\n[<AutoOpen>]\nmodule ValueTaskExtensions =\n    type String with\n        static member Echo(value: int) : int = value\n\n    type System.Object with\n        static member Kind() : int = 7\n\n    type ValueTask with\n        static member FromCanceled(cancellationToken: CancellationToken) : ValueTask =\n            new ValueTask(Task.FromCanceled(cancellationToken))\n"
+                    "namespace IcedTasks.ValueTasks\n\nopen System\nopen System.Threading\nopen System.Threading.Tasks\n\n[<AutoOpen>]\nmodule ValueTaskExtensions =\n    type String with\n        static member Echo(value: int) : int = value\n\n    type System.Object with\n        static member Kind() : int = 7\n\n    type ValueTask with\n        static member FromCanceled(cancellationToken) =\n            new ValueTask(Task.FromCanceled(cancellationToken))\n\n        static member FromCanceled<'T>(cancellationToken) =\n            new ValueTask<'T>(Task.FromCanceled<'T>(cancellationToken))\n"
 
                 let root =
                     Path.Combine(
@@ -4985,7 +4985,22 @@ module CompilerTargetTests =
                             methodInfo.ReturnType.FullName,
                             (methodInfo.Invoke(null, arguments) :?> int)
 
-                        let fromCanceled = augmentationMethod "FromCanceled"
+                        let fromCanceledMethods =
+                            publicStaticMethods
+                            |> Array.filter (fun methodInfo ->
+                                methodInfo.Name.Contains(".FromCanceled", StringComparison.Ordinal)
+                            )
+
+                        let fromCanceled =
+                            fromCanceledMethods
+                            |> Array.find (fun methodInfo ->
+                                not methodInfo.IsGenericMethodDefinition
+                            )
+
+                        let genericFromCanceled =
+                            fromCanceledMethods
+                            |> Array.find _.IsGenericMethodDefinition
+                            |> fun methodInfo -> methodInfo.MakeGenericMethod(typeof<int>)
 
                         let canceledTask =
                             fromCanceled.Invoke(
@@ -4993,6 +5008,16 @@ module CompilerTargetTests =
                                 [| box (System.Threading.CancellationToken(canceled = true)) |]
                             )
                             :?> System.Threading.Tasks.ValueTask
+
+                        let canceledGenericTask =
+                            try
+                                genericFromCanceled.Invoke(
+                                    null,
+                                    [| box (System.Threading.CancellationToken(canceled = true)) |]
+                                )
+                                :?> System.Threading.Tasks.ValueTask<int>
+                            with error ->
+                                failtestf "%O" error
 
                         methodShape (augmentationMethod "Echo") [| box 42 |],
                         methodShape (augmentationMethod "Kind") Array.empty,
@@ -5003,7 +5028,16 @@ module CompilerTargetTests =
                               parameter.Name, parameter.ParameterType.FullName
                           )),
                          fromCanceled.ReturnType.FullName,
-                         canceledTask.IsCanceled)
+                         canceledTask.IsCanceled),
+                        (genericFromCanceled.Name,
+                         genericFromCanceled.Attributes,
+                         genericFromCanceled.GetGenericArguments().Length,
+                         (genericFromCanceled.GetParameters()
+                          |> Array.map (fun parameter ->
+                              parameter.Name, parameter.ParameterType.FullName
+                          )),
+                         genericFromCanceled.ReturnType.FullName,
+                         canceledGenericTask.IsCanceled)
 
                     let oracleShape = inspectAndInvoke oracleOutputPath
                     let fsharp2Shape = inspectAndInvoke outputPath
@@ -5013,12 +5047,19 @@ module CompilerTargetTests =
                         oracleShape
                         "the static type augmentation should match the Compatibility Oracle"
 
-                    let (_, _, _, _, result), (_, _, _, _, kind), (_, _, _, _, isCanceled) =
+                    let ((_, _, _, _, result),
+                         (_, _, _, _, kind),
+                         (_, _, _, _, isCanceled),
+                         (_, _, _, _, _, isGenericCanceled)) =
                         fsharp2Shape
 
                     Expect.equal result 42 "Echo should return its argument"
                     Expect.equal kind 7 "Kind should execute from the qualified augmentation"
                     Expect.isTrue isCanceled "FromCanceled should return a canceled ValueTask"
+
+                    Expect.isTrue
+                        isGenericCanceled
+                        "generic FromCanceled should return a canceled ValueTask"
 
                     File.WriteAllText(
                         sourcePath,
@@ -5033,7 +5074,7 @@ module CompilerTargetTests =
                             "ValueTask-changed-fsharp2"
                             [ typeof<System.Threading.Tasks.Task>.Assembly.Location ]
 
-                    let (_, _, _, _, changedResult), _, _ = inspectAndInvoke changedOutputPath
+                    let (_, _, _, _, changedResult), _, _, _ = inspectAndInvoke changedOutputPath
                     Expect.equal changedResult 43 "the changed non-inline body should be emitted"
 
                     Expect.equal
@@ -7217,7 +7258,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "46"
+                        "47"
                         "query cache evidence should be versioned"
 
                     Expect.equal

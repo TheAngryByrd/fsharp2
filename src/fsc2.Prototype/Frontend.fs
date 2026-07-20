@@ -1608,6 +1608,27 @@ module internal Frontend =
                                                 End = closeToken.Range.End
                                             }
                                 }
+                            | LessThan when memberPath.Length = 1 ->
+                                parseResult {
+                                    let! _ = expected LessThan "expected '<'"
+                                    let! typeArguments = parseTypeArguments []
+                                    let! _ = expected GreaterThan "expected '>'"
+                                    let! _ = expected LeftParenthesis "expected '('"
+                                    let! arguments = parseCallArguments ()
+                                    let! closeToken = expected RightParenthesis "expected ')'"
+
+                                    return
+                                        GenericMemberCall(
+                                            receiverName,
+                                            memberPath.Head,
+                                            typeArguments,
+                                            arguments
+                                        ),
+                                        {
+                                            Start = expressionToken.Range.Start
+                                            End = closeToken.Range.End
+                                        }
+                                }
                             | LeftArrow ->
                                 parseResult {
                                     let! _ = expected LeftArrow "expected '<-'"
@@ -2144,8 +2165,14 @@ module internal Frontend =
 
                         let! parameterName, parameterToken = identifier "expected a parameter name"
 
-                        let! _ = expected Colon "expected ':'"
-                        let! parameterType = parseTypeExpression ()
+                        let! parameterType =
+                            match (current ()).Kind with
+                            | Colon ->
+                                consume ()
+                                |> ignore
+
+                                parseTypeExpression ()
+                            | _ -> Ok(ParsedWildcardType parameterToken.Range)
 
                         return {
                             Attributes = attributes

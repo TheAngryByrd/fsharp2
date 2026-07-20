@@ -1130,6 +1130,92 @@ type internal CompilerService() =
                     else
                         None
 
+            let tryApplyExplicitMethodTypeArguments
+                (genericArity: int)
+                (parameterTypes: CliType list)
+                returnType
+                (genericArguments: CliType list)
+                (argumentTypes: CliType list)
+                =
+                if
+                    genericArity
+                    <> genericArguments.Length
+                    || parameterTypes.Length
+                       <> argumentTypes.Length
+                then
+                    None
+                else
+                    let substitutions =
+                        genericArguments
+                        |> List.map Some
+                        |> List.toArray
+
+                    let parametersMatch =
+                        (parameterTypes, argumentTypes)
+                        ||> List.forall2 (inferMethodTypeArgument substitutions)
+
+                    if parametersMatch then
+                        Some(substituteMethodTypeArguments substitutions returnType)
+                    else
+                        None
+
+            let tryApplyExplicitSourceStaticMethod
+                (sourceType: CheckedSourceType)
+                (methodDeclaration: TypedMethodDeclaration)
+                genericArguments
+                argumentTypes
+                =
+                tryApplyExplicitMethodTypeArguments
+                    methodDeclaration.GenericParameters.Length
+                    (methodDeclaration.Parameters |> List.map _.Type)
+                    methodDeclaration.ReturnType
+                    genericArguments
+                    argumentTypes
+                |> Option.map (fun returnType ->
+                    {
+                        DeclaringType = {
+                            DeclarationId = sourceType.StableId
+                            AssemblyName = String.Empty
+                            TypeName = {
+                                Namespace = sourceType.Namespace
+                                Name = sourceType.Name
+                            }
+                            IsValueType = false
+                        }
+                        StableId = methodDeclaration.StableId
+                        Name = methodDeclaration.Name
+                        GenericArity = methodDeclaration.GenericParameters.Length
+                        ParameterTypes = methodDeclaration.Parameters |> List.map _.Type
+                        ReturnType = methodDeclaration.ReturnType
+                    },
+                    genericArguments,
+                    returnType
+                )
+
+            let tryApplyExplicitReferenceStaticMethod
+                (methodDefinition: ReferenceMethodDefinition)
+                genericArguments
+                argumentTypes
+                =
+                tryApplyExplicitMethodTypeArguments
+                    methodDefinition.GenericArity
+                    methodDefinition.ParameterTypes
+                    methodDefinition.ReturnType
+                    genericArguments
+                    argumentTypes
+                |> Option.map (fun returnType ->
+                    {
+                        DeclaringType = methodDefinition.DeclaringType
+                        StableId = methodDefinition.StableId
+                        Name = methodDefinition.Name
+                        GenericArity = methodDefinition.GenericArity
+                        ParameterTypes = methodDefinition.ParameterTypes
+                        ReturnType = methodDefinition.ReturnType
+                    },
+                    genericArguments,
+                    returnType
+                )
+
             let resolveStaticMethod receiverName memberName argumentTypes range =
                 let visibleNamespaces =
                     parsed.Namespace
@@ -1193,6 +1279,85 @@ type internal CompilerService() =
                     diagnostic
                         range
                         $"no visible static member '{receiverName}.{memberName}' matches the argument types"
+                | _ ->
+                    diagnostic
+                        range
+                        $"the static member call '{receiverName}.{memberName}' is ambiguous"
+
+            let resolveExplicitStaticMethod
+                receiverName
+                memberName
+                genericArguments
+                argumentTypes
+                range
+                =
+                let visibleNamespaces =
+                    parsed.Namespace
+                    :: parsed.OpenedNamespaces
+                    |> Set.ofList
+
+                let visibleSourceTypes =
+                    checkedSourceTypes
+                    |> Seq.filter (fun sourceType ->
+                        sourceType.Name = receiverName
+                        && visibleNamespaces.Contains(sourceType.Namespace)
+                    )
+
+                let sourceCandidates =
+                    visibleSourceTypes
+                    |> Seq.collect (fun sourceType ->
+                        sourceType.Methods
+                        |> Seq.choose (fun methodDeclaration ->
+                            if methodDeclaration.Name = memberName then
+                                tryApplyExplicitSourceStaticMethod
+                                    sourceType
+                                    methodDeclaration
+                                    genericArguments
+                                    argumentTypes
+                            else
+                                None
+                        )
+                    )
+                    |> Seq.toList
+
+                let candidates =
+                    if
+                        visibleSourceTypes
+                        |> Seq.isEmpty
+                    then
+                        match
+                            references.Resolve(
+                                parsed.Namespace,
+                                parsed.OpenedNamespaces,
+                                {
+                                    Namespace = String.Empty
+                                    Name = receiverName
+                                },
+                                0
+                            )
+                        with
+                        | Error _ -> []
+                        | Ok resolvedType ->
+                            references.Methods(
+                                resolvedType.DeclarationId,
+                                memberName,
+                                true
+                            )
+                            |> List.choose (fun methodDefinition ->
+                                tryApplyExplicitReferenceStaticMethod
+                                    methodDefinition
+                                    genericArguments
+                                    argumentTypes
+                            )
+                    else
+                        sourceCandidates
+
+                match candidates with
+                | [ candidate ] -> Ok candidate
+                | [] ->
+                    diagnostic
+                        range
+                        $"no visible static member '{receiverName}.{memberName}' matches the explicit type and argument types"
                 | _ ->
                     diagnostic
                         range
@@ -1263,6 +1428,7 @@ type internal CompilerService() =
                             "value references are supported only in parameterized members"
                     | _, UnitLiteral
                     | _, BooleanLiteral _
+                    | _, GenericMemberCall _
                     | _, BoundInstanceMember _
                     | _, MemberAssignment _
                     | _, SequentialExpression _
@@ -1711,6 +1877,7 @@ type internal CompilerService() =
                             | Ok _, Ok _, UnitLiteral
                             | Ok _, Ok _, BooleanLiteral _
                             | Ok _, Ok _, StringLiteral _
+                            | Ok _, Ok _, GenericMemberCall _
                             | Ok _, Ok _, ValueReference _
                             | Ok _, Ok _, AddressOfExpression _
                             | Ok _, Ok _, UnitApplication _
@@ -1940,17 +2107,203 @@ type internal CompilerService() =
                         | Some returnType -> collectTypeParameters fromParameters returnType
                         | None -> fromParameters
 
+                    let inferObjectMethodParameterTypes expression =
+                        let containsGenericParameter cliType =
+                            let rec loop =
+                                function
+                                | CliTypeParameter _
+                                | CliMethodTypeParameter _ -> true
+                                | CliByRef elementType -> loop elementType
+                                | CliGenericType(_, arguments) -> arguments |> List.exists loop
+                                | CliInt32
+                                | CliBoolean
+                                | CliString
+                                | CliObject
+                                | CliNativeInt
+                                | CliVoid
+                                | CliNamedType _ -> false
+
+                            loop cliType
+
+                        let addConstraint name cliType constraints =
+                            if containsGenericParameter cliType then
+                                constraints
+                            else
+                                constraints
+                                |> Map.change name (fun existing ->
+                                    existing
+                                    |> Option.defaultValue Set.empty
+                                    |> Set.add cliType
+                                    |> Some
+                                )
+
+                        let collectStaticCallConstraints
+                            (genericArity: int option)
+                            receiverName
+                            memberName
+                            (arguments: ParsedExpression list)
+                            constraints
+                            =
+                            match
+                                references.Resolve(
+                                    parsed.Namespace,
+                                    parsed.OpenedNamespaces,
+                                    {
+                                        Namespace = String.Empty
+                                        Name = receiverName
+                                    },
+                                    0
+                                )
+                            with
+                            | Error _ -> constraints
+                            | Ok resolvedType ->
+                                let candidates =
+                                    references.Methods(
+                                        resolvedType.DeclarationId,
+                                        memberName,
+                                        true
+                                    )
+                                    |> List.filter (fun methodDefinition ->
+                                        methodDefinition.ParameterTypes.Length = arguments.Length
+                                        && (genericArity
+                                            |> Option.forall (fun arity ->
+                                                methodDefinition.GenericArity = arity
+                                            ))
+                                    )
+
+                                arguments
+                                |> List.mapi (fun index argument -> index, argument)
+                                |> List.fold (fun state (index, argument) ->
+                                    match argument with
+                                    | ValueReference parameterName ->
+                                        let candidateTypes =
+                                            candidates
+                                            |> List.map (fun candidate ->
+                                                candidate.ParameterTypes.[index]
+                                            )
+                                            |> List.filter (containsGenericParameter >> not)
+                                            |> List.distinct
+
+                                        match candidateTypes with
+                                        | [ candidateType ] ->
+                                            addConstraint parameterName candidateType state
+                                        | _ -> state
+                                    | _ -> state
+                                ) constraints
+
+                        let rec collect constraints =
+                            function
+                            | MemberCall(receiverName, memberName, arguments) ->
+                                let constraints =
+                                    collectStaticCallConstraints
+                                        None
+                                        receiverName
+                                        memberName
+                                        arguments
+                                        constraints
+
+                                (constraints, arguments)
+                                ||> List.fold collect
+                            | GenericMemberCall(receiverName,
+                                                memberName,
+                                                typeArguments,
+                                                arguments) ->
+                                let constraints =
+                                    collectStaticCallConstraints
+                                        (Some typeArguments.Length)
+                                        receiverName
+                                        memberName
+                                        arguments
+                                        constraints
+
+                                (constraints, arguments)
+                                ||> List.fold collect
+                            | TypeConstruction(_, arguments, _) ->
+                                (constraints, arguments)
+                                ||> List.fold collect
+                            | MemberAssignment(_, _, value)
+                            | LocalAssignment(_, value)
+                            | BooleanNegationExpression(value, _)
+                            | ExplicitUpcastExpression(value, _) -> collect constraints value
+                            | SequentialExpression expressions ->
+                                (constraints, expressions)
+                                ||> List.fold collect
+                            | SequentialValueExpression expressions ->
+                                (constraints, expressions)
+                                ||> List.fold (fun state (value, _) -> collect state value)
+                            | FunctionApplication(functionExpression, argumentExpression) ->
+                                let constraints = collect constraints functionExpression
+                                collect constraints argumentExpression
+                            | ExpressionMemberCall(receiver, _, arguments) ->
+                                let constraints = collect constraints receiver
+                                (constraints, arguments) ||> List.fold collect
+                            | ConditionalExpression(condition, ifTrue, ifFalse, _, _, _) ->
+                                let constraints = collect constraints condition
+                                let constraints = collect constraints ifTrue
+                                collect constraints ifFalse
+                            | MatchExpression(input, clauses, _, _) ->
+                                let constraints = collect constraints input
+
+                                (constraints, clauses)
+                                ||> List.fold (fun state (_, body, _) -> collect state body)
+                            | LetExpression(_, _, value, body, _, _) ->
+                                let constraints = collect constraints value
+                                collect constraints body
+                            | LambdaExpression(_, _, body)
+                            | UnitLambdaExpression body -> collect constraints body
+                            | ObjectExpression(_, arguments, _, _, _, body, _) ->
+                                let constraints =
+                                    (constraints, arguments)
+                                    ||> List.fold collect
+
+                                collect constraints body
+                            | IntegerLiteral _
+                            | UnitLiteral
+                            | BooleanLiteral _
+                            | StringLiteral _
+                            | ValueReference _
+                            | AddressOfExpression _
+                            | UnitApplication _
+                            | BoundInstanceMember _ -> constraints
+
+                        collect Map.empty expression
+                        |> Map.toList
+                        |> List.choose (fun (name, candidates) ->
+                            if candidates.Count = 1 then
+                                candidates
+                                |> Seq.exactlyOne
+                                |> fun candidate -> Some(name, candidate)
+                            else
+                                None
+                        )
+                        |> Map.ofList
+
                     let typeObjectMethodParameters
                         methodParameterIndex
                         declaredMethodParameters
+                        inferredParameterTypes
                         (parameters: ParsedParameter list)
                         =
                         parameters
                         |> List.map (fun parameter ->
-                            parameter.Type
-                            |> expandTypeAbbreviations Set.empty
-                            |> resolveType declaredMethodParameters
-                            |> Result.bind (toCliType methodParameterIndex parameter.Range)
+                            (match parameter.Type with
+                             | ParsedWildcardType _ ->
+                                 match
+                                     inferredParameterTypes
+                                     |> Map.tryFind parameter.Name
+                                 with
+                                 | Some parameterType -> Ok parameterType
+                                 | None ->
+                                     diagnostic
+                                         parameter.Range
+                                         $"the type of parameter '{parameter.Name}' could not be inferred"
+                             | _ ->
+                                 parameter.Type
+                                 |> expandTypeAbbreviations Set.empty
+                                 |> resolveType declaredMethodParameters
+                                 |> Result.bind (
+                                     toCliType methodParameterIndex parameter.Range
+                                 ))
                             |> Result.map (fun parameterType ->
                                 ({
                                     Name = parameter.Name
@@ -2090,6 +2443,7 @@ type internal CompilerService() =
                                 typeObjectMethodParameters
                                     methodParameterIndex
                                     declaredMethodParameters
+                                    (inferObjectMethodParameterTypes methodDeclaration.Body)
                                     methodDeclaration.Parameters
 
                             let declaredReturnType =
@@ -2431,6 +2785,82 @@ type internal CompilerService() =
                                                     returnType,
                                                     nextArgumentLocalIndex
                                                 )
+                                    | GenericMemberCall(receiverName,
+                                                        memberName,
+                                                        genericArguments,
+                                                        arguments) ->
+                                        let rec typeCallArguments
+                                            typedArguments
+                                            argumentTypes
+                                            argumentLocalIndex
+                                            =
+                                            function
+                                            | [] ->
+                                                Ok(
+                                                    List.rev typedArguments,
+                                                    List.rev argumentTypes,
+                                                    argumentLocalIndex
+                                                )
+                                            | argument :: remaining ->
+                                                match
+                                                    typeStaticExpression
+                                                        localBindings
+                                                        argumentLocalIndex
+                                                        argument
+                                                with
+                                                | Error error -> Error error
+                                                | Ok(typedArgument,
+                                                     argumentType,
+                                                     nextArgumentLocalIndex) ->
+                                                    typeCallArguments
+                                                        (typedArgument :: typedArguments)
+                                                        (argumentType :: argumentTypes)
+                                                        nextArgumentLocalIndex
+                                                        remaining
+
+                                        let typedGenericArguments =
+                                            genericArguments
+                                            |> List.map (fun genericArgument ->
+                                                genericArgument
+                                                |> expandTypeAbbreviations Set.empty
+                                                |> resolveType declaredMethodParameters
+                                                |> Result.bind (
+                                                    toCliType
+                                                        methodParameterIndex
+                                                        methodDeclaration.BodyRange
+                                                )
+                                            )
+                                            |> collectResults []
+
+                                        match
+                                            typedGenericArguments,
+                                            typeCallArguments [] [] nextLocalIndex arguments
+                                        with
+                                        | Error error, _
+                                        | _, Error error -> Error error
+                                        | Ok typedGenericArguments,
+                                          Ok(typedArguments,
+                                             argumentTypes,
+                                             nextArgumentLocalIndex) ->
+                                            match
+                                                resolveExplicitStaticMethod
+                                                    receiverName
+                                                    memberName
+                                                    typedGenericArguments
+                                                    argumentTypes
+                                                    methodDeclaration.BodyRange
+                                            with
+                                            | Error error -> Error error
+                                            | Ok(target, genericArguments, returnType) ->
+                                                Ok(
+                                                    TypedStaticMethodCall(
+                                                        target,
+                                                        genericArguments,
+                                                        typedArguments
+                                                    ),
+                                                    returnType,
+                                                    nextArgumentLocalIndex
+                                                )
                                     | TypeConstruction(constructedType,
                                                        arguments,
                                                        argumentRange) ->
@@ -2530,7 +2960,8 @@ type internal CompilerService() =
                                                                 Some {
                                                                     DeclaringType = constructedCliType
                                                                     StableId = constructor.StableId
-                                                                    ParameterTypes = parameterTypes
+                                                                    ParameterTypes =
+                                                                        constructor.ParameterTypes
                                                                 }
                                                             else
                                                                 None
@@ -3456,6 +3887,7 @@ type internal CompilerService() =
                             typeObjectMethodParameters
                                 methodParameterIndex
                                 declaredMethodParameters
+                                (inferObjectMethodParameterTypes methodDeclaration.Body)
                                 generalizedParameters
 
                         let typedFlexibleConstraints =
@@ -4152,6 +4584,10 @@ type internal CompilerService() =
                                     diagnostic
                                         methodDeclaration.BodyRange
                                         "trait calls are not yet supported in instance members"
+                                | GenericMemberCall _ ->
+                                    diagnostic
+                                        methodDeclaration.BodyRange
+                                        "explicit generic static calls are not yet supported in instance members"
                                 | TypeConstruction(constructedType,
                                                    [ LambdaExpression(lambdaParameter,
                                                                       lambdaParameterType,
