@@ -145,6 +145,7 @@ module private TypeIdentity =
                 "integer"
                 value.ToString(CultureInfo.InvariantCulture)
             ]
+        | TypedUnitLiteral -> "unit"
         | TypedParameterReference index ->
             Fingerprint.parts [
                 "parameter"
@@ -1050,6 +1051,7 @@ type internal CompilerService() =
                         diagnostic
                             declaration.BodyRange
                             "value references are supported only in parameterized members"
+                    | _, UnitLiteral
                     | _, BooleanLiteral _
                     | _, MemberAssignment _
                     | _, SequentialExpression _
@@ -1487,6 +1489,7 @@ type internal CompilerService() =
                                                 Range = methodDeclaration.Range
                                             }
                             | Ok _, Ok _, IntegerLiteral _
+                            | Ok _, Ok _, UnitLiteral
                             | Ok _, Ok _, BooleanLiteral _
                             | Ok _, Ok _, StringLiteral _
                             | Ok _, Ok _, ValueReference _
@@ -1859,6 +1862,7 @@ type internal CompilerService() =
                                     function
                                     | IntegerLiteral value ->
                                         Ok(TypedIntegerLiteral value, CliInt32, nextLocalIndex)
+                                    | UnitLiteral -> Ok(TypedUnitLiteral, CliVoid, nextLocalIndex)
                                     | ValueReference name ->
                                         match
                                             localBindings
@@ -2377,6 +2381,7 @@ type internal CompilerService() =
                                             inferredSubtypeConstraints expression
                                         )
                                     | TypedIntegerLiteral _
+                                    | TypedUnitLiteral
                                     | TypedParameterReference _
                                     | TypedLocalReference _
                                     | TypedResumableCode _
@@ -3003,6 +3008,7 @@ type internal CompilerService() =
                                         lambdaParameter
                                         lambdaBody
                                         argumentRange
+                                | UnitLiteral
                                 | BooleanLiteral _
                                 | AddressOfExpression _
                                 | UnitApplication _
@@ -3047,6 +3053,7 @@ type internal CompilerService() =
                                     match body with
                                     | TypedResumableCode expression -> expression.Range
                                     | TypedIntegerLiteral _
+                                    | TypedUnitLiteral
                                     | TypedParameterReference _
                                     | TypedLocalReference _
                                     | TypedLet _
@@ -3892,6 +3899,7 @@ type internal CompilerService() =
             let rec valueExpressionInstructions freshLabel kind =
                 function
                 | TypedIntegerLiteral value -> [ LoadInt32 value ], []
+                | TypedUnitLiteral -> [], []
                 | TypedParameterReference index ->
                     [ LoadArgument(methodArgumentIndex kind index) ], []
                 | TypedLocalReference index -> [ LoadLocal index ], []
@@ -4033,7 +4041,15 @@ type internal CompilerService() =
                             let instructions, locals =
                                 valueExpressionInstructions freshLabel kind expression
 
-                            [ MarkSequencePoint expressionRange ]
+                            let sequencePoint =
+                                match expression with
+                                | TypedConditional _
+                                | TypedBooleanNegation _
+                                | TypedLet _
+                                | TypedSequential _ -> []
+                                | _ -> [ MarkSequencePoint expressionRange ]
+
+                            sequencePoint
                             @ instructions
                             @ (if
                                    index < expressionCount
@@ -4071,13 +4087,34 @@ type internal CompilerService() =
 
                     let ifTrueSequencePoint =
                         match ifTrue with
-                        | TypedSequential _ -> []
+                        | TypedSequential _
+                        | TypedUnitLiteral -> []
                         | _ -> [ MarkSequencePoint ifTrueRange ]
 
                     let ifFalseSequencePoint =
                         match ifFalse with
-                        | TypedSequential _ -> []
+                        | TypedSequential _
+                        | TypedUnitLiteral -> []
                         | _ -> [ MarkSequencePoint ifFalseRange ]
+
+                    let joinInstructions =
+                        match ifFalse with
+                        | TypedUnitLiteral -> [
+                            MarkHiddenSequencePoint
+                            Branch endLabel
+                            MarkLabel falseLabel
+                            MarkHiddenSequencePoint
+                            Nop
+                            MarkLabel endLabel
+                          ]
+                        | _ ->
+                            [
+                                Branch endLabel
+                                MarkLabel falseLabel
+                            ]
+                            @ ifFalseSequencePoint
+                            @ ifFalseInstructions
+                            @ [ MarkLabel endLabel ]
 
                     [
                         MarkSequencePoint conditionRange
@@ -4088,13 +4125,7 @@ type internal CompilerService() =
                     @ [ BranchIfFalse falseLabel ]
                     @ ifTrueSequencePoint
                     @ ifTrueInstructions
-                    @ [
-                        Branch endLabel
-                        MarkLabel falseLabel
-                    ]
-                    @ ifFalseSequencePoint
-                    @ ifFalseInstructions
-                    @ [ MarkLabel endLabel ],
+                    @ joinInstructions,
                     conditionLocals
                     @ ifTrueLocals
                     @ ifFalseLocals
@@ -4127,7 +4158,7 @@ type internal CompilerService() =
                         Return
                     ],
                     []
-                | (TypedLocalReference _ | TypedLet _ | TypedLocalAssignment _ | TypedStaticMethodCall _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _ | TypedUpcast _ | TypedSequential _ | TypedBooleanNegation _) as expression ->
+                | (TypedUnitLiteral | TypedLocalReference _ | TypedLet _ | TypedLocalAssignment _ | TypedStaticMethodCall _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _ | TypedUpcast _ | TypedSequential _ | TypedBooleanNegation _) as expression ->
                     let instructions, locals =
                         valueExpressionInstructions freshLabel kind expression
 
@@ -4398,6 +4429,7 @@ type internal CompilerService() =
                         | TypedResumableCode _
                         | TypedResumableTryFinally _ -> 8
                         | TypedIntegerLiteral _
+                        | TypedUnitLiteral
                         | TypedParameterReference _
                         | TypedLocalReference _
                         | TypedLet _
@@ -4704,6 +4736,7 @@ type internal CompilerService() =
                                     | TypedResumableTryFinally expression ->
                                         Some expression.Compensation
                                     | TypedIntegerLiteral _
+                                    | TypedUnitLiteral
                                     | TypedParameterReference _
                                     | TypedLocalReference _
                                     | TypedLet _

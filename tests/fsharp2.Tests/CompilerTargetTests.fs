@@ -4024,6 +4024,51 @@ module CompilerTargetTests =
 
                     Expect.equal fsharp2Behavior 42 "Replace should return the assigned value"
 
+            testCase "executes a unit-valued if expression without else"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline MaybeReplace(condition: bool, initial: int, replacement: int) : int =\n            let mutable result = initial\n            if condition then\n                result <- replacement\n            result\n"
+
+                withObjectMemberDifferential "fsharp2-if-without-else" sourceText "MaybeReplace"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeMaybeReplace assemblyPath condition =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        builderType
+                            .GetMethod("MaybeReplace")
+                            .Invoke(
+                                null,
+                                [|
+                                    box condition
+                                    box 1
+                                    box 42
+                                |]
+                            )
+                        :?> int
+
+                    let oracleBehavior =
+                        invokeMaybeReplace oracleOutputPath false,
+                        invokeMaybeReplace oracleOutputPath true
+
+                    let fsharp2Behavior =
+                        invokeMaybeReplace outputPath false, invokeMaybeReplace outputPath true
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the emitted unit-valued conditional should behave like the Compatibility Oracle"
+
+                    Expect.equal
+                        fsharp2Behavior
+                        (1, 42)
+                        "MaybeReplace should mutate only on the true branch"
+
             testCase "executes a whitespace-applied static object member call"
             <| fun _ ->
                 let sourceText =
@@ -6421,7 +6466,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "33"
+                        "34"
                         "query cache evidence should be versioned"
 
                     Expect.equal

@@ -706,8 +706,12 @@ module internal Linker =
 
         points
         |> List.iteri (fun index (offset, range) ->
-            if offset < previousOffset then
-                invalidOp "sequence-point offsets must be nondecreasing"
+            if
+                index > 0
+                && offset
+                   <= previousOffset
+            then
+                invalidOp "sequence-point offsets must be strictly increasing"
 
             let offsetDelta =
                 if index = 0 then

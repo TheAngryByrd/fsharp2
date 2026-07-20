@@ -980,47 +980,54 @@ module internal Frontend =
                                         :: expressions
                                     )
                                 )
-                            | _ ->
-                                Error(
-                                    prototypeDiagnostic
-                                        source.Path
-                                        (current ()).Range
-                                        "expected 'else' after an if branch"
-                                )
+                            | _ -> Ok(sequenceExpression expressions)
 
                         let! ifTrue, ifTrueRange = parseIfTrue [ firstIfTrue, firstIfTrueRange ]
 
-                        let! _ = expected ElseKeyword "expected 'else' after an if branch"
-                        let ifFalseIndent = (current ()).Range.Start.Column
-                        let! firstIfFalse, firstIfFalseRange = parseExpression ()
-
-                        let rec parseIfFalse expressions =
-                            let token = current ()
-
-                            match token.Kind with
-                            | RightParenthesis
-                            | EndOfFile
-                            | MemberKeyword
-                            | StaticKeyword
-                            | AttributeStart
-                            | TypeKeyword
-                            | AndKeyword
-                            | ElseKeyword -> Ok(sequenceExpression expressions)
-                            | _ when
-                                token.Range.Start.Column
-                                >= ifFalseIndent
-                                ->
-                                parseExpression ()
-                                |> Result.bind (fun expression ->
-                                    parseIfFalse (
-                                        expression
-                                        :: expressions
-                                    )
-                                )
-                            | _ -> Ok(sequenceExpression expressions)
-
                         let! ifFalse, ifFalseRange =
-                            parseIfFalse [ firstIfFalse, firstIfFalseRange ]
+                            match (current ()).Kind with
+                            | ElseKeyword ->
+                                parseResult {
+                                    let! _ =
+                                        expected ElseKeyword "expected 'else' after an if branch"
+
+                                    let ifFalseIndent = (current ()).Range.Start.Column
+                                    let! firstIfFalse, firstIfFalseRange = parseExpression ()
+
+                                    let rec parseIfFalse expressions =
+                                        let token = current ()
+
+                                        match token.Kind with
+                                        | RightParenthesis
+                                        | EndOfFile
+                                        | MemberKeyword
+                                        | StaticKeyword
+                                        | AttributeStart
+                                        | TypeKeyword
+                                        | AndKeyword
+                                        | ElseKeyword -> Ok(sequenceExpression expressions)
+                                        | _ when
+                                            token.Range.Start.Column
+                                            >= ifFalseIndent
+                                            ->
+                                            parseExpression ()
+                                            |> Result.bind (fun expression ->
+                                                parseIfFalse (
+                                                    expression
+                                                    :: expressions
+                                                )
+                                            )
+                                        | _ -> Ok(sequenceExpression expressions)
+
+                                    return! parseIfFalse [ firstIfFalse, firstIfFalseRange ]
+                                }
+                            | _ ->
+                                let range = {
+                                    Start = ifTrueRange.End
+                                    End = ifTrueRange.End
+                                }
+
+                                Ok(UnitLiteral, range)
 
                         return
                             ConditionalExpression(
