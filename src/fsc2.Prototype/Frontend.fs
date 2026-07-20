@@ -1207,7 +1207,15 @@ module internal Frontend =
 
                         let rec parseMethodConstraints constraints =
                             parseResult {
-                                let! constraint' = parseTypeExpression ()
+                                let! constraint' =
+                                    match (current ()).Kind with
+                                    | TypeParameter _ ->
+                                        parseConstraint ()
+                                        |> Result.map ParsedDirectConstraint
+                                    | _ ->
+                                        parseTypeExpression ()
+                                        |> Result.map ParsedAbbreviationConstraint
+
                                 let constraints = constraint' :: constraints
 
                                 return!

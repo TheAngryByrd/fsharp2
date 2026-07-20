@@ -79,6 +79,19 @@ module private TypeIdentity =
                 expression memberType
             ]
 
+    let methodConstraintIdentity =
+        function
+        | TypedAbbreviationConstraint constraintType ->
+            Fingerprint.parts [
+                "abbreviation"
+                expression constraintType
+            ]
+        | TypedDirectConstraint constraint' ->
+            Fingerprint.parts [
+                "direct"
+                constraintIdentity constraint'
+            ]
+
     let cliType =
         function
         | CliInt32 -> "int32"
@@ -484,11 +497,55 @@ type internal CompilerService() =
                                     range
                                     $"the CLI type '{TypeIdentity.expression typedType}' is not yet supported"
 
+                        let resolveMethodConstraint =
+                            function
+                            | ParsedAbbreviationConstraint constraintType ->
+                                resolveType methodParameters constraintType
+                                |> Result.map TypedAbbreviationConstraint
+                            | ParsedDirectConstraint directConstraint ->
+                                match directConstraint with
+                                | ParsedSubtypeConstraint(typeParameter, superType, range) ->
+                                    if not (methodParameters.Contains(typeParameter)) then
+                                        diagnostic
+                                            range
+                                            $"the constrained type parameter '{typeParameter}' is not declared"
+                                    else
+                                        resolveType methodParameters superType
+                                        |> Result.map (fun typedSuperType ->
+                                            TypedDirectConstraint(
+                                                TypedSubtypeConstraint(
+                                                    typeParameter,
+                                                    typedSuperType
+                                                )
+                                            )
+                                        )
+                                | ParsedMemberConstraint(
+                                    typeParameter,
+                                    memberName,
+                                    memberType,
+                                    range
+                                  ) ->
+                                    if not (methodParameters.Contains(typeParameter)) then
+                                        diagnostic
+                                            range
+                                            $"the constrained type parameter '{typeParameter}' is not declared"
+                                    else
+                                        resolveType methodParameters memberType
+                                        |> Result.map (fun typedMemberType ->
+                                            TypedDirectConstraint(
+                                                TypedMemberConstraint(
+                                                    typeParameter,
+                                                    memberName,
+                                                    typedMemberType
+                                                )
+                                            )
+                                        )
+
                         let rec resolveMethodConstraints resolved =
                             function
                             | [] -> Ok(List.rev resolved)
                             | constraint' :: remaining ->
-                                match resolveType methodParameters constraint' with
+                                match resolveMethodConstraint constraint' with
                                 | Error error -> Error error
                                 | Ok typedConstraint ->
                                     resolveMethodConstraints
@@ -521,10 +578,12 @@ type internal CompilerService() =
                                 methodDeclaration.Constraints
                                 |> List.tryPick (fun constraint' ->
                                     match constraint' with
-                                    | ParsedGenericTypeApplication(
-                                        ParsedNamedType(aliasName, _),
-                                        arguments,
-                                        _
+                                    | ParsedAbbreviationConstraint(
+                                        ParsedGenericTypeApplication(
+                                            ParsedNamedType(aliasName, _),
+                                            arguments,
+                                            _
+                                        )
                                       ) ->
                                         match typeAbbreviations |> Map.tryFind aliasName.Name with
                                         | Some abbreviation when
@@ -552,6 +611,14 @@ type internal CompilerService() =
                                                 | _ -> None
                                             )
                                         | _ -> None
+                                    | ParsedDirectConstraint(
+                                        ParsedMemberConstraint(
+                                            _,
+                                            constrainedMemberName,
+                                            memberType,
+                                            _
+                                        )
+                                      ) when constrainedMemberName = memberName -> Some memberType
                                     | _ -> None
                                 )
 
@@ -628,7 +695,7 @@ type internal CompilerService() =
 
                                                 yield!
                                                     constraints
-                                                    |> List.map TypeIdentity.expression
+                                                    |> List.map TypeIdentity.methodConstraintIdentity
 
                                                 "parameters"
 
@@ -1098,12 +1165,15 @@ type internal CompilerService() =
             let methodDependencies (methodDeclaration: TypedMethodDeclaration) =
                 methodDeclaration.Constraints
                 |> List.choose (function
-                    | TypedGenericTypeApplication(TypedNamedType typeName, _) ->
+                    | TypedAbbreviationConstraint(
+                        TypedGenericTypeApplication(TypedNamedType typeName, _)
+                      ) ->
                         Some(
                             "type-abbreviation:"
                             + TypeIdentity.qualifiedName typeName
                         )
-                    | _ -> None
+                    | TypedAbbreviationConstraint _
+                    | TypedDirectConstraint _ -> None
                 )
 
             let methodFragment

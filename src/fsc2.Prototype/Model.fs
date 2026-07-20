@@ -5,7 +5,7 @@ open System.Collections.Immutable
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 6
+    let Query = 7
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -164,6 +164,13 @@ type internal ParsedTypeConstraint =
 
     override _.ToString() = "ParsedTypeConstraint"
 
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal ParsedMethodConstraint =
+    | ParsedAbbreviationConstraint of ParsedTypeExpression
+    | ParsedDirectConstraint of ParsedTypeConstraint
+
+    override _.ToString() = "ParsedMethodConstraint"
+
 type internal ParsedMethodDeclaration = {
     Name: string
     IsUnitFunction: bool
@@ -195,7 +202,7 @@ type internal ParsedParameter = {
 type internal ParsedStaticMethodDeclaration = {
     Name: string
     TypeParameters: string list
-    Constraints: ParsedTypeExpression list
+    Constraints: ParsedMethodConstraint list
     Parameters: ParsedParameter list
     Body: ParsedExpression
     BodyRange: SourceRange
@@ -307,6 +314,23 @@ type internal TypedTypeExpression =
 
     override _.ToString() = "TypedTypeExpression"
 
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal TypedTypeConstraint =
+    | TypedSubtypeConstraint of typeParameter: string * superType: TypedTypeExpression
+    | TypedMemberConstraint of
+        typeParameter: string *
+        memberName: string *
+        memberType: TypedTypeExpression
+
+    override _.ToString() = "TypedTypeConstraint"
+
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal TypedMethodConstraint =
+    | TypedAbbreviationConstraint of TypedTypeExpression
+    | TypedDirectConstraint of TypedTypeConstraint
+
+    override _.ToString() = "TypedMethodConstraint"
+
 type internal TypedParameter = {
     Name: string
     Type: CliType
@@ -318,7 +342,7 @@ type internal TypedMethodDeclaration = {
     StableId: string
     Name: string
     GenericParameters: string list
-    Constraints: TypedTypeExpression list
+    Constraints: TypedMethodConstraint list
     Parameters: TypedParameter list
     ReturnType: CliType
     Body: TypedExpression
@@ -336,16 +360,6 @@ type internal TypedLiteralFieldDeclaration = {
 } with
 
     override _.ToString() = "TypedLiteralFieldDeclaration"
-
-[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
-type internal TypedTypeConstraint =
-    | TypedSubtypeConstraint of typeParameter: string * superType: TypedTypeExpression
-    | TypedMemberConstraint of
-        typeParameter: string *
-        memberName: string *
-        memberType: TypedTypeExpression
-
-    override _.ToString() = "TypedTypeConstraint"
 
 type internal TypedTypeAbbreviationDeclaration = {
     StableId: string
@@ -441,7 +455,7 @@ type internal SymbolicMethodFragment = {
     Name: string
     Kind: SymbolicMethodKind
     GenericParameters: string list
-    Constraints: TypedTypeExpression list
+    Constraints: TypedMethodConstraint list
     Parameters: TypedParameter list
     ReturnType: CliType
     Instructions: SymbolicInstruction list

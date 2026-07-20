@@ -1107,6 +1107,92 @@ module CompilerTargetTests =
                 finally
                     Directory.Delete(root, true)
 
+            testCase "emits an inline stub from a direct member constraint"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-inline-direct-member-constraint",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "TaskLike.fs")
+                    let outputPath = Path.Combine(root, "TaskLike.dll")
+                    let pdbPath = Path.Combine(root, "TaskLike.pdb")
+                    let responsePath = Path.Combine(root, "compile.rsp")
+                    let systemRuntimePath = Assembly.Load("System.Runtime").Location
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "namespace IcedTasks.TaskLike\n\ntype MethodBuilder =\n    static member inline Check<'Builder, 'TResult\n        when 'Builder: (member Check: 'TResult -> bool)>\n        (builder: 'Builder, context: 'TResult)\n        =\n        builder.Check(context)\n"
+                    )
+
+                    File.WriteAllLines(
+                        responsePath,
+                        [|
+                            "--target:library"
+                            "--deterministic+"
+                            "--debug:portable"
+                            $"--reference:{typeof<Microsoft.FSharp.Core.Unit>.Assembly.Location}"
+                            $"--reference:{systemRuntimePath}"
+                            $"--out:{outputPath}"
+                            $"--pdb:{pdbPath}"
+                            sourcePath
+                        |]
+                    )
+
+                    let result = invokeFsc2 root responsePath
+
+                    Expect.equal
+                        result.ExitCode
+                        0
+                        (result.StandardOutput
+                         + result.StandardError)
+
+                    use implementationStream = File.OpenRead(outputPath)
+                    use implementation = new PEReader(implementationStream)
+                    let metadata = implementation.GetMetadataReader()
+
+                    let methodDefinition =
+                        metadata.TypeDefinitions
+                        |> Seq.map metadata.GetTypeDefinition
+                        |> Seq.find (fun definition ->
+                            metadata.GetString(definition.Namespace) = "IcedTasks.TaskLike"
+                            && metadata.GetString(definition.Name) = "MethodBuilder"
+                        )
+                        |> _.GetMethods()
+                        |> Seq.map metadata.GetMethodDefinition
+                        |> Seq.find (fun definition ->
+                            metadata.GetString(definition.Name) = "Check"
+                        )
+
+                    Expect.sequenceEqual
+                        (metadata.GetBlobBytes(methodDefinition.Signature))
+                        (Convert.FromHexString("100202021E001E01"))
+                        "the direct constraint should preserve the Oracle method signature"
+
+                    let il =
+                        implementation
+                            .GetMethodBody(methodDefinition.RelativeVirtualAddress)
+                            .GetILBytes()
+
+                    let message =
+                        BitConverter.ToInt32(il, 1)
+                        &&& 0x00ffffff
+                        |> MetadataTokens.UserStringHandle
+                        |> metadata.GetUserString
+
+                    Expect.equal
+                        message
+                        "Dynamic invocation of Check is not supported"
+                        "the direct member constraint should resolve the Oracle trait identity"
+                finally
+                    Directory.Delete(root, true)
+
             testCase "namespace moves change same-named module export fingerprints"
             <| fun _ ->
                 let root =
@@ -2956,7 +3042,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "6"
+                        "7"
                         "query cache evidence should be versioned"
 
                     Expect.equal
