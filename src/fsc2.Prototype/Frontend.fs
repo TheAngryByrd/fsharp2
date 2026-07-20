@@ -19,6 +19,8 @@ module internal Frontend =
         | InlineKeyword
         | NewKeyword
         | OverrideKeyword
+        | MatchKeyword
+        | AsKeyword
         | WithKeyword
         | WhenKeyword
         | AndKeyword
@@ -44,6 +46,7 @@ module internal Frontend =
         | LeftBrace
         | RightBrace
         | Colon
+        | TypeTest
         | Subtype
         | Comma
         | Semicolon
@@ -382,6 +385,8 @@ module internal Frontend =
                 | "inline" -> add InlineKeyword start
                 | "new" -> add NewKeyword start
                 | "override" -> add OverrideKeyword start
+                | "match" -> add MatchKeyword start
+                | "as" -> add AsKeyword start
                 | "with" -> add WithKeyword start
                 | "when" -> add WhenKeyword start
                 | "and" -> add AndKeyword start
@@ -469,6 +474,14 @@ module internal Frontend =
                     advance ()
                     advance ()
                     add AttributeEnd start
+                elif
+                    current = ':'
+                    && offset + 1 < text.Length
+                    && text.[offset + 1] = '?'
+                then
+                    advance ()
+                    advance ()
+                    add TypeTest start
                 elif
                     current = ':'
                     && offset + 1 < text.Length
@@ -916,6 +929,131 @@ module internal Frontend =
                     |> Result.map (fun members -> rootName, members)
 
                 match expressionToken.Kind with
+                | MatchKeyword ->
+                    parseResult {
+                        let sequenceExpression expressions =
+                            let expressions = List.rev expressions
+
+                            match expressions with
+                            | [ expression, range ] -> expression, range
+                            | _ ->
+                                let _, firstRange = List.head expressions
+                                let _, lastRange = List.last expressions
+
+                                SequentialValueExpression expressions,
+                                {
+                                    Start = firstRange.Start
+                                    End = lastRange.End
+                                }
+
+                        let! matchToken = expected MatchKeyword "expected 'match'"
+                        let! inputExpression, _ = parseExpression ()
+
+                        let! withToken =
+                            expected WithKeyword "expected 'with' after a match input"
+
+                        let matchHeaderRange = {
+                            Start = matchToken.Range.Start
+                            End = withToken.Range.End
+                        }
+
+                        let clauseIndent = (current ()).Range.Start.Column
+
+                        let parseClause () =
+                            parseResult {
+                                let! barToken = expected Bar "expected '|' before a match clause"
+
+                                let! pattern =
+                                    match (current ()).Kind with
+                                    | TypeTest ->
+                                        parseResult {
+                                            let typeTestToken = consume ()
+                                            let! targetType = parseTypeExpression ()
+                                            let! _ = expected AsKeyword "expected 'as' in a type-test pattern"
+
+                                            let! bindingName, bindingToken =
+                                                identifier "expected a type-test binding name"
+
+                                            return
+                                                ParsedTypeTestPattern(
+                                                    targetType,
+                                                    bindingName,
+                                                    {
+                                                        Start = typeTestToken.Range.Start
+                                                        End = bindingToken.Range.End
+                                                    }
+                                                )
+                                        }
+                                    | Identifier name ->
+                                        let token = consume ()
+                                        Ok(ParsedNamedPattern(name, token.Range))
+                                    | _ ->
+                                        Error(
+                                            prototypeDiagnostic
+                                                source.Path
+                                                (current ()).Range
+                                                "expected a supported match pattern"
+                                        )
+
+                                let! _ = expected Arrow "expected '->' after a match pattern"
+                                let bodyIndent = (current ()).Range.Start.Column
+                                let! firstBody, firstBodyRange = parseExpression ()
+
+                                let rec parseBody expressions =
+                                    let token = current ()
+
+                                    match token.Kind with
+                                    | Bar when token.Range.Start.Column <= clauseIndent ->
+                                        Ok(sequenceExpression expressions)
+                                    | RightParenthesis
+                                    | RightBrace
+                                    | EndOfFile
+                                    | MemberKeyword
+                                    | StaticKeyword
+                                    | AttributeStart
+                                    | TypeKeyword
+                                    | AndKeyword
+                                    | ElseKeyword -> Ok(sequenceExpression expressions)
+                                    | _ when token.Range.Start.Column >= bodyIndent ->
+                                        parseExpression ()
+                                        |> Result.bind (fun expression ->
+                                            parseBody (
+                                                expression
+                                                :: expressions
+                                            )
+                                        )
+                                    | _ -> Ok(sequenceExpression expressions)
+
+                                let! body, bodyRange = parseBody [ firstBody, firstBodyRange ]
+
+                                return pattern, body, bodyRange, barToken.Range
+                            }
+
+                        let rec parseClauses clauses =
+                            parseClause ()
+                            |> Result.bind (fun (pattern, body, bodyRange, barRange) ->
+                                let clauses =
+                                    (pattern, body, bodyRange)
+                                    :: clauses
+
+                                match (current ()).Kind with
+                                | Bar when (current ()).Range.Start.Column = clauseIndent ->
+                                    parseClauses clauses
+                                | _ -> Ok(List.rev clauses, barRange)
+                            )
+
+                        let! clauses, _ = parseClauses []
+                        let _, _, finalBodyRange = List.last clauses
+
+                        let range = {
+                            Start = matchToken.Range.Start
+                            End = finalBodyRange.End
+                        }
+
+                        return
+                            MatchExpression(inputExpression, clauses, matchHeaderRange, range),
+                            range
+                    }
                 | LeftBrace ->
                     parseResult {
                         let! openToken = expected LeftBrace "expected '{'"

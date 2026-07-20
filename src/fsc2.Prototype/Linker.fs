@@ -519,6 +519,9 @@ module internal Linker =
             | Box cliType ->
                 instructions.OpCode(ILOpCode.Box)
                 instructions.Token(resolveDeclaringType (CliDeclaringType cliType))
+            | IsInstance cliType ->
+                instructions.OpCode(ILOpCode.Isinst)
+                instructions.Token(resolveDeclaringType (CliDeclaringType cliType))
             | LoadInt32 value -> instructions.LoadConstantI4(value)
             | LoadString value ->
                 value
@@ -1132,6 +1135,15 @@ module internal Linker =
         let cliTypeSpecifications = Dictionary<CliType, EntityHandle>()
 
         let resolveCliTypeEntity cliType =
+            let coreTypeEntity namespaceName name =
+                let handle =
+                    resolveCoreTypeReference {
+                        Namespace = namespaceName
+                        Name = name
+                    }
+
+                MetadataTokens.EntityHandle(TableIndex.TypeRef, MetadataTokens.GetRowNumber(handle))
+
             match cliType with
             | CliNamedType typeReference -> resolveCliTypeReference typeReference
             | CliGenericType _
@@ -1157,11 +1169,11 @@ module internal Linker =
 
                     cliTypeSpecifications.Add(cliType, entityHandle)
                     entityHandle
-            | CliInt32
-            | CliBoolean
-            | CliString
-            | CliObject
-            | CliNativeInt
+            | CliInt32 -> coreTypeEntity "System" "Int32"
+            | CliBoolean -> coreTypeEntity "System" "Boolean"
+            | CliString -> coreTypeEntity "System" "String"
+            | CliObject -> coreTypeEntity "System" "Object"
+            | CliNativeInt -> coreTypeEntity "System" "IntPtr"
             | CliVoid
             | CliByRef _ -> invalidOp "a CLI type entity must be a named or constructed CLI type"
 

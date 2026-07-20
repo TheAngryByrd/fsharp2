@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 41
+    let Query = 42
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -174,6 +174,21 @@ type internal ParsedTypeExpression =
     override _.ToString() = "ParsedTypeExpression"
 
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal ParsedMatchPattern =
+    | ParsedTypeTestPattern of
+        targetType: ParsedTypeExpression *
+        bindingName: string *
+        range: SourceRange
+    | ParsedNamedPattern of name: string * range: SourceRange
+
+    member this.Range =
+        match this with
+        | ParsedTypeTestPattern(_, _, range)
+        | ParsedNamedPattern(_, range) -> range
+
+    override _.ToString() = "ParsedMatchPattern"
+
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
 type internal ParsedExpression =
     | IntegerLiteral of int
     | UnitLiteral
@@ -204,6 +219,11 @@ type internal ParsedExpression =
     | SequentialValueExpression of (ParsedExpression * SourceRange) list
     | LocalAssignment of name: string * value: ParsedExpression
     | BooleanNegationExpression of expression: ParsedExpression * range: SourceRange
+    | MatchExpression of
+        input: ParsedExpression *
+        clauses: (ParsedMatchPattern * ParsedExpression * SourceRange) list *
+        matchHeaderRange: SourceRange *
+        range: SourceRange
     | LetExpression of
         bindingName: string *
         isMutable: bool *
@@ -772,6 +792,17 @@ type internal TypedExpression =
         expression: TypedExpression
     | TypedSequential of (TypedExpression * CliType * SourceRange) list
     | TypedBooleanNegation of expression: TypedExpression * range: SourceRange
+    | TypedTypeTestMatch of
+        input: TypedExpression *
+        targetType: CliType *
+        localIndex: int *
+        bindingName: string *
+        ifMatched: TypedExpression *
+        ifNotMatched: TypedExpression *
+        matchHeaderRange: SourceRange *
+        ifMatchedRange: SourceRange *
+        ifNotMatchedRange: SourceRange *
+        range: SourceRange
     | TypedResumableCode of TypedResumableCodeExpression
     | TypedResumableTryFinally of TypedResumableTryFinallyExpression
     | TypedObjectExpression of
@@ -1055,6 +1086,7 @@ type internal SymbolicInstruction =
     | Branch of int
     | Nop
     | Box of CliType
+    | IsInstance of CliType
     | CompareEqual
     | LoadInt32 of int
     | LoadString of string

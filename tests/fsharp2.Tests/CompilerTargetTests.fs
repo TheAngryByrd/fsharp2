@@ -4928,6 +4928,42 @@ module CompilerTargetTests =
                         "object-expression"
                         "the override should provide the object-expression result"
 
+            testCase "emits and executes a runtime type-test match"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        static member inline Describe(value: System.Object) : System.String =\n            match value with\n            | :? System.String as text -> text\n            | _ -> \"other\"\n"
+
+                withObjectMemberDifferential "fsharp2-type-test-match" sourceText "Describe"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeDescribe assemblyPath value =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        builderType.GetMethod("Describe").Invoke(null, [| value |]) :?> string
+
+                    for input, expected in
+                        [
+                            box "matched", "matched"
+                            box 42, "other"
+                        ] do
+                        let oracleBehavior = invokeDescribe oracleOutputPath input
+                        let fsharp2Behavior = invokeDescribe outputPath input
+
+                        Expect.equal
+                            fsharp2Behavior
+                            oracleBehavior
+                            "the runtime type-test match should behave like the Compatibility Oracle"
+
+                        Expect.equal
+                            fsharp2Behavior
+                            expected
+                            "the runtime type-test match should select the expected arm"
+
             testCase "retained service invalidates an IcedTasks inline object-member edit"
             <| fun _ ->
                 let root =
@@ -7035,7 +7071,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "41"
+                        "42"
                         "query cache evidence should be versioned"
 
                     Expect.equal

@@ -304,6 +304,25 @@ module private TypeIdentity =
                 "boolean-negation"
                 inlineBody expression
             ]
+        | TypedTypeTestMatch(input,
+                             targetType,
+                             localIndex,
+                             bindingName,
+                             ifMatched,
+                             ifNotMatched,
+                             _,
+                             _,
+                             _,
+                             _) ->
+            Fingerprint.parts [
+                "type-test-match"
+                inlineBody input
+                cliType targetType
+                localIndex.ToString(CultureInfo.InvariantCulture)
+                bindingName
+                inlineBody ifMatched
+                inlineBody ifNotMatched
+            ]
         | TypedResumableCode expression -> resumableCode expression
         | TypedResumableTryFinally expression ->
             Fingerprint.parts [
@@ -1165,7 +1184,8 @@ type internal CompilerService() =
                     | _, LambdaExpression _
                     | _, UnitLambdaExpression _
                     | _, TypeConstruction _
-                    | _, ObjectExpression _ ->
+                    | _, ObjectExpression _
+                    | _, MatchExpression _ ->
                         diagnostic
                             declaration.BodyRange
                             "this expression form is supported only in instance members"
@@ -1611,7 +1631,8 @@ type internal CompilerService() =
                             | Ok _, Ok _, LambdaExpression _
                             | Ok _, Ok _, UnitLambdaExpression _
                             | Ok _, Ok _, TypeConstruction _
-                            | Ok _, Ok _, ObjectExpression _ ->
+                            | Ok _, Ok _, ObjectExpression _
+                            | Ok _, Ok _, MatchExpression _ ->
                                 diagnostic
                                     methodDeclaration.BodyRange
                                     "static inline members require a constrained trait call"
@@ -2683,6 +2704,100 @@ type internal CompilerService() =
                                                     bodyType,
                                                     nextBodyLocalIndex
                                                 )
+                                    | MatchExpression(inputExpression,
+                                                      clauses,
+                                                      matchHeaderRange,
+                                                      range) ->
+                                        match clauses with
+                                        | [ (ParsedTypeTestPattern(targetType,
+                                                                   bindingName,
+                                                                   patternRange),
+                                             ifMatched,
+                                             ifMatchedRange)
+                                            (ParsedNamedPattern("_", _),
+                                             ifNotMatched,
+                                             ifNotMatchedRange) ] ->
+                                            match
+                                                typeStaticExpression
+                                                    localBindings
+                                                    nextLocalIndex
+                                                    inputExpression
+                                            with
+                                            | Error error -> Error error
+                                            | Ok(typedInput, inputType, nextInputLocalIndex) ->
+                                                let targetTypeResult =
+                                                    targetType
+                                                    |> expandTypeAbbreviations Set.empty
+                                                    |> resolveType declaredMethodParameters
+                                                    |> Result.bind (
+                                                        toCliType methodParameterIndex patternRange
+                                                    )
+
+                                                match targetTypeResult with
+                                                | Error error -> Error error
+                                                | Ok targetType when
+                                                    match inputType, targetType with
+                                                    | (CliObject | CliString | CliNamedType _ | CliGenericType _),
+                                                      (CliObject | CliString | CliNamedType _ | CliGenericType _) ->
+                                                        true
+                                                    | _ -> false
+                                                    ->
+                                                    let localIndex = nextInputLocalIndex
+
+                                                    match
+                                                        typeStaticExpression
+                                                            (localBindings
+                                                             |> Map.add
+                                                                 bindingName
+                                                                 (localIndex, targetType, false))
+                                                            (localIndex
+                                                             + 1)
+                                                            ifMatched
+                                                    with
+                                                    | Error error -> Error error
+                                                    | Ok(typedIfMatched,
+                                                         ifMatchedType,
+                                                         nextMatchedLocalIndex) ->
+                                                        match
+                                                            typeStaticExpression
+                                                                localBindings
+                                                                nextMatchedLocalIndex
+                                                                ifNotMatched
+                                                        with
+                                                        | Error error -> Error error
+                                                        | Ok(typedIfNotMatched,
+                                                             ifNotMatchedType,
+                                                             nextNotMatchedLocalIndex) when
+                                                            ifMatchedType = ifNotMatchedType
+                                                            ->
+                                                            Ok(
+                                                                TypedTypeTestMatch(
+                                                                    typedInput,
+                                                                    targetType,
+                                                                    localIndex,
+                                                                    bindingName,
+                                                                    typedIfMatched,
+                                                                    typedIfNotMatched,
+                                                                    matchHeaderRange,
+                                                                    ifMatchedRange,
+                                                                    ifNotMatchedRange,
+                                                                    range
+                                                                ),
+                                                                ifMatchedType,
+                                                                nextNotMatchedLocalIndex
+                                                            )
+                                                        | Ok _ ->
+                                                            diagnostic
+                                                                range
+                                                                "the type-test match arms must have the same type"
+                                                | Ok _ ->
+                                                    diagnostic
+                                                        range
+                                                        "the runtime type-test match requires reference types"
+                                        | _ ->
+                                            diagnostic
+                                                range
+                                                "only a type-test clause followed by a wildcard clause is currently supported"
                                     | ObjectExpression(baseType,
                                                        constructorArguments,
                                                        isOverride,
@@ -2821,6 +2936,19 @@ type internal CompilerService() =
                                         (arguments
                                          |> List.collect inferredSubtypeConstraints)
                                         @ inferredSubtypeConstraints body
+                                    | TypedTypeTestMatch(input,
+                                                         _,
+                                                         _,
+                                                         _,
+                                                         ifMatched,
+                                                         ifNotMatched,
+                                                         _,
+                                                         _,
+                                                         _,
+                                                         _) ->
+                                        inferredSubtypeConstraints input
+                                        @ inferredSubtypeConstraints ifMatched
+                                        @ inferredSubtypeConstraints ifNotMatched
                                     | TypedSequential expressions ->
                                         expressions
                                         |> List.collect (fun (expression, _, _) ->
@@ -3819,7 +3947,8 @@ type internal CompilerService() =
                                 | LambdaExpression _
                                 | UnitLambdaExpression _
                                 | TypeConstruction _
-                                | ObjectExpression _ ->
+                                | ObjectExpression _
+                                | MatchExpression _ ->
                                     diagnostic
                                         methodDeclaration.BodyRange
                                         "this instance-member expression is not yet supported"
@@ -3867,6 +3996,7 @@ type internal CompilerService() =
                                     | TypedBooleanNegation _
                                     | TypedResumableTryFinally _
                                     | TypedObjectExpression _
+                                    | TypedTypeTestMatch _
                                     | TypedTraitCall _ -> methodDeclaration.BodyRange
 
                                 finishObjectMethod {
@@ -5351,6 +5481,61 @@ type internal CompilerService() =
                     conditionLocals
                     @ ifTrueLocals
                     @ ifFalseLocals
+                | TypedTypeTestMatch(input,
+                                     targetType,
+                                     localIndex,
+                                     bindingName,
+                                     ifMatched,
+                                     ifNotMatched,
+                                     matchHeaderRange,
+                                     ifMatchedRange,
+                                     ifNotMatchedRange,
+                                     _) ->
+                    let fallbackLabel = freshLabel ()
+                    let endLabel = freshLabel ()
+
+                    let inputInstructions, inputLocals =
+                        valueExpressionInstructions freshLabel kind input
+
+                    let matchedInstructions, matchedLocals =
+                        valueExpressionInstructions freshLabel kind ifMatched
+
+                    let notMatchedInstructions, notMatchedLocals =
+                        valueExpressionInstructions freshLabel kind ifNotMatched
+
+                    [
+                        MarkSequencePoint matchHeaderRange
+                        Nop
+                        MarkHiddenSequencePoint
+                    ]
+                    @ inputInstructions
+                    @ [
+                        IsInstance targetType
+                        StoreLocal localIndex
+                        LoadLocal localIndex
+                        BranchIfFalse fallbackLabel
+                        MarkHiddenSequencePoint
+                        Nop
+                        MarkSequencePoint ifMatchedRange
+                    ]
+                    @ matchedInstructions
+                    @ [
+                        Branch endLabel
+                        MarkLabel fallbackLabel
+                        MarkSequencePoint ifNotMatchedRange
+                    ]
+                    @ notMatchedInstructions
+                    @ [ MarkLabel endLabel ],
+                    inputLocals
+                    @ [
+                        {
+                            Index = localIndex
+                            Name = bindingName
+                            Type = targetType
+                        }
+                    ]
+                    @ matchedLocals
+                    @ notMatchedLocals
                 | TypedObjectExpression(typeReference, _, constructorArguments, _, _, _, _, _, _) ->
                     if not (List.isEmpty constructorArguments) then
                         invalidOp
@@ -5388,7 +5573,7 @@ type internal CompilerService() =
                         Return
                     ],
                     []
-                | (TypedStringLiteral _ | TypedUnitLiteral | TypedLocalReference _ | TypedLet _ | TypedLocalAssignment _ | TypedAddressOf _ | TypedStaticMethodCall _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _ | TypedUpcast _ | TypedSequential _ | TypedBooleanNegation _ | TypedObjectExpression _) as expression ->
+                | (TypedStringLiteral _ | TypedUnitLiteral | TypedLocalReference _ | TypedLet _ | TypedLocalAssignment _ | TypedAddressOf _ | TypedStaticMethodCall _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _ | TypedUpcast _ | TypedSequential _ | TypedBooleanNegation _ | TypedTypeTestMatch _ | TypedObjectExpression _) as expression ->
                     let instructions, locals =
                         valueExpressionInstructions freshLabel kind expression
 
@@ -5627,6 +5812,7 @@ type internal CompilerService() =
                             :: (genericArguments
                                 |> List.collect cliTypeDependencyIds)
                         | Box cliType -> cliTypeDependencyIds cliType
+                        | IsInstance cliType -> cliTypeDependencyIds cliType
                         | MarkHiddenSequencePoint
                         | MarkLabel _
                         | BranchIfFalse _
@@ -5690,7 +5876,8 @@ type internal CompilerService() =
                         | TypedUpcast _
                         | TypedSequential _
                         | TypedLocalAssignment _
-                        | TypedBooleanNegation _ -> 8
+                        | TypedBooleanNegation _
+                        | TypedTypeTestMatch _ -> 8
                     DependencyIds =
                         methodDependencies methodDeclaration
                         @ instructionDependencies
@@ -5881,6 +6068,19 @@ type internal CompilerService() =
                     objectExpressions condition
                     @ objectExpressions ifTrue
                     @ objectExpressions ifFalse
+                | TypedTypeTestMatch(input,
+                                     _,
+                                     _,
+                                     _,
+                                     ifMatched,
+                                     ifNotMatched,
+                                     _,
+                                     _,
+                                     _,
+                                     _) ->
+                    objectExpressions input
+                    @ objectExpressions ifMatched
+                    @ objectExpressions ifNotMatched
                 | TypedSequential expressions ->
                     expressions
                     |> List.collect (fun (expression, _, _) -> objectExpressions expression)
@@ -6282,6 +6482,7 @@ type internal CompilerService() =
                                     | TypedSequential _
                                     | TypedLocalAssignment _
                                     | TypedBooleanNegation _
+                                    | TypedTypeTestMatch _
                                     | TypedObjectExpression _
                                     | TypedTraitCall _ -> None
 
@@ -6662,6 +6863,7 @@ type internal CompilerService() =
                                 | TypedUpcast _
                                 | TypedSequential _
                                 | TypedBooleanNegation _
+                                | TypedTypeTestMatch _
                                 | TypedResumableCode _
                                 | TypedResumableTryFinally _
                                 | TypedObjectExpression _
@@ -6843,6 +7045,7 @@ type internal CompilerService() =
                                 | TypedUpcast _
                                 | TypedSequential _
                                 | TypedBooleanNegation _
+                                | TypedTypeTestMatch _
                                 | TypedResumableCode _
                                 | TypedResumableTryFinally _
                                 | TypedObjectExpression _
