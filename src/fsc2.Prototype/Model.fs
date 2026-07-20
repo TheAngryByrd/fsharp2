@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 15
+    let Query = 16
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -429,6 +429,7 @@ type internal ParsedModule = {
     override _.ToString() = "ParsedModule"
 
 type internal CliTypeReference = {
+    DeclarationId: string
     AssemblyName: string
     TypeName: QualifiedTypeName
     IsValueType: bool
@@ -476,6 +477,7 @@ module internal StableIdentity =
         | CliNamedType typeReference ->
             String.concat "|" [
                 "named"
+                typeReference.DeclarationId
                 typeReference.AssemblyName
                 qualifiedTypeName typeReference.TypeName
                 if typeReference.IsValueType then "value" else "reference"
@@ -483,6 +485,7 @@ module internal StableIdentity =
         | CliGenericType(typeReference, arguments) ->
             String.concat "|" [
                 "generic"
+                typeReference.DeclarationId
                 typeReference.AssemblyName
                 qualifiedTypeName typeReference.TypeName
                 if typeReference.IsValueType then "value" else "reference"

@@ -835,23 +835,37 @@ module internal Linker =
                 handle
 
         let cliTypeReferences = Dictionary<CliTypeReference, EntityHandle>()
+        let mutable localTypeDefinitions: Map<string, EntityHandle> = Map.empty
 
         let resolveCliTypeReference (typeReference: CliTypeReference) =
             match cliTypeReferences.TryGetValue(typeReference) with
             | true, handle -> handle
             | false, _ ->
-                let handle =
-                    metadata.AddTypeReference(
-                        resolveAssemblyReference typeReference.AssemblyName,
-                        metadata.GetOrAddString(typeReference.TypeName.Namespace),
-                        metadata.GetOrAddString(typeReference.TypeName.Name)
-                    )
-
                 let entityHandle =
-                    MetadataTokens.EntityHandle(
-                        TableIndex.TypeRef,
-                        MetadataTokens.GetRowNumber(handle)
-                    )
+                    if String.IsNullOrEmpty(typeReference.AssemblyName) then
+                        match
+                            localTypeDefinitions
+                            |> Map.tryFind typeReference.DeclarationId
+                        with
+                        | Some handle -> handle
+                        | None ->
+                            invalidOp (
+                                "the local CLI type '"
+                                + typeReference.DeclarationId
+                                + "' has no symbolic type definition"
+                            )
+                    else
+                        let handle =
+                            metadata.AddTypeReference(
+                                resolveAssemblyReference typeReference.AssemblyName,
+                                metadata.GetOrAddString(typeReference.TypeName.Namespace),
+                                metadata.GetOrAddString(typeReference.TypeName.Name)
+                            )
+
+                        MetadataTokens.EntityHandle(
+                            TableIndex.TypeRef,
+                            MetadataTokens.GetRowNumber(handle)
+                        )
 
                 cliTypeReferences.Add(typeReference, entityHandle)
                 entityHandle
@@ -913,20 +927,6 @@ module internal Linker =
                 |> metadata.GetOrAddBlob
             )
             |> ignore
-
-        let encodedMethods =
-            methodFragments
-            |> List.map (fun methodFragment ->
-                let bodyOffset, codeSize =
-                    encodeMethodBody
-                        metadata
-                        resolveCoreTypeReference
-                        resolveCliTypeReference
-                        methodBodies
-                        methodFragment
-
-                methodFragment, bodyOffset, codeSize
-            )
 
         let firstField = MetadataTokens.FieldDefinitionHandle(1)
         let firstMethod = MetadataTokens.MethodDefinitionHandle(1)
@@ -1011,6 +1011,22 @@ module internal Linker =
                 typeFragment.StableId, MetadataTokens.EntityHandle(TableIndex.TypeDef, index + 2)
             )
             |> Map.ofList
+
+        localTypeDefinitions <- typeDefinitionEntities
+
+        let encodedMethods =
+            methodFragments
+            |> List.map (fun methodFragment ->
+                let bodyOffset, codeSize =
+                    encodeMethodBody
+                        metadata
+                        resolveCoreTypeReference
+                        resolveCliTypeReference
+                        methodBodies
+                        methodFragment
+
+                methodFragment, bodyOffset, codeSize
+            )
 
         for typeFragment in typeFragments do
             let visibility =
@@ -1097,13 +1113,39 @@ module internal Linker =
                 )
             | None -> ()
 
-        for typeFragment in typeFragments do
-            let typeDefinition = typeDefinitionHandles.[typeFragment.StableId]
+        let genericParameterOwners =
+            [
+                yield!
+                    typeFragments
+                    |> List.mapi (fun index typeFragment ->
+                        let row =
+                            index
+                            + 2
 
-            typeFragment.GenericParameters
+                        row * 2,
+                        MetadataTokens.EntityHandle(TableIndex.TypeDef, row),
+                        typeFragment.GenericParameters
+                    )
+
+                yield!
+                    methodFragments
+                    |> List.mapi (fun index methodFragment ->
+                        let row =
+                            index
+                            + 1
+
+                        row * 2 + 1,
+                        MetadataTokens.EntityHandle(TableIndex.MethodDef, row),
+                        methodFragment.GenericParameters
+                    )
+            ]
+            |> List.sortBy (fun (codedOwner, _, _) -> codedOwner)
+
+        for _, owner, genericParameters in genericParameterOwners do
+            genericParameters
             |> List.iteri (fun index name ->
                 metadata.AddGenericParameter(
-                    typeDefinition,
+                    owner,
                     GenericParameterAttributes.None,
                     metadata.GetOrAddString(name),
                     index
@@ -1111,6 +1153,7 @@ module internal Linker =
                 |> ignore
             )
 
+        for typeFragment in typeFragments do
             let parent = typeDefinitionEntities.[typeFragment.StableId]
 
             for attribute in typeFragment.Attributes do
@@ -1186,17 +1229,6 @@ module internal Linker =
                     bodyOffset,
                     MetadataTokens.ParameterHandle(nextParameterRow)
                 )
-
-            methodFragment.GenericParameters
-            |> List.iteri (fun index name ->
-                metadata.AddGenericParameter(
-                    methodDefinition,
-                    GenericParameterAttributes.None,
-                    metadata.GetOrAddString(name),
-                    index
-                )
-                |> ignore
-            )
 
             methodFragment.Parameters
             |> List.iteri (fun index parameter ->

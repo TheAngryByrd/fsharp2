@@ -62,12 +62,7 @@ module CompilerTargetTests =
                 + "."
                 + name
 
-        let assemblyName (metadata: MetadataReader) =
-            if metadata.IsAssembly then
-                metadata.GetAssemblyDefinition().Name
-                |> metadata.GetString
-            else
-                "<module>"
+        let localScopeName = "<local>"
 
         let rec resolutionScopeName (metadata: MetadataReader) (handle: EntityHandle) =
             match handle.Kind with
@@ -86,7 +81,7 @@ module CompilerTargetTests =
                     |> metadata.GetTypeReference
 
                 resolutionScopeName metadata declaringType.ResolutionScope
-            | HandleKind.ModuleDefinition -> assemblyName metadata
+            | HandleKind.ModuleDefinition -> localScopeName
             | HandleKind.ModuleReference ->
                 handle
                 |> MetadataTokens.GetRowNumber
@@ -159,7 +154,7 @@ module CompilerTargetTests =
                     $"{rawTypeKind:X2}:"
                     fullTypeName metadata definition.Namespace definition.Name
                     "@"
-                    assemblyName metadata
+                    localScopeName
                 ]
 
             member _.GetTypeFromReference(metadata, handle, rawTypeKind) =
@@ -2700,6 +2695,96 @@ module CompilerTargetTests =
                 finally
                     Directory.Delete(root, true)
 
+            testCase "encodes a nested local generic struct in an object member signature"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-local-struct-object-member",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "TaskBuilderBase.fs")
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "namespace IcedTasks.TaskBase\n\n[<AutoOpen>]\nmodule TaskBase =\n    [<Struct; NoComparison; NoEquality>]\n    type Data<'T> =\n        [<DefaultValue(false)>]\n        val mutable Value: 'T\n\n    type Values<'T> = System.Collections.Generic.IEnumerable<Data<'T>>\n\n    type TaskBuilderBase() =\n        member inline _.Identity(values: Values<'T>) : Values<'T> = values\n"
+                    )
+
+                    let oracleOutputPath = Path.Combine(root, "TaskBuilderBase-oracle.dll")
+                    let oraclePdbPath = Path.Combine(root, "TaskBuilderBase-oracle.pdb")
+                    let oracleResponsePath = Path.Combine(root, "oracle.rsp")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root oracleResponsePath [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{oracleOutputPath}"
+                            $"--pdb:{oraclePdbPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let responsePath = Path.Combine(root, "fsharp2.rsp")
+
+                    let outputPath, _ =
+                        compileForExportFingerprint
+                            root
+                            responsePath
+                            sourcePath
+                            "TaskBuilderBase-fsharp2"
+                            []
+
+                    let pdbPath = Path.ChangeExtension(outputPath, ".pdb")
+
+                    Expect.equal
+                        (objectTypeMetadataShape outputPath pdbPath "Identity")
+                        (objectTypeMetadataShape oracleOutputPath oraclePdbPath "Identity")
+                        "the local-struct member should match the Compatibility Oracle's CLR and portable-PDB surface"
+
+                    let emittedAssembly = Assembly.Load(File.ReadAllBytes(outputPath))
+
+                    let builderType =
+                        emittedAssembly.GetType(
+                            "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                            throwOnError = true
+                        )
+
+                    let dataTypeDefinition =
+                        emittedAssembly.GetType(
+                            "IcedTasks.TaskBase.TaskBase+Data`1",
+                            throwOnError = true
+                        )
+
+                    let dataType = dataTypeDefinition.MakeGenericType(typeof<int>)
+
+                    let values = Array.CreateInstance(dataType, 1)
+                    let builder = Activator.CreateInstance(builderType)
+
+                    let identityMethod =
+                        builderType.GetMethod("Identity").MakeGenericMethod(typeof<int>)
+
+                    Expect.isTrue
+                        (Object.ReferenceEquals(
+                            identityMethod.Invoke(builder, [| values |]),
+                            values
+                        ))
+                        "the emitted member should return its nested local generic argument"
+                finally
+                    Directory.Delete(root, true)
+
             testCase "retained service invalidates an IcedTasks inline object-member edit"
             <| fun _ ->
                 let root =
@@ -4807,7 +4892,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "15"
+                        "16"
                         "query cache evidence should be versioned"
 
                     Expect.equal

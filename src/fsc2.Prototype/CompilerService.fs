@@ -266,18 +266,26 @@ type internal CompilerService() =
             for declaration in parsed.Declarations do
                 match ParsedDeclaration.tryTypeIdentity parsed.StableId declaration with
                 | Some(key, declarationId) ->
-                    localTypes.TryAdd(
-                        key,
-                        {
-                            TypeName = {
-                                Namespace = parsed.Namespace
-                                Name = key.Name
-                            }
-                            DeclarationId = declarationId
-                            AssemblyName = String.Empty
-                            IsValueType = false
+                    let isValueType =
+                        match declaration with
+                        | ParsedStructType _ -> true
+                        | ParsedMethod _
+                        | ParsedLiteralField _
+                        | ParsedTypeAbbreviation _
+                        | ParsedStaticType _
+                        | ParsedObjectType _ -> false
+
+                    let resolved: ResolvedTypeName = {
+                        TypeName = {
+                            Namespace = parsed.Namespace
+                            Name = key.Name
                         }
-                    )
+                        DeclarationId = declarationId
+                        AssemblyName = String.Empty
+                        IsValueType = isValueType
+                    }
+
+                    localTypes.TryAdd(key, resolved)
                     |> ignore
                 | None -> ()
 
@@ -1063,6 +1071,7 @@ type internal CompilerService() =
                             |> fun parameters -> collectTypeParameters parameters range
 
                     let fsharpUnitType = {
+                        DeclarationId = "reference:FSharp.Core/type:Microsoft.FSharp.Core.Unit`0"
                         AssemblyName = "FSharp.Core"
                         TypeName = {
                             Namespace = "Microsoft.FSharp.Core"
@@ -1072,6 +1081,8 @@ type internal CompilerService() =
                     }
 
                     let fsharpFunctionType = {
+                        DeclarationId =
+                            "reference:FSharp.Core/type:Microsoft.FSharp.Core.FSharpFunc`2"
                         AssemblyName = "FSharp.Core"
                         TypeName = {
                             Namespace = "Microsoft.FSharp.Core"
@@ -1112,15 +1123,14 @@ type internal CompilerService() =
                             && resolvedType.TypeName.Name = "Unit"
                             ->
                             Ok(CliNamedType fsharpUnitType)
-                        | TypedGenericTypeApplication(TypedNamedType resolvedType, arguments) when
-                            not (String.IsNullOrEmpty(resolvedType.AssemblyName))
-                            ->
+                        | TypedGenericTypeApplication(TypedNamedType resolvedType, arguments) ->
                             arguments
                             |> List.map (toCliType methodParameterIndex range)
                             |> collectResults []
                             |> Result.map (fun argumentTypes ->
                                 CliGenericType(
                                     {
+                                        DeclarationId = resolvedType.DeclarationId
                                         AssemblyName = resolvedType.AssemblyName
                                         TypeName = {
                                             Namespace = resolvedType.TypeName.Namespace
@@ -1136,11 +1146,10 @@ type internal CompilerService() =
                                     argumentTypes
                                 )
                             )
-                        | TypedNamedType resolvedType when
-                            not (String.IsNullOrEmpty(resolvedType.AssemblyName))
-                            ->
+                        | TypedNamedType resolvedType ->
                             Ok(
                                 CliNamedType {
+                                    DeclarationId = resolvedType.DeclarationId
                                     AssemblyName = resolvedType.AssemblyName
                                     TypeName = resolvedType.TypeName
                                     IsValueType = resolvedType.IsValueType

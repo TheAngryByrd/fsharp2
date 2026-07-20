@@ -173,7 +173,7 @@ type internal ReferenceTypeIndex
 
                 let key = ReferenceTypeName.typeKey qualifiedName genericArity
 
-                let resolved = {
+                let resolved: ResolvedTypeName = {
                     TypeName = qualifiedName
                     DeclarationId =
                         declarationOwner
