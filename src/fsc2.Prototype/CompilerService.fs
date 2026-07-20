@@ -214,6 +214,13 @@ module private TypeIdentity =
                 inlineBody ifTrue
                 inlineBody ifFalse
             ]
+        | TypedUpcast(sourceType, targetType, _, expression) ->
+            Fingerprint.parts [
+                "upcast"
+                cliType sourceType
+                cliType targetType
+                inlineBody expression
+            ]
         | TypedResumableCode expression -> resumableCode expression
         | TypedResumableTryFinally expression ->
             Fingerprint.parts [
@@ -1025,6 +1032,7 @@ type internal CompilerService() =
                     | _, FunctionApplication _
                     | _, ExpressionMemberCall _
                     | _, ConditionalExpression _
+                    | _, ExplicitUpcastExpression _
                     | _, LetExpression _
                     | _, LambdaExpression _
                     | _, TypeConstruction _ ->
@@ -1462,6 +1470,7 @@ type internal CompilerService() =
                             | Ok _, Ok _, FunctionApplication _
                             | Ok _, Ok _, ExpressionMemberCall _
                             | Ok _, Ok _, ConditionalExpression _
+                            | Ok _, Ok _, ExplicitUpcastExpression _
                             | Ok _, Ok _, LetExpression _
                             | Ok _, Ok _, LambdaExpression _
                             | Ok _, Ok _, TypeConstruction _ ->
@@ -2102,6 +2111,50 @@ type internal CompilerService() =
                                             diagnostic
                                                 methodDeclaration.BodyRange
                                                 "the if expression condition is not bool"
+                                    | ExplicitUpcastExpression(expression, targetType) ->
+                                        match
+                                            typeStaticExpression
+                                                localBindings
+                                                nextLocalIndex
+                                                expression
+                                        with
+                                        | Error error -> Error error
+                                        | Ok(typedExpression,
+                                             (CliMethodTypeParameter _ as sourceType),
+                                             nextExpressionLocalIndex) ->
+                                            match
+                                                targetType
+                                                |> expandTypeAbbreviations Set.empty
+                                                |> resolveType declaredMethodParameters
+                                            with
+                                            | Error error -> Error error
+                                            | Ok(TypedNamedType targetResolvedType) ->
+                                                match
+                                                    toCliType
+                                                        methodParameterIndex
+                                                        targetType.Range
+                                                        (TypedNamedType targetResolvedType)
+                                                with
+                                                | Error error -> Error error
+                                                | Ok targetCliType ->
+                                                    Ok(
+                                                        TypedUpcast(
+                                                            sourceType,
+                                                            targetCliType,
+                                                            targetResolvedType,
+                                                            typedExpression
+                                                        ),
+                                                        targetCliType,
+                                                        nextExpressionLocalIndex
+                                                    )
+                                            | Ok _ ->
+                                                diagnostic
+                                                    targetType.Range
+                                                    "the upcast target must be a named type"
+                                        | Ok _ ->
+                                            diagnostic
+                                                methodDeclaration.BodyRange
+                                                "this explicit upcast source is not yet supported"
                                     | LetExpression(bindingName,
                                                     value,
                                                     body,
@@ -2149,6 +2202,49 @@ type internal CompilerService() =
                                             methodDeclaration.BodyRange
                                             "this static-member expression is not yet supported"
 
+                                let rec inferredSubtypeConstraints =
+                                    function
+                                    | TypedUpcast(CliMethodTypeParameter parameterIndex,
+                                                  _,
+                                                  targetResolvedType,
+                                                  expression) ->
+                                        TypedDirectConstraint(
+                                            TypedSubtypeConstraint(
+                                                methodTypeParameters.[parameterIndex],
+                                                TypedNamedType targetResolvedType
+                                            )
+                                        )
+                                        :: inferredSubtypeConstraints expression
+                                    | TypedUpcast(_, _, _, expression) ->
+                                        inferredSubtypeConstraints expression
+                                    | TypedLet(_, _, _, value, body, _, _) ->
+                                        inferredSubtypeConstraints value
+                                        @ inferredSubtypeConstraints body
+                                    | TypedStaticMethodCall(_, _, arguments) ->
+                                        arguments
+                                        |> List.collect inferredSubtypeConstraints
+                                    | TypedFunctionApplication(_,
+                                                               _,
+                                                               _,
+                                                               functionExpression,
+                                                               argumentExpression) ->
+                                        inferredSubtypeConstraints functionExpression
+                                        @ inferredSubtypeConstraints argumentExpression
+                                    | TypedInstanceMethodCall(_, receiver, arguments) ->
+                                        inferredSubtypeConstraints receiver
+                                        @ (arguments
+                                           |> List.collect inferredSubtypeConstraints)
+                                    | TypedConditional(condition, ifTrue, ifFalse, _, _, _) ->
+                                        inferredSubtypeConstraints condition
+                                        @ inferredSubtypeConstraints ifTrue
+                                        @ inferredSubtypeConstraints ifFalse
+                                    | TypedIntegerLiteral _
+                                    | TypedParameterReference _
+                                    | TypedLocalReference _
+                                    | TypedResumableCode _
+                                    | TypedResumableTryFinally _
+                                    | TypedTraitCall _ -> []
+
                                 let typedBody =
                                     typeStaticExpression Map.empty 0 methodDeclaration.Body
 
@@ -2172,7 +2268,11 @@ type internal CompilerService() =
                                             Kind = StaticObjectMethod
                                             Name = methodDeclaration.Name
                                             GenericParameters = methodTypeParameters
-                                            Constraints = []
+                                            Constraints =
+                                                body
+                                                |> inferredSubtypeConstraints
+                                                |> List.distinctBy
+                                                    TypeIdentity.methodConstraintIdentity
                                             ParsedAttributes = methodDeclaration.Attributes
                                             ParsedParameters = methodDeclaration.Parameters
                                             Parameters = parameters
@@ -2773,6 +2873,7 @@ type internal CompilerService() =
                                 | FunctionApplication _
                                 | ExpressionMemberCall _
                                 | ConditionalExpression _
+                                | ExplicitUpcastExpression _
                                 | LetExpression _
                                 | LambdaExpression _
                                 | TypeConstruction _ ->
@@ -2812,6 +2913,7 @@ type internal CompilerService() =
                                     | TypedFunctionApplication _
                                     | TypedInstanceMethodCall _
                                     | TypedConditional _
+                                    | TypedUpcast _
                                     | TypedResumableTryFinally _
                                     | TypedTraitCall _ -> methodDeclaration.BodyRange
 
@@ -3749,6 +3851,13 @@ type internal CompilerService() =
                     receiverLocals
                     @ (loweredArguments
                        |> List.collect snd)
+                | TypedUpcast(sourceType, _, _, expression) ->
+                    let expressionInstructions, expressionLocals =
+                        valueExpressionInstructions freshLabel kind expression
+
+                    expressionInstructions
+                    @ [ Box sourceType ],
+                    expressionLocals
                 | TypedConditional(condition,
                                    ifTrue,
                                    ifFalse,
@@ -3817,7 +3926,7 @@ type internal CompilerService() =
                         Return
                     ],
                     []
-                | (TypedLocalReference _ | TypedLet _ | TypedStaticMethodCall _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _) as expression ->
+                | (TypedLocalReference _ | TypedLet _ | TypedStaticMethodCall _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _ | TypedUpcast _) as expression ->
                     let instructions, locals =
                         valueExpressionInstructions freshLabel kind expression
 
@@ -4047,6 +4156,7 @@ type internal CompilerService() =
                             methodReference.DependencyId
                             :: (genericArguments
                                 |> List.collect cliTypeDependencyIds)
+                        | Box cliType -> cliTypeDependencyIds cliType
                         | MarkHiddenSequencePoint
                         | MarkLabel _
                         | BranchIfFalse _
@@ -4093,7 +4203,8 @@ type internal CompilerService() =
                         | TypedStaticMethodCall _
                         | TypedFunctionApplication _
                         | TypedInstanceMethodCall _
-                        | TypedConditional _ -> 8
+                        | TypedConditional _
+                        | TypedUpcast _ -> 8
                     DependencyIds =
                         methodDependencies methodDeclaration
                         @ instructionDependencies
@@ -4395,6 +4506,7 @@ type internal CompilerService() =
                                     | TypedFunctionApplication _
                                     | TypedInstanceMethodCall _
                                     | TypedConditional _
+                                    | TypedUpcast _
                                     | TypedTraitCall _ -> None
 
                                 match closureExpression with

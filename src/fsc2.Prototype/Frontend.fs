@@ -888,6 +888,23 @@ module internal Frontend =
                                                     }
                                             }
                                         | _ -> Ok(expression, expressionRange)
+                                    | Subtype ->
+                                        parseResult {
+                                            let! _ = expected Subtype "expected ':>'"
+                                            let! targetType = parseTypeExpression ()
+
+                                            let! _ =
+                                                expected
+                                                    RightParenthesis
+                                                    "expected ')' after an upcast"
+
+                                            return
+                                                ExplicitUpcastExpression(expression, targetType),
+                                                {
+                                                    Start = expressionRange.Start
+                                                    End = targetType.Range.End
+                                                }
+                                        }
                                     | EndOfFile ->
                                         Error(
                                             prototypeDiagnostic

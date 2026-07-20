@@ -4134,6 +4134,48 @@ module CompilerTargetTests =
 
                     Expect.equal fsharp2Behavior (0, 42) "Choose should select one branch"
 
+            testCase "executes a constrained generic upcast"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen System.Runtime.CompilerServices\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Upcast(awaiter: 'TAwaiter) : ICriticalNotifyCompletion =\n            (awaiter :> ICriticalNotifyCompletion)\n"
+
+                withObjectMemberDifferential "fsharp2-generic-upcast" sourceText "Upcast"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeUpcast assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        let awaiter = System.Threading.Tasks.Task.CompletedTask.GetAwaiter()
+
+                        let result =
+                            builderType
+                                .GetMethod("Upcast")
+                                .MakeGenericMethod(
+                                    typeof<System.Runtime.CompilerServices.TaskAwaiter>
+                                )
+                                .Invoke(null, [| box awaiter |])
+
+                        result.GetType().FullName,
+                        result :? System.Runtime.CompilerServices.ICriticalNotifyCompletion
+
+                    let oracleBehavior = invokeUpcast oracleOutputPath
+                    let fsharp2Behavior = invokeUpcast outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the emitted upcast should behave like the Compatibility Oracle"
+
+                    Expect.equal
+                        fsharp2Behavior
+                        (typeof<System.Runtime.CompilerServices.TaskAwaiter>.FullName, true)
+                        "Upcast should box the constrained value type as the target interface"
+
             testCase "retained service invalidates an IcedTasks inline object-member edit"
             <| fun _ ->
                 let root =
@@ -6241,7 +6283,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "28"
+                        "29"
                         "query cache evidence should be versioned"
 
                     Expect.equal

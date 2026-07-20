@@ -496,6 +496,9 @@ module internal Linker =
             | BranchIfFalse label -> instructions.Branch(ILOpCode.Brfalse, resolveLabel label)
             | Branch label -> instructions.Branch(ILOpCode.Br, resolveLabel label)
             | Nop -> instructions.OpCode(ILOpCode.Nop)
+            | Box cliType ->
+                instructions.OpCode(ILOpCode.Box)
+                instructions.Token(resolveDeclaringType (CliDeclaringType cliType))
             | LoadInt32 value -> instructions.LoadConstantI4(value)
             | LoadString value ->
                 value
@@ -1102,7 +1105,9 @@ module internal Linker =
         let resolveCliTypeEntity cliType =
             match cliType with
             | CliNamedType typeReference -> resolveCliTypeReference typeReference
-            | CliGenericType _ ->
+            | CliGenericType _
+            | CliTypeParameter _
+            | CliMethodTypeParameter _ ->
                 match cliTypeSpecifications.TryGetValue(cliType) with
                 | true, handle -> handle
                 | false, _ ->
@@ -1129,8 +1134,6 @@ module internal Linker =
             | CliObject
             | CliNativeInt
             | CliVoid
-            | CliTypeParameter _
-            | CliMethodTypeParameter _
             | CliByRef _ -> invalidOp "a CLI type entity must be a named or constructed CLI type"
 
         let resolveDeclaringType =
