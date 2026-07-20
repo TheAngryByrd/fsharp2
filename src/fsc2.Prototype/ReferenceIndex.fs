@@ -53,6 +53,7 @@ type internal ReferenceMethodDefinition = {
     IsStatic: bool
     GenericArity: int
     ParameterTypes: CliType list
+    OptionalParameterCount: int
     ReturnType: CliType
 } with
 
@@ -199,6 +200,60 @@ type internal ReferenceTypeIndex
             use pe = new PEReader(metadataStream)
             let metadata = pe.GetMetadataReader()
 
+            let entityTypeName (handle: EntityHandle) =
+                match handle.Kind with
+                | HandleKind.TypeReference ->
+                    let reference = metadata.GetTypeReference(TypeReferenceHandle.op_Explicit handle)
+
+                    Some(
+                        metadata.GetString(reference.Namespace),
+                        metadata.GetString(reference.Name)
+                    )
+                | HandleKind.TypeDefinition ->
+                    let definition = metadata.GetTypeDefinition(TypeDefinitionHandle.op_Explicit handle)
+
+                    Some(
+                        metadata.GetString(definition.Namespace),
+                        metadata.GetString(definition.Name)
+                    )
+                | _ -> None
+
+            let customAttributeTypeName (attribute: CustomAttribute) =
+                match attribute.Constructor.Kind with
+                | HandleKind.MemberReference ->
+                    let constructor =
+                        metadata.GetMemberReference(
+                            MemberReferenceHandle.op_Explicit attribute.Constructor
+                        )
+
+                    entityTypeName constructor.Parent
+                | HandleKind.MethodDefinition ->
+                    let constructor =
+                        metadata.GetMethodDefinition(
+                            MethodDefinitionHandle.op_Explicit attribute.Constructor
+                        )
+
+                    let declaringType =
+                        metadata.GetTypeDefinition(constructor.GetDeclaringType())
+
+                    Some(
+                        metadata.GetString(declaringType.Namespace),
+                        metadata.GetString(declaringType.Name)
+                    )
+                | _ -> None
+
+            let isFSharpOptionalParameter (parameter: Parameter) =
+                parameter.GetCustomAttributes()
+                |> Seq.exists (fun handle ->
+                    handle
+                    |> metadata.GetCustomAttribute
+                    |> customAttributeTypeName
+                    |> Option.exists (fun (namespaceName, typeName) ->
+                        namespaceName = "Microsoft.FSharp.Core"
+                        && typeName = "OptionalArgumentAttribute"
+                    )
+                )
+
             let typeDefinition =
                 location.TypeRow
                 |> MetadataTokens.TypeDefinitionHandle
@@ -242,6 +297,26 @@ type internal ReferenceTypeIndex
                         let returnType = signature.ReturnType.Value
                         let genericArity = signature.GenericParameterCount
 
+                        let optionalParameters =
+                            Array.create parameterTypes.Length false
+
+                        for parameterHandle in methodDefinition.GetParameters() do
+                            let parameter = metadata.GetParameter(parameterHandle)
+                            let index = parameter.SequenceNumber - 1
+
+                            if
+                                index >= 0
+                                && index < optionalParameters.Length
+                            then
+                                optionalParameters.[index] <-
+                                    isFSharpOptionalParameter parameter
+
+                        let optionalParameterCount =
+                            optionalParameters
+                            |> Array.rev
+                            |> Seq.takeWhile id
+                            |> Seq.length
+
                         let stableId =
                             String.concat "|" [
                                 location.DeclaringType.DeclarationId
@@ -263,6 +338,7 @@ type internal ReferenceTypeIndex
                             IsStatic = methodIsStatic
                             GenericArity = genericArity
                             ParameterTypes = parameterTypes
+                            OptionalParameterCount = optionalParameterCount
                             ReturnType = returnType
                         }
             )
@@ -307,6 +383,12 @@ type internal ReferenceTypeIndex
                 Some {
                     Namespace = "Microsoft.FSharp.Core"
                     Name = "Unit"
+                }
+            | "", "Async"
+            | "Microsoft.FSharp.Control", "Async" ->
+                Some {
+                    Namespace = "Microsoft.FSharp.Control"
+                    Name = "FSharpAsync"
                 }
             | _ -> None
 

@@ -55,7 +55,9 @@ module internal Frontend =
         | GreaterThan
         | Arrow
         | LeftArrow
+        | PipeRight
         | Ampersand
+        | Bang
         | Hash
         | Star
         | Equals
@@ -506,6 +508,14 @@ module internal Frontend =
                     advance ()
                     advance ()
                     add LeftArrow start
+                elif
+                    current = '|'
+                    && offset + 1 < text.Length
+                    && text.[offset + 1] = '>'
+                then
+                    advance ()
+                    advance ()
+                    add PipeRight start
                 else
                     advance ()
 
@@ -521,6 +531,7 @@ module internal Frontend =
                     | '<' -> add LessThan start
                     | '>' -> add GreaterThan start
                     | '&' -> add Ampersand start
+                    | '!' -> add Bang start
                     | '#' -> add Hash start
                     | '*' -> add Star start
                     | '=' -> add Equals start
@@ -907,6 +918,39 @@ module internal Frontend =
                                     (ExpressionMemberCall(expression, memberName, arguments))
                                     range
                         }
+                    | PipeRight ->
+                        consume ()
+                        |> ignore
+
+                        match (current ()).Kind with
+                        | Identifier _ when
+                            index + 1 < input.Length
+                            && input.[index + 1].Kind = LessThan
+                            ->
+                            parseResult {
+                                let! constructedType = parseTypeExpression ()
+
+                                let range = {
+                                    Start = expressionRange.Start
+                                    End = constructedType.Range.End
+                                }
+
+                                return!
+                                    parsePostfixMemberCalls
+                                        (TypeConstruction(
+                                            constructedType,
+                                            [ expression ],
+                                            expressionRange
+                                        ))
+                                        range
+                            }
+                        | _ ->
+                            Error(
+                                prototypeDiagnostic
+                                    source.Path
+                                    (current ()).Range
+                                    "expected a generic type constructor after '|>'"
+                            )
                     | _ -> Ok(expression, expressionRange)
 
                 let parseMemberPath rootName =

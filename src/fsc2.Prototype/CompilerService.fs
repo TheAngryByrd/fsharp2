@@ -1090,16 +1090,24 @@ type internal CompilerService() =
                 (methodDefinition: ReferenceMethodDefinition)
                 (argumentTypes: CliType list)
                 =
-                if
+                let requiredParameterCount =
                     methodDefinition.ParameterTypes.Length
-                    <> argumentTypes.Length
+                    - methodDefinition.OptionalParameterCount
+
+                if
+                    argumentTypes.Length < requiredParameterCount
+                    || argumentTypes.Length > methodDefinition.ParameterTypes.Length
                 then
                     None
                 else
                     let substitutions = Array.create methodDefinition.GenericArity None
 
+                    let providedParameterTypes =
+                        methodDefinition.ParameterTypes
+                        |> List.truncate argumentTypes.Length
+
                     let parametersMatch =
-                        (methodDefinition.ParameterTypes, argumentTypes)
+                        (providedParameterTypes, argumentTypes)
                         ||> List.forall2 (inferMethodTypeArgument substitutions)
 
                     if
@@ -1133,15 +1141,20 @@ type internal CompilerService() =
             let tryApplyExplicitMethodTypeArguments
                 (genericArity: int)
                 (parameterTypes: CliType list)
+                (optionalParameterCount: int)
                 returnType
                 (genericArguments: CliType list)
                 (argumentTypes: CliType list)
                 =
+                let requiredParameterCount =
+                    parameterTypes.Length
+                    - optionalParameterCount
+
                 if
                     genericArity
                     <> genericArguments.Length
-                    || parameterTypes.Length
-                       <> argumentTypes.Length
+                    || argumentTypes.Length < requiredParameterCount
+                    || argumentTypes.Length > parameterTypes.Length
                 then
                     None
                 else
@@ -1151,7 +1164,9 @@ type internal CompilerService() =
                         |> List.toArray
 
                     let parametersMatch =
-                        (parameterTypes, argumentTypes)
+                        (parameterTypes
+                         |> List.truncate argumentTypes.Length,
+                         argumentTypes)
                         ||> List.forall2 (inferMethodTypeArgument substitutions)
 
                     if parametersMatch then
@@ -1168,6 +1183,7 @@ type internal CompilerService() =
                 tryApplyExplicitMethodTypeArguments
                     methodDeclaration.GenericParameters.Length
                     (methodDeclaration.Parameters |> List.map _.Type)
+                    0
                     methodDeclaration.ReturnType
                     genericArguments
                     argumentTypes
@@ -1200,6 +1216,7 @@ type internal CompilerService() =
                 tryApplyExplicitMethodTypeArguments
                     methodDefinition.GenericArity
                     methodDefinition.ParameterTypes
+                    methodDefinition.OptionalParameterCount
                     methodDefinition.ReturnType
                     genericArguments
                     argumentTypes
@@ -2164,7 +2181,11 @@ type internal CompilerService() =
                                         true
                                     )
                                     |> List.filter (fun methodDefinition ->
-                                        methodDefinition.ParameterTypes.Length = arguments.Length
+                                        arguments.Length
+                                        >= methodDefinition.ParameterTypes.Length
+                                           - methodDefinition.OptionalParameterCount
+                                        && arguments.Length
+                                           <= methodDefinition.ParameterTypes.Length
                                         && (genericArity
                                             |> Option.forall (fun arity ->
                                                 methodDefinition.GenericArity = arity
@@ -5994,6 +6015,12 @@ type internal CompilerService() =
                         arguments
                         |> List.map (valueExpressionInstructions freshLabel kind)
 
+                    let omittedOptionalArguments =
+                        List.replicate
+                            (target.ParameterTypes.Length
+                             - arguments.Length)
+                            LoadNull
+
                     let methodReference = {
                         DeclaringType = CliDeclaringType(CliNamedType target.DeclaringType)
                         Name = target.Name
@@ -6012,6 +6039,7 @@ type internal CompilerService() =
 
                     (loweredArguments
                      |> List.collect fst)
+                    @ omittedOptionalArguments
                     @ [ callInstruction ],
                     (loweredArguments
                      |> List.collect snd)
