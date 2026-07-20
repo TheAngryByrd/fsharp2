@@ -221,6 +221,20 @@ module private TypeIdentity =
                     arguments
                     |> List.map inlineBody
             ]
+        | TypedObjectConstruction(target, arguments) ->
+            Fingerprint.parts [
+                "object-construction"
+                cliType target.DeclaringType
+                target.StableId
+
+                yield!
+                    target.ParameterTypes
+                    |> List.map cliType
+
+                yield!
+                    arguments
+                    |> List.map inlineBody
+            ]
         | TypedFunctionApplication(functionType,
                                    domainType,
                                    rangeType,
@@ -1072,18 +1086,65 @@ type internal CompilerService() =
                     else
                         None
 
+            let tryInferReferenceStaticMethod
+                (methodDefinition: ReferenceMethodDefinition)
+                (argumentTypes: CliType list)
+                =
+                if
+                    methodDefinition.ParameterTypes.Length
+                    <> argumentTypes.Length
+                then
+                    None
+                else
+                    let substitutions = Array.create methodDefinition.GenericArity None
+
+                    let parametersMatch =
+                        (methodDefinition.ParameterTypes, argumentTypes)
+                        ||> List.forall2 (inferMethodTypeArgument substitutions)
+
+                    if
+                        parametersMatch
+                        && (substitutions
+                            |> Array.forall Option.isSome)
+                    then
+                        let genericArguments =
+                            substitutions
+                            |> Array.choose id
+                            |> Array.toList
+
+                        let returnType =
+                            substituteMethodTypeArguments substitutions methodDefinition.ReturnType
+
+                        Some(
+                            {
+                                DeclaringType = methodDefinition.DeclaringType
+                                StableId = methodDefinition.StableId
+                                Name = methodDefinition.Name
+                                GenericArity = methodDefinition.GenericArity
+                                ParameterTypes = methodDefinition.ParameterTypes
+                                ReturnType = methodDefinition.ReturnType
+                            },
+                            genericArguments,
+                            returnType
+                        )
+                    else
+                        None
+
             let resolveStaticMethod receiverName memberName argumentTypes range =
                 let visibleNamespaces =
                     parsed.Namespace
                     :: parsed.OpenedNamespaces
                     |> Set.ofList
 
-                let candidates =
+                let visibleSourceTypes =
                     checkedSourceTypes
                     |> Seq.filter (fun sourceType ->
                         sourceType.Name = receiverName
                         && visibleNamespaces.Contains(sourceType.Namespace)
                     )
+
+                let sourceCandidates =
+                    visibleSourceTypes
                     |> Seq.collect (fun sourceType ->
                         sourceType.Methods
                         |> Seq.choose (fun methodDeclaration ->
@@ -1094,6 +1155,37 @@ type internal CompilerService() =
                         )
                     )
                     |> Seq.toList
+
+                let candidates =
+                    if
+                        visibleSourceTypes
+                        |> Seq.isEmpty
+                    then
+                        match
+                            references.Resolve(
+                                parsed.Namespace,
+                                parsed.OpenedNamespaces,
+                                {
+                                    Namespace = String.Empty
+                                    Name = receiverName
+                                },
+                                0
+                            )
+                        with
+                        | Error _ -> []
+                        | Ok resolvedType ->
+                            references.Methods(
+                                resolvedType.DeclarationId,
+                                memberName,
+                                true
+                            )
+                            |> List.choose (fun methodDefinition ->
+                                tryInferReferenceStaticMethod
+                                    methodDefinition
+                                    argumentTypes
+                            )
+                    else
+                        sourceCandidates
 
                 match candidates with
                 | [ candidate ] -> Ok candidate
@@ -2339,6 +2431,131 @@ type internal CompilerService() =
                                                     returnType,
                                                     nextArgumentLocalIndex
                                                 )
+                                    | TypeConstruction(constructedType,
+                                                       arguments,
+                                                       argumentRange) ->
+                                        let rec typeArguments
+                                            typedArguments
+                                            argumentTypes
+                                            argumentLocalIndex
+                                            =
+                                            function
+                                            | [] ->
+                                                Ok(
+                                                    List.rev typedArguments,
+                                                    List.rev argumentTypes,
+                                                    argumentLocalIndex
+                                                )
+                                            | argument :: remaining ->
+                                                match
+                                                    typeStaticExpression
+                                                        localBindings
+                                                        argumentLocalIndex
+                                                        argument
+                                                with
+                                                | Error error -> Error error
+                                                | Ok(typedArgument,
+                                                     argumentType,
+                                                     nextArgumentLocalIndex) ->
+                                                    typeArguments
+                                                        (typedArgument
+                                                         :: typedArguments)
+                                                        (argumentType
+                                                         :: argumentTypes)
+                                                        nextArgumentLocalIndex
+                                                        remaining
+
+                                        let resolvedConstructedType =
+                                            constructedType
+                                            |> expandTypeAbbreviations Set.empty
+                                            |> resolveType declaredMethodParameters
+                                            |> Result.bind (
+                                                toCliType
+                                                    methodParameterIndex
+                                                    argumentRange
+                                            )
+
+                                        match
+                                            resolvedConstructedType,
+                                            typeArguments [] [] nextLocalIndex arguments
+                                        with
+                                        | Error error, _
+                                        | _, Error error -> Error error
+                                        | Ok constructedCliType,
+                                          Ok(typedArguments,
+                                             argumentTypes,
+                                             nextArgumentLocalIndex) ->
+                                            let declaringType, declaringTypeArguments =
+                                                match constructedCliType with
+                                                | CliNamedType typeReference ->
+                                                    Some typeReference, []
+                                                | CliGenericType(typeReference, typeArguments) ->
+                                                    Some typeReference, typeArguments
+                                                | _ -> None, []
+
+                                            let rec substituteTypeArguments =
+                                                function
+                                                | CliTypeParameter index when
+                                                    index
+                                                    < declaringTypeArguments.Length
+                                                    ->
+                                                    declaringTypeArguments.[index]
+                                                | CliGenericType(typeReference, typeArguments) ->
+                                                    CliGenericType(
+                                                        typeReference,
+                                                        typeArguments
+                                                        |> List.map substituteTypeArguments
+                                                    )
+                                                | CliByRef elementType ->
+                                                    CliByRef(substituteTypeArguments elementType)
+                                                | cliType -> cliType
+
+                                            let candidates =
+                                                declaringType
+                                                |> Option.map (fun typeReference ->
+                                                    references.Methods(
+                                                        typeReference.DeclarationId,
+                                                        ".ctor",
+                                                        false
+                                                    )
+                                                    |> List.choose (fun constructor ->
+                                                        if constructor.GenericArity <> 0 then
+                                                            None
+                                                        else
+                                                            let parameterTypes =
+                                                                constructor.ParameterTypes
+                                                                |> List.map substituteTypeArguments
+
+                                                            if parameterTypes = argumentTypes then
+                                                                Some {
+                                                                    DeclaringType = constructedCliType
+                                                                    StableId = constructor.StableId
+                                                                    ParameterTypes = parameterTypes
+                                                                }
+                                                            else
+                                                                None
+                                                    )
+                                                )
+                                                |> Option.defaultValue []
+
+                                            match candidates with
+                                            | [ target ] ->
+                                                Ok(
+                                                    TypedObjectConstruction(
+                                                        target,
+                                                        typedArguments
+                                                    ),
+                                                    constructedCliType,
+                                                    nextArgumentLocalIndex
+                                                )
+                                            | [] ->
+                                                diagnostic
+                                                    argumentRange
+                                                    "no visible object constructor matches the argument types"
+                                            | _ ->
+                                                diagnostic
+                                                    argumentRange
+                                                    "the object constructor call is ambiguous"
                                     | FunctionApplication(functionExpression, argumentExpression) ->
                                         match
                                             typeStaticExpression
@@ -2900,8 +3117,7 @@ type internal CompilerService() =
                                     | BoundInstanceMember _
                                     | MemberAssignment _
                                     | SequentialExpression _
-                                    | LambdaExpression _
-                                    | TypeConstruction _ ->
+                                    | LambdaExpression _ ->
                                         diagnostic
                                             methodDeclaration.BodyRange
                                             "this static-member expression is not yet supported"
@@ -2929,6 +3145,9 @@ type internal CompilerService() =
                                     | TypedBooleanNegation(expression, _) ->
                                         inferredSubtypeConstraints expression
                                     | TypedStaticMethodCall(_, _, arguments) ->
+                                        arguments
+                                        |> List.collect inferredSubtypeConstraints
+                                    | TypedObjectConstruction(_, arguments) ->
                                         arguments
                                         |> List.collect inferredSubtypeConstraints
                                     | TypedFunctionApplication(_,
@@ -3918,9 +4137,9 @@ type internal CompilerService() =
                                              "TryFinally",
                                              [ ValueReference computationName
                                                TypeConstruction(constructedType,
-                                                                LambdaExpression(lambdaParameter,
-                                                                                 lambdaParameterType,
-                                                                                 lambdaBody),
+                                                                [ LambdaExpression(lambdaParameter,
+                                                                                   lambdaParameterType,
+                                                                                   lambdaBody) ],
                                                                 argumentRange) ]) ->
                                     typeResumableTryFinally
                                         computationName
@@ -3934,9 +4153,9 @@ type internal CompilerService() =
                                         methodDeclaration.BodyRange
                                         "trait calls are not yet supported in instance members"
                                 | TypeConstruction(constructedType,
-                                                   LambdaExpression(lambdaParameter,
-                                                                    lambdaParameterType,
-                                                                    lambdaBody),
+                                                   [ LambdaExpression(lambdaParameter,
+                                                                      lambdaParameterType,
+                                                                      lambdaBody) ],
                                                    argumentRange) ->
                                     typeResumableCode
                                         None
@@ -4000,6 +4219,7 @@ type internal CompilerService() =
                                     | TypedLet _
                                     | TypedAddressOf _
                                     | TypedStaticMethodCall _
+                                    | TypedObjectConstruction _
                                     | TypedFunctionApplication _
                                     | TypedInstanceMethodCall _
                                     | TypedBoundInstanceMethod _
@@ -5359,6 +5579,26 @@ type internal CompilerService() =
                     @ [ callInstruction ],
                     (loweredArguments
                      |> List.collect snd)
+                | TypedObjectConstruction(target, arguments) ->
+                    let loweredArguments =
+                        arguments
+                        |> List.map (valueExpressionInstructions freshLabel kind)
+
+                    let constructorReference = {
+                        DeclaringType = CliDeclaringType target.DeclaringType
+                        Name = ".ctor"
+                        GenericArity = 0
+                        IsInstance = true
+                        ParameterTypes = target.ParameterTypes
+                        ReturnType = CliVoid
+                        TargetStableId = Some target.StableId
+                    }
+
+                    (loweredArguments
+                     |> List.collect fst)
+                    @ [ NewObject constructorReference ],
+                    (loweredArguments
+                     |> List.collect snd)
                 | TypedFunctionApplication(functionType,
                                            domainType,
                                            rangeType,
@@ -5606,7 +5846,7 @@ type internal CompilerService() =
                         Return
                     ],
                     []
-                | (TypedStringLiteral _ | TypedUnitLiteral | TypedLocalReference _ | TypedLet _ | TypedLocalAssignment _ | TypedAddressOf _ | TypedStaticMethodCall _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _ | TypedUpcast _ | TypedSequential _ | TypedBooleanNegation _ | TypedTypeTestMatch _ | TypedObjectExpression _) as expression ->
+                | (TypedStringLiteral _ | TypedUnitLiteral | TypedLocalReference _ | TypedLet _ | TypedLocalAssignment _ | TypedAddressOf _ | TypedStaticMethodCall _ | TypedObjectConstruction _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _ | TypedUpcast _ | TypedSequential _ | TypedBooleanNegation _ | TypedTypeTestMatch _ | TypedObjectExpression _) as expression ->
                     let instructions, locals =
                         valueExpressionInstructions freshLabel kind expression
 
@@ -5903,6 +6143,7 @@ type internal CompilerService() =
                         | TypedObjectExpression _
                         | TypedTraitCall _ -> 1
                         | TypedStaticMethodCall _
+                        | TypedObjectConstruction _
                         | TypedFunctionApplication _
                         | TypedInstanceMethodCall _
                         | TypedConditional _
@@ -6152,6 +6393,9 @@ type internal CompilerService() =
                 | TypedBooleanNegation(value, _)
                 | TypedUpcast(_, _, _, value) -> objectExpressions value
                 | TypedStaticMethodCall(_, _, arguments) ->
+                    arguments
+                    |> List.collect objectExpressions
+                | TypedObjectConstruction(_, arguments) ->
                     arguments
                     |> List.collect objectExpressions
                 | TypedFunctionApplication(_, _, _, functionExpression, argumentExpression) ->
@@ -6562,6 +6806,7 @@ type internal CompilerService() =
                                     | TypedLet _
                                     | TypedAddressOf _
                                     | TypedStaticMethodCall _
+                                    | TypedObjectConstruction _
                                     | TypedFunctionApplication _
                                     | TypedInstanceMethodCall _
                                     | TypedBoundInstanceMethod _
@@ -6945,6 +7190,7 @@ type internal CompilerService() =
                                 | TypedLocalAssignment _
                                 | TypedAddressOf _
                                 | TypedStaticMethodCall _
+                                | TypedObjectConstruction _
                                 | TypedFunctionApplication _
                                 | TypedInstanceMethodCall _
                                 | TypedUnitLambda _
@@ -7127,6 +7373,7 @@ type internal CompilerService() =
                                 | TypedLocalAssignment _
                                 | TypedAddressOf _
                                 | TypedStaticMethodCall _
+                                | TypedObjectConstruction _
                                 | TypedFunctionApplication _
                                 | TypedInstanceMethodCall _
                                 | TypedBoundInstanceMethod _

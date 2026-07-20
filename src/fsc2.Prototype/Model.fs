@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 45
+    let Query = 46
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -238,7 +238,7 @@ type internal ParsedExpression =
     | UnitLambdaExpression of body: ParsedExpression
     | TypeConstruction of
         constructedType: ParsedTypeExpression *
-        argument: ParsedExpression *
+        arguments: ParsedExpression list *
         argumentRange: SourceRange
     | ObjectExpression of
         baseType: ParsedTypeExpression *
@@ -710,6 +710,14 @@ type internal TypedStaticMethodCallTarget = {
 
     override _.ToString() = "TypedStaticMethodCallTarget"
 
+type internal TypedObjectConstructionTarget = {
+    DeclaringType: CliType
+    StableId: string
+    ParameterTypes: CliType list
+} with
+
+    override _.ToString() = "TypedObjectConstructionTarget"
+
 type internal TypedInstanceMethodCallTarget = {
     DeclaringType: CliType
     Name: string
@@ -768,6 +776,9 @@ type internal TypedExpression =
     | TypedStaticMethodCall of
         target: TypedStaticMethodCallTarget *
         genericArguments: CliType list *
+        arguments: TypedExpression list
+    | TypedObjectConstruction of
+        target: TypedObjectConstructionTarget *
         arguments: TypedExpression list
     | TypedFunctionApplication of
         functionType: CliType *

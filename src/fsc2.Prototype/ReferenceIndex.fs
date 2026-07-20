@@ -3,6 +3,7 @@ namespace FSharp2.Compiler
 open System
 open System.Collections.Generic
 open System.IO
+open System.Reflection
 open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open System.Reflection.PortableExecutable
@@ -45,6 +46,132 @@ module internal ReferenceTypeName =
         else
             metadataName, 0
 
+type internal ReferenceMethodDefinition = {
+    DeclaringType: CliTypeReference
+    StableId: string
+    Name: string
+    IsStatic: bool
+    GenericArity: int
+    ParameterTypes: CliType list
+    ReturnType: CliType
+} with
+
+    override _.ToString() = "ReferenceMethodDefinition"
+
+type private ReferenceTypeLocation = {
+    ReferencePath: string
+    TypeRow: int
+    DeclaringType: CliTypeReference
+} with
+
+    override _.ToString() = "ReferenceTypeLocation"
+
+module private ReferenceMethodKey =
+    let create declarationId name isStatic =
+        String.concat "\u001f" [
+            declarationId
+            name
+            (if isStatic then "static" else "instance")
+        ]
+
+type private ReferenceSignatureTypeProvider(types: Dictionary<TypeNameArity, ResolvedTypeName>) as this =
+    let tryResolve namespaceName metadataName =
+        let name, genericArity = ReferenceTypeName.parseMetadataName metadataName
+
+        let key =
+            ReferenceTypeName.typeKey
+                {
+                    Namespace = namespaceName
+                    Name = name
+                }
+                genericArity
+
+        match types.TryGetValue(key) with
+        | true, resolved ->
+            Some {
+                DeclarationId = resolved.DeclarationId
+                AssemblyName = resolved.AssemblyName
+                TypeName = resolved.TypeName
+                IsValueType = resolved.IsValueType
+            }
+        | false, _ -> None
+
+    interface ISignatureTypeProvider<CliType option, unit> with
+        member _.GetArrayType(_, _) = None
+
+        member _.GetByReferenceType(elementType) =
+            elementType
+            |> Option.bind (function
+                | CliVoid -> None
+                | cliType -> Some(CliByRef cliType)
+            )
+
+        member _.GetFunctionPointerType(_) = None
+
+        member _.GetGenericInstantiation(genericType, typeArguments) =
+            match genericType with
+            | Some(CliNamedType typeReference) when typeArguments |> Seq.forall Option.isSome ->
+                let arguments =
+                    typeArguments
+                    |> Seq.choose id
+                    |> List.ofSeq
+
+                let genericReference = {
+                    typeReference with
+                        TypeName = {
+                            typeReference.TypeName with
+                                Name =
+                                    typeReference.TypeName.Name
+                                    + "`"
+                                    + arguments.Length.ToString()
+                        }
+                }
+
+                Some(CliGenericType(genericReference, arguments))
+            | _ -> None
+
+        member _.GetGenericMethodParameter(_, index) =
+            Some(CliMethodTypeParameter index)
+
+        member _.GetGenericTypeParameter(_, index) = Some(CliTypeParameter index)
+
+        member _.GetModifiedType(_, unmodifiedType, _) = unmodifiedType
+
+        member _.GetPinnedType(elementType) = elementType
+
+        member _.GetPointerType(_) = None
+
+        member _.GetPrimitiveType(code) =
+            match code with
+            | PrimitiveTypeCode.Boolean -> Some CliBoolean
+            | PrimitiveTypeCode.Int32 -> Some CliInt32
+            | PrimitiveTypeCode.IntPtr -> Some CliNativeInt
+            | PrimitiveTypeCode.Object -> Some CliObject
+            | PrimitiveTypeCode.String -> Some CliString
+            | PrimitiveTypeCode.Void -> Some CliVoid
+            | _ -> None
+
+        member _.GetSZArrayType(_) = None
+
+        member _.GetTypeFromDefinition(metadata, handle, _) =
+            let definition = metadata.GetTypeDefinition(handle)
+
+            tryResolve
+                (metadata.GetString(definition.Namespace))
+                (metadata.GetString(definition.Name))
+            |> Option.map CliNamedType
+
+        member _.GetTypeFromReference(metadata, handle, _) =
+            let reference = metadata.GetTypeReference(handle)
+
+            tryResolve
+                (metadata.GetString(reference.Namespace))
+                (metadata.GetString(reference.Name))
+            |> Option.map CliNamedType
+
+        member _.GetTypeFromSpecification(metadata, context, handle, _) =
+            metadata.GetTypeSpecification(handle).DecodeSignature(this, context)
+
 /// A metadata-only index of the evaluated target references. The index owns
 /// name lookup and a content-addressed identity; it never loads target code.
 type internal ReferenceTypeIndex
@@ -53,12 +180,113 @@ type internal ReferenceTypeIndex
         fingerprint: string,
         types: Dictionary<TypeNameArity, ResolvedTypeName>,
         typesBySimpleName: Dictionary<TypeNameArity, ResolvedTypeName list>,
-        fsharpDelegateDeclarationIds: HashSet<string>
+        fsharpDelegateDeclarationIds: HashSet<string>,
+        typeLocations: Dictionary<string, ReferenceTypeLocation list>
     ) =
+    let methodCache = Dictionary<string, ReferenceMethodDefinition list>()
+
+    let loadMethods declarationId name isStatic =
+        let signatureProvider = ReferenceSignatureTypeProvider(types)
+
+        let locations =
+            match typeLocations.TryGetValue(declarationId) with
+            | true, candidates -> candidates
+            | false, _ -> []
+
+        locations
+        |> List.collect (fun location ->
+            use metadataStream = File.OpenRead(location.ReferencePath)
+            use pe = new PEReader(metadataStream)
+            let metadata = pe.GetMetadataReader()
+
+            let typeDefinition =
+                location.TypeRow
+                |> MetadataTokens.TypeDefinitionHandle
+                |> metadata.GetTypeDefinition
+
+            typeDefinition.GetMethods()
+            |> Seq.choose (fun methodHandle ->
+                let methodDefinition = metadata.GetMethodDefinition(methodHandle)
+                let methodName = metadata.GetString(methodDefinition.Name)
+                let access =
+                    methodDefinition.Attributes
+                    &&& MethodAttributes.MemberAccessMask
+
+                let methodIsStatic =
+                    (methodDefinition.Attributes
+                     &&& MethodAttributes.Static)
+                    <> enum 0
+
+                if
+                    methodName <> name
+                    || access <> MethodAttributes.Public
+                    || methodIsStatic <> isStatic
+                then
+                    None
+                else
+                    let signature =
+                        methodDefinition.DecodeSignature(signatureProvider, ())
+
+                    if
+                        signature.ReturnType.IsNone
+                        || (signature.ParameterTypes
+                            |> Seq.exists Option.isNone)
+                    then
+                        None
+                    else
+                        let parameterTypes =
+                            signature.ParameterTypes
+                            |> Seq.choose id
+                            |> List.ofSeq
+
+                        let returnType = signature.ReturnType.Value
+                        let genericArity = signature.GenericParameterCount
+
+                        let stableId =
+                            String.concat "|" [
+                                location.DeclaringType.DeclarationId
+                                "method"
+                                methodName
+                                "generic"
+                                genericArity.ToString()
+                                yield!
+                                    parameterTypes
+                                    |> List.map StableIdentity.cliType
+                                "return"
+                                StableIdentity.cliType returnType
+                            ]
+
+                        Some {
+                            DeclaringType = location.DeclaringType
+                            StableId = stableId
+                            Name = methodName
+                            IsStatic = methodIsStatic
+                            GenericArity = genericArity
+                            ParameterTypes = parameterTypes
+                            ReturnType = returnType
+                        }
+            )
+            |> List.ofSeq
+        )
+        |> List.distinctBy _.StableId
+        |> List.sortBy _.StableId
+
     member _.Fingerprint = fingerprint
 
     member _.IsFSharpDelegate(declarationId: string) =
         fsharpDelegateDeclarationIds.Contains(declarationId)
+
+    member _.Methods(declarationId: string, name: string, isStatic: bool) =
+        let key = ReferenceMethodKey.create declarationId name isStatic
+
+        lock methodCache (fun () ->
+            match methodCache.TryGetValue(key) with
+            | true, candidates -> candidates
+            | false, _ ->
+                let candidates = loadMethods declarationId name isStatic
+                methodCache.Add(key, candidates)
+                candidates
+        )
 
     member _.Resolve
         (
@@ -146,11 +374,19 @@ type internal ReferenceTypeIndex
                 )
 
     static member Create(referencePaths: string list) =
+        let normalizedReferencePaths =
+            referencePaths
+            |> List.map Path.GetFullPath
+            |> List.distinct
+            |> List.sortWith (fun left right -> StringComparer.Ordinal.Compare(left, right))
+
         let types = Dictionary<TypeNameArity, ResolvedTypeName>()
 
         let bySimpleName = Dictionary<TypeNameArity, ResizeArray<ResolvedTypeName>>()
 
         let fsharpDelegateDeclarationIds = HashSet<string>(StringComparer.Ordinal)
+
+        let typeLocations = Dictionary<string, ResizeArray<ReferenceTypeLocation>>()
 
         let referenceIdentities = ResizeArray<string>()
 
@@ -203,11 +439,7 @@ type internal ReferenceTypeIndex
                         bySimpleName.Add(key, candidates)
 
         try
-            for path in
-                referencePaths
-                |> List.map Path.GetFullPath
-                |> List.distinct
-                |> List.sortWith (fun left right -> StringComparer.Ordinal.Compare(left, right)) do
+            for path in normalizedReferencePaths do
                 use fingerprintStream = File.OpenRead(path)
 
                 let contentHash =
@@ -356,13 +588,48 @@ type internal ReferenceTypeIndex
                     let definition = metadata.GetTypeDefinition(handle)
 
                     if not definition.IsNested then
+                        let namespaceName = metadata.GetString(definition.Namespace)
+                        let metadataName = metadata.GetString(definition.Name)
+
                         addType
                             declarationOwner
                             assemblyName
                             (isValueType definition)
                             (isFSharpDelegate definition)
-                            (metadata.GetString(definition.Namespace))
-                            (metadata.GetString(definition.Name))
+                            namespaceName
+                            metadataName
+
+                        let name, genericArity =
+                            ReferenceTypeName.parseMetadataName metadataName
+
+                        let key =
+                            ReferenceTypeName.typeKey
+                                {
+                                    Namespace = namespaceName
+                                    Name = name
+                                }
+                                genericArity
+
+                        match types.TryGetValue(key) with
+                        | false, _ -> ()
+                        | true, resolved ->
+                            let location = {
+                                ReferencePath = path
+                                TypeRow = MetadataTokens.GetRowNumber(handle)
+                                DeclaringType = {
+                                    DeclarationId = resolved.DeclarationId
+                                    AssemblyName = resolved.AssemblyName
+                                    TypeName = resolved.TypeName
+                                    IsValueType = resolved.IsValueType
+                                }
+                            }
+
+                            match typeLocations.TryGetValue(resolved.DeclarationId) with
+                            | true, locations -> locations.Add(location)
+                            | false, _ ->
+                                let locations = ResizeArray<ReferenceTypeLocation>()
+                                locations.Add(location)
+                                typeLocations.Add(resolved.DeclarationId, locations)
 
                 for handle in metadata.ExportedTypes do
                     let exportedType = metadata.GetExportedType(handle)
@@ -392,12 +659,24 @@ type internal ReferenceTypeIndex
                     |> List.ofSeq
                 )
 
+            let frozenTypeLocations = Dictionary<string, ReferenceTypeLocation list>()
+
+            for KeyValue(declarationId, locations) in typeLocations do
+                frozenTypeLocations.Add(
+                    declarationId,
+                    locations
+                    |> Seq.distinctBy (fun location -> location.ReferencePath, location.TypeRow)
+                    |> Seq.sortBy (fun location -> location.ReferencePath, location.TypeRow)
+                    |> List.ofSeq
+                )
+
             Ok(
                 ReferenceTypeIndex(
                     fingerprint,
                     types,
                     frozenBySimpleName,
-                    fsharpDelegateDeclarationIds
+                    fsharpDelegateDeclarationIds,
+                    frozenTypeLocations
                 )
             )
         with error ->

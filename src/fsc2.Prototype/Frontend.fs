@@ -1538,9 +1538,31 @@ module internal Frontend =
                         }
 
                         return
-                            TypeConstruction(constructedType, argument, argumentRange),
+                            TypeConstruction(constructedType, [ argument ], argumentRange),
                             {
                                 Start = expressionToken.Range.Start
+                                End = closeToken.Range.End
+                            }
+                    }
+                | NewKeyword ->
+                    parseResult {
+                        let newToken = consume ()
+                        let! constructedType = parseTypeExpression ()
+                        let! openToken = expected LeftParenthesis "expected '('"
+                        let! arguments = parseCallArguments ()
+                        let! closeToken = expected RightParenthesis "expected ')'"
+
+                        return
+                            TypeConstruction(
+                                constructedType,
+                                arguments,
+                                {
+                                    Start = openToken.Range.Start
+                                    End = closeToken.Range.End
+                                }
+                            ),
+                            {
+                                Start = newToken.Range.Start
                                 End = closeToken.Range.End
                             }
                     }

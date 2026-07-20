@@ -4900,7 +4900,7 @@ module CompilerTargetTests =
             testCase "emits a static type augmentation in the current module"
             <| fun _ ->
                 let sourceText =
-                    "namespace IcedTasks.ValueTasks\n\nopen System\n\n[<AutoOpen>]\nmodule ValueTaskExtensions =\n    type String with\n        static member Echo(value: int) : int = value\n\n    type System.Object with\n        static member Kind() : int = 7\n"
+                    "namespace IcedTasks.ValueTasks\n\nopen System\nopen System.Threading\nopen System.Threading.Tasks\n\n[<AutoOpen>]\nmodule ValueTaskExtensions =\n    type String with\n        static member Echo(value: int) : int = value\n\n    type System.Object with\n        static member Kind() : int = 7\n\n    type ValueTask with\n        static member FromCanceled(cancellationToken: CancellationToken) : ValueTask =\n            new ValueTask(Task.FromCanceled(cancellationToken))\n"
 
                 let root =
                     Path.Combine(
@@ -4939,7 +4939,9 @@ module CompilerTargetTests =
                     let responsePath = Path.Combine(root, "fsharp2.rsp")
 
                     let outputPath, originalExportFingerprint =
-                        compileForExportFingerprint root responsePath sourcePath "ValueTask-fsharp2" []
+                        compileForExportFingerprint root responsePath sourcePath "ValueTask-fsharp2" [
+                            typeof<System.Threading.Tasks.Task>.Assembly.Location
+                        ]
 
                     let inspectAndInvoke assemblyPath =
                         let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
@@ -4983,8 +4985,25 @@ module CompilerTargetTests =
                             methodInfo.ReturnType.FullName,
                             (methodInfo.Invoke(null, arguments) :?> int)
 
+                        let fromCanceled = augmentationMethod "FromCanceled"
+
+                        let canceledTask =
+                            fromCanceled.Invoke(
+                                null,
+                                [| box (System.Threading.CancellationToken(canceled = true)) |]
+                            )
+                            :?> System.Threading.Tasks.ValueTask
+
                         methodShape (augmentationMethod "Echo") [| box 42 |],
-                        methodShape (augmentationMethod "Kind") Array.empty
+                        methodShape (augmentationMethod "Kind") Array.empty,
+                        (fromCanceled.Name,
+                         fromCanceled.Attributes,
+                         (fromCanceled.GetParameters()
+                          |> Array.map (fun parameter ->
+                              parameter.Name, parameter.ParameterType.FullName
+                          )),
+                         fromCanceled.ReturnType.FullName,
+                         canceledTask.IsCanceled)
 
                     let oracleShape = inspectAndInvoke oracleOutputPath
                     let fsharp2Shape = inspectAndInvoke outputPath
@@ -4994,9 +5013,12 @@ module CompilerTargetTests =
                         oracleShape
                         "the static type augmentation should match the Compatibility Oracle"
 
-                    let (_, _, _, _, result), (_, _, _, _, kind) = fsharp2Shape
+                    let (_, _, _, _, result), (_, _, _, _, kind), (_, _, _, _, isCanceled) =
+                        fsharp2Shape
+
                     Expect.equal result 42 "Echo should return its argument"
                     Expect.equal kind 7 "Kind should execute from the qualified augmentation"
+                    Expect.isTrue isCanceled "FromCanceled should return a canceled ValueTask"
 
                     File.WriteAllText(
                         sourcePath,
@@ -5009,9 +5031,9 @@ module CompilerTargetTests =
                             responsePath
                             sourcePath
                             "ValueTask-changed-fsharp2"
-                            []
+                            [ typeof<System.Threading.Tasks.Task>.Assembly.Location ]
 
-                    let (_, _, _, _, changedResult), _ = inspectAndInvoke changedOutputPath
+                    let (_, _, _, _, changedResult), _, _ = inspectAndInvoke changedOutputPath
                     Expect.equal changedResult 43 "the changed non-inline body should be emitted"
 
                     Expect.equal
@@ -7195,7 +7217,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "45"
+                        "46"
                         "query cache evidence should be versioned"
 
                     Expect.equal
