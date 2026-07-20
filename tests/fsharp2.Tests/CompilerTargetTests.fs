@@ -4140,6 +4140,37 @@ module CompilerTargetTests =
 
                     Expect.equal fsharp2Behavior "42" "Run should invoke the returned delegate"
 
+            testCase "executes a postfix member call on a call result"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type Helper() =\n        static member inline Echo(value: System.Func<int>) : System.Func<int> = value\n\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Run(value: System.Func<int>) : int =\n            Helper.Echo(value).Invoke()\n"
+
+                withObjectMemberDifferential "fsharp2-postfix-member-call" sourceText "Run"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeRun assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        builderType
+                            .GetMethod("Run")
+                            .Invoke(null, [| box (Func<int>(fun () -> 42)) |])
+                        :?> int
+
+                    let oracleBehavior = invokeRun oracleOutputPath
+                    let fsharp2Behavior = invokeRun outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the emitted postfix call should behave like the Compatibility Oracle"
+
+                    Expect.equal fsharp2Behavior 42 "Run should invoke the returned delegate"
+
             testCase "executes an if-then-else expression"
             <| fun _ ->
                 let sourceText =
@@ -6390,7 +6421,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "32"
+                        "33"
                         "query cache evidence should be versioned"
 
                     Expect.equal

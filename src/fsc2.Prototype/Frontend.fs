@@ -825,6 +825,32 @@ module internal Frontend =
                     | RightParenthesis -> Ok []
                     | _ -> loop []
 
+                let rec parsePostfixMemberCalls expression expressionRange =
+                    match (current ()).Kind with
+                    | Dot ->
+                        parseResult {
+                            let! _ = expected Dot "expected '.'"
+                            let! memberName, _ = identifier "expected a member name"
+
+                            let! _ = expected LeftParenthesis "expected '(' after a member name"
+
+                            let! arguments = parseCallArguments ()
+
+                            let! closeToken =
+                                expected RightParenthesis "expected ')' after member arguments"
+
+                            let range = {
+                                Start = expressionRange.Start
+                                End = closeToken.Range.End
+                            }
+
+                            return!
+                                parsePostfixMemberCalls
+                                    (ExpressionMemberCall(expression, memberName, arguments))
+                                    range
+                        }
+                    | _ -> Ok(expression, expressionRange)
+
                 let parseMemberPath rootName =
                     let rec loop members =
                         parseResult {
@@ -855,39 +881,13 @@ module internal Frontend =
                                 return!
                                     match (current ()).Kind with
                                     | RightParenthesis ->
-                                        consume ()
-                                        |> ignore
+                                        let closeToken = consume ()
 
                                         match (current ()).Kind with
                                         | Dot ->
-                                            parseResult {
-                                                let! _ = expected Dot "expected '.'"
-
-                                                let! memberName, _ =
-                                                    identifier "expected a member name"
-
-                                                let! _ =
-                                                    expected
-                                                        LeftParenthesis
-                                                        "expected '(' after a member name"
-
-                                                let! arguments = parseCallArguments ()
-
-                                                let! closeToken =
-                                                    expected
-                                                        RightParenthesis
-                                                        "expected ')' after member arguments"
-
-                                                return
-                                                    ExpressionMemberCall(
-                                                        expression,
-                                                        memberName,
-                                                        arguments
-                                                    ),
-                                                    {
-                                                        Start = expressionToken.Range.Start
-                                                        End = closeToken.Range.End
-                                                    }
+                                            parsePostfixMemberCalls expression {
+                                                Start = expressionToken.Range.Start
+                                                End = closeToken.Range.End
                                             }
                                         | _ -> Ok(expression, expressionRange)
                                     | Subtype ->
@@ -1266,12 +1266,13 @@ module internal Frontend =
                                     let! arguments = parseCallArguments ()
                                     let! closeToken = expected RightParenthesis "expected ')'"
 
-                                    return
-                                        MemberCall(receiverName, memberPath.Head, arguments),
-                                        {
-                                            Start = expressionToken.Range.Start
-                                            End = closeToken.Range.End
-                                        }
+                                    return!
+                                        parsePostfixMemberCalls
+                                            (MemberCall(receiverName, memberPath.Head, arguments))
+                                            {
+                                                Start = expressionToken.Range.Start
+                                                End = closeToken.Range.End
+                                            }
                                 }
                             | LeftArrow ->
                                 parseResult {
