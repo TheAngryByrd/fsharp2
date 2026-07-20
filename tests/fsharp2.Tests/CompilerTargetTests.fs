@@ -204,7 +204,7 @@ module CompilerTargetTests =
         )
         |> Map.ofArray
 
-    let private findAssemblyAttribute (metadata: MetadataReader) expectedTypeName =
+    let private findAssemblyAttributes (metadata: MetadataReader) expectedTypeName =
         metadata.CustomAttributes
         |> Seq.choose (fun handle ->
             let attribute = metadata.GetCustomAttribute(handle)
@@ -256,6 +256,10 @@ module CompilerTargetTests =
 
                         Some(attribute, constructor, scope)
         )
+        |> Seq.toArray
+
+    let private findAssemblyAttribute (metadata: MetadataReader) expectedTypeName =
+        findAssemblyAttributes metadata expectedTypeName
         |> Seq.exactlyOne
 
     let private rvaToFileOffset (headers: PEHeaders) relativeVirtualAddress =
@@ -448,7 +452,10 @@ module CompilerTargetTests =
                     let pdbPath = Path.Combine(root, "Tracer.pdb")
                     let responsePath = Path.Combine(root, "compile.rsp")
 
-                    File.WriteAllText(sourcePath, "module Tracer\nlet answer () = 42\n")
+                    File.WriteAllText(
+                        sourcePath,
+                        "// Auto-generated source\nmodule Tracer\nlet answer () = 42\n"
+                    )
 
                     File.WriteAllLines(
                         responsePath,
@@ -507,7 +514,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         sequencePoints.[0].StartLine
-                        2
+                        3
                         "the sequence point should map to the declaration"
 
                     Expect.equal
@@ -517,7 +524,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         sequencePoints.[0].EndLine
-                        2
+                        3
                         "the sequence point should end on the declaration line"
 
                     Expect.equal
@@ -532,6 +539,160 @@ module CompilerTargetTests =
                         (consumer.StandardOutput.Trim())
                         "42"
                         "a downstream process should execute the emitted method"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "uses the invocation define set when selecting conditional source"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-conditionals",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "Tracer.fs")
+                    let outputPath = Path.Combine(root, "Tracer.dll")
+                    let pdbPath = Path.Combine(root, "Tracer.pdb")
+                    let responsePath = Path.Combine(root, "compile.rsp")
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "module Tracer\n#if FEATURE\nlet answer () = )\n#else\nlet answer () = 42\n#endif\n"
+                    )
+
+                    File.WriteAllLines(
+                        responsePath,
+                        [|
+                            "--target:library"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--define:OTHER"
+                            $"--out:{outputPath}"
+                            $"--pdb:{pdbPath}"
+                            sourcePath
+                        |]
+                    )
+
+                    let result = invokeFsc2 root responsePath
+                    Expect.equal result.ExitCode 0 result.StandardError
+
+                    let consumer = invokeConsumer root outputPath 42
+                    Expect.equal consumer.ExitCode 0 consumer.StandardError
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "keeps nullable type abbreviations in the semantic surface only"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-type-abbreviations",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "Nullness.fs")
+                    let outputPath = Path.Combine(root, "Aliases.dll")
+                    let pdbPath = Path.Combine(root, "Aliases.pdb")
+                    let responsePath = Path.Combine(root, "compile.rsp")
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "namespace Aliases\n\nopen System\n\ntype ExceptionNull =\n#if NULLABLE\n    Exception | null\n#else\n    Exception\n#endif\n"
+                    )
+
+                    File.WriteAllLines(
+                        responsePath,
+                        [|
+                            "--target:library"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--define:NULLABLE"
+                            $"--out:{outputPath}"
+                            $"--pdb:{pdbPath}"
+                            sourcePath
+                        |]
+                    )
+
+                    let result = invokeFsc2 root responsePath
+                    Expect.equal result.ExitCode 0 result.StandardError
+
+                    use implementationStream = File.OpenRead(outputPath)
+                    use implementation = new PEReader(implementationStream)
+                    let metadata = implementation.GetMetadataReader()
+
+                    let typeNames =
+                        metadata.TypeDefinitions
+                        |> Seq.map (fun handle ->
+                            let definition = metadata.GetTypeDefinition(handle)
+                            metadata.GetString(definition.Name)
+                        )
+                        |> Seq.toArray
+
+                    Expect.sequenceEqual
+                        typeNames
+                        [| "<Module>" |]
+                        "an F# type abbreviation should not add a CLI runtime type"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "namespace moves change same-named module export fingerprints"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-stable-identities",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "AssemblyInfo.fs")
+                    let outputPath = Path.Combine(root, "StableIdentity.dll")
+                    let pdbPath = Path.Combine(root, "StableIdentity.pdb")
+                    let responsePath = Path.Combine(root, "compile.rsp")
+                    let tracePath = Path.Combine(root, "compile.trace")
+
+                    File.WriteAllLines(
+                        responsePath,
+                        [|
+                            "--target:library"
+                            "--deterministic+"
+                            "--debug:portable"
+                            $"--out:{outputPath}"
+                            $"--pdb:{pdbPath}"
+                            $"--fsharp2-trace:{tracePath}"
+                            sourcePath
+                        |]
+                    )
+
+                    let compile namespaceName =
+                        File.WriteAllText(
+                            sourcePath,
+                            $"namespace {namespaceName}\n[<assembly: System.Reflection.AssemblyTitleAttribute(\"same\")>]\ndo ()\nmodule internal Shared =\n    let [<Literal>] Value = \"same\"\n"
+                        )
+
+                        let result = invokeFsc2 root responsePath
+                        Expect.equal result.ExitCode 0 result.StandardError
+                        (readTrace tracePath).["exportFingerprint"]
+
+                    let firstFingerprint = compile "First"
+                    let secondFingerprint = compile "Second"
+
+                    Expect.notEqual
+                        secondFingerprint
+                        firstFingerprint
+                        "namespace identity is part of a declaration's exported meaning"
                 finally
                     Directory.Delete(root, true)
 
@@ -714,7 +875,7 @@ module CompilerTargetTests =
                 finally
                     Directory.Delete(root, true)
 
-            testCase "resolves generated target-framework metadata from the target reference set"
+            testCase "emits generated and authored assembly metadata from the target reference set"
             <| fun _ ->
                 let root =
                     Path.Combine(
@@ -730,6 +891,7 @@ module CompilerTargetTests =
                     let targetFrameworkSourcePath =
                         Path.Combine(root, ".NETStandard,Version=v2.1.AssemblyAttributes.fs")
 
+                    let assemblyInfoSourcePath = Path.Combine(root, "AssemblyInfo.fs")
                     let tracerSourcePath = Path.Combine(root, "Tracer.fs")
                     let outputPath = Path.Combine(root, "Tracer.dll")
                     let pdbPath = Path.Combine(root, "Tracer.pdb")
@@ -772,6 +934,11 @@ module CompilerTargetTests =
                         "namespace Microsoft.BuildSettings\n[<System.Runtime.Versioning.TargetFrameworkAttribute(\".NETStandard,Version=v2.1\", FrameworkDisplayName=\".NET Standard 2.1\")>]\ndo ()\n"
                     )
 
+                    File.WriteAllText(
+                        assemblyInfoSourcePath,
+                        "// Auto-Generated by FAKE; do not edit\nnamespace System\nopen System.Reflection\n\n[<assembly: AssemblyTitleAttribute(\"IcedTasks\")>]\n[<assembly: AssemblyProductAttribute(\"IcedTasks\")>]\n[<assembly: AssemblyVersionAttribute(\"0.11.9\")>]\n[<assembly: AssemblyMetadataAttribute(\"ReleaseDate\",\"2025-09-05T00:00:00.0000000-04:00\")>]\n[<assembly: AssemblyFileVersionAttribute(\"0.11.9\")>]\n[<assembly: AssemblyInformationalVersionAttribute(\"0.11.9\")>]\n[<assembly: AssemblyMetadataAttribute(\"ReleaseChannel\",\"release\")>]\n[<assembly: AssemblyMetadataAttribute(\"GitHash\",\"ef640f5d11e4c7b50234dfe90f0e45d5976a9b2d\")>]\ndo ()\n\nmodule internal AssemblyVersionInformation =\n    let [<Literal>] AssemblyTitle = \"IcedTasks\"\n    let [<Literal>] AssemblyProduct = \"IcedTasks\"\n    let [<Literal>] AssemblyVersion = \"0.11.9\"\n    let [<Literal>] AssemblyMetadata_ReleaseDate = \"2025-09-05T00:00:00.0000000-04:00\"\n    let [<Literal>] AssemblyFileVersion = \"0.11.9\"\n    let [<Literal>] AssemblyInformationalVersion = \"0.11.9\"\n    let [<Literal>] AssemblyMetadata_ReleaseChannel = \"release\"\n    let [<Literal>] AssemblyMetadata_GitHash = \"ef640f5d11e4c7b50234dfe90f0e45d5976a9b2d\"\n"
+                    )
+
                     File.WriteAllText(tracerSourcePath, "module Tracer\nlet answer () = 42\n")
 
                     File.WriteAllLines(
@@ -784,6 +951,7 @@ module CompilerTargetTests =
                             "--target:library"
                             "--deterministic+"
                             targetFrameworkSourcePath
+                            assemblyInfoSourcePath
                             tracerSourcePath
                         |]
                     )
@@ -794,6 +962,17 @@ module CompilerTargetTests =
                     use implementationStream = File.OpenRead(outputPath)
                     use implementation = new PEReader(implementationStream)
                     let metadata = implementation.GetMetadataReader()
+
+                    Expect.equal
+                        (metadata.GetAssemblyDefinition().Version)
+                        (System.Version(0, 11, 9, 0))
+                        "AssemblyVersionAttribute should set the AssemblyDef version"
+
+                    Expect.isEmpty
+                        (findAssemblyAttributes
+                            metadata
+                            "System.Reflection.AssemblyVersionAttribute")
+                        "AssemblyVersionAttribute should not remain as a custom attribute"
 
                     let (targetFrameworkAttribute, targetFrameworkConstructor, targetFrameworkScope) =
                         findAssemblyAttribute
@@ -827,6 +1006,122 @@ module CompilerTargetTests =
                         ))
                         "the attribute value should match the Compatibility Oracle"
 
+                    let (assemblyTitleAttribute, assemblyTitleConstructor, assemblyTitleScope) =
+                        findAssemblyAttribute metadata "System.Reflection.AssemblyTitleAttribute"
+
+                    Expect.equal
+                        (metadata.GetString(assemblyTitleScope.Name))
+                        "netstandard"
+                        "authored assembly attributes should resolve through the supplied facade"
+
+                    Expect.sequenceEqual
+                        (metadata.GetBlobBytes(assemblyTitleConstructor.Signature))
+                        (Convert.FromHexString("2001010E"))
+                        "a one-string attribute constructor should match the Compatibility Oracle"
+
+                    Expect.sequenceEqual
+                        (metadata.GetBlobBytes(assemblyTitleAttribute.Value))
+                        (Convert.FromHexString("010009496365645461736B730000"))
+                        "the assembly-title value should match the Compatibility Oracle"
+
+                    let assemblyMetadataAttributes =
+                        findAssemblyAttributes
+                            metadata
+                            "System.Reflection.AssemblyMetadataAttribute"
+
+                    Expect.equal
+                        assemblyMetadataAttributes.Length
+                        3
+                        "every repeated assembly-metadata attribute should be emitted"
+
+                    let (releaseDateAttribute, releaseDateConstructor, _) =
+                        assemblyMetadataAttributes.[0]
+
+                    Expect.sequenceEqual
+                        (metadata.GetBlobBytes(releaseDateConstructor.Signature))
+                        (Convert.FromHexString("2002010E0E"))
+                        "a two-string attribute constructor should match the Compatibility Oracle"
+
+                    Expect.sequenceEqual
+                        (metadata.GetBlobBytes(releaseDateAttribute.Value))
+                        (Convert.FromHexString(
+                            "01000B52656C656173654461746521323032352D30392D30355430303A30303A30302E303030303030302D30343A30300000"
+                        ))
+                        "the assembly-metadata value should match the Compatibility Oracle"
+
+                    let assemblyVersionInformation =
+                        metadata.TypeDefinitions
+                        |> Seq.map metadata.GetTypeDefinition
+                        |> Seq.find (fun definition ->
+                            metadata.GetString(definition.Namespace) = "System"
+                            && metadata.GetString(definition.Name) = "AssemblyVersionInformation"
+                        )
+
+                    Expect.equal
+                        assemblyVersionInformation.Attributes
+                        (TypeAttributes.Abstract
+                         ||| TypeAttributes.Sealed)
+                        "the internal F# module type should match the Compatibility Oracle"
+
+                    let literalFields =
+                        assemblyVersionInformation.GetFields()
+                        |> Seq.map (fun handle ->
+                            let field = metadata.GetFieldDefinition(handle)
+                            let constant = metadata.GetConstant(field.GetDefaultValue())
+
+                            metadata.GetString(field.Name),
+                            field.Attributes,
+                            metadata.GetBlobBytes(field.Signature),
+                            (metadata.GetBlobBytes(constant.Value)
+                             |> Encoding.Unicode.GetString)
+                        )
+                        |> Seq.toArray
+
+                    let expectedLiterals = [|
+                        "AssemblyTitle", "IcedTasks"
+                        "AssemblyProduct", "IcedTasks"
+                        "AssemblyVersion", "0.11.9"
+                        "AssemblyMetadata_ReleaseDate", "2025-09-05T00:00:00.0000000-04:00"
+                        "AssemblyFileVersion", "0.11.9"
+                        "AssemblyInformationalVersion", "0.11.9"
+                        "AssemblyMetadata_ReleaseChannel", "release"
+                        "AssemblyMetadata_GitHash", "ef640f5d11e4c7b50234dfe90f0e45d5976a9b2d"
+                    |]
+
+                    Expect.equal
+                        literalFields.Length
+                        expectedLiterals.Length
+                        "every literal declaration should produce one field"
+
+                    for index in
+                        0 .. expectedLiterals.Length
+                             - 1 do
+                        let expectedName, expectedValue = expectedLiterals.[index]
+                        let actualName, attributes, signature, actualValue = literalFields.[index]
+
+                        Expect.equal
+                            actualName
+                            expectedName
+                            "literal fields should preserve source order"
+
+                        Expect.equal
+                            attributes
+                            (FieldAttributes.Assembly
+                             ||| FieldAttributes.Static
+                             ||| FieldAttributes.Literal
+                             ||| FieldAttributes.HasDefault)
+                            "literal field attributes should match the Compatibility Oracle"
+
+                        Expect.sequenceEqual
+                            signature
+                            (Convert.FromHexString("060E"))
+                            "literal fields should use a string field signature"
+
+                        Expect.equal
+                            actualValue
+                            expectedValue
+                            "literal field constants should match the Compatibility Oracle"
+
                     let typeNames =
                         metadata.TypeDefinitions
                         |> Seq.map (fun handle ->
@@ -840,9 +1135,10 @@ module CompilerTargetTests =
                         typeNames
                         [|
                             "<Module>"
+                            "AssemblyVersionInformation"
                             "Tracer"
                         |]
-                        "the generated attribute source should not add a runtime type"
+                        "only the authored assembly-info module should add a runtime type"
 
                     use pdbStream = File.OpenRead(pdbPath)
                     use pdbProvider = MetadataReaderProvider.FromPortablePdbStream(pdbStream)
@@ -860,6 +1156,7 @@ module CompilerTargetTests =
                         documentNames
                         [|
                             ".NETStandard,Version=v2.1.AssemblyAttributes.fs"
+                            "AssemblyInfo.fs"
                             "Tracer.fs"
                         |]
                         "the portable PDB should retain the generated source in order"
@@ -2196,7 +2493,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "1"
+                        "2"
                         "query cache evidence should be versioned"
 
                     Expect.equal
@@ -2360,6 +2657,9 @@ module CompilerTargetTests =
                         3
                         "the warm PDB should use the current declaration range"
 
+                    pdbProvider.Dispose()
+                    pdbStream.Dispose()
+
                     let consumer = invokeConsumer root outputPath 43
                     Expect.equal consumer.ExitCode 0 consumer.StandardError
 
@@ -2367,6 +2667,75 @@ module CompilerTargetTests =
                         (consumer.StandardOutput.Trim())
                         "43"
                         "the edited implementation must not reuse stale typed code"
+
+                    let conditionalBaselineSource =
+                        "module Tracer\n#if UNUSED\nlet hidden = 11\n#endif\nlet answer () = 43\n"
+
+                    let conditionalEditedSource =
+                        "module Tracer\n#if UNUSED\nlet hidden = 22\n#endif\nlet answer () = 43\n"
+
+                    let conditionalBaseline =
+                        compile conditionalBaselineSource "conditional-baseline"
+
+                    let conditionalEdited = compile conditionalEditedSource "conditional-edited"
+
+                    Expect.equal
+                        conditionalEdited.["parse"]
+                        "miss"
+                        "an inactive-source edit should still refresh the physical source input"
+
+                    Expect.equal
+                        conditionalEdited.["check"]
+                        "hit"
+                        "an equal active program should reuse its semantic check"
+
+                    Expect.equal
+                        conditionalEdited.["lower"]
+                        "miss"
+                        "a changed source checksum should rebuild the debug fragment"
+
+                    Expect.equal
+                        conditionalEdited.["checkKey"]
+                        conditionalBaseline.["checkKey"]
+                        "inactive source text should not change the semantic check key"
+
+                    Expect.notEqual
+                        conditionalEdited.["lowerKey"]
+                        conditionalBaseline.["lowerKey"]
+                        "debug inputs should participate independently in the lowering key"
+
+                    Expect.equal
+                        conditionalEdited.["exportFingerprint"]
+                        conditionalBaseline.["exportFingerprint"]
+                        "inactive source text should not change exported meaning"
+
+                    Expect.equal
+                        conditionalEdited.["fragmentHash"]
+                        conditionalBaseline.["fragmentHash"]
+                        "inactive source text should not change implementation fragments"
+
+                    do
+                        use conditionalPdbStream = File.OpenRead(pdbPath)
+
+                        use conditionalPdbProvider =
+                            MetadataReaderProvider.FromPortablePdbStream(conditionalPdbStream)
+
+                        let conditionalPdb = conditionalPdbProvider.GetMetadataReader()
+
+                        let conditionalDocument =
+                            conditionalPdb.Documents
+                            |> Seq.exactlyOne
+                            |> conditionalPdb.GetDocument
+
+                        let conditionalChecksum =
+                            conditionalEditedSource
+                            |> Encoding.UTF8.GetBytes
+                            |> SHA256.HashData
+
+                        Expect.sequenceEqual
+                            (conditionalPdb.GetBlobBytes(conditionalDocument.Hash))
+                            conditionalChecksum
+                            "semantic reuse must not retain the prior physical source checksum"
                 finally
                     if not service.HasExited then
                         service.Kill(true)

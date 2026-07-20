@@ -165,12 +165,12 @@ module internal Linker =
         symbolic.AssemblyAttributes
         |> List.tryPick (fun attribute ->
             if
-                attribute.AttributeType.Namespace = "System.Runtime.Versioning"
-                && attribute.AttributeType.Name = "TargetFrameworkAttribute"
-                && attribute.ConstructorArgument.StartsWith(
-                    ".NETStandard,",
-                    StringComparison.Ordinal
-                )
+                attribute.Kind = TargetFrameworkAttribute
+                && (attribute.ConstructorArguments
+                    |> List.tryHead
+                    |> Option.exists (fun argument ->
+                        argument.StartsWith(".NETStandard,", StringComparison.Ordinal)
+                    ))
             then
                 Some "netstandard"
             else
@@ -263,15 +263,18 @@ module internal Linker =
 
         signature
 
-    let private encodeStringConstructorSignature () =
+    let private encodeStringConstructorSignature (parameterCount: int) =
         let signature = BlobBuilder()
 
         BlobEncoder(signature)
             .MethodSignature(isInstanceMethod = true)
             .Parameters(
-                1,
+                parameterCount,
                 (fun returnType -> returnType.Void()),
-                (fun parameters -> parameters.AddParameter().Type().String())
+                (fun parameters ->
+                    for _ in 1..parameterCount do
+                        parameters.AddParameter().Type().String()
+                )
             )
 
         signature
@@ -282,7 +285,8 @@ module internal Linker =
         BlobEncoder(value)
             .CustomAttributeSignature(
                 (fun fixedArguments ->
-                    fixedArguments.AddArgument().Scalar().Constant(attribute.ConstructorArgument)
+                    for argument in attribute.ConstructorArguments do
+                        fixedArguments.AddArgument().Scalar().Constant(argument)
                 ),
                 (fun namedArguments ->
                     let arguments = namedArguments.Count(attribute.NamedArguments.Length)
@@ -355,10 +359,15 @@ module internal Linker =
         (strongName: StrongNamePlan)
         =
         let typeFragments = symbolic.Module.Types
+        let typeAbbreviationFragments = symbolic.Module.TypeAbbreviations
 
         let methodFragments =
             typeFragments
             |> List.collect _.Methods
+
+        let literalFieldFragments =
+            typeFragments
+            |> List.collect _.LiteralFields
 
         if
             symbolic.SchemaVersion
@@ -373,10 +382,20 @@ module internal Linker =
                     symbolic.SchemaVersion
                     <> attribute.SchemaVersion
                 ))
+            || (typeAbbreviationFragments
+                |> List.exists (fun typeAbbreviation ->
+                    symbolic.SchemaVersion
+                    <> typeAbbreviation.SchemaVersion
+                ))
             || (typeFragments
                 |> List.exists (fun typeFragment ->
                     symbolic.SchemaVersion
                     <> typeFragment.SchemaVersion
+                    || (typeFragment.LiteralFields
+                        |> List.exists (fun fieldFragment ->
+                            symbolic.SchemaVersion
+                            <> fieldFragment.SchemaVersion
+                        ))
                     || (typeFragment.Methods
                         |> List.exists (fun methodFragment ->
                             symbolic.SchemaVersion
@@ -393,9 +412,19 @@ module internal Linker =
                 |> List.exists (fun document -> String.IsNullOrWhiteSpace(document.StableId)))
             || (symbolic.AssemblyAttributes
                 |> List.exists (fun attribute -> String.IsNullOrWhiteSpace(attribute.StableId)))
+            || (typeAbbreviationFragments
+                |> List.exists (fun typeAbbreviation ->
+                    String.IsNullOrWhiteSpace(typeAbbreviation.StableId)
+                    || String.IsNullOrWhiteSpace(typeAbbreviation.Name)
+                    || String.IsNullOrWhiteSpace(typeAbbreviation.TargetType.Name)
+                ))
             || (typeFragments
                 |> List.exists (fun typeFragment ->
                     String.IsNullOrWhiteSpace(typeFragment.StableId)
+                    || (typeFragment.LiteralFields
+                        |> List.exists (fun fieldFragment ->
+                            String.IsNullOrWhiteSpace(fieldFragment.StableId)
+                        ))
                     || (typeFragment.Methods
                         |> List.exists (fun methodFragment ->
                             String.IsNullOrWhiteSpace(methodFragment.StableId)
@@ -438,6 +467,11 @@ module internal Linker =
             )
 
         let signature = encodeSignature ()
+
+        let stringFieldSignature =
+            let signature = BlobBuilder()
+            BlobEncoder(signature).FieldSignature().String()
+            signature
 
         let targetReference = resolveTargetReference invocation symbolic
 
@@ -490,16 +524,12 @@ module internal Linker =
         let assemblyDefinition =
             metadata.AddAssembly(
                 metadata.GetOrAddString(symbolic.AssemblyName),
-                Version(1, 0, 0, 0),
+                symbolic.AssemblyVersion,
                 Unchecked.defaultof<StringHandle>,
                 assemblyPublicKey,
                 StrongName.assemblyFlags strongName,
                 StrongName.assemblyHashAlgorithm strongName
             )
-
-        let attributeConstructorSignature =
-            encodeStringConstructorSignature ()
-            |> metadata.GetOrAddBlob
 
         for attribute in symbolic.AssemblyAttributes do
             let attributeType =
@@ -510,10 +540,14 @@ module internal Linker =
                 )
 
             let constructor =
+                let signature =
+                    encodeStringConstructorSignature attribute.ConstructorArguments.Length
+                    |> metadata.GetOrAddBlob
+
                 metadata.AddMemberReference(
                     attributeType,
                     metadata.GetOrAddString(".ctor"),
-                    attributeConstructorSignature
+                    signature
                 )
 
             let value =
@@ -534,21 +568,36 @@ module internal Linker =
         )
         |> ignore
 
+        let mutable nextFieldRow = 1
         let mutable nextMethodRow = 1
 
         for typeFragment in typeFragments do
+            let visibility =
+                if typeFragment.IsPublic then
+                    TypeAttributes.Public
+                else
+                    TypeAttributes.NotPublic
+
+            let attributes =
+                if List.isEmpty typeFragment.Methods then
+                    visibility
+                    ||| TypeAttributes.Abstract
+                    ||| TypeAttributes.Sealed
+                else
+                    visibility
+                    ||| TypeAttributes.Abstract
+                    ||| TypeAttributes.Sealed
+                    ||| TypeAttributes.BeforeFieldInit
+
             metadata.AddTypeDefinition(
-                TypeAttributes.Public
-                ||| TypeAttributes.Abstract
-                ||| TypeAttributes.Sealed
-                ||| TypeAttributes.BeforeFieldInit,
+                attributes,
                 (if String.IsNullOrEmpty(typeFragment.Namespace) then
                      Unchecked.defaultof<StringHandle>
                  else
                      metadata.GetOrAddString(typeFragment.Namespace)),
                 metadata.GetOrAddString(typeFragment.Name),
                 systemObject,
-                firstField,
+                MetadataTokens.FieldDefinitionHandle(nextFieldRow),
                 MetadataTokens.MethodDefinitionHandle(nextMethodRow)
             )
             |> ignore
@@ -556,6 +605,26 @@ module internal Linker =
             nextMethodRow <-
                 nextMethodRow
                 + typeFragment.Methods.Length
+
+            nextFieldRow <-
+                nextFieldRow
+                + typeFragment.LiteralFields.Length
+
+        let literalFieldSignature = metadata.GetOrAddBlob(stringFieldSignature)
+
+        for fieldFragment in literalFieldFragments do
+            let field =
+                metadata.AddFieldDefinition(
+                    FieldAttributes.Assembly
+                    ||| FieldAttributes.Static
+                    ||| FieldAttributes.Literal
+                    ||| FieldAttributes.HasDefault,
+                    metadata.GetOrAddString(fieldFragment.Name),
+                    literalFieldSignature
+                )
+
+            metadata.AddConstant(field, fieldFragment.Value)
+            |> ignore
 
         let methodSignature = metadata.GetOrAddBlob(signature)
 

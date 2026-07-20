@@ -3,6 +3,10 @@ namespace FSharp2.Compiler
 open System
 open System.Collections.Immutable
 
+module internal CompilerSchema =
+    [<Literal>]
+    let Query = 2
+
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
 [<Struct>]
@@ -111,7 +115,14 @@ type internal ParsedType =
 
     override _.ToString() = "ParsedType"
 
-type internal ParsedDeclaration = {
+type internal QualifiedTypeName = {
+    Namespace: string
+    Name: string
+} with
+
+    override _.ToString() = "QualifiedTypeName"
+
+type internal ParsedMethodDeclaration = {
     Name: string
     IsUnitFunction: bool
     DeclaredType: ParsedType option
@@ -119,6 +130,38 @@ type internal ParsedDeclaration = {
     BodyRange: SourceRange
     Range: SourceRange
 } with
+
+    override _.ToString() = "ParsedMethodDeclaration"
+
+type internal ParsedLiteralFieldDeclaration = {
+    Name: string
+    Value: string
+    ValueRange: SourceRange
+    Range: SourceRange
+} with
+
+    override _.ToString() = "ParsedLiteralFieldDeclaration"
+
+type internal ParsedTypeReference = {
+    TypeName: QualifiedTypeName
+    AllowsNull: bool
+    Range: SourceRange
+} with
+
+    override _.ToString() = "ParsedTypeReference"
+
+type internal ParsedTypeAbbreviationDeclaration = {
+    Name: string
+    Target: ParsedTypeReference
+    Range: SourceRange
+} with
+
+    override _.ToString() = "ParsedTypeAbbreviationDeclaration"
+
+type internal ParsedDeclaration =
+    | ParsedMethod of ParsedMethodDeclaration
+    | ParsedLiteralField of ParsedLiteralFieldDeclaration
+    | ParsedTypeAbbreviation of ParsedTypeAbbreviationDeclaration
 
     override _.ToString() = "ParsedDeclaration"
 
@@ -129,16 +172,20 @@ type internal ParsedNamedStringArgument = {
 
     override _.ToString() = "ParsedNamedStringArgument"
 
-type internal QualifiedTypeName = {
-    Namespace: string
-    Name: string
-} with
+type internal AssemblyAttributeKind =
+    | TargetFrameworkAttribute
+    | AssemblyTitleAttribute
+    | AssemblyProductAttribute
+    | AssemblyVersionAttribute
+    | AssemblyMetadataAttribute
+    | AssemblyFileVersionAttribute
+    | AssemblyInformationalVersionAttribute
 
-    override _.ToString() = "QualifiedTypeName"
+    override _.ToString() = "AssemblyAttributeKind"
 
 type internal ParsedAssemblyAttribute = {
     AttributeType: QualifiedTypeName
-    ConstructorArgument: string
+    ConstructorArguments: string list
     NamedArguments: ParsedNamedStringArgument list
     Range: SourceRange
 } with
@@ -146,7 +193,11 @@ type internal ParsedAssemblyAttribute = {
     override _.ToString() = "ParsedAssemblyAttribute"
 
 type internal ParsedModule = {
+    StableId: string
+    Namespace: string
     Name: string
+    IsPublic: bool
+    OpenedNamespaces: string list
     SourceChecksum: ImmutableArray<byte>
     ContentFingerprint: string
     AssemblyAttributes: ParsedAssemblyAttribute list
@@ -165,7 +216,7 @@ type internal TypedExpression =
 
     override _.ToString() = "TypedExpression"
 
-type internal TypedDeclaration = {
+type internal TypedMethodDeclaration = {
     StableId: string
     Name: string
     ReturnType: ValueType
@@ -174,12 +225,52 @@ type internal TypedDeclaration = {
     Range: SourceRange
 } with
 
+    override _.ToString() = "TypedMethodDeclaration"
+
+type internal TypedLiteralFieldDeclaration = {
+    StableId: string
+    Name: string
+    Value: string
+    ExportFingerprint: string
+} with
+
+    override _.ToString() = "TypedLiteralFieldDeclaration"
+
+type internal TypedTypeAbbreviationDeclaration = {
+    StableId: string
+    Name: string
+    TargetType: QualifiedTypeName
+    AllowsNull: bool
+    ExportFingerprint: string
+    Range: SourceRange
+} with
+
+    override _.ToString() = "TypedTypeAbbreviationDeclaration"
+
+type internal TypedDeclaration =
+    | TypedMethod of TypedMethodDeclaration
+    | TypedLiteralField of TypedLiteralFieldDeclaration
+    | TypedTypeAbbreviation of TypedTypeAbbreviationDeclaration
+
+    member this.StableId =
+        match this with
+        | TypedMethod declaration -> declaration.StableId
+        | TypedLiteralField declaration -> declaration.StableId
+        | TypedTypeAbbreviation declaration -> declaration.StableId
+
+    member this.ExportFingerprint =
+        match this with
+        | TypedMethod declaration -> declaration.ExportFingerprint
+        | TypedLiteralField declaration -> declaration.ExportFingerprint
+        | TypedTypeAbbreviation declaration -> declaration.ExportFingerprint
+
     override _.ToString() = "TypedDeclaration"
 
 type internal TypedAssemblyAttribute = {
     StableId: string
+    Kind: AssemblyAttributeKind
     AttributeType: QualifiedTypeName
-    ConstructorArgument: string
+    ConstructorArguments: string list
     NamedArguments: ParsedNamedStringArgument list
     ExportFingerprint: string
     Range: SourceRange
@@ -188,7 +279,10 @@ type internal TypedAssemblyAttribute = {
     override _.ToString() = "TypedAssemblyAttribute"
 
 type internal TypedModule = {
+    StableId: string
+    Namespace: string
     Name: string
+    IsPublic: bool
     SourceChecksum: ImmutableArray<byte>
     ContentFingerprint: string
     AssemblyAttributes: TypedAssemblyAttribute list
@@ -220,11 +314,23 @@ type internal SymbolicMethodFragment = {
 
     override _.ToString() = "SymbolicMethodFragment"
 
+type internal SymbolicLiteralFieldFragment = {
+    SchemaVersion: int
+    StableId: string
+    Name: string
+    Value: string
+    ContentHash: string
+} with
+
+    override _.ToString() = "SymbolicLiteralFieldFragment"
+
 type internal SymbolicTypeFragment = {
     SchemaVersion: int
     StableId: string
     Namespace: string
     Name: string
+    IsPublic: bool
+    LiteralFields: SymbolicLiteralFieldFragment list
     Methods: SymbolicMethodFragment list
 } with
 
@@ -238,6 +344,17 @@ type internal SymbolicDocumentFragment = {
 
     override _.ToString() = "SymbolicDocumentFragment"
 
+type internal SymbolicTypeAbbreviationFragment = {
+    SchemaVersion: int
+    StableId: string
+    Name: string
+    TargetType: QualifiedTypeName
+    AllowsNull: bool
+    ContentHash: string
+} with
+
+    override _.ToString() = "SymbolicTypeAbbreviationFragment"
+
 type internal SymbolicNamedStringArgument = {
     Name: string
     Value: string
@@ -248,8 +365,9 @@ type internal SymbolicNamedStringArgument = {
 type internal SymbolicAssemblyAttributeFragment = {
     SchemaVersion: int
     StableId: string
+    Kind: AssemblyAttributeKind
     AttributeType: QualifiedTypeName
-    ConstructorArgument: string
+    ConstructorArguments: string list
     NamedArguments: SymbolicNamedStringArgument list
     ContentHash: string
 } with
@@ -260,6 +378,7 @@ type internal SymbolicModuleFragment = {
     SchemaVersion: int
     StableId: string
     Name: string
+    TypeAbbreviations: SymbolicTypeAbbreviationFragment list
     Types: SymbolicTypeFragment list
 } with
 
@@ -269,6 +388,7 @@ type internal SymbolicAssembly = {
     SchemaVersion: int
     StableId: string
     AssemblyName: string
+    AssemblyVersion: Version
     PublicFingerprint: string
     Documents: SymbolicDocumentFragment list
     AssemblyAttributes: SymbolicAssemblyAttributeFragment list

@@ -16,7 +16,7 @@ module internal CompilationPipeline =
         ExitCode = 1
         Error = message
         ServiceProcessId = Environment.ProcessId
-        QuerySchema = 1
+        QuerySchema = CompilerSchema.Query
         NodeKind = "source"
         ContentFingerprint = String.Empty
         PreviousContentFingerprint = String.Empty
@@ -47,7 +47,7 @@ module internal CompilationPipeline =
         let compileStarted = Stopwatch.GetTimestamp()
         let assemblyName = Path.GetFileNameWithoutExtension(invocation.AssemblyPath)
 
-        match service.Compile(assemblyName, sources) with
+        match service.Compile(assemblyName, invocation.Defines, sources) with
         | Error diagnostic ->
             diagnostic
             |> DiagnosticFormatter.format invocation
@@ -86,9 +86,24 @@ module internal CompilationPipeline =
                     ExportFingerprint = query.SymbolicAssembly.PublicFingerprint
                     FragmentHash =
                         match
-                            query.SymbolicAssembly.Module.Types
-                            |> List.collect _.Methods
-                            |> List.map _.ContentHash
+                            [
+                                yield!
+                                    query.SymbolicAssembly.AssemblyAttributes
+                                    |> List.map _.ContentHash
+
+                                yield!
+                                    query.SymbolicAssembly.Module.TypeAbbreviations
+                                    |> List.map _.ContentHash
+
+                                for typeFragment in query.SymbolicAssembly.Module.Types do
+                                    yield!
+                                        typeFragment.LiteralFields
+                                        |> List.map _.ContentHash
+
+                                    yield!
+                                        typeFragment.Methods
+                                        |> List.map _.ContentHash
+                            ]
                         with
                         | [ contentHash ] -> contentHash
                         | contentHashes -> String.concat "|" contentHashes

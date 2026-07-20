@@ -3,6 +3,7 @@ namespace FSharp2.Compiler
 open System
 open System.Collections.Generic
 open System.Diagnostics
+open System.Globalization
 open System.IO
 open System.Security.Cryptography
 open System.Text
@@ -15,10 +16,20 @@ module private Fingerprint =
         |> Convert.ToHexString
         |> fun hash -> hash.ToLowerInvariant()
 
+    let parts (values: string seq) =
+        values
+        |> Seq.map (fun value ->
+            value.Length.ToString(CultureInfo.InvariantCulture)
+            + ":"
+            + value
+        )
+        |> String.concat String.Empty
+        |> text
+
 /// A deliberately small in-memory query owner. Query identities and cached
 /// values are semantic/compiler state; final SRM state never enters these maps.
 type internal CompilerService() =
-    let querySchema = 1
+    let querySchema = CompilerSchema.Query
     let parseCache = Dictionary<string, ParsedModule>(StringComparer.Ordinal)
     let checkCache = Dictionary<string, TypedModule>(StringComparer.Ordinal)
     let lowerCache = Dictionary<string, SymbolicAssembly>(StringComparer.Ordinal)
@@ -34,15 +45,23 @@ type internal CompilerService() =
         Stopwatch.GetElapsedTime(started).Ticks
         / 10L
 
-    let parse (source: SourceInput) =
-        let key =
-            Fingerprint.text (
-                querySchema.ToString()
-                + "\n"
-                + Path.GetFileName(source.Path)
-                + "\n"
-                + source.Text
+    let parse (defines: string list) (source: SourceInput) =
+        let normalizedDefines =
+            defines
+            |> List.distinct
+            |> List.sortWith (fun left right ->
+                StringComparer.Ordinal.Compare(left, right)
             )
+
+        let key =
+            Fingerprint.parts [
+                querySchema.ToString(CultureInfo.InvariantCulture)
+                "defines"
+                normalizedDefines.Length.ToString(CultureInfo.InvariantCulture)
+                yield! normalizedDefines
+                Path.GetFileName(source.Path)
+                source.Text
+            ]
 
         match parseCache.TryGetValue(key) with
         | true, parsed ->
@@ -56,7 +75,7 @@ type internal CompilerService() =
                 parseMisses
                 + 1
 
-            match Frontend.parse source with
+            match Frontend.parse normalizedDefines source with
             | Error error -> Error error
             | Ok parsed ->
                 parseCache.Add(key, parsed)
@@ -64,13 +83,11 @@ type internal CompilerService() =
 
     let check (sourcePath: string) (parsed: ParsedModule) =
         let key =
-            Fingerprint.text (
-                querySchema.ToString()
-                + "|"
-                + parsed.Name
-                + "|"
-                + parsed.ContentFingerprint
-            )
+            Fingerprint.parts [
+                querySchema.ToString(CultureInfo.InvariantCulture)
+                parsed.StableId
+                parsed.ContentFingerprint
+            ]
 
         match checkCache.TryGetValue(key) with
         | true, typed ->
@@ -78,56 +95,131 @@ type internal CompilerService() =
                 checkHits
                 + 1
 
-            Ok(typed, key)
+            Ok(
+                {
+                    typed with
+                        SourceChecksum = parsed.SourceChecksum
+                },
+                key
+            )
         | false, _ ->
             checkMisses <-
                 checkMisses
                 + 1
 
-            let typeDeclaration declaration =
-                match declaration.DeclaredType, declaration.Body with
-                | Some ParsedInt32, StringLiteral _ ->
-                    Error {
-                        Code = "FS0001"
-                        Message =
-                            String.concat Environment.NewLine [
-                                "This expression was expected to have type"
-                                "    'int'    "
-                                "but here has type"
-                                "    'string'"
-                            ]
-                        Path = Some sourcePath
-                        Range = Some declaration.BodyRange
-                    }
+            let typeDeclaration =
+                function
+                | ParsedMethod declaration ->
+                    match declaration.DeclaredType, declaration.Body with
+                    | Some ParsedInt32, StringLiteral _ ->
+                        Error {
+                            Code = "FS0001"
+                            Message =
+                                String.concat Environment.NewLine [
+                                    "This expression was expected to have type"
+                                    "    'int'    "
+                                    "but here has type"
+                                    "    'string'"
+                                ]
+                            Path = Some sourcePath
+                            Range = Some declaration.BodyRange
+                        }
 
-                | _, IntegerLiteral value ->
+                    | _, IntegerLiteral value ->
+                        let stableId =
+                            parsed.StableId
+                            + "/method:"
+                            + declaration.Name
+                            + (if declaration.IsUnitFunction then
+                                   ":unit->int32"
+                               else
+                                   ":int32")
+
+                        let exportFingerprint = Fingerprint.text stableId
+
+                        Ok(
+                            TypedMethod {
+                                StableId = stableId
+                                Name = declaration.Name
+                                ReturnType = ValueType.Int32
+                                Body = TypedIntegerLiteral value
+                                ExportFingerprint = exportFingerprint
+                                Range = declaration.Range
+                            }
+                        )
+                    | None, StringLiteral _ ->
+                        Error {
+                            Code = "FSC2P1001"
+                            Message =
+                                "string-valued declarations are not yet supported by the prototype"
+                            Path = Some sourcePath
+                            Range = Some declaration.BodyRange
+                        }
+                | ParsedLiteralField declaration ->
                     let stableId =
-                        parsed.Name
-                        + "."
+                        parsed.StableId
+                        + "/literal-field:"
                         + declaration.Name
-                        + (if declaration.IsUnitFunction then
-                               ":unit->int32"
+
+                    Ok(
+                        TypedLiteralField {
+                            StableId = stableId
+                            Name = declaration.Name
+                            Value = declaration.Value
+                            ExportFingerprint =
+                                Fingerprint.text (
+                                    stableId
+                                    + "="
+                                    + declaration.Value
+                                )
+                        }
+                    )
+                | ParsedTypeAbbreviation declaration ->
+                    let targetType =
+                        if
+                            String.IsNullOrEmpty(declaration.Target.TypeName.Namespace)
+                        then
+                            match parsed.OpenedNamespaces |> List.tryLast with
+                            | Some openedNamespace -> {
+                                Namespace = openedNamespace
+                                Name = declaration.Target.TypeName.Name
+                              }
+                            | None -> declaration.Target.TypeName
+                        else
+                            declaration.Target.TypeName
+
+                    let stableId =
+                        parsed.StableId
+                        + "/type-abbreviation:"
+                        + declaration.Name
+
+                    let targetIdentity =
+                        (if String.IsNullOrEmpty(targetType.Namespace) then
+                             targetType.Name
+                         else
+                             targetType.Namespace
+                             + "."
+                             + targetType.Name)
+                        + (if declaration.Target.AllowsNull then
+                               "|null"
                            else
-                               ":int32")
+                               String.Empty)
 
-                    let exportFingerprint = Fingerprint.text stableId
-
-                    Ok {
-                        StableId = stableId
-                        Name = declaration.Name
-                        ReturnType = ValueType.Int32
-                        Body = TypedIntegerLiteral value
-                        ExportFingerprint = exportFingerprint
-                        Range = declaration.Range
-                    }
-                | None, StringLiteral _ ->
-                    Error {
-                        Code = "FSC2P1001"
-                        Message =
-                            "string-valued declarations are not yet supported by the prototype"
-                        Path = Some sourcePath
-                        Range = Some declaration.BodyRange
-                    }
+                    Ok(
+                        TypedTypeAbbreviation {
+                            StableId = stableId
+                            Name = declaration.Name
+                            TargetType = targetType
+                            AllowsNull = declaration.Target.AllowsNull
+                            ExportFingerprint =
+                                Fingerprint.text (
+                                    stableId
+                                    + "="
+                                    + targetIdentity
+                                )
+                            Range = declaration.Range
+                        }
+                    )
 
             let typeAssemblyAttribute index (attribute: ParsedAssemblyAttribute) =
                 let attributeTypeName =
@@ -138,20 +230,19 @@ type internal CompilerService() =
                         + "."
                         + attribute.AttributeType.Name
 
-                match attributeTypeName, attribute.NamedArguments with
-                | "System.Runtime.Versioning.TargetFrameworkAttribute",
-                  [ { Name = "FrameworkDisplayName" } ] ->
+                let typedAttribute kind =
                     let stableId =
-                        parsed.Name
+                        parsed.StableId
                         + "/assembly-attribute:"
                         + index.ToString()
                         + ":"
                         + attributeTypeName
 
                     let exportFingerprint =
-                        String.concat "\n" [
+                        Fingerprint.parts [
                             attributeTypeName
-                            attribute.ConstructorArgument
+
+                            yield! attribute.ConstructorArguments
 
                             yield!
                                 attribute.NamedArguments
@@ -164,13 +255,62 @@ type internal CompilerService() =
 
                     Ok {
                         StableId = stableId
+                        Kind = kind
                         AttributeType = attribute.AttributeType
-                        ConstructorArgument = attribute.ConstructorArgument
+                        ConstructorArguments = attribute.ConstructorArguments
                         NamedArguments = attribute.NamedArguments
                         ExportFingerprint = exportFingerprint
                         Range = attribute.Range
                     }
-                | "System.Runtime.Versioning.TargetFrameworkAttribute", _ ->
+
+                let tryAttributeKind =
+                    function
+                    | "System.Runtime.Versioning.TargetFrameworkAttribute" ->
+                        Some TargetFrameworkAttribute
+                    | "System.Reflection.AssemblyTitleAttribute" ->
+                        Some AssemblyTitleAttribute
+                    | "System.Reflection.AssemblyProductAttribute" ->
+                        Some AssemblyProductAttribute
+                    | "System.Reflection.AssemblyVersionAttribute" ->
+                        Some AssemblyVersionAttribute
+                    | "System.Reflection.AssemblyMetadataAttribute" ->
+                        Some AssemblyMetadataAttribute
+                    | "System.Reflection.AssemblyFileVersionAttribute" ->
+                        Some AssemblyFileVersionAttribute
+                    | "System.Reflection.AssemblyInformationalVersionAttribute" ->
+                        Some AssemblyInformationalVersionAttribute
+                    | _ -> None
+
+                match
+                    tryAttributeKind attributeTypeName,
+                    attribute.ConstructorArguments,
+                    attribute.NamedArguments
+                with
+                | Some TargetFrameworkAttribute,
+                  [ _ ],
+                  [ { Name = "FrameworkDisplayName" } ] ->
+                    typedAttribute TargetFrameworkAttribute
+                | Some AssemblyVersionAttribute, [ value ], [] ->
+                    match Version.TryParse(value) with
+                    | true, _ -> typedAttribute AssemblyVersionAttribute
+                    | false, _ ->
+                        Error {
+                            Code = "FSC2P1001"
+                            Message = "the assembly version is invalid"
+                            Path = Some sourcePath
+                            Range = Some attribute.Range
+                        }
+                | Some AssemblyTitleAttribute, [ _ ], [] ->
+                    typedAttribute AssemblyTitleAttribute
+                | Some AssemblyProductAttribute, [ _ ], [] ->
+                    typedAttribute AssemblyProductAttribute
+                | Some AssemblyFileVersionAttribute, [ _ ], [] ->
+                    typedAttribute AssemblyFileVersionAttribute
+                | Some AssemblyInformationalVersionAttribute, [ _ ], [] ->
+                    typedAttribute AssemblyInformationalVersionAttribute
+                | Some AssemblyMetadataAttribute, [ _; _ ], [] ->
+                    typedAttribute AssemblyMetadataAttribute
+                | Some TargetFrameworkAttribute, _, _ ->
                     Error {
                         Code = "FSC2P1001"
                         Message =
@@ -178,7 +318,14 @@ type internal CompilerService() =
                         Path = Some sourcePath
                         Range = Some attribute.Range
                     }
-                | _ ->
+                | Some _, _, _ ->
+                    Error {
+                        Code = "FSC2P1001"
+                        Message = "the assembly attribute has unsupported arguments"
+                        Path = Some sourcePath
+                        Range = Some attribute.Range
+                    }
+                | None, _, _ ->
                     Error {
                         Code = "FSC2P1001"
                         Message = "unsupported assembly attribute"
@@ -215,17 +362,31 @@ type internal CompilerService() =
                 | Error diagnostic -> Error diagnostic
                 | Ok declarations ->
                     let typed = {
+                        StableId = parsed.StableId
+                        Namespace = parsed.Namespace
                         Name = parsed.Name
+                        IsPublic = parsed.IsPublic
                         SourceChecksum = parsed.SourceChecksum
                         ContentFingerprint = parsed.ContentFingerprint
                         AssemblyAttributes = assemblyAttributes
                         Declarations = declarations
                         ExportFingerprint =
-                            List.append
-                                (assemblyAttributes
-                                 |> List.map _.ExportFingerprint)
-                                (declarations
-                                 |> List.map _.ExportFingerprint)
+                            [
+                                parsed.StableId
+
+                                if parsed.IsPublic then
+                                    "public"
+                                else
+                                    "internal"
+
+                                yield!
+                                    assemblyAttributes
+                                    |> List.map _.ExportFingerprint
+
+                                yield!
+                                    declarations
+                                    |> List.map _.ExportFingerprint
+                            ]
                             |> String.concat "|"
                             |> Fingerprint.text
                     }
@@ -241,11 +402,27 @@ type internal CompilerService() =
                     typed.Declarations
                     |> List.map (fun declaration ->
                         let implementation =
-                            match declaration.Body with
-                            | TypedIntegerLiteral value ->
-                                declaration.StableId
+                            match declaration with
+                            | TypedMethod methodDeclaration ->
+                                match methodDeclaration.Body with
+                                | TypedIntegerLiteral value ->
+                                    methodDeclaration.StableId
+                                    + "="
+                                    + value.ToString()
+                            | TypedLiteralField fieldDeclaration ->
+                                fieldDeclaration.StableId
                                 + "="
-                                + value.ToString()
+                                + fieldDeclaration.Value
+                            | TypedTypeAbbreviation typeDeclaration ->
+                                typeDeclaration.StableId
+                                + "="
+                                + typeDeclaration.TargetType.Namespace
+                                + "."
+                                + typeDeclaration.TargetType.Name
+                                + (if typeDeclaration.AllowsNull then
+                                       "|null"
+                                   else
+                                       String.Empty)
 
                         declaration, Fingerprint.text implementation
                     )
@@ -259,6 +436,25 @@ type internal CompilerService() =
                 typed.AssemblyAttributes
                 |> List.map (fun attribute -> attribute, attribute.ExportFingerprint)
             )
+
+        let isAssemblyVersionAttribute (attribute: TypedAssemblyAttribute) =
+            attribute.Kind = AssemblyVersionAttribute
+
+        let assemblyVersion =
+            assemblyAttributesWithContentHashes
+            |> List.tryPick (fun (attribute, _) ->
+                if isAssemblyVersionAttribute attribute then
+                    attribute.ConstructorArguments
+                    |> List.tryHead
+                else
+                    None
+            )
+            |> Option.map (fun value ->
+                let parsed = Version.Parse(value)
+
+                Version(parsed.Major, parsed.Minor, max 0 parsed.Build, max 0 parsed.Revision)
+            )
+            |> Option.defaultValue (Version(1, 0, 0, 0))
 
         let implementationFingerprint =
             modulesWithContentHashes
@@ -275,16 +471,23 @@ type internal CompilerService() =
             |> String.concat "|"
             |> Fingerprint.text
 
-        let key =
-            Fingerprint.text (
-                querySchema.ToString()
-                + "|"
-                + assemblyName
-                + "|"
-                + implementationFingerprint
-                + "|"
-                + contentFingerprint
+        let debugFingerprint =
+            typedModules
+            |> List.map (fun typed ->
+                typed.SourceChecksum
+                |> Seq.toArray
+                |> Convert.ToHexString
             )
+            |> Fingerprint.parts
+
+        let key =
+            Fingerprint.parts [
+                querySchema.ToString(CultureInfo.InvariantCulture)
+                assemblyName
+                implementationFingerprint
+                contentFingerprint
+                debugFingerprint
+            ]
 
         match lowerCache.TryGetValue(key) with
         | true, symbolic ->
@@ -324,11 +527,17 @@ type internal CompilerService() =
 
             let assemblyAttributes =
                 assemblyAttributesWithContentHashes
+                |> List.filter (
+                    fst
+                    >> isAssemblyVersionAttribute
+                    >> not
+                )
                 |> List.map (fun (attribute, contentHash) -> {
                     SchemaVersion = querySchema
                     StableId = attribute.StableId
+                    Kind = attribute.Kind
                     AttributeType = attribute.AttributeType
-                    ConstructorArgument = attribute.ConstructorArgument
+                    ConstructorArguments = attribute.ConstructorArguments
                     NamedArguments =
                         attribute.NamedArguments
                         |> List.map (fun argument -> {
@@ -338,49 +547,96 @@ type internal CompilerService() =
                     ContentHash = contentHash
                 })
 
+            let typeAbbreviations =
+                modulesWithContentHashes
+                |> List.collect (fun (_, declarationsWithContentHashes) ->
+                    declarationsWithContentHashes
+                    |> List.choose (fun (declaration, contentHash) ->
+                        match declaration with
+                        | TypedTypeAbbreviation typeDeclaration ->
+                            Some {
+                                SchemaVersion = querySchema
+                                StableId = typeDeclaration.StableId
+                                Name = typeDeclaration.Name
+                                TargetType = typeDeclaration.TargetType
+                                AllowsNull = typeDeclaration.AllowsNull
+                                ContentHash = contentHash
+                            }
+                        | TypedMethod _
+                        | TypedLiteralField _ -> None
+                    )
+                )
+
             let types =
                 modulesWithContentHashes
                 |> List.mapi (fun documentIndex (typed, declarationsWithContentHashes) ->
-                    if List.isEmpty declarationsWithContentHashes then
-                        None
-                    else
-                        let typeStableId =
-                            moduleStableId
-                            + "/type:"
-                            + typed.Name
+                    let typeStableId =
+                        moduleStableId
+                        + "/type:"
+                        + typed.StableId
 
-                        let methods =
-                            declarationsWithContentHashes
-                            |> List.map (fun (declaration, contentHash) ->
-                                let instructions =
-                                    match declaration.Body with
-                                    | TypedIntegerLiteral value -> [
-                                        LoadInt32 value
-                                        Return
-                                      ]
+                    let literalFields =
+                        declarationsWithContentHashes
+                        |> List.choose (fun (declaration, contentHash) ->
+                            match declaration with
+                            | TypedLiteralField fieldDeclaration ->
+                                Some {
+                                    SchemaVersion = querySchema
+                                    StableId =
+                                        typeStableId
+                                        + "/field:"
+                                        + fieldDeclaration.StableId
+                                    Name = fieldDeclaration.Name
+                                    Value = fieldDeclaration.Value
+                                    ContentHash = contentHash
+                                }
+                            | TypedMethod _
+                            | TypedTypeAbbreviation _ -> None
+                        )
 
-                                {
+                    let methods =
+                        declarationsWithContentHashes
+                        |> List.choose (fun (declaration, contentHash) ->
+                            match declaration with
+                            | TypedMethod methodDeclaration ->
+                                let value =
+                                    match methodDeclaration.Body with
+                                    | TypedIntegerLiteral value -> value
+
+                                let instructions = [
+                                    LoadInt32 value
+                                    Return
+                                ]
+
+                                Some {
                                     SchemaVersion = querySchema
                                     StableId =
                                         typeStableId
                                         + "/method:"
-                                        + declaration.StableId
-                                    Name = declaration.Name
-                                    ReturnType = declaration.ReturnType
+                                        + methodDeclaration.StableId
+                                    Name = methodDeclaration.Name
+                                    ReturnType = methodDeclaration.ReturnType
                                     Instructions = instructions
                                     DependencyIds = []
                                     ContentHash = contentHash
                                     DocumentIndex = documentIndex
                                     DocumentChecksum = typed.SourceChecksum
-                                    Range = declaration.Range
+                                    Range = methodDeclaration.Range
                                 }
-                            )
+                            | TypedLiteralField _
+                            | TypedTypeAbbreviation _ -> None
+                        )
 
+                    if List.isEmpty literalFields && List.isEmpty methods then
+                        None
+                    else
                         Some {
                             SchemaVersion = querySchema
                             StableId = typeStableId
-                            Namespace = String.Empty
+                            Namespace = typed.Namespace
                             Name = typed.Name
+                            IsPublic = typed.IsPublic
+                            LiteralFields = literalFields
                             Methods = methods
                         }
                 )
@@ -390,6 +646,7 @@ type internal CompilerService() =
                 SchemaVersion = querySchema
                 StableId = assemblyStableId
                 AssemblyName = assemblyName
+                AssemblyVersion = assemblyVersion
                 PublicFingerprint =
                     typedModules
                     |> List.map _.ExportFingerprint
@@ -401,6 +658,7 @@ type internal CompilerService() =
                     SchemaVersion = querySchema
                     StableId = moduleStableId
                     Name = moduleName
+                    TypeAbbreviations = typeAbbreviations
                     Types = types
                 }
             }
@@ -408,7 +666,7 @@ type internal CompilerService() =
             lowerCache.Add(key, symbolic)
             symbolic, key
 
-    member _.Compile(assemblyName: string, sources: SourceInput list) =
+    member _.Compile(assemblyName: string, defines: string list, sources: SourceInput list) =
         let combine values =
             match values with
             | [ value ] -> value
@@ -461,7 +719,7 @@ type internal CompilerService() =
             match remaining with
             | [] -> Ok(List.rev parsed, List.rev keys)
             | source :: tail ->
-                match parse source with
+                match parse defines source with
                 | Error diagnostic -> Error diagnostic
                 | Ok(parsedModule, key) ->
                     parseAll
@@ -527,13 +785,15 @@ type internal CompilerService() =
                     CheckKey = combine checkKeys
                     LowerKey = lowerKey
                     DependencyCount =
-                        symbolic.Module.Types
-                        |> List.sumBy (fun typeFragment ->
-                            typeFragment.Methods
-                            |> List.sumBy (fun methodFragment ->
-                                methodFragment.DependencyIds.Length
+                        symbolic.Module.TypeAbbreviations.Length
+                        + (symbolic.Module.Types
+                           |> List.sumBy (fun typeFragment ->
+                               typeFragment.Methods
+                               |> List.sumBy (fun methodFragment ->
+                                   methodFragment.DependencyIds.Length
+                               )
                             )
-                        )
+                          )
                     ParseDecision =
                         decision before.ParseHits parseHits before.ParseMisses parseMisses
                     CheckDecision =
