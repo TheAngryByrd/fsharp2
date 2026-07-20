@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 14
+    let Query = 15
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -143,6 +143,8 @@ type internal TypeNameArity = {
 type internal ResolvedTypeName = {
     TypeName: QualifiedTypeName
     DeclarationId: string
+    AssemblyName: string
+    IsValueType: bool
 } with
 
     override _.ToString() = "ResolvedTypeName"

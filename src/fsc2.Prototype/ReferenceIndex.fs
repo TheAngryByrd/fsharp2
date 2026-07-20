@@ -4,6 +4,7 @@ open System
 open System.Collections.Generic
 open System.IO
 open System.Reflection.Metadata
+open System.Reflection.Metadata.Ecma335
 open System.Reflection.PortableExecutable
 open System.Security.Cryptography
 
@@ -151,7 +152,13 @@ type internal ReferenceTypeIndex
 
         let referenceIdentities = ResizeArray<string>()
 
-        let addType declarationOwner (namespaceName: string) (metadataName: string) =
+        let addType
+            declarationOwner
+            assemblyName
+            isValueType
+            (namespaceName: string)
+            (metadataName: string)
+            =
             let name, genericArity = ReferenceTypeName.parseMetadataName metadataName
 
             if
@@ -174,6 +181,8 @@ type internal ReferenceTypeIndex
                         + ReferenceTypeName.fullName qualifiedName
                         + "`"
                         + genericArity.ToString()
+                    AssemblyName = assemblyName
+                    IsValueType = isValueType
                 }
 
                 if types.TryAdd(key, resolved) then
@@ -213,9 +222,10 @@ type internal ReferenceTypeIndex
 
                 let metadata = pe.GetMetadataReader()
 
-                let declarationOwner =
+                let assemblyName, declarationOwner =
                     if metadata.IsAssembly then
                         let definition = metadata.GetAssemblyDefinition()
+                        let assemblyName = metadata.GetString(definition.Name)
 
                         let culture =
                             if definition.Culture.IsNil then
@@ -230,16 +240,37 @@ type internal ReferenceTypeIndex
                                 metadata.GetBlobBytes(definition.PublicKey)
                                 |> Convert.ToHexString
 
+                        assemblyName,
                         String.concat "|" [
                             "reference-assembly"
-                            metadata.GetString(definition.Name)
+                            assemblyName
                             definition.Version.ToString()
                             culture
                             publicKey
                         ]
                     else
+                        Path.GetFileNameWithoutExtension(path),
                         "reference-module|"
                         + contentHash
+
+                let isValueType (definition: TypeDefinition) =
+                    if
+                        definition.BaseType.Kind
+                        <> HandleKind.TypeReference
+                    then
+                        false
+                    else
+                        let baseType =
+                            definition.BaseType
+                            |> MetadataTokens.GetRowNumber
+                            |> MetadataTokens.TypeReferenceHandle
+                            |> metadata.GetTypeReference
+
+                        metadata.GetString(baseType.Namespace) = "System"
+                        && (match metadata.GetString(baseType.Name) with
+                            | "ValueType"
+                            | "Enum" -> true
+                            | _ -> false)
 
                 for handle in metadata.TypeDefinitions do
                     let definition = metadata.GetTypeDefinition(handle)
@@ -247,6 +278,8 @@ type internal ReferenceTypeIndex
                     if not definition.IsNested then
                         addType
                             declarationOwner
+                            assemblyName
+                            (isValueType definition)
                             (metadata.GetString(definition.Namespace))
                             (metadata.GetString(definition.Name))
 
@@ -255,6 +288,8 @@ type internal ReferenceTypeIndex
 
                     addType
                         declarationOwner
+                        assemblyName
+                        false
                         (metadata.GetString(exportedType.Namespace))
                         (metadata.GetString(exportedType.Name))
 

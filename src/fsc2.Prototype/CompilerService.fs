@@ -274,6 +274,8 @@ type internal CompilerService() =
                                 Name = key.Name
                             }
                             DeclarationId = declarationId
+                            AssemblyName = String.Empty
+                            IsValueType = false
                         }
                     )
                     |> ignore
@@ -363,6 +365,89 @@ type internal CompilerService() =
                     | Ok typedDomain ->
                         resolveType declaredParameters range
                         |> Result.map (fun typedRange -> TypedFunctionType(typedDomain, typedRange))
+
+            let rec substituteType
+                (substitutions: Map<string, ParsedTypeExpression>)
+                expression
+                =
+                match expression with
+                | ParsedTypeParameter(name, _) ->
+                    substitutions
+                    |> Map.tryFind name
+                    |> Option.defaultValue expression
+                | ParsedNamedType _ -> expression
+                | ParsedGenericTypeApplication(genericType, arguments, range) ->
+                    ParsedGenericTypeApplication(
+                        substituteType substitutions genericType,
+                        arguments
+                        |> List.map (substituteType substitutions),
+                        range
+                    )
+                | ParsedTupleType(elements, range) ->
+                    ParsedTupleType(
+                        elements
+                        |> List.map (substituteType substitutions),
+                        range
+                    )
+                | ParsedFunctionType(domain, range, sourceRange) ->
+                    ParsedFunctionType(
+                        substituteType substitutions domain,
+                        substituteType substitutions range,
+                        sourceRange
+                    )
+
+            let rec expandTypeAbbreviations expanding expression =
+                let expand = expandTypeAbbreviations expanding
+
+                match expression with
+                | ParsedGenericTypeApplication(ParsedNamedType(typeName, _), arguments, _) when
+                    String.IsNullOrEmpty(typeName.Namespace)
+                    ->
+                    let expandedArguments = arguments |> List.map expand
+
+                    match typeAbbreviations |> Map.tryFind typeName.Name with
+                    | Some abbreviation when
+                        abbreviation.TypeParameters.Length = expandedArguments.Length
+                        && not (expanding |> Set.contains typeName.Name)
+                        ->
+                        abbreviation.Target.Type
+                        |> substituteType (
+                            List.zip abbreviation.TypeParameters expandedArguments
+                            |> Map.ofList
+                        )
+                        |> expandTypeAbbreviations (expanding |> Set.add typeName.Name)
+                    | _ ->
+                        match expression with
+                        | ParsedGenericTypeApplication(genericType, _, range) ->
+                            ParsedGenericTypeApplication(
+                                expand genericType,
+                                expandedArguments,
+                                range
+                            )
+                        | _ -> expression
+                | ParsedNamedType(typeName, _) when
+                    String.IsNullOrEmpty(typeName.Namespace)
+                    ->
+                    match typeAbbreviations |> Map.tryFind typeName.Name with
+                    | Some abbreviation when
+                        List.isEmpty abbreviation.TypeParameters
+                        && not (expanding |> Set.contains typeName.Name)
+                        ->
+                        abbreviation.Target.Type
+                        |> expandTypeAbbreviations (expanding |> Set.add typeName.Name)
+                    | _ -> expression
+                | ParsedGenericTypeApplication(genericType, arguments, range) ->
+                    ParsedGenericTypeApplication(
+                        expand genericType,
+                        arguments |> List.map expand,
+                        range
+                    )
+                | ParsedTupleType(elements, range) ->
+                    ParsedTupleType(elements |> List.map expand, range)
+                | ParsedFunctionType(domain, range, sourceRange) ->
+                    ParsedFunctionType(expand domain, expand range, sourceRange)
+                | ParsedTypeParameter _
+                | ParsedNamedType _ -> expression
 
             let rec collectResults completed remaining =
                 match remaining with
@@ -629,36 +714,6 @@ type internal CompilerService() =
                         parsed.StableId
                         + "/type:"
                         + declaration.Name
-
-                    let rec substituteType
-                        (substitutions: Map<string, ParsedTypeExpression>)
-                        expression
-                        =
-                        match expression with
-                        | ParsedTypeParameter(name, _) ->
-                            substitutions
-                            |> Map.tryFind name
-                            |> Option.defaultValue expression
-                        | ParsedNamedType _ -> expression
-                        | ParsedGenericTypeApplication(genericType, arguments, range) ->
-                            ParsedGenericTypeApplication(
-                                substituteType substitutions genericType,
-                                arguments
-                                |> List.map (substituteType substitutions),
-                                range
-                            )
-                        | ParsedTupleType(elements, range) ->
-                            ParsedTupleType(
-                                elements
-                                |> List.map (substituteType substitutions),
-                                range
-                            )
-                        | ParsedFunctionType(domain, range, sourceRange) ->
-                            ParsedFunctionType(
-                                substituteType substitutions domain,
-                                substituteType substitutions range,
-                                sourceRange
-                            )
 
                     let typeMethod (methodDeclaration: ParsedStaticMethodDeclaration) =
                         let methodParameters =
@@ -1057,6 +1112,40 @@ type internal CompilerService() =
                             && resolvedType.TypeName.Name = "Unit"
                             ->
                             Ok(CliNamedType fsharpUnitType)
+                        | TypedGenericTypeApplication(TypedNamedType resolvedType, arguments) when
+                            not (String.IsNullOrEmpty(resolvedType.AssemblyName))
+                            ->
+                            arguments
+                            |> List.map (toCliType methodParameterIndex range)
+                            |> collectResults []
+                            |> Result.map (fun argumentTypes ->
+                                CliGenericType(
+                                    {
+                                        AssemblyName = resolvedType.AssemblyName
+                                        TypeName = {
+                                            Namespace = resolvedType.TypeName.Namespace
+                                            Name =
+                                                resolvedType.TypeName.Name
+                                                + "`"
+                                                + arguments.Length.ToString(
+                                                    CultureInfo.InvariantCulture
+                                                )
+                                        }
+                                        IsValueType = resolvedType.IsValueType
+                                    },
+                                    argumentTypes
+                                )
+                            )
+                        | TypedNamedType resolvedType when
+                            not (String.IsNullOrEmpty(resolvedType.AssemblyName))
+                            ->
+                            Ok(
+                                CliNamedType {
+                                    AssemblyName = resolvedType.AssemblyName
+                                    TypeName = resolvedType.TypeName
+                                    IsValueType = resolvedType.IsValueType
+                                }
+                            )
                         | TypedFunctionType(domain, rangeType) ->
                             match
                                 toCliType methodParameterIndex range domain,
@@ -1109,7 +1198,9 @@ type internal CompilerService() =
                         let typedParameters =
                             methodDeclaration.Parameters
                             |> List.map (fun parameter ->
-                                resolveType declaredMethodParameters parameter.Type
+                                parameter.Type
+                                |> expandTypeAbbreviations Set.empty
+                                |> resolveType declaredMethodParameters
                                 |> Result.bind (toCliType methodParameterIndex parameter.Range)
                                 |> Result.map (fun parameterType -> {
                                     Name = parameter.Name
@@ -1161,7 +1252,9 @@ type internal CompilerService() =
                                 match methodDeclaration.ReturnType with
                                 | None -> Ok None
                                 | Some returnType ->
-                                    resolveType declaredMethodParameters returnType
+                                    returnType
+                                    |> expandTypeAbbreviations Set.empty
+                                    |> resolveType declaredMethodParameters
                                     |> Result.bind (
                                         toCliReturnType methodParameterIndex returnType.Range
                                     )
