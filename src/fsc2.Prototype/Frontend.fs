@@ -17,6 +17,8 @@ module internal Frontend =
         | TypeKeyword
         | StaticKeyword
         | InlineKeyword
+        | NewKeyword
+        | OverrideKeyword
         | WithKeyword
         | WhenKeyword
         | AndKeyword
@@ -39,6 +41,8 @@ module internal Frontend =
         | AttributeEnd
         | LeftParenthesis
         | RightParenthesis
+        | LeftBrace
+        | RightBrace
         | Colon
         | Subtype
         | Comma
@@ -376,6 +380,8 @@ module internal Frontend =
                 | "type" -> add TypeKeyword start
                 | "static" -> add StaticKeyword start
                 | "inline" -> add InlineKeyword start
+                | "new" -> add NewKeyword start
+                | "override" -> add OverrideKeyword start
                 | "with" -> add WithKeyword start
                 | "when" -> add WhenKeyword start
                 | "and" -> add AndKeyword start
@@ -493,6 +499,8 @@ module internal Frontend =
                     match current with
                     | '(' -> add LeftParenthesis start
                     | ')' -> add RightParenthesis start
+                    | '{' -> add LeftBrace start
+                    | '}' -> add RightBrace start
                     | ':' -> add Colon start
                     | ',' -> add Comma start
                     | ';' -> add Semicolon start
@@ -908,6 +916,86 @@ module internal Frontend =
                     |> Result.map (fun members -> rootName, members)
 
                 match expressionToken.Kind with
+                | LeftBrace ->
+                    parseResult {
+                        let! openToken = expected LeftBrace "expected '{'"
+                        let! _ = expected NewKeyword "expected 'new' in an object expression"
+                        let! baseType = parseTypeExpression ()
+
+                        let! _ =
+                            expected LeftParenthesis "expected '(' after an object-expression type"
+
+                        let! constructorArguments = parseCallArguments ()
+
+                        let! _ =
+                            expected
+                                RightParenthesis
+                                "expected ')' after object-expression constructor arguments"
+
+                        let! _ = expected WithKeyword "expected 'with' in an object expression"
+
+                        let! isOverride =
+                            match (current ()).Kind with
+                            | OverrideKeyword ->
+                                consume ()
+                                |> ignore
+
+                                Ok true
+                            | MemberKeyword ->
+                                consume ()
+                                |> ignore
+
+                                Ok false
+                            | _ ->
+                                Error(
+                                    prototypeDiagnostic
+                                        source.Path
+                                        (current ()).Range
+                                        "expected 'override' or 'member' in an object expression"
+                                )
+
+                        let! receiverName, _ =
+                            identifier "expected an object-expression member receiver"
+
+                        let! _ = expected Dot "expected '.' after an object-expression receiver"
+
+                        let! memberName, _ = identifier "expected an object-expression member name"
+
+                        let! _ =
+                            expected
+                                LeftParenthesis
+                                "expected '(' after an object-expression member"
+
+                        let! _ =
+                            expected
+                                RightParenthesis
+                                "only parameterless object-expression members are supported"
+
+                        let! _ =
+                            expected Equals "expected '=' before an object-expression member body"
+
+                        let! memberBody, _ = parseExpression ()
+
+                        let! closeToken =
+                            expected RightBrace "expected '}' after an object expression"
+
+                        let range = {
+                            Start = openToken.Range.Start
+                            End = closeToken.Range.End
+                        }
+
+                        return
+                            ObjectExpression(
+                                baseType,
+                                constructorArguments,
+                                isOverride,
+                                receiverName,
+                                memberName,
+                                memberBody,
+                                range
+                            ),
+                            range
+                    }
                 | LeftParenthesis ->
                     parseResult {
                         let! _ = expected LeftParenthesis "expected '('"
@@ -1885,8 +1973,7 @@ module internal Frontend =
                             | AttributeStart -> parseDeclarationAttributes ()
                             | _ -> Ok []
 
-                        let! parameterName, parameterToken =
-                            identifier "expected a parameter name"
+                        let! parameterName, parameterToken = identifier "expected a parameter name"
 
                         let! _ = expected Colon "expected ':'"
                         let! parameterType = parseTypeExpression ()
@@ -1942,8 +2029,7 @@ module internal Frontend =
                                 false
                             | _ -> true
 
-                        let! receiverName, _ =
-                            identifier "expected an instance member receiver"
+                        let! receiverName, _ = identifier "expected an instance member receiver"
 
                         let! _ = expected Dot "expected '.'"
                         let! methodName, _ = identifier "expected an instance member name"
@@ -1978,7 +2064,9 @@ module internal Frontend =
                                             let! memberName, _ = identifier "expected a member name"
                                             let! _ = expected Colon "expected ':'"
                                             let! memberType = parseTypeExpression ()
-                                            let! closeToken = expected RightParenthesis "expected ')'"
+
+                                            let! closeToken =
+                                                expected RightParenthesis "expected ')'"
 
                                             return
                                                 ParsedMemberConstraint(
@@ -2011,7 +2099,9 @@ module internal Frontend =
                                         parseTypeExpression ()
                                         |> Result.map ParsedAbbreviationConstraint
 
-                                let constraints = constraint' :: constraints
+                                let constraints =
+                                    constraint'
+                                    :: constraints
 
                                 return!
                                     match (current ()).Kind with
@@ -2035,7 +2125,9 @@ module internal Frontend =
                                 let! parameter, _ =
                                     typeParameter "expected an instance-member type parameter"
 
-                                let parameters = parameter :: parameters
+                                let parameters =
+                                    parameter
+                                    :: parameters
 
                                 return!
                                     match (current ()).Kind with
@@ -2069,8 +2161,7 @@ module internal Frontend =
                                 |> ignore
 
                                 parseResult {
-                                    let! parameters, constraints =
-                                        parseMethodTypeParameters []
+                                    let! parameters, constraints = parseMethodTypeParameters []
 
                                     let! _ = expected GreaterThan "expected '>'"
                                     return parameters, constraints
@@ -2404,8 +2495,7 @@ module internal Frontend =
                         let rec parseObjectMethods methods =
                             match (current ()).Kind with
                             | AttributeStart when
-                                (current ()).Range.Start.Column
-                                > typeToken.Range.Start.Column
+                                (current ()).Range.Start.Column > typeToken.Range.Start.Column
                                 ->
                                 parseResult {
                                     let! attributes = parseDeclarationAttributes ()
@@ -2670,8 +2760,7 @@ module internal Frontend =
                         let rec parseExtensionMethods methods =
                             match (current ()).Kind with
                             | AttributeStart when
-                                (current ()).Range.Start.Column
-                                > typeToken.Range.Start.Column
+                                (current ()).Range.Start.Column > typeToken.Range.Start.Column
                                 ->
                                 parseResult {
                                     let! methodAttributes = parseDeclarationAttributes ()
@@ -2684,8 +2773,7 @@ module internal Frontend =
                                         )
                                 }
                             | MemberKeyword when
-                                (current ()).Range.Start.Column
-                                > typeToken.Range.Start.Column
+                                (current ()).Range.Start.Column > typeToken.Range.Start.Column
                                 ->
                                 parseResult {
                                     let! methodDeclaration = parseInstanceMethod []
@@ -2700,7 +2788,8 @@ module internal Frontend =
                             | _ when
                                 (current ()).Range.Start.Column
                                 <= moduleToken.Range.Start.Column
-                                -> Ok(List.rev methods)
+                                ->
+                                Ok(List.rev methods)
                             | _ ->
                                 Error(
                                     prototypeDiagnostic

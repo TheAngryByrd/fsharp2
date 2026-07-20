@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 40
+    let Query = 41
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -220,6 +220,14 @@ type internal ParsedExpression =
         constructedType: ParsedTypeExpression *
         argument: ParsedExpression *
         argumentRange: SourceRange
+    | ObjectExpression of
+        baseType: ParsedTypeExpression *
+        constructorArguments: ParsedExpression list *
+        isOverride: bool *
+        receiverName: string *
+        memberName: string *
+        memberBody: ParsedExpression *
+        range: SourceRange
 
     override _.ToString() = "ParsedExpression"
 
@@ -719,6 +727,7 @@ type internal TypedUnitLambdaExpression = {
 
 type internal TypedExpression =
     | TypedIntegerLiteral of int
+    | TypedStringLiteral of string
     | TypedUnitLiteral
     | TypedParameterReference of int
     | TypedLocalReference of int
@@ -765,6 +774,16 @@ type internal TypedExpression =
     | TypedBooleanNegation of expression: TypedExpression * range: SourceRange
     | TypedResumableCode of TypedResumableCodeExpression
     | TypedResumableTryFinally of TypedResumableTryFinallyExpression
+    | TypedObjectExpression of
+        typeReference: CliTypeReference *
+        baseType: CliType *
+        constructorArguments: TypedExpression list *
+        isOverride: bool *
+        receiverName: string *
+        memberName: string *
+        memberReturnType: CliType *
+        memberBody: TypedExpression *
+        range: SourceRange
     | TypedTraitCall of
         receiverName: string *
         memberName: string *
@@ -1069,6 +1088,7 @@ type internal SymbolicMethodKind =
     | InternalInstanceInlineMember
     | ClosureConstructor
     | ClosureInvoke
+    | ObjectExpressionOverride
 
     override _.ToString() = "SymbolicMethodKind"
 
@@ -1151,6 +1171,7 @@ type internal SymbolicTypeKind =
     | ObjectContainer
     | StructContainer
     | ClosureContainer
+    | ObjectExpressionContainer
 
     override _.ToString() = "SymbolicTypeKind"
 

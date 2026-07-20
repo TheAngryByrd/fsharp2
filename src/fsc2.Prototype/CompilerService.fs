@@ -146,6 +146,11 @@ module private TypeIdentity =
                 "integer"
                 value.ToString(CultureInfo.InvariantCulture)
             ]
+        | TypedStringLiteral value ->
+            Fingerprint.parts [
+                "string"
+                value
+            ]
         | TypedUnitLiteral -> "unit"
         | TypedParameterReference index ->
             Fingerprint.parts [
@@ -311,6 +316,30 @@ module private TypeIdentity =
                 expression.ComputationName
                 resumableCode expression.Compensation
             ]
+        | TypedObjectExpression(typeReference,
+                                baseType,
+                                constructorArguments,
+                                isOverride,
+                                receiverName,
+                                memberName,
+                                memberReturnType,
+                                memberBody,
+                                _) ->
+            Fingerprint.parts [
+                "object-expression"
+                typeReference.DeclarationId
+                cliType baseType
+                if isOverride then "override" else "member"
+                receiverName
+                memberName
+                cliType memberReturnType
+
+                yield!
+                    constructorArguments
+                    |> List.map inlineBody
+
+                inlineBody memberBody
+            ]
         | TypedTraitCall(receiverName, memberName, arguments) ->
             Fingerprint.parts [
                 "trait-call"
@@ -370,11 +399,10 @@ type private ObjectMethodKind =
 
     member this.AllowedAttributeKinds =
         match this with
-        | InstanceObjectMethod ->
-            [
-                DefaultValueAttribute
-                NoEagerConstraintApplicationAttribute
-            ]
+        | InstanceObjectMethod -> [
+            DefaultValueAttribute
+            NoEagerConstraintApplicationAttribute
+          ]
         | StaticObjectMethod -> [ NoEagerConstraintApplicationAttribute ]
 
 type private ObjectMethodCompletion = {
@@ -1136,7 +1164,8 @@ type internal CompilerService() =
                     | _, LetExpression _
                     | _, LambdaExpression _
                     | _, UnitLambdaExpression _
-                    | _, TypeConstruction _ ->
+                    | _, TypeConstruction _
+                    | _, ObjectExpression _ ->
                         diagnostic
                             declaration.BodyRange
                             "this expression form is supported only in instance members"
@@ -1581,7 +1610,8 @@ type internal CompilerService() =
                             | Ok _, Ok _, LetExpression _
                             | Ok _, Ok _, LambdaExpression _
                             | Ok _, Ok _, UnitLambdaExpression _
-                            | Ok _, Ok _, TypeConstruction _ ->
+                            | Ok _, Ok _, TypeConstruction _
+                            | Ok _, Ok _, ObjectExpression _ ->
                                 diagnostic
                                     methodDeclaration.BodyRange
                                     "static inline members require a constrained trait call"
@@ -1693,6 +1723,11 @@ type internal CompilerService() =
                             && resolvedType.TypeName.Name = "String"
                             ->
                             Ok CliString
+                        | TypedNamedType resolvedType when
+                            resolvedType.TypeName.Namespace = "System"
+                            && resolvedType.TypeName.Name = "Object"
+                            ->
+                            Ok CliObject
                         | TypedNamedType resolvedType when
                             resolvedType.TypeName.Namespace = "Microsoft.FSharp.Core"
                             && resolvedType.TypeName.Name = "Unit"
@@ -2033,6 +2068,8 @@ type internal CompilerService() =
                                     function
                                     | IntegerLiteral value ->
                                         Ok(TypedIntegerLiteral value, CliInt32, nextLocalIndex)
+                                    | StringLiteral value ->
+                                        Ok(TypedStringLiteral value, CliString, nextLocalIndex)
                                     | UnitLiteral -> Ok(TypedUnitLiteral, CliVoid, nextLocalIndex)
                                     | ValueReference name ->
                                         match
@@ -2646,8 +2683,90 @@ type internal CompilerService() =
                                                     bodyType,
                                                     nextBodyLocalIndex
                                                 )
+                                    | ObjectExpression(baseType,
+                                                       constructorArguments,
+                                                       isOverride,
+                                                       receiverName,
+                                                       memberName,
+                                                       memberBody,
+                                                       range) ->
+                                        if not (List.isEmpty constructorArguments) then
+                                            diagnostic
+                                                range
+                                                "object-expression constructor arguments are not yet supported"
+                                        elif not isOverride then
+                                            diagnostic
+                                                range
+                                                "only object-expression overrides are currently supported"
+                                        elif
+                                            memberName
+                                            <> "ToString"
+                                        then
+                                            diagnostic
+                                                range
+                                                "only the parameterless System.Object.ToString override is currently supported"
+                                        else
+                                            match
+                                                baseType
+                                                |> expandTypeAbbreviations Set.empty
+                                                |> resolveType declaredMethodParameters
+                                            with
+                                            | Error error -> Error error
+                                            | Ok(TypedNamedType resolvedBaseType) when
+                                                resolvedBaseType.TypeName.Namespace = "System"
+                                                && resolvedBaseType.TypeName.Name = "Object"
+                                                ->
+                                                match memberBody with
+                                                | StringLiteral value ->
+                                                    let objectTypeStableId =
+                                                        stableId
+                                                        + "/method:"
+                                                        + methodDeclaration.Name
+                                                        + "/object-expression:"
+                                                        + range.Start.Offset.ToString(
+                                                            CultureInfo.InvariantCulture
+                                                        )
+
+                                                    let objectTypeReference = {
+                                                        DeclarationId = objectTypeStableId
+                                                        AssemblyName = String.Empty
+                                                        TypeName = {
+                                                            Namespace = String.Empty
+                                                            Name =
+                                                                "objectExpression@"
+                                                                + range.Start.Line.ToString(
+                                                                    CultureInfo.InvariantCulture
+                                                                )
+                                                        }
+                                                        IsValueType = false
+                                                    }
+
+                                                    let baseCliType = CliObject
+
+                                                    Ok(
+                                                        TypedObjectExpression(
+                                                            objectTypeReference,
+                                                            baseCliType,
+                                                            [],
+                                                            true,
+                                                            receiverName,
+                                                            memberName,
+                                                            CliString,
+                                                            TypedStringLiteral value,
+                                                            range
+                                                        ),
+                                                        baseCliType,
+                                                        nextLocalIndex
+                                                    )
+                                                | _ ->
+                                                    diagnostic
+                                                        range
+                                                        "the System.Object.ToString object-expression override must return a string literal"
+                                            | Ok _ ->
+                                                diagnostic
+                                                    range
+                                                    "only a System.Object object expression is currently supported"
                                     | BooleanLiteral _
-                                    | StringLiteral _
                                     | UnitApplication _
                                     | BoundInstanceMember _
                                     | MemberAssignment _
@@ -2698,12 +2817,17 @@ type internal CompilerService() =
                                         inferredSubtypeConstraints condition
                                         @ inferredSubtypeConstraints ifTrue
                                         @ inferredSubtypeConstraints ifFalse
+                                    | TypedObjectExpression(_, _, arguments, _, _, _, _, body, _) ->
+                                        (arguments
+                                         |> List.collect inferredSubtypeConstraints)
+                                        @ inferredSubtypeConstraints body
                                     | TypedSequential expressions ->
                                         expressions
                                         |> List.collect (fun (expression, _, _) ->
                                             inferredSubtypeConstraints expression
                                         )
                                     | TypedIntegerLiteral _
+                                    | TypedStringLiteral _
                                     | TypedUnitLiteral
                                     | TypedParameterReference _
                                     | TypedLocalReference _
@@ -2867,10 +2991,7 @@ type internal CompilerService() =
                                             TypedSubtypeConstraint(typeParameter, typedSuperType)
                                         )
                                     )
-                            | ParsedMemberConstraint(typeParameter,
-                                                     memberName,
-                                                     memberType,
-                                                     range) ->
+                            | ParsedMemberConstraint(typeParameter, memberName, memberType, range) ->
                                 if not (declaredMethodParameters.Contains(typeParameter)) then
                                     diagnostic
                                         range
@@ -2894,7 +3015,10 @@ type internal CompilerService() =
                                                            _) when
                                 String.IsNullOrEmpty(aliasName.Namespace)
                                 ->
-                                match typeAbbreviations |> Map.tryFind aliasName.Name with
+                                match
+                                    typeAbbreviations
+                                    |> Map.tryFind aliasName.Name
+                                with
                                 | Some abbreviation when
                                     abbreviation.TypeParameters.Length = arguments.Length
                                     ->
@@ -2904,9 +3028,7 @@ type internal CompilerService() =
 
                                     let substituteConstraint =
                                         function
-                                        | ParsedSubtypeConstraint(typeParameter,
-                                                                  superType,
-                                                                  range) ->
+                                        | ParsedSubtypeConstraint(typeParameter, superType, range) ->
                                             match
                                                 ParsedTypeParameter(typeParameter, range)
                                                 |> substituteType substitutions
@@ -3696,7 +3818,8 @@ type internal CompilerService() =
                                 | LetExpression _
                                 | LambdaExpression _
                                 | UnitLambdaExpression _
-                                | TypeConstruction _ ->
+                                | TypeConstruction _
+                                | ObjectExpression _ ->
                                     diagnostic
                                         methodDeclaration.BodyRange
                                         "this instance-member expression is not yet supported"
@@ -3726,6 +3849,7 @@ type internal CompilerService() =
                                     match body with
                                     | TypedResumableCode expression -> expression.Range
                                     | TypedIntegerLiteral _
+                                    | TypedStringLiteral _
                                     | TypedUnitLiteral
                                     | TypedParameterReference _
                                     | TypedLocalReference _
@@ -3742,6 +3866,7 @@ type internal CompilerService() =
                                     | TypedLocalAssignment _
                                     | TypedBooleanNegation _
                                     | TypedResumableTryFinally _
+                                    | TypedObjectExpression _
                                     | TypedTraitCall _ -> methodDeclaration.BodyRange
 
                                 finishObjectMethod {
@@ -3789,14 +3914,8 @@ type internal CompilerService() =
                                 }
 
                                 match
-                                    resolveNamedType
-                                        0
-                                        targetTypeName
-                                        declaration.ConstructorRange,
-                                    typeCustomAttributes
-                                        stableId
-                                        [ AutoOpenAttribute ]
-                                        attributes
+                                    resolveNamedType 0 targetTypeName declaration.ConstructorRange,
+                                    typeCustomAttributes stableId [ AutoOpenAttribute ] attributes
                                 with
                                 | Error error, _
                                 | _, Error error -> Error error
@@ -4752,6 +4871,7 @@ type internal CompilerService() =
                 | InstanceConstructor
                 | InstanceInlineMember
                 | InternalInstanceInlineMember
+                | ObjectExpressionOverride
                 | TypeExtensionMember ->
                     parameterIndex
                     + 1
@@ -4759,6 +4879,20 @@ type internal CompilerService() =
                 | StaticInlineMemberStub
                 | ClosureConstructor
                 | ClosureInvoke -> parameterIndex
+
+            let objectExpressionConstructorStableId (typeReference: CliTypeReference) =
+                typeReference.DeclarationId
+                + "/constructor:unit"
+
+            let objectExpressionConstructorReference (typeReference: CliTypeReference) = {
+                DeclaringType = CliDeclaringType(CliNamedType typeReference)
+                Name = ".ctor"
+                GenericArity = 0
+                IsInstance = true
+                ParameterTypes = []
+                ReturnType = CliVoid
+                TargetStableId = Some(objectExpressionConstructorStableId typeReference)
+            }
 
             let resumableCodeConstructionInstructions
                 kind
@@ -4965,6 +5099,7 @@ type internal CompilerService() =
             let rec valueExpressionInstructions freshLabel kind =
                 function
                 | TypedIntegerLiteral value -> [ LoadInt32 value ], []
+                | TypedStringLiteral value -> [ LoadString value ], []
                 | TypedUnitLiteral -> [], []
                 | TypedParameterReference index ->
                     [ LoadArgument(methodArgumentIndex kind index) ], []
@@ -5216,6 +5351,12 @@ type internal CompilerService() =
                     conditionLocals
                     @ ifTrueLocals
                     @ ifFalseLocals
+                | TypedObjectExpression(typeReference, _, constructorArguments, _, _, _, _, _, _) ->
+                    if not (List.isEmpty constructorArguments) then
+                        invalidOp
+                            "object-expression constructor arguments reached an unsupported lowering path"
+
+                    [ NewObject(objectExpressionConstructorReference typeReference) ], []
                 | TypedBoundInstanceMethod _
                 | TypedUnitLambda _
                 | TypedResumableCode _
@@ -5247,7 +5388,7 @@ type internal CompilerService() =
                         Return
                     ],
                     []
-                | (TypedUnitLiteral | TypedLocalReference _ | TypedLet _ | TypedLocalAssignment _ | TypedAddressOf _ | TypedStaticMethodCall _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _ | TypedUpcast _ | TypedSequential _ | TypedBooleanNegation _) as expression ->
+                | (TypedStringLiteral _ | TypedUnitLiteral | TypedLocalReference _ | TypedLet _ | TypedLocalAssignment _ | TypedAddressOf _ | TypedStaticMethodCall _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _ | TypedUpcast _ | TypedSequential _ | TypedBooleanNegation _ | TypedObjectExpression _) as expression ->
                     let instructions, locals =
                         valueExpressionInstructions freshLabel kind expression
 
@@ -5534,11 +5675,13 @@ type internal CompilerService() =
                         | TypedUnitLambda _
                         | TypedResumableTryFinally _ -> 8
                         | TypedIntegerLiteral _
+                        | TypedStringLiteral _
                         | TypedUnitLiteral
                         | TypedParameterReference _
                         | TypedLocalReference _
                         | TypedLet _
                         | TypedAddressOf _
+                        | TypedObjectExpression _
                         | TypedTraitCall _ -> 1
                         | TypedStaticMethodCall _
                         | TypedFunctionApplication _
@@ -5708,6 +5851,51 @@ type internal CompilerService() =
                 )
                 |> List.collect id
 
+            let rec objectExpressions =
+                function
+                | (TypedObjectExpression(_, _, constructorArguments, _, _, _, _, body, _) as expression) -> [
+                    yield expression
+
+                    for argument in constructorArguments do
+                        yield! objectExpressions argument
+
+                    yield! objectExpressions body
+                  ]
+                | TypedLet(_, _, _, _, value, body, _, _) ->
+                    objectExpressions value
+                    @ objectExpressions body
+                | TypedLocalAssignment(_, _, value)
+                | TypedBooleanNegation(value, _)
+                | TypedUpcast(_, _, _, value) -> objectExpressions value
+                | TypedStaticMethodCall(_, _, arguments) ->
+                    arguments
+                    |> List.collect objectExpressions
+                | TypedFunctionApplication(_, _, _, functionExpression, argumentExpression) ->
+                    objectExpressions functionExpression
+                    @ objectExpressions argumentExpression
+                | TypedInstanceMethodCall(_, receiver, arguments) ->
+                    objectExpressions receiver
+                    @ (arguments
+                       |> List.collect objectExpressions)
+                | TypedConditional(condition, ifTrue, ifFalse, _, _, _) ->
+                    objectExpressions condition
+                    @ objectExpressions ifTrue
+                    @ objectExpressions ifFalse
+                | TypedSequential expressions ->
+                    expressions
+                    |> List.collect (fun (expression, _, _) -> objectExpressions expression)
+                | TypedIntegerLiteral _
+                | TypedStringLiteral _
+                | TypedUnitLiteral
+                | TypedParameterReference _
+                | TypedLocalReference _
+                | TypedAddressOf _
+                | TypedBoundInstanceMethod _
+                | TypedUnitLambda _
+                | TypedResumableCode _
+                | TypedResumableTryFinally _
+                | TypedTraitCall _ -> []
+
             let objectTypes =
                 modulesWithContentHashes
                 |> List.mapi (fun documentIndex (typed, declarationsWithContentHashes) ->
@@ -5728,7 +5916,8 @@ type internal CompilerService() =
                                     typeDeclaration.Methods
                                     |> List.choose (fun objectMethodDeclaration ->
                                         match objectMethodDeclaration with
-                                        | TypedInstanceObjectMethod(receiverName, methodDeclaration) ->
+                                        | TypedInstanceObjectMethod(receiverName,
+                                                                    methodDeclaration) ->
                                             let extensionMethod = {
                                                 methodDeclaration with
                                                     Name =
@@ -5759,7 +5948,7 @@ type internal CompilerService() =
                                                     typeContentHash
                                                     extensionMethod.ExportFingerprint
                                                     methodImplementationHash methodDeclaration
-                                                 ])
+                                                ])
                                                 extensionMethod
                                             |> Some
                                         | TypedStaticObjectMethod _ -> None
@@ -5889,6 +6078,170 @@ type internal CompilerService() =
                 )
                 |> List.collect id
 
+            let objectExpressionTypes =
+                modulesWithContentHashes
+                |> List.mapi (fun documentIndex (typed, declarationsWithContentHashes) ->
+                    let moduleTypeStableId =
+                        moduleStableId
+                        + "/type:"
+                        + typed.StableId
+
+                    let ownedMethods =
+                        declarationsWithContentHashes
+                        |> List.collect (fun (declaration, _) ->
+                            match declaration with
+                            | TypedMethod methodDeclaration -> [
+                                moduleTypeStableId, methodDeclaration
+                              ]
+                            | TypedStaticType typeDeclaration ->
+                                typeDeclaration.Methods
+                                |> List.map (fun methodDeclaration ->
+                                    typeDeclaration.StableId, methodDeclaration
+                                )
+                            | TypedObjectType typeDeclaration ->
+                                typeDeclaration.Methods
+                                |> List.map (fun objectMethodDeclaration ->
+                                    typeDeclaration.StableId, objectMethodDeclaration.Method
+                                )
+                            | TypedLiteralField _
+                            | TypedTypeAbbreviation _
+                            | TypedStructType _ -> []
+                        )
+
+                    ownedMethods
+                    |> List.collect (fun (enclosingTypeStableId, ownerMethod) ->
+                        ownerMethod.Body
+                        |> objectExpressions
+                        |> List.map (fun expression ->
+                            match expression with
+                            | TypedObjectExpression(typeReference,
+                                                    baseType,
+                                                    constructorArguments,
+                                                    isOverride,
+                                                    receiverName,
+                                                    memberName,
+                                                    memberReturnType,
+                                                    memberBody,
+                                                    range) ->
+                                if not (List.isEmpty constructorArguments) then
+                                    invalidOp
+                                        "object-expression constructor arguments reached symbolic lowering"
+
+                                if not isOverride then
+                                    invalidOp "an object-expression member must be an override"
+
+                                let constructorStableId =
+                                    objectExpressionConstructorStableId typeReference
+
+                                let baseDeclaringType =
+                                    match baseType with
+                                    | CliObject ->
+                                        CoreDeclaringType {
+                                            Namespace = "System"
+                                            Name = "Object"
+                                        }
+                                    | _ -> CliDeclaringType baseType
+
+                                let baseConstructor = {
+                                    DeclaringType = baseDeclaringType
+                                    Name = ".ctor"
+                                    GenericArity = 0
+                                    IsInstance = true
+                                    ParameterTypes = []
+                                    ReturnType = CliVoid
+                                    TargetStableId = None
+                                }
+
+                                let constructor = {
+                                    SchemaVersion = querySchema
+                                    StableId = constructorStableId
+                                    Name = ".ctor"
+                                    Kind = InstanceConstructor
+                                    GenericParameters = []
+                                    Constraints = []
+                                    GenericParameterConstraints = []
+                                    Attributes = []
+                                    Parameters = []
+                                    Locals = []
+                                    ReturnType = CliVoid
+                                    Instructions = [
+                                        LoadArgument 0
+                                        CallMethod baseConstructor
+                                        Return
+                                    ]
+                                    EmitDefaultSequencePoint = false
+                                    MaxStack = 1
+                                    DependencyIds = [ baseConstructor.DependencyId ]
+                                    ContentHash =
+                                        Fingerprint.parts [
+                                            constructorStableId
+                                            baseConstructor.StableId
+                                        ]
+                                    DocumentIndex = documentIndex
+                                    DocumentChecksum = typed.SourceChecksum
+                                    Range = range
+                                }
+
+                                let overrideStableId =
+                                    typeReference.DeclarationId
+                                    + "/method:"
+                                    + memberName
+
+                                let overrideDeclaration = {
+                                    StableId = overrideStableId
+                                    Name = memberName
+                                    IsPublic = true
+                                    GenericParameters = []
+                                    Constraints = []
+                                    Attributes = []
+                                    Parameters = []
+                                    ReturnType = memberReturnType
+                                    Body = memberBody
+                                    ExportFingerprint =
+                                        Fingerprint.parts [
+                                            overrideStableId
+                                            "override"
+                                            receiverName
+                                            TypeIdentity.cliType memberReturnType
+                                            TypeIdentity.inlineBody memberBody
+                                        ]
+                                    Range = range
+                                }
+
+                                let overrideMethod =
+                                    methodFragment
+                                        ObjectExpressionOverride
+                                        documentIndex
+                                        typed.SourceChecksum
+                                        overrideStableId
+                                        (methodImplementationHash overrideDeclaration)
+                                        overrideDeclaration
+
+                                {
+                                    SchemaVersion = querySchema
+                                    StableId = typeReference.DeclarationId
+                                    Namespace = String.Empty
+                                    Name = typeReference.TypeName.Name
+                                    IsPublic = false
+                                    EnclosingTypeStableId = Some enclosingTypeStableId
+                                    Kind = ObjectExpressionContainer
+                                    GenericParameters = []
+                                    Attributes = []
+                                    LiteralFields = []
+                                    InstanceFields = []
+                                    Methods = [
+                                        constructor
+                                        overrideMethod
+                                    ]
+                                }
+                            | _ ->
+                                invalidOp
+                                    "object-expression collection returned a different expression"
+                        )
+                    )
+                )
+                |> List.collect id
+
             let closureTypes =
                 modulesWithContentHashes
                 |> List.mapi (fun documentIndex (typed, declarationsWithContentHashes) ->
@@ -5913,6 +6266,7 @@ type internal CompilerService() =
                                     | TypedResumableTryFinally expression ->
                                         Some expression.Compensation
                                     | TypedIntegerLiteral _
+                                    | TypedStringLiteral _
                                     | TypedUnitLiteral
                                     | TypedParameterReference _
                                     | TypedLocalReference _
@@ -5928,6 +6282,7 @@ type internal CompilerService() =
                                     | TypedSequential _
                                     | TypedLocalAssignment _
                                     | TypedBooleanNegation _
+                                    | TypedObjectExpression _
                                     | TypedTraitCall _ -> None
 
                                 match closureExpression with
@@ -6292,6 +6647,7 @@ type internal CompilerService() =
                                         ]
                                     }
                                 | TypedIntegerLiteral _
+                                | TypedStringLiteral _
                                 | TypedUnitLiteral
                                 | TypedParameterReference _
                                 | TypedLocalReference _
@@ -6308,6 +6664,7 @@ type internal CompilerService() =
                                 | TypedBooleanNegation _
                                 | TypedResumableCode _
                                 | TypedResumableTryFinally _
+                                | TypedObjectExpression _
                                 | TypedTraitCall _ -> None
                             )
                         | TypedMethod _
@@ -6471,6 +6828,7 @@ type internal CompilerService() =
                                         ]
                                     }
                                 | TypedIntegerLiteral _
+                                | TypedStringLiteral _
                                 | TypedUnitLiteral
                                 | TypedParameterReference _
                                 | TypedLocalReference _
@@ -6487,6 +6845,7 @@ type internal CompilerService() =
                                 | TypedBooleanNegation _
                                 | TypedResumableCode _
                                 | TypedResumableTryFinally _
+                                | TypedObjectExpression _
                                 | TypedTraitCall _ -> None
                             )
                         | TypedMethod _
@@ -6559,6 +6918,7 @@ type internal CompilerService() =
                 moduleTypes
                 @ staticTypes
                 @ objectTypes
+                @ objectExpressionTypes
                 @ structTypes
                 @ closureTypes
                 @ boundMemberClosureTypes

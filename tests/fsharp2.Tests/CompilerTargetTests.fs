@@ -4897,6 +4897,37 @@ module CompilerTargetTests =
                 finally
                     Directory.Delete(root, true)
 
+            testCase "emits and executes an object expression"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        static member inline Make() : System.Object =\n            { new System.Object() with\n                override _.ToString() = \"object-expression\" }\n"
+
+                withObjectMemberDifferential "fsharp2-object-expression" sourceText "Make"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeMake assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        builderType.GetMethod("Make").Invoke(null, null).ToString()
+
+                    let oracleBehavior = invokeMake oracleOutputPath
+                    let fsharp2Behavior = invokeMake outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the emitted object expression should behave like the Compatibility Oracle"
+
+                    Expect.equal
+                        fsharp2Behavior
+                        "object-expression"
+                        "the override should provide the object-expression result"
+
             testCase "retained service invalidates an IcedTasks inline object-member edit"
             <| fun _ ->
                 let root =
@@ -7004,7 +7035,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "40"
+                        "41"
                         "query cache evidence should be versioned"
 
                     Expect.equal

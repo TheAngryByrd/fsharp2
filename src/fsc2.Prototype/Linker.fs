@@ -349,6 +349,13 @@ module internal Linker =
                 MethodAttributes.Assembly
                 ||| MethodAttributes.HideBySig
           }
+        | ObjectExpressionOverride -> {
+            IsInstance = true
+            Attributes =
+                MethodAttributes.Public
+                ||| MethodAttributes.Virtual
+                ||| MethodAttributes.HideBySig
+          }
 
     let private encodeCallableSignature
         resolveTypeReference
@@ -1368,6 +1375,10 @@ module internal Linker =
                     ||| TypeAttributes.SpecialName
                     ||| enum<TypeAttributes> 0x00002000
                     ||| TypeAttributes.BeforeFieldInit
+                | ObjectExpressionContainer ->
+                    visibility
+                    ||| TypeAttributes.Sealed
+                    ||| enum<TypeAttributes> 0x00002000
 
             let name =
                 if List.isEmpty typeFragment.GenericParameters then
@@ -1384,7 +1395,8 @@ module internal Linker =
                 | ExtensionModuleContainer
                 | StaticMemberContainer
                 | ObjectContainer
-                | ClosureContainer -> systemObject
+                | ClosureContainer
+                | ObjectExpressionContainer -> systemObject
 
             let typeDefinition =
                 metadata.AddTypeDefinition(
