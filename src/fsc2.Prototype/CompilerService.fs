@@ -1663,6 +1663,10 @@ type internal CompilerService() =
                             parsed.StableId
                             + "/type:"
                             + declaration.Name
+                        | ParsedCurrentModuleAugmentation ->
+                            parsed.StableId
+                            + "/augmentation:"
+                            + declaration.Name
                         | ParsedExtensionModule(moduleName, _) ->
                             parsed.StableId
                             + "/module:"
@@ -4037,6 +4041,15 @@ type internal CompilerService() =
                         let typedContainer =
                             match declaration.Container with
                             | OrdinaryObjectType -> Ok OrdinaryTypedObjectType
+                            | ParsedCurrentModuleAugmentation ->
+                                let targetTypeName = {
+                                    Namespace = String.Empty
+                                    Name = declaration.Name
+                                }
+
+                                resolveNamedType 0 targetTypeName declaration.ConstructorRange
+                                |> Result.bind (toCliType Map.empty declaration.ConstructorRange)
+                                |> Result.map TypedCurrentModuleAugmentation
                             | ParsedExtensionModule(moduleName, attributes) ->
                                 let targetTypeName = {
                                     Namespace = String.Empty
@@ -4069,6 +4082,18 @@ type internal CompilerService() =
                                     Fingerprint.parts [
                                         stableId
                                         "constructor:unit"
+
+                                        yield!
+                                            methods
+                                            |> List.map (fun methodDeclaration ->
+                                                methodDeclaration.Method.ExportFingerprint
+                                            )
+                                    ]
+                                | TypedCurrentModuleAugmentation targetType ->
+                                    Fingerprint.parts [
+                                        stableId
+                                        "current-module-augmentation"
+                                        TypeIdentity.cliType targetType
 
                                         yield!
                                             methods
@@ -5006,6 +5031,7 @@ type internal CompilerService() =
                     parameterIndex
                     + 1
                 | ModuleFunction
+                | StaticTypeExtensionMember
                 | StaticInlineMemberStub
                 | ClosureConstructor
                 | ClosureInvoke -> parameterIndex
@@ -5920,9 +5946,9 @@ type internal CompilerService() =
 
                     let methods =
                         declarationsWithContentHashes
-                        |> List.choose (fun (declaration, contentHash) ->
+                        |> List.collect (fun (declaration, contentHash) ->
                             match declaration with
-                            | TypedMethod methodDeclaration ->
+                            | TypedMethod methodDeclaration -> [
                                 methodFragment
                                     ModuleFunction
                                     documentIndex
@@ -5932,12 +5958,73 @@ type internal CompilerService() =
                                      + methodDeclaration.StableId)
                                     contentHash
                                     methodDeclaration
-                                |> Some
+                              ]
+                            | TypedObjectType({
+                                                  Container = TypedCurrentModuleAugmentation extendedType
+                                              } as typeDeclaration) ->
+                                typeDeclaration.Methods
+                                |> List.map (fun objectMethodDeclaration ->
+                                    let kind, methodDeclaration, extensionMethod =
+                                        match objectMethodDeclaration with
+                                        | TypedInstanceObjectMethod(receiverName,
+                                                                    methodDeclaration) ->
+                                            TypeExtensionMember,
+                                            methodDeclaration,
+                                            {
+                                                methodDeclaration with
+                                                    Name =
+                                                        typeDeclaration.Name
+                                                        + "."
+                                                        + methodDeclaration.Name
+                                                    Parameters =
+                                                        {
+                                                            Name = receiverName
+                                                            Type = extendedType
+                                                            Attributes = []
+                                                        }
+                                                        :: methodDeclaration.Parameters
+                                                    ExportFingerprint =
+                                                        Fingerprint.parts [
+                                                            methodDeclaration.ExportFingerprint
+                                                            "type-augmentation"
+                                                            TypeIdentity.cliType extendedType
+                                                        ]
+                                            }
+                                        | TypedStaticObjectMethod methodDeclaration ->
+                                            StaticTypeExtensionMember,
+                                            methodDeclaration,
+                                            {
+                                                methodDeclaration with
+                                                    Name =
+                                                        typeDeclaration.Name
+                                                        + "."
+                                                        + methodDeclaration.Name
+                                                        + ".Static"
+                                                    ExportFingerprint =
+                                                        Fingerprint.parts [
+                                                            methodDeclaration.ExportFingerprint
+                                                            "static-type-augmentation"
+                                                            TypeIdentity.cliType extendedType
+                                                        ]
+                                            }
+
+                                    methodFragment
+                                        kind
+                                        documentIndex
+                                        typed.SourceChecksum
+                                        methodDeclaration.StableId
+                                        (Fingerprint.parts [
+                                            contentHash
+                                            extensionMethod.ExportFingerprint
+                                            methodImplementationHash methodDeclaration
+                                        ])
+                                        extensionMethod
+                                )
                             | TypedLiteralField _
                             | TypedTypeAbbreviation _
                             | TypedStaticType _
                             | TypedObjectType _
-                            | TypedStructType _ -> None
+                            | TypedStructType _ -> []
                         )
 
                     let containsNestedType =
@@ -5946,6 +6033,9 @@ type internal CompilerService() =
                             |> List.exists (
                                 fst
                                 >> function
+                                    | TypedObjectType {
+                                                          Container = TypedCurrentModuleAugmentation _
+                                                      } -> false
                                     | TypedObjectType _
                                     | TypedStructType _ -> true
                                     | _ -> false
@@ -6068,16 +6158,7 @@ type internal CompilerService() =
                     objectExpressions condition
                     @ objectExpressions ifTrue
                     @ objectExpressions ifFalse
-                | TypedTypeTestMatch(input,
-                                     _,
-                                     _,
-                                     _,
-                                     ifMatched,
-                                     ifNotMatched,
-                                     _,
-                                     _,
-                                     _,
-                                     _) ->
+                | TypedTypeTestMatch(input, _, _, _, ifMatched, ifNotMatched, _, _, _, _) ->
                     objectExpressions input
                     @ objectExpressions ifMatched
                     @ objectExpressions ifNotMatched
@@ -6111,6 +6192,7 @@ type internal CompilerService() =
                         match declaration with
                         | TypedObjectType typeDeclaration ->
                             match typeDeclaration.Container with
+                            | TypedCurrentModuleAugmentation _ -> None
                             | TypedExtensionModule(moduleName, attributes, extendedType) ->
                                 let methods =
                                     typeDeclaration.Methods

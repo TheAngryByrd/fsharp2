@@ -305,7 +305,8 @@ module internal Linker =
                 ||| MethodAttributes.Static
                 ||| MethodAttributes.HideBySig
           }
-        | TypeExtensionMember -> {
+        | TypeExtensionMember
+        | StaticTypeExtensionMember -> {
             IsInstance = false
             Attributes =
                 MethodAttributes.Public

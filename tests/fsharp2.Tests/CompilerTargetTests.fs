@@ -4897,6 +4897,100 @@ module CompilerTargetTests =
                 finally
                     Directory.Delete(root, true)
 
+            testCase "emits a static type augmentation in the current module"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.ValueTasks\n\nopen System\n\n[<AutoOpen>]\nmodule ValueTaskExtensions =\n    type String with\n        static member inline Echo(value: int) : int = value\n"
+
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-current-module-type-augmentation",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "ValueTask.fs")
+                    File.WriteAllText(sourcePath, sourceText)
+
+                    let oracleOutputPath = Path.Combine(root, "ValueTask-oracle.dll")
+                    let oracleResponsePath = Path.Combine(root, "oracle.rsp")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root oracleResponsePath [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{oracleOutputPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let responsePath = Path.Combine(root, "fsharp2.rsp")
+
+                    let outputPath, _ =
+                        compileForExportFingerprint root responsePath sourcePath "ValueTask-fsharp2" []
+
+                    let inspectAndInvoke assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let extensionModuleType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.ValueTasks.ValueTaskExtensions",
+                                throwOnError = true
+                            )
+
+                        let publicStaticMethods =
+                            extensionModuleType.GetMethods(
+                                BindingFlags.Public
+                                ||| BindingFlags.Static
+                            )
+
+                        let extensionMethod =
+                            publicStaticMethods
+                            |> Array.tryFind (fun methodInfo ->
+                                methodInfo.Name.Contains(".Echo", StringComparison.Ordinal)
+                            )
+                            |> Option.defaultWith (fun () ->
+                                publicStaticMethods
+                                |> Array.map _.Name
+                                |> String.concat ", "
+                                |> failtestf
+                                    "the source module should expose the static type-augmentation member; found: %s"
+                            )
+
+                        extensionMethod.Name,
+                        extensionMethod.Attributes,
+                        (extensionMethod.GetParameters()
+                         |> Array.map (fun parameter ->
+                             parameter.Name, parameter.ParameterType.FullName
+                         )),
+                        extensionMethod.ReturnType.FullName,
+                        (extensionMethod.Invoke(null, [| box 42 |]) :?> int)
+
+                    let oracleShape = inspectAndInvoke oracleOutputPath
+                    let fsharp2Shape = inspectAndInvoke outputPath
+
+                    Expect.equal
+                        fsharp2Shape
+                        oracleShape
+                        "the static type augmentation should match the Compatibility Oracle"
+
+                    let _, _, _, _, result = fsharp2Shape
+                    Expect.equal result 42 "Echo should return its argument"
+                finally
+                    Directory.Delete(root, true)
+
             testCase "emits and executes an object expression"
             <| fun _ ->
                 let sourceText =
@@ -7071,7 +7165,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "42"
+                        "43"
                         "query cache evidence should be versioned"
 
                     Expect.equal

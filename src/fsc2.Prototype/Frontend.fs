@@ -949,8 +949,7 @@ module internal Frontend =
                         let! matchToken = expected MatchKeyword "expected 'match'"
                         let! inputExpression, _ = parseExpression ()
 
-                        let! withToken =
-                            expected WithKeyword "expected 'with' after a match input"
+                        let! withToken = expected WithKeyword "expected 'with' after a match input"
 
                         let matchHeaderRange = {
                             Start = matchToken.Range.Start
@@ -969,7 +968,11 @@ module internal Frontend =
                                         parseResult {
                                             let typeTestToken = consume ()
                                             let! targetType = parseTypeExpression ()
-                                            let! _ = expected AsKeyword "expected 'as' in a type-test pattern"
+
+                                            let! _ =
+                                                expected
+                                                    AsKeyword
+                                                    "expected 'as' in a type-test pattern"
 
                                             let! bindingName, bindingToken =
                                                 identifier "expected a type-test binding name"
@@ -1003,7 +1006,10 @@ module internal Frontend =
                                     let token = current ()
 
                                     match token.Kind with
-                                    | Bar when token.Range.Start.Column <= clauseIndent ->
+                                    | Bar when
+                                        token.Range.Start.Column
+                                        <= clauseIndent
+                                        ->
                                         Ok(sequenceExpression expressions)
                                     | RightParenthesis
                                     | RightBrace
@@ -1014,7 +1020,10 @@ module internal Frontend =
                                     | TypeKeyword
                                     | AndKeyword
                                     | ElseKeyword -> Ok(sequenceExpression expressions)
-                                    | _ when token.Range.Start.Column >= bodyIndent ->
+                                    | _ when
+                                        token.Range.Start.Column
+                                        >= bodyIndent
+                                        ->
                                         parseExpression ()
                                         |> Result.bind (fun expression ->
                                             parseBody (
@@ -2737,8 +2746,15 @@ module internal Frontend =
                                 }
                             | _ -> Ok(List.rev fields)
 
+                        let isCurrentModuleAugmentation = (current ()).Kind = WithKeyword
+
                         let! isObjectType =
                             match (current ()).Kind with
+                            | WithKeyword ->
+                                consume ()
+                                |> ignore
+
+                                Ok false
                             | LeftParenthesis ->
                                 parseResult {
                                     let! _ = expected LeftParenthesis "expected '('"
@@ -2747,140 +2763,182 @@ module internal Frontend =
                                 }
                             | _ -> Ok false
 
-                        let! _ = expected Equals "expected '='"
+                        let! _ =
+                            if isCurrentModuleAugmentation then
+                                Ok typeToken
+                            else
+                                expected Equals "expected '='"
 
                         return!
-                            match isObjectType, (current ()).Kind with
-                            | true, _ when
-                                not (List.isEmpty attributes)
-                                || not (List.isEmpty typeParameters)
-                                || not (List.isEmpty constraints)
-                                ->
-                                Error(
-                                    prototypeDiagnostic
-                                        source.Path
-                                        typeToken.Range
-                                        "attributed or generic object types are not yet supported"
-                                )
-                            | true, MemberKeyword
-                            | true, StaticKeyword
-                            | true, AttributeStart ->
-                                parseObjectMethods []
-                                |> Result.bind (fun methods ->
-                                    match List.tryLast methods with
-                                    | Some lastMethod ->
-                                        Ok(
-                                            ParsedObjectType {
-                                                Container = OrdinaryObjectType
-                                                Name = declarationName
-                                                Methods = methods
-                                                ConstructorRange = declarationNameToken.Range
-                                                Range = {
-                                                    Start = typeToken.Range.Start
-                                                    End = lastMethod.Range.End
+                            if isCurrentModuleAugmentation then
+                                if
+                                    not (List.isEmpty attributes)
+                                    || not (List.isEmpty typeParameters)
+                                    || not (List.isEmpty constraints)
+                                then
+                                    Error(
+                                        prototypeDiagnostic
+                                            source.Path
+                                            typeToken.Range
+                                            "attributed or generic type augmentations are not yet supported"
+                                    )
+                                else
+                                    parseObjectMethods []
+                                    |> Result.bind (fun methods ->
+                                        match List.tryLast methods with
+                                        | Some lastMethod ->
+                                            Ok(
+                                                ParsedObjectType {
+                                                    Container = ParsedCurrentModuleAugmentation
+                                                    Name = declarationName
+                                                    Methods = methods
+                                                    ConstructorRange = declarationNameToken.Range
+                                                    Range = {
+                                                        Start = typeToken.Range.Start
+                                                        End = lastMethod.Range.End
+                                                    }
                                                 }
-                                            }
-                                        )
-                                    | None ->
-                                        Error(
-                                            prototypeDiagnostic
-                                                source.Path
-                                                (current ()).Range
-                                                "an object type must declare an instance member"
-                                        )
-                                )
-                            | true, _ ->
-                                Error(
-                                    prototypeDiagnostic
-                                        source.Path
-                                        (current ()).Range
-                                        "an object type must declare an instance member"
-                                )
-                            | false, AttributeStart when not (List.isEmpty attributes) ->
-                                parseFields []
-                                |> Result.bind (fun fields ->
-                                    match List.tryLast fields with
-                                    | Some lastField ->
-                                        Ok(
-                                            ParsedStructType {
+                                            )
+                                        | None ->
+                                            Error(
+                                                prototypeDiagnostic
+                                                    source.Path
+                                                    (current ()).Range
+                                                    "a type augmentation must declare a member"
+                                            )
+                                    )
+                            else
+                                match isObjectType, (current ()).Kind with
+                                | true, _ when
+                                    not (List.isEmpty attributes)
+                                    || not (List.isEmpty typeParameters)
+                                    || not (List.isEmpty constraints)
+                                    ->
+                                    Error(
+                                        prototypeDiagnostic
+                                            source.Path
+                                            typeToken.Range
+                                            "attributed or generic object types are not yet supported"
+                                    )
+                                | true, MemberKeyword
+                                | true, StaticKeyword
+                                | true, AttributeStart ->
+                                    parseObjectMethods []
+                                    |> Result.bind (fun methods ->
+                                        match List.tryLast methods with
+                                        | Some lastMethod ->
+                                            Ok(
+                                                ParsedObjectType {
+                                                    Container = OrdinaryObjectType
+                                                    Name = declarationName
+                                                    Methods = methods
+                                                    ConstructorRange = declarationNameToken.Range
+                                                    Range = {
+                                                        Start = typeToken.Range.Start
+                                                        End = lastMethod.Range.End
+                                                    }
+                                                }
+                                            )
+                                        | None ->
+                                            Error(
+                                                prototypeDiagnostic
+                                                    source.Path
+                                                    (current ()).Range
+                                                    "an object type must declare an instance member"
+                                            )
+                                    )
+                                | true, _ ->
+                                    Error(
+                                        prototypeDiagnostic
+                                            source.Path
+                                            (current ()).Range
+                                            "an object type must declare an instance member"
+                                    )
+                                | false, AttributeStart when not (List.isEmpty attributes) ->
+                                    parseFields []
+                                    |> Result.bind (fun fields ->
+                                        match List.tryLast fields with
+                                        | Some lastField ->
+                                            Ok(
+                                                ParsedStructType {
+                                                    Name = declarationName
+                                                    TypeParameters = typeParameters
+                                                    Attributes = attributes
+                                                    Fields = fields
+                                                    Range = {
+                                                        Start = typeToken.Range.Start
+                                                        End = lastField.Range.End
+                                                    }
+                                                }
+                                            )
+                                        | None ->
+                                            Error(
+                                                prototypeDiagnostic
+                                                    source.Path
+                                                    (current ()).Range
+                                                    "an attributed struct type must declare a field"
+                                            )
+                                    )
+                                | false, StaticKeyword when
+                                    List.isEmpty typeParameters
+                                    && List.isEmpty constraints
+                                    ->
+                                    parseStaticMethods []
+                                    |> Result.bind (fun methods ->
+                                        match List.tryLast methods with
+                                        | Some lastMethod ->
+                                            Ok(
+                                                ParsedStaticType {
+                                                    Name = declarationName
+                                                    Methods = methods
+                                                    Range = {
+                                                        Start = typeToken.Range.Start
+                                                        End = lastMethod.Range.End
+                                                    }
+                                                }
+                                            )
+                                        | None ->
+                                            Error(
+                                                prototypeDiagnostic
+                                                    source.Path
+                                                    (current ()).Range
+                                                    "a static type must declare a member"
+                                            )
+                                    )
+                                | false, _ ->
+                                    parseResult {
+                                        let targetStart = (current ()).Range.Start
+                                        let! targetType = parseTypeExpression ()
+
+                                        let! allowsNull, targetEnd =
+                                            match (current ()).Kind with
+                                            | Bar ->
+                                                consume ()
+                                                |> ignore
+
+                                                match
+                                                    expected NullKeyword "expected 'null' after '|'"
+                                                with
+                                                | Error error -> Error error
+                                                | Ok nullToken -> Ok(true, nullToken.Range.End)
+                                            | _ -> Ok(false, input.[index - 1].Range.End)
+
+                                        return
+                                            ParsedTypeAbbreviation {
                                                 Name = declarationName
                                                 TypeParameters = typeParameters
-                                                Attributes = attributes
-                                                Fields = fields
+                                                Constraints = constraints
+                                                Target = {
+                                                    Type = targetType
+                                                    AllowsNull = allowsNull
+                                                    Range = { Start = targetStart; End = targetEnd }
+                                                }
                                                 Range = {
                                                     Start = typeToken.Range.Start
-                                                    End = lastField.Range.End
+                                                    End = targetEnd
                                                 }
                                             }
-                                        )
-                                    | None ->
-                                        Error(
-                                            prototypeDiagnostic
-                                                source.Path
-                                                (current ()).Range
-                                                "an attributed struct type must declare a field"
-                                        )
-                                )
-                            | false, StaticKeyword when
-                                List.isEmpty typeParameters
-                                && List.isEmpty constraints
-                                ->
-                                parseStaticMethods []
-                                |> Result.bind (fun methods ->
-                                    match List.tryLast methods with
-                                    | Some lastMethod ->
-                                        Ok(
-                                            ParsedStaticType {
-                                                Name = declarationName
-                                                Methods = methods
-                                                Range = {
-                                                    Start = typeToken.Range.Start
-                                                    End = lastMethod.Range.End
-                                                }
-                                            }
-                                        )
-                                    | None ->
-                                        Error(
-                                            prototypeDiagnostic
-                                                source.Path
-                                                (current ()).Range
-                                                "a static type must declare a member"
-                                        )
-                                )
-                            | false, _ ->
-                                parseResult {
-                                    let targetStart = (current ()).Range.Start
-                                    let! targetType = parseTypeExpression ()
-
-                                    let! allowsNull, targetEnd =
-                                        match (current ()).Kind with
-                                        | Bar ->
-                                            consume ()
-                                            |> ignore
-
-                                            match
-                                                expected NullKeyword "expected 'null' after '|'"
-                                            with
-                                            | Error error -> Error error
-                                            | Ok nullToken -> Ok(true, nullToken.Range.End)
-                                        | _ -> Ok(false, input.[index - 1].Range.End)
-
-                                    return
-                                        ParsedTypeAbbreviation {
-                                            Name = declarationName
-                                            TypeParameters = typeParameters
-                                            Constraints = constraints
-                                            Target = {
-                                                Type = targetType
-                                                AllowsNull = allowsNull
-                                                Range = { Start = targetStart; End = targetEnd }
-                                            }
-                                            Range = {
-                                                Start = typeToken.Range.Start
-                                                End = targetEnd
-                                            }
-                                        }
-                                }
+                                    }
                     }
 
                 let parseExtensionModule attributes =
