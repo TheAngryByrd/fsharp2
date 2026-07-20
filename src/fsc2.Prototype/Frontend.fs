@@ -1656,6 +1656,11 @@ module internal Frontend =
 
                         let parseParameter () =
                             parseResult {
+                                let! attributes =
+                                    match (current ()).Kind with
+                                    | AttributeStart -> parseDeclarationAttributes ()
+                                    | _ -> Ok []
+
                                 let! parameterName, parameterToken =
                                     identifier "expected a parameter name"
 
@@ -1663,6 +1668,7 @@ module internal Frontend =
                                 let! parameterType = parseTypeExpression ()
 
                                 return {
+                                    Attributes = attributes
                                     Name = parameterName
                                     Type = parameterType
                                     Range = {

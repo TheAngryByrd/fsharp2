@@ -31,7 +31,7 @@ module CompilerTargetTests =
         Attributes: MethodAttributes
         ImplementationAttributes: MethodImplAttributes
         Signature: string
-        Parameters: (int * string * ParameterAttributes) array
+        Parameters: (int * string * ParameterAttributes * (string * string * string) array) array
         GenericParameters: (int * string * GenericParameterAttributes) array
         GenericParameterConstraints: (int * string array) array
         CustomAttributes: (string * string * string) array
@@ -425,7 +425,10 @@ module CompilerTargetTests =
 
                         int parameter.SequenceNumber,
                         metadata.GetString(parameter.Name),
-                        parameter.Attributes
+                        parameter.Attributes,
+                        (parameter.GetCustomAttributes()
+                         |> Seq.map customAttributeShape
+                         |> Seq.toArray)
                     )
                     |> Seq.toArray
                 GenericParameters =
@@ -2725,6 +2728,472 @@ module CompilerTargetTests =
                         unattributedFingerprint
                         attributedFingerprint
                         "removing a consumer-visible member attribute should change the export fingerprint"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "matches the Oracle InlineIfLambda attribute on an object-member parameter"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-inline-if-lambda-parameter",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                let pipeName =
+                    "fsharp2-"
+                    + Guid.NewGuid().ToString("N")
+
+                use service = startCompilerService root pipeName
+
+                try
+                    let sourcePath = Path.Combine(root, "TaskBuilderBase.fs")
+
+                    let attributedSource =
+                        "namespace IcedTasks.TaskBase\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.While\n            (\n                [<InlineIfLambda>] guard: unit -> bool,\n                computation: int\n            ) : int =\n            computation\n"
+
+                    File.WriteAllText(sourcePath, attributedSource)
+
+                    let oracleOutputPath = Path.Combine(root, "TaskBuilderBase-oracle.dll")
+                    let oraclePdbPath = Path.Combine(root, "TaskBuilderBase-oracle.pdb")
+                    let oracleResponsePath = Path.Combine(root, "oracle.rsp")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root oracleResponsePath [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{oracleOutputPath}"
+                            $"--pdb:{oraclePdbPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let responsePath = Path.Combine(root, "fsharp2.rsp")
+
+                    let outputPath, attributedFingerprint =
+                        compileForExportFingerprint
+                            root
+                            responsePath
+                            sourcePath
+                            "TaskBuilderBase-fsharp2"
+                            []
+
+                    let pdbPath = Path.ChangeExtension(outputPath, ".pdb")
+
+                    Expect.equal
+                        (objectTypeMetadataShape outputPath pdbPath "While")
+                        (objectTypeMetadataShape oracleOutputPath oraclePdbPath "While")
+                        "the attributed parameter should match the Compatibility Oracle's CLR and portable-PDB surface"
+
+                    let emittedAssembly = Assembly.Load(File.ReadAllBytes(outputPath))
+
+                    let builderType =
+                        emittedAssembly.GetType(
+                            "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                            throwOnError = true
+                        )
+
+                    let builder = Activator.CreateInstance(builderType)
+                    let whileMethod = builderType.GetMethod("While")
+
+                    Expect.equal
+                        (whileMethod.Invoke(
+                            builder,
+                            [|
+                                null
+                                box 42
+                            |]
+                        ))
+                        (box 42)
+                        "the attributed parameter should remain executable"
+
+                    File.WriteAllText(
+                        sourcePath,
+                        attributedSource.Replace(
+                            "                [<InlineIfLambda>] guard",
+                            "\n                [<InlineIfLambda>] guard"
+                        )
+                    )
+
+                    let _, relocatedFingerprint =
+                        compileForExportFingerprint
+                            root
+                            responsePath
+                            sourcePath
+                            "TaskBuilderBase-relocated-parameter-attribute"
+                            []
+
+                    Expect.equal
+                        relocatedFingerprint
+                        attributedFingerprint
+                        "moving a parameter attribute without changing its meaning should preserve the export fingerprint"
+
+                    File.WriteAllText(
+                        sourcePath,
+                        attributedSource.Replace("[<InlineIfLambda>] ", String.Empty)
+                    )
+
+                    let _, unattributedFingerprint =
+                        compileForExportFingerprint
+                            root
+                            responsePath
+                            sourcePath
+                            "TaskBuilderBase-without-parameter-attribute"
+                            []
+
+                    Expect.notEqual
+                        unattributedFingerprint
+                        attributedFingerprint
+                        "removing a consumer-visible parameter attribute should change the export fingerprint"
+
+                    let retainedOutputPath = Path.Combine(root, "TaskBuilderBase-retained.dll")
+                    let retainedPdbPath = Path.Combine(root, "TaskBuilderBase-retained.pdb")
+                    let systemRuntimePath = Assembly.Load("System.Runtime").Location
+
+                    let compileRetained (sourceText: string) traceName =
+                        let retainedResponsePath =
+                            Path.Combine(
+                                root,
+                                traceName
+                                + ".rsp"
+                            )
+
+                        let tracePath =
+                            Path.Combine(
+                                root,
+                                traceName
+                                + ".trace"
+                            )
+
+                        File.WriteAllText(sourcePath, sourceText)
+
+                        File.WriteAllLines(
+                            retainedResponsePath,
+                            [|
+                                $"--fsharp2-server:{pipeName}"
+                                $"--fsharp2-trace:{tracePath}"
+                                "--target:library"
+                                "--deterministic+"
+                                "--debug:portable"
+                                $"--reference:{typeof<Microsoft.FSharp.Core.InlineIfLambdaAttribute>.Assembly.Location}"
+                                $"--reference:{systemRuntimePath}"
+                                $"--out:{retainedOutputPath}"
+                                $"--pdb:{retainedPdbPath}"
+                                sourcePath
+                            |]
+                        )
+
+                        let result = invokeFsc2 root retainedResponsePath
+
+                        Expect.equal
+                            result.ExitCode
+                            0
+                            (result.StandardOutput
+                             + result.StandardError)
+
+                        readTrace tracePath
+
+                    let unattributedSource =
+                        attributedSource.Replace("[<InlineIfLambda>] ", String.Empty)
+
+                    let retainedBaseline = compileRetained attributedSource "retained-baseline"
+                    let retainedEdited = compileRetained unattributedSource "retained-edited"
+                    let retainedReplay = compileRetained unattributedSource "retained-replay"
+
+                    for traceName, trace in
+                        [
+                            "baseline", retainedBaseline
+                            "edited", retainedEdited
+                            "replay", retainedReplay
+                        ] do
+                        Expect.equal
+                            trace.["servicePid"]
+                            retainedBaseline.["servicePid"]
+                            $"the retained {traceName} request should use the same compiler service"
+
+                    Expect.notEqual
+                        retainedEdited.["exportFingerprint"]
+                        retainedBaseline.["exportFingerprint"]
+                        "removing the parameter attribute should invalidate consumer-visible meaning"
+
+                    Expect.notEqual
+                        retainedEdited.["fragmentHash"]
+                        retainedBaseline.["fragmentHash"]
+                        "removing the emitted parameter attribute should invalidate the symbolic fragment"
+
+                    Expect.equal
+                        retainedEdited.["previousContentFingerprint"]
+                        retainedBaseline.["contentFingerprint"]
+                        "the attribute edit should identify the retained semantic state it replaced"
+
+                    Expect.equal
+                        retainedEdited.["invalidationReason"]
+                        "source-content-changed"
+                        "the trace should explain the attribute edit"
+
+                    Expect.equal
+                        retainedEdited.["parse"]
+                        "miss"
+                        "the attribute edit should be reparsed"
+
+                    Expect.equal
+                        retainedEdited.["check"]
+                        "miss"
+                        "the attribute edit should be rechecked"
+
+                    Expect.equal
+                        retainedEdited.["lower"]
+                        "miss"
+                        "the attribute edit should be re-emitted"
+
+                    Expect.equal
+                        retainedReplay.["parse"]
+                        "hit"
+                        "an identical attribute-free replay should reuse parsing"
+
+                    Expect.equal
+                        retainedReplay.["check"]
+                        "hit"
+                        "an identical attribute-free replay should reuse checking"
+
+                    Expect.equal
+                        retainedReplay.["lower"]
+                        "hit"
+                        "an identical attribute-free replay should reuse symbolic lowering"
+                finally
+                    if not service.HasExited then
+                        service.Kill(true)
+
+                        service.WaitForExit(10_000)
+                        |> ignore
+
+                    Directory.Delete(root, true)
+
+            testCase "accepts InlineIfLambda on an F# delegate parameter like the Oracle"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-inline-if-lambda-delegate-parameter",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let delegateSourcePath = Path.Combine(root, "DelegateLibrary.fs")
+                    let delegateAssemblyPath = Path.Combine(root, "DelegateLibrary.dll")
+                    let delegateResponsePath = Path.Combine(root, "delegate.rsp")
+
+                    File.WriteAllText(
+                        delegateSourcePath,
+                        "namespace DelegateLibrary\n\ntype Callback = delegate of unit -> unit\n"
+                    )
+
+                    let delegateResult =
+                        invokeCompatibilityOracle root delegateResponsePath [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--optimize-"
+                            $"--out:{delegateAssemblyPath}"
+                            delegateSourcePath
+                        ]
+
+                    Expect.equal
+                        delegateResult.ExitCode
+                        0
+                        (delegateResult.StandardOutput
+                         + delegateResult.StandardError)
+
+                    let sourcePath = Path.Combine(root, "TaskBuilderBase.fs")
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "namespace IcedTasks.TaskBase\n\nopen DelegateLibrary\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Delay([<InlineIfLambda>] callback: Callback) : int = 42\n"
+                    )
+
+                    let oracleOutputPath = Path.Combine(root, "TaskBuilderBase-oracle.dll")
+                    let oraclePdbPath = Path.Combine(root, "TaskBuilderBase-oracle.pdb")
+                    let oracleResponsePath = Path.Combine(root, "oracle.rsp")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root oracleResponsePath [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--reference:{delegateAssemblyPath}"
+                            $"--out:{oracleOutputPath}"
+                            $"--pdb:{oraclePdbPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let outputPath, _ =
+                        compileForExportFingerprint
+                            root
+                            (Path.Combine(root, "fsharp2.rsp"))
+                            sourcePath
+                            "TaskBuilderBase-fsharp2"
+                            [ delegateAssemblyPath ]
+
+                    let pdbPath = Path.ChangeExtension(outputPath, ".pdb")
+
+                    Expect.equal
+                        (objectTypeMetadataShape outputPath pdbPath "Delay")
+                        (objectTypeMetadataShape oracleOutputPath oraclePdbPath "Delay")
+                        "the F# delegate parameter should match the Compatibility Oracle's CLR and portable-PDB surface"
+
+                    let loadContext =
+                        new System.Runtime.Loader.AssemblyLoadContext(
+                            "fsharp2-inline-if-lambda-delegate",
+                            isCollectible = true
+                        )
+
+                    use delegateStream = File.OpenRead(delegateAssemblyPath)
+                    use outputStream = File.OpenRead(outputPath)
+
+                    loadContext.LoadFromStream(delegateStream)
+                    |> ignore
+
+                    let emittedAssembly = loadContext.LoadFromStream(outputStream)
+
+                    let builderType =
+                        emittedAssembly.GetType(
+                            "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                            throwOnError = true
+                        )
+
+                    let builder = Activator.CreateInstance(builderType)
+                    let delayMethod = builderType.GetMethod("Delay")
+
+                    Expect.equal
+                        (delayMethod.Invoke(builder, [| null |]))
+                        (box 42)
+                        "an attributed F# delegate parameter should remain executable"
+
+                    loadContext.Unload()
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "rejects InlineIfLambda on a non-function parameter like the Oracle"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-invalid-inline-if-lambda-parameter",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "TaskBuilderBase.fs")
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "namespace IcedTasks.TaskBase\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Return([<InlineIfLambda>] value: int) : int = value\n"
+                    )
+
+                    let fsharpCorePath =
+                        typeof<Microsoft.FSharp.Core.InlineIfLambdaAttribute>.Assembly.Location
+
+                    let systemRuntimePath = Assembly.Load("System.Runtime").Location
+                    let oracleOutputPath = Path.Combine(root, "TaskBuilderBase-oracle.dll")
+                    let oraclePdbPath = Path.Combine(root, "TaskBuilderBase-oracle.pdb")
+                    let oracleResponsePath = Path.Combine(root, "oracle.rsp")
+
+                    let commonArguments = [
+                        "--nologo"
+                        "--target:library"
+                        "--targetprofile:netcore"
+                        "--fullpaths"
+                        "--flaterrors"
+                        "--utf8output"
+                        "--deterministic+"
+                        "--debug:portable"
+                        "--optimize-"
+                        $"--reference:{fsharpCorePath}"
+                        $"--reference:{systemRuntimePath}"
+                    ]
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root oracleResponsePath [
+                            yield! commonArguments
+                            $"--out:{oracleOutputPath}"
+                            $"--pdb:{oraclePdbPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        1
+                        "the Compatibility Oracle should reject InlineIfLambda on an int parameter"
+
+                    Expect.stringContains
+                        oracleResult.StandardError
+                        "FS3519"
+                        "the Compatibility Oracle should report FS3519"
+
+                    let outputPath = Path.Combine(root, "TaskBuilderBase-fsharp2.dll")
+                    let pdbPath = Path.Combine(root, "TaskBuilderBase-fsharp2.pdb")
+                    let responsePath = Path.Combine(root, "fsharp2.rsp")
+
+                    File.WriteAllLines(
+                        responsePath,
+                        [|
+                            yield! commonArguments
+                            $"--out:{outputPath}"
+                            $"--pdb:{pdbPath}"
+                            sourcePath
+                        |]
+                    )
+
+                    let result = invokeFsc2 root responsePath
+
+                    Expect.equal
+                        result.ExitCode
+                        oracleResult.ExitCode
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    Expect.equal
+                        result.StandardOutput
+                        oracleResult.StandardOutput
+                        "the invalid attribute should have the Oracle standard-output behavior"
+
+                    Expect.equal
+                        result.StandardError
+                        oracleResult.StandardError
+                        "the invalid attribute should have the exact Oracle diagnostic"
+
+                    Expect.isFalse
+                        (File.Exists outputPath)
+                        "a rejected parameter attribute should not emit an implementation assembly"
+
+                    Expect.isFalse
+                        (File.Exists pdbPath)
+                        "a rejected parameter attribute should not emit a portable PDB"
                 finally
                     Directory.Delete(root, true)
 
@@ -5317,7 +5786,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "19"
+                        "20"
                         "query cache evidence should be versioned"
 
                     Expect.equal

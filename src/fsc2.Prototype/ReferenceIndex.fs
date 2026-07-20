@@ -52,9 +52,13 @@ type internal ReferenceTypeIndex
     (
         fingerprint: string,
         types: Dictionary<TypeNameArity, ResolvedTypeName>,
-        typesBySimpleName: Dictionary<TypeNameArity, ResolvedTypeName list>
+        typesBySimpleName: Dictionary<TypeNameArity, ResolvedTypeName list>,
+        fsharpDelegateDeclarationIds: HashSet<string>
     ) =
     member _.Fingerprint = fingerprint
+
+    member _.IsFSharpDelegate(declarationId: string) =
+        fsharpDelegateDeclarationIds.Contains(declarationId)
 
     member _.Resolve
         (
@@ -65,11 +69,7 @@ type internal ReferenceTypeIndex
         ) =
         let knownAlias =
             match syntaxName.Namespace, syntaxName.Name with
-            | "", "int" ->
-                Some {
-                    Namespace = "System"
-                    Name = "Int32"
-                }
+            | "", "int" -> Some { Namespace = "System"; Name = "Int32" }
             | "", "bool" ->
                 Some {
                     Namespace = "System"
@@ -150,12 +150,15 @@ type internal ReferenceTypeIndex
 
         let bySimpleName = Dictionary<TypeNameArity, ResizeArray<ResolvedTypeName>>()
 
+        let fsharpDelegateDeclarationIds = HashSet<string>(StringComparer.Ordinal)
+
         let referenceIdentities = ResizeArray<string>()
 
         let addType
             declarationOwner
             assemblyName
             isValueType
+            isFSharpDelegate
             (namespaceName: string)
             (metadataName: string)
             =
@@ -186,6 +189,10 @@ type internal ReferenceTypeIndex
                 }
 
                 if types.TryAdd(key, resolved) then
+                    if isFSharpDelegate then
+                        fsharpDelegateDeclarationIds.Add(resolved.DeclarationId)
+                        |> ignore
+
                     let key = ReferenceTypeName.simpleKey name genericArity
 
                     match bySimpleName.TryGetValue(key) with
@@ -253,24 +260,97 @@ type internal ReferenceTypeIndex
                         "reference-module|"
                         + contentHash
 
-                let isValueType (definition: TypeDefinition) =
-                    if
-                        definition.BaseType.Kind
-                        <> HandleKind.TypeReference
-                    then
-                        false
-                    else
-                        let baseType =
-                            definition.BaseType
-                            |> MetadataTokens.GetRowNumber
-                            |> MetadataTokens.TypeReferenceHandle
-                            |> metadata.GetTypeReference
+                let qualifiedTypeName namespaceName name : QualifiedTypeName = {
+                    Namespace = namespaceName
+                    Name = name
+                }
 
-                        metadata.GetString(baseType.Namespace) = "System"
-                        && (match metadata.GetString(baseType.Name) with
-                            | "ValueType"
-                            | "Enum" -> true
-                            | _ -> false)
+                let typeReferenceName handle =
+                    let typeReference =
+                        handle
+                        |> MetadataTokens.GetRowNumber
+                        |> MetadataTokens.TypeReferenceHandle
+                        |> metadata.GetTypeReference
+
+                    qualifiedTypeName
+                        (metadata.GetString(typeReference.Namespace))
+                        (metadata.GetString(typeReference.Name))
+
+                let typeDefinitionName handle =
+                    let typeDefinition =
+                        handle
+                        |> MetadataTokens.GetRowNumber
+                        |> MetadataTokens.TypeDefinitionHandle
+                        |> metadata.GetTypeDefinition
+
+                    qualifiedTypeName
+                        (metadata.GetString(typeDefinition.Namespace))
+                        (metadata.GetString(typeDefinition.Name))
+
+                let entityTypeName (handle: EntityHandle) =
+                    if handle.IsNil then
+                        None
+                    else
+                        match handle.Kind with
+                        | HandleKind.TypeReference -> Some(typeReferenceName handle)
+                        | HandleKind.TypeDefinition -> Some(typeDefinitionName handle)
+                        | _ -> None
+
+                let baseTypeName (definition: TypeDefinition) = entityTypeName definition.BaseType
+
+                let isValueType (definition: TypeDefinition) =
+                    match baseTypeName definition with
+                    | Some typeName when
+                        typeName = qualifiedTypeName "System" "ValueType"
+                        || typeName = qualifiedTypeName "System" "Enum"
+                        ->
+                        true
+                    | _ -> false
+
+                let customAttributeTypeName (attribute: CustomAttribute) =
+                    match attribute.Constructor.Kind with
+                    | HandleKind.MemberReference ->
+                        let constructor =
+                            attribute.Constructor
+                            |> MetadataTokens.GetRowNumber
+                            |> MetadataTokens.MemberReferenceHandle
+                            |> metadata.GetMemberReference
+
+                        entityTypeName constructor.Parent
+                    | HandleKind.MethodDefinition ->
+                        let constructor =
+                            attribute.Constructor
+                            |> MetadataTokens.GetRowNumber
+                            |> MetadataTokens.MethodDefinitionHandle
+                            |> metadata.GetMethodDefinition
+
+                        let declaringType =
+                            constructor.GetDeclaringType()
+                            |> metadata.GetTypeDefinition
+
+                        qualifiedTypeName
+                            (metadata.GetString(declaringType.Namespace))
+                            (metadata.GetString(declaringType.Name))
+                        |> Some
+                    | _ -> None
+
+                let isFSharpDelegate (definition: TypeDefinition) =
+                    match baseTypeName definition with
+                    | Some baseType when
+                        baseType.Namespace = "System"
+                        && baseType.Name = "MulticastDelegate"
+                        ->
+                        definition.GetCustomAttributes()
+                        |> Seq.exists (fun handle ->
+                            handle
+                            |> metadata.GetCustomAttribute
+                            |> customAttributeTypeName
+                            |> Option.exists (fun attributeType ->
+                                attributeType.Namespace = "Microsoft.FSharp.Core"
+                                && attributeType.Name = "CompilationMappingAttribute"
+                            )
+                        )
+                    | _ -> false
 
                 for handle in metadata.TypeDefinitions do
                     let definition = metadata.GetTypeDefinition(handle)
@@ -280,6 +360,7 @@ type internal ReferenceTypeIndex
                             declarationOwner
                             assemblyName
                             (isValueType definition)
+                            (isFSharpDelegate definition)
                             (metadata.GetString(definition.Namespace))
                             (metadata.GetString(definition.Name))
 
@@ -289,6 +370,7 @@ type internal ReferenceTypeIndex
                     addType
                         declarationOwner
                         assemblyName
+                        false
                         false
                         (metadata.GetString(exportedType.Namespace))
                         (metadata.GetString(exportedType.Name))
@@ -310,6 +392,13 @@ type internal ReferenceTypeIndex
                     |> List.ofSeq
                 )
 
-            Ok(ReferenceTypeIndex(fingerprint, types, frozenBySimpleName))
+            Ok(
+                ReferenceTypeIndex(
+                    fingerprint,
+                    types,
+                    frozenBySimpleName,
+                    fsharpDelegateDeclarationIds
+                )
+            )
         with error ->
             Error error.Message

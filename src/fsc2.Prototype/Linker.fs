@@ -500,6 +500,7 @@ module internal Linker =
         | NoComparisonAttribute -> "NoComparisonAttribute"
         | NoEqualityAttribute -> "NoEqualityAttribute"
         | DefaultValueAttribute -> "DefaultValueAttribute"
+        | InlineIfLambdaAttribute -> "InlineIfLambdaAttribute"
         | CompilationMappingAttribute -> "CompilationMappingAttribute"
 
     let private encodeKnownAttributeConstructorSignature
@@ -629,6 +630,9 @@ module internal Linker =
 
                 for methodFragment in typeFragment.Methods do
                     yield! methodFragment.Attributes
+
+                    for parameterFragment in methodFragment.Parameters do
+                        yield! parameterFragment.Attributes
         ]
 
         let rec invalidTypeExpression =
@@ -710,6 +714,14 @@ module internal Linker =
                                     symbolic.SchemaVersion
                                     <> attribute.SchemaVersion
                                 ))
+                            || (methodFragment.Parameters
+                                |> List.exists (fun parameterFragment ->
+                                    parameterFragment.Attributes
+                                    |> List.exists (fun attribute ->
+                                        symbolic.SchemaVersion
+                                        <> attribute.SchemaVersion
+                                    )
+                                ))
                         ))
                 ))
         then
@@ -760,6 +772,13 @@ module internal Linker =
                             || (methodFragment.Attributes
                                 |> List.exists (fun attribute ->
                                     String.IsNullOrWhiteSpace(attribute.StableId)
+                                ))
+                            || (methodFragment.Parameters
+                                |> List.exists (fun parameterFragment ->
+                                    parameterFragment.Attributes
+                                    |> List.exists (fun attribute ->
+                                        String.IsNullOrWhiteSpace(attribute.StableId)
+                                    )
                                 ))
                         ))
                 ))
@@ -1342,12 +1361,21 @@ module internal Linker =
 
             methodFragment.Parameters
             |> List.iteri (fun index parameter ->
-                metadata.AddParameter(
-                    ParameterAttributes.None,
-                    metadata.GetOrAddString(parameter.Name),
-                    index + 1
-                )
-                |> ignore
+                let parameterDefinition =
+                    metadata.AddParameter(
+                        ParameterAttributes.None,
+                        metadata.GetOrAddString(parameter.Name),
+                        index + 1
+                    )
+
+                let parent =
+                    MetadataTokens.EntityHandle(
+                        TableIndex.Param,
+                        MetadataTokens.GetRowNumber(parameterDefinition)
+                    )
+
+                for attribute in parameter.Attributes do
+                    addKnownCustomAttribute parent attribute
 
                 nextParameterRow <-
                     nextParameterRow

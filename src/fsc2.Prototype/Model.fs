@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 19
+    let Query = 20
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -242,6 +242,7 @@ type internal ParsedLiteralFieldDeclaration = {
     override _.ToString() = "ParsedLiteralFieldDeclaration"
 
 type internal ParsedParameter = {
+    Attributes: ParsedAttribute list
     Name: string
     Type: ParsedTypeExpression
     Range: SourceRange
@@ -616,13 +617,6 @@ type internal TypedMethodConstraint =
 
     override _.ToString() = "TypedMethodConstraint"
 
-type internal TypedParameter = {
-    Name: string
-    Type: CliType
-} with
-
-    override _.ToString() = "TypedParameter"
-
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
 type internal KnownAttributeKind =
     | AutoOpenAttribute
@@ -630,6 +624,7 @@ type internal KnownAttributeKind =
     | NoComparisonAttribute
     | NoEqualityAttribute
     | DefaultValueAttribute
+    | InlineIfLambdaAttribute
     | CompilationMappingAttribute
 
     override _.ToString() = "KnownAttributeKind"
@@ -656,6 +651,14 @@ type internal TypedCustomAttribute = {
 } with
 
     override _.ToString() = "TypedCustomAttribute"
+
+type internal TypedParameter = {
+    Name: string
+    Type: CliType
+    Attributes: TypedCustomAttribute list
+} with
+
+    override _.ToString() = "TypedParameter"
 
 type internal TypedMethodDeclaration = {
     StableId: string
@@ -852,6 +855,14 @@ type internal SymbolicCustomAttributeFragment = {
 
     override _.ToString() = "SymbolicCustomAttributeFragment"
 
+type internal SymbolicParameterFragment = {
+    Name: string
+    Type: CliType
+    Attributes: SymbolicCustomAttributeFragment list
+} with
+
+    override _.ToString() = "SymbolicParameterFragment"
+
 type internal SymbolicMethodFragment = {
     SchemaVersion: int
     StableId: string
@@ -861,7 +872,7 @@ type internal SymbolicMethodFragment = {
     Constraints: TypedMethodConstraint list
     GenericParameterConstraints: (int * CliType) list
     Attributes: SymbolicCustomAttributeFragment list
-    Parameters: TypedParameter list
+    Parameters: SymbolicParameterFragment list
     ReturnType: CliType
     Instructions: SymbolicInstruction list
     MaxStack: int

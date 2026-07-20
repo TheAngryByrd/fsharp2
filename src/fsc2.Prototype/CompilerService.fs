@@ -157,6 +157,7 @@ module private TypeIdentity =
         | NoComparisonAttribute -> "no-comparison"
         | NoEqualityAttribute -> "no-equality"
         | DefaultValueAttribute -> "default-value"
+        | InlineIfLambdaAttribute -> "inline-if-lambda"
         | CompilationMappingAttribute -> "compilation-mapping"
 
     let attributeArgument =
@@ -173,6 +174,17 @@ module private TypeIdentity =
             yield!
                 attribute.ConstructorArguments
                 |> List.map attributeArgument
+        ]
+
+    let parameter (parameter: TypedParameter) =
+        Fingerprint.parts [
+            parameter.Name
+            cliType parameter.Type
+            "attributes"
+
+            yield!
+                parameter.Attributes
+                |> List.map customAttribute
         ]
 
 /// A deliberately small in-memory query owner. Query identities and cached
@@ -524,6 +536,8 @@ type internal CompilerService() =
                 | "NoEqualityAttribute" -> Some NoEqualityAttribute
                 | "DefaultValue"
                 | "DefaultValueAttribute" -> Some DefaultValueAttribute
+                | "InlineIfLambda"
+                | "InlineIfLambdaAttribute" -> Some InlineIfLambdaAttribute
                 | _ -> None
 
             let typeCustomAttribute
@@ -580,6 +594,66 @@ type internal CompilerService() =
             let typeCustomAttributes ownerStableId allowedKinds attributes =
                 attributes
                 |> List.mapi (typeCustomAttribute ownerStableId allowedKinds)
+                |> collectResults []
+
+            let isInlineIfLambdaParameterType =
+                function
+                | CliNamedType typeReference ->
+                    references.IsFSharpDelegate(typeReference.DeclarationId)
+                | CliGenericType(typeReference, arguments) ->
+                    (arguments.Length = 2
+                     && typeReference.AssemblyName = "FSharp.Core"
+                     && typeReference.TypeName.Namespace = "Microsoft.FSharp.Core"
+                     && typeReference.TypeName.Name = "FSharpFunc`2")
+                    || references.IsFSharpDelegate(typeReference.DeclarationId)
+                | _ -> false
+
+            let attachTypedParameterAttributes
+                methodStableId
+                (parsedParameters: ParsedParameter list)
+                (parameters: TypedParameter list)
+                =
+                if
+                    parsedParameters.Length
+                    <> parameters.Length
+                then
+                    invalidOp "parsed and typed parameter counts must match"
+
+                List.zip parsedParameters parameters
+                |> List.mapi (fun index (parsedParameter, parameter) ->
+                    let parameterStableId =
+                        methodStableId
+                        + "/parameter:"
+                        + index.ToString(CultureInfo.InvariantCulture)
+                        + ":"
+                        + parameter.Name
+
+                    typeCustomAttributes
+                        parameterStableId
+                        [ InlineIfLambdaAttribute ]
+                        parsedParameter.Attributes
+                    |> Result.bind (fun attributes ->
+                        if
+                            attributes
+                            |> List.exists (fun attribute ->
+                                attribute.Kind = InlineIfLambdaAttribute
+                            )
+                            && not (isInlineIfLambdaParameterType parameter.Type)
+                        then
+                            Error {
+                                Code = "FS3519"
+                                Message =
+                                    "The 'InlineIfLambda' attribute may only be used on parameters of inlined functions of methods whose type is a function or F# delegate type."
+                                Path = Some sourcePath
+                                Range = Some parsedParameter.Range
+                            }
+                        else
+                            Ok {
+                                parameter with
+                                    Attributes = attributes
+                            }
+                    )
+                )
                 |> collectResults []
 
             let typeDeclaration =
@@ -880,6 +954,7 @@ type internal CompilerService() =
                                             ({
                                                 Name = parameter.Name
                                                 Type = cliType
+                                                Attributes = []
                                              }
                                              :: typed)
                                             remaining
@@ -1007,55 +1082,60 @@ type internal CompilerService() =
                                             + "/method:"
                                             + methodDeclaration.Name
 
-                                        let exportFingerprint =
-                                            Fingerprint.parts [
+                                        match
+                                            attachTypedParameterAttributes
                                                 methodStableId
-                                                "generic-parameters"
-                                                yield! methodDeclaration.TypeParameters
-                                                "constraints"
+                                                methodDeclaration.Parameters
+                                                parameters
+                                        with
+                                        | Error error -> Error error
+                                        | Ok parameters ->
+                                            let exportFingerprint =
+                                                Fingerprint.parts [
+                                                    methodStableId
+                                                    "generic-parameters"
+                                                    yield! methodDeclaration.TypeParameters
+                                                    "constraints"
 
-                                                yield!
-                                                    constraints
-                                                    |> List.map
-                                                        TypeIdentity.methodConstraintIdentity
+                                                    yield!
+                                                        constraints
+                                                        |> List.map
+                                                            TypeIdentity.methodConstraintIdentity
 
-                                                "parameters"
+                                                    "parameters"
 
-                                                yield!
-                                                    parameters
-                                                    |> List.collect (fun parameter -> [
-                                                        parameter.Name
-                                                        TypeIdentity.cliType parameter.Type
-                                                    ])
+                                                    yield!
+                                                        parameters
+                                                        |> List.map TypeIdentity.parameter
 
-                                                "return"
-                                                TypeIdentity.cliType returnType
-                                                "trait-call"
-                                                receiverName
-                                                memberName
+                                                    "return"
+                                                    TypeIdentity.cliType returnType
+                                                    "trait-call"
+                                                    receiverName
+                                                    memberName
 
-                                                yield!
-                                                    typedArguments
-                                                    |> List.map TypeIdentity.callArgument
-                                            ]
+                                                    yield!
+                                                        typedArguments
+                                                        |> List.map TypeIdentity.callArgument
+                                                ]
 
-                                        Ok {
-                                            StableId = methodStableId
-                                            Name = methodDeclaration.Name
-                                            GenericParameters = methodDeclaration.TypeParameters
-                                            Constraints = constraints
-                                            Attributes = []
-                                            Parameters = parameters
-                                            ReturnType = returnType
-                                            Body =
-                                                TypedTraitCall(
-                                                    receiverName,
-                                                    memberName,
-                                                    typedArguments
-                                                )
-                                            ExportFingerprint = exportFingerprint
-                                            Range = methodDeclaration.Range
-                                        }
+                                            Ok {
+                                                StableId = methodStableId
+                                                Name = methodDeclaration.Name
+                                                GenericParameters = methodDeclaration.TypeParameters
+                                                Constraints = constraints
+                                                Attributes = []
+                                                Parameters = parameters
+                                                ReturnType = returnType
+                                                Body =
+                                                    TypedTraitCall(
+                                                        receiverName,
+                                                        memberName,
+                                                        typedArguments
+                                                    )
+                                                ExportFingerprint = exportFingerprint
+                                                Range = methodDeclaration.Range
+                                            }
                             | Ok _, Ok _, IntegerLiteral _
                             | Ok _, Ok _, BooleanLiteral _
                             | Ok _, Ok _, StringLiteral _
@@ -1341,10 +1421,14 @@ type internal CompilerService() =
                                 |> expandTypeAbbreviations Set.empty
                                 |> resolveType declaredMethodParameters
                                 |> Result.bind (toCliType methodParameterIndex parameter.Range)
-                                |> Result.map (fun parameterType -> {
-                                    Name = parameter.Name
-                                    Type = parameterType
-                                })
+                                |> Result.map (fun parameterType ->
+                                    ({
+                                        Name = parameter.Name
+                                        Type = parameterType
+                                        Attributes = []
+                                    }
+                                    : TypedParameter)
+                                )
                             )
                             |> collectResults []
 
@@ -1668,10 +1752,15 @@ type internal CompilerService() =
                                     typeCustomAttributes
                                         methodStableId
                                         [ DefaultValueAttribute ]
-                                        methodDeclaration.Attributes
+                                        methodDeclaration.Attributes,
+                                    attachTypedParameterAttributes
+                                        methodStableId
+                                        generalizedParameters
+                                        parameters
                                 with
-                                | Error error -> Error error
-                                | Ok attributes ->
+                                | Error error, _
+                                | _, Error error -> Error error
+                                | Ok attributes, Ok parameters ->
                                     let exportFingerprint =
                                         Fingerprint.parts [
                                             methodStableId
@@ -1694,10 +1783,7 @@ type internal CompilerService() =
 
                                             yield!
                                                 parameters
-                                                |> List.collect (fun parameter -> [
-                                                    parameter.Name
-                                                    TypeIdentity.cliType parameter.Type
-                                                ])
+                                                |> List.map TypeIdentity.parameter
 
                                             "return"
                                             TypeIdentity.cliType returnType
@@ -2292,6 +2378,14 @@ type internal CompilerService() =
                 ContentHash = attribute.ExportFingerprint
             }
 
+            let parameterFragment (parameter: TypedParameter) : SymbolicParameterFragment = {
+                Name = parameter.Name
+                Type = parameter.Type
+                Attributes =
+                    parameter.Attributes
+                    |> List.map customAttributeFragment
+            }
+
             let compilationMappingAttribute ownerStableId sourceConstruct =
                 let stableId =
                     ownerStableId
@@ -2662,7 +2756,9 @@ type internal CompilerService() =
                     Attributes =
                         methodDeclaration.Attributes
                         |> List.map customAttributeFragment
-                    Parameters = methodDeclaration.Parameters
+                    Parameters =
+                        methodDeclaration.Parameters
+                        |> List.map parameterFragment
                     ReturnType = methodDeclaration.ReturnType
                     Instructions = instructions
                     MaxStack =
@@ -2978,6 +3074,7 @@ type internal CompilerService() =
                                             {
                                                 Name = expression.CaptureName
                                                 Type = layout.CaptureType
+                                                Attributes = []
                                             }
                                         ]
                                         ReturnType = CliVoid
@@ -3018,6 +3115,7 @@ type internal CompilerService() =
                                             {
                                                 Name = expression.StateMachineParameterName
                                                 Type = CliByRef layout.StateMachineType
+                                                Attributes = []
                                             }
                                         ]
                                         ReturnType = CliBoolean
