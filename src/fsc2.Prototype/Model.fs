@@ -2,10 +2,11 @@ namespace FSharp2.Compiler
 
 open System
 open System.Collections.Immutable
+open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 11
+    let Query = 12
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -255,6 +256,25 @@ type internal ParsedStaticTypeDeclaration = {
 
     override _.ToString() = "ParsedStaticTypeDeclaration"
 
+type internal ParsedInstanceMethodDeclaration = {
+    ReceiverName: string
+    Name: string
+    Body: ParsedExpression
+    BodyRange: SourceRange
+    Range: SourceRange
+} with
+
+    override _.ToString() = "ParsedInstanceMethodDeclaration"
+
+type internal ParsedObjectTypeDeclaration = {
+    Name: string
+    Methods: ParsedInstanceMethodDeclaration list
+    ConstructorRange: SourceRange
+    Range: SourceRange
+} with
+
+    override _.ToString() = "ParsedObjectTypeDeclaration"
+
 type internal ParsedFieldDeclaration = {
     Name: string
     IsMutable: bool
@@ -298,6 +318,7 @@ type internal ParsedDeclaration =
     | ParsedLiteralField of ParsedLiteralFieldDeclaration
     | ParsedTypeAbbreviation of ParsedTypeAbbreviationDeclaration
     | ParsedStaticType of ParsedStaticTypeDeclaration
+    | ParsedObjectType of ParsedObjectTypeDeclaration
     | ParsedStructType of ParsedStructTypeDeclaration
 
     override _.ToString() = "ParsedDeclaration"
@@ -316,6 +337,16 @@ module internal ParsedDeclaration =
                 + declaration.Name
             )
         | ParsedStaticType declaration ->
+            Some(
+                {
+                    Name = declaration.Name
+                    GenericArity = 0
+                },
+                moduleStableId
+                + "/type:"
+                + declaration.Name
+            )
+        | ParsedObjectType declaration ->
             Some(
                 {
                     Name = declaration.Name
@@ -369,8 +400,16 @@ type internal ParsedAssemblyAttribute = {
 
     override _.ToString() = "ParsedAssemblyAttribute"
 
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal SourceContainerKind =
+    | NamespaceSource
+    | ModuleSource
+
+    override _.ToString() = "SourceContainerKind"
+
 type internal ParsedModule = {
     StableId: string
+    ContainerKind: SourceContainerKind
     Namespace: string
     Name: string
     IsPublic: bool
@@ -394,6 +433,54 @@ type internal CliType =
     | CliByRef of CliType
 
     override _.ToString() = "CliType"
+
+module internal StableIdentity =
+    let qualifiedTypeName (typeName: QualifiedTypeName) =
+        if String.IsNullOrEmpty(typeName.Namespace) then
+            typeName.Name
+        else
+            typeName.Namespace
+            + "."
+            + typeName.Name
+
+    let rec cliType =
+        function
+        | CliInt32 -> "int32"
+        | CliBoolean -> "bool"
+        | CliString -> "string"
+        | CliVoid -> "void"
+        | CliTypeParameter index ->
+            "type-parameter:"
+            + index.ToString(CultureInfo.InvariantCulture)
+        | CliMethodTypeParameter index ->
+            "method-parameter:"
+            + index.ToString(CultureInfo.InvariantCulture)
+        | CliByRef elementType ->
+            "byref:"
+            + cliType elementType
+
+type internal SymbolicMethodReference = {
+    DeclaringType: QualifiedTypeName
+    Name: string
+    IsInstance: bool
+    ParameterTypes: CliType list
+    ReturnType: CliType
+} with
+
+    member this.StableId =
+        String.concat
+            "|"
+            [
+                "method-reference"
+                StableIdentity.qualifiedTypeName this.DeclaringType
+                this.Name
+                if this.IsInstance then "instance" else "static"
+                yield! this.ParameterTypes |> List.map StableIdentity.cliType
+                "return"
+                StableIdentity.cliType this.ReturnType
+            ]
+
+    override _.ToString() = "SymbolicMethodReference"
 
 type internal TypedCallArgument =
     | TypedValueArgument of string
@@ -550,11 +637,23 @@ type internal TypedStaticTypeDeclaration = {
 
     override _.ToString() = "TypedStaticTypeDeclaration"
 
+type internal TypedObjectTypeDeclaration = {
+    StableId: string
+    Name: string
+    Methods: TypedMethodDeclaration list
+    ExportFingerprint: string
+    ConstructorRange: SourceRange
+    Range: SourceRange
+} with
+
+    override _.ToString() = "TypedObjectTypeDeclaration"
+
 type internal TypedDeclaration =
     | TypedMethod of TypedMethodDeclaration
     | TypedLiteralField of TypedLiteralFieldDeclaration
     | TypedTypeAbbreviation of TypedTypeAbbreviationDeclaration
     | TypedStaticType of TypedStaticTypeDeclaration
+    | TypedObjectType of TypedObjectTypeDeclaration
     | TypedStructType of TypedStructTypeDeclaration
 
     member this.StableId =
@@ -563,6 +662,7 @@ type internal TypedDeclaration =
         | TypedLiteralField declaration -> declaration.StableId
         | TypedTypeAbbreviation declaration -> declaration.StableId
         | TypedStaticType declaration -> declaration.StableId
+        | TypedObjectType declaration -> declaration.StableId
         | TypedStructType declaration -> declaration.StableId
 
     member this.ExportFingerprint =
@@ -571,6 +671,7 @@ type internal TypedDeclaration =
         | TypedLiteralField declaration -> declaration.ExportFingerprint
         | TypedTypeAbbreviation declaration -> declaration.ExportFingerprint
         | TypedStaticType declaration -> declaration.ExportFingerprint
+        | TypedObjectType declaration -> declaration.ExportFingerprint
         | TypedStructType declaration -> declaration.ExportFingerprint
 
     override _.ToString() = "TypedDeclaration"
@@ -589,6 +690,7 @@ type internal TypedAssemblyAttribute = {
 
 type internal TypedModule = {
     StableId: string
+    ContainerKind: SourceContainerKind
     Namespace: string
     Name: string
     IsPublic: bool
@@ -606,6 +708,8 @@ type internal TypedModule = {
 type internal SymbolicInstruction =
     | LoadInt32 of int
     | LoadString of string
+    | LoadArgumentZero
+    | CallMethod of SymbolicMethodReference
     | NewObject of declaringType: QualifiedTypeName * parameterTypes: CliType list
     | Throw
     | Return
@@ -616,6 +720,8 @@ type internal SymbolicInstruction =
 type internal SymbolicMethodKind =
     | ModuleFunction
     | StaticInlineMemberStub
+    | InstanceConstructor
+    | InstanceInlineMember
 
     override _.ToString() = "SymbolicMethodKind"
 
@@ -673,6 +779,7 @@ type internal SymbolicInstanceFieldFragment = {
 type internal SymbolicTypeKind =
     | ModuleContainer
     | StaticMemberContainer
+    | ObjectContainer
     | StructContainer
 
     override _.ToString() = "SymbolicTypeKind"

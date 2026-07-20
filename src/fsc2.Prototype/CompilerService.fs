@@ -27,13 +27,7 @@ module private Fingerprint =
         |> text
 
 module private TypeIdentity =
-    let qualifiedName (typeName: QualifiedTypeName) =
-        if String.IsNullOrEmpty(typeName.Namespace) then
-            typeName.Name
-        else
-            typeName.Namespace
-            + "."
-            + typeName.Name
+    let qualifiedName = StableIdentity.qualifiedTypeName
 
     let rec expression =
         function
@@ -106,21 +100,7 @@ module private TypeIdentity =
                 constraintIdentity constraint'
             ]
 
-    let rec cliType =
-        function
-        | CliInt32 -> "int32"
-        | CliBoolean -> "bool"
-        | CliString -> "string"
-        | CliVoid -> "void"
-        | CliTypeParameter index ->
-            "type-parameter:"
-            + index.ToString(CultureInfo.InvariantCulture)
-        | CliMethodTypeParameter index ->
-            "method-parameter:"
-            + index.ToString(CultureInfo.InvariantCulture)
-        | CliByRef elementType ->
-            "byref:"
-            + cliType elementType
+    let cliType = StableIdentity.cliType
 
     let callArgument =
         function
@@ -256,6 +236,7 @@ type internal CompilerService() =
                     | ParsedMethod _
                     | ParsedLiteralField _
                     | ParsedStaticType _
+                    | ParsedObjectType _
                     | ParsedStructType _ -> None
                 )
                 |> Map.ofList
@@ -953,19 +934,11 @@ type internal CompilerService() =
                                     methodDeclaration.BodyRange
                                     "static inline members require a constrained trait call"
 
-                    let rec typeMethods typedMethods =
-                        function
-                        | [] -> Ok(List.rev typedMethods)
-                        | methodDeclaration :: remaining ->
-                            match typeMethod methodDeclaration with
-                            | Error error -> Error error
-                            | Ok typedMethod ->
-                                typeMethods
-                                    (typedMethod
-                                     :: typedMethods)
-                                    remaining
-
-                    match typeMethods [] declaration.Methods with
+                    match
+                        declaration.Methods
+                        |> List.map typeMethod
+                        |> collectResults []
+                    with
                     | Error error -> Error error
                     | Ok methods ->
                         Ok(
@@ -977,6 +950,77 @@ type internal CompilerService() =
                                     methods
                                     |> List.map _.ExportFingerprint
                                     |> Fingerprint.parts
+                                Range = declaration.Range
+                            }
+                        )
+                | ParsedObjectType declaration ->
+                    let stableId =
+                        parsed.StableId
+                        + "/type:"
+                        + declaration.Name
+
+                    let typeMethod (methodDeclaration: ParsedInstanceMethodDeclaration) =
+                        match methodDeclaration.Body with
+                        | IntegerLiteral value ->
+                            let methodStableId =
+                                stableId
+                                + "/method:"
+                                + methodDeclaration.Name
+                                + ":unit->int32"
+
+                            let exportFingerprint =
+                                Fingerprint.parts [
+                                    methodStableId
+                                    "instance"
+                                    "parameters"
+                                    "return"
+                                    TypeIdentity.cliType CliInt32
+                                    "inline-body"
+                                    value.ToString(CultureInfo.InvariantCulture)
+                                ]
+
+                            Ok {
+                                StableId = methodStableId
+                                Name = methodDeclaration.Name
+                                GenericParameters = []
+                                Constraints = []
+                                Parameters = []
+                                ReturnType = CliInt32
+                                Body = TypedIntegerLiteral value
+                                ExportFingerprint = exportFingerprint
+                                Range = methodDeclaration.BodyRange
+                            }
+                        | StringLiteral _ ->
+                            diagnostic
+                                methodDeclaration.BodyRange
+                                "string-valued instance members are not yet supported"
+                        | TraitCall _ ->
+                            diagnostic
+                                methodDeclaration.BodyRange
+                                "trait calls are not yet supported in instance members"
+
+                    match
+                        declaration.Methods
+                        |> List.map typeMethod
+                        |> collectResults []
+                    with
+                    | Error error -> Error error
+                    | Ok methods ->
+                        Ok(
+                            TypedObjectType {
+                                StableId = stableId
+                                Name = declaration.Name
+                                Methods = methods
+                                ExportFingerprint =
+                                    Fingerprint.parts [
+                                        stableId
+                                        "constructor:unit"
+
+                                        yield!
+                                            methods
+                                            |> List.map _.ExportFingerprint
+                                    ]
+                                ConstructorRange = declaration.ConstructorRange
                                 Range = declaration.Range
                             }
                         )
@@ -1249,6 +1293,7 @@ type internal CompilerService() =
                 | Ok declarations ->
                     let typed = {
                         StableId = parsed.StableId
+                        ContainerKind = parsed.ContainerKind
                         Namespace = parsed.Namespace
                         Name = parsed.Name
                         IsPublic = parsed.IsPublic
@@ -1283,35 +1328,40 @@ type internal CompilerService() =
                     Ok(typed, key)
 
     let lower (assemblyName: string) (typedModules: TypedModule list) =
+        let methodImplementationHash (methodDeclaration: TypedMethodDeclaration) =
+            match methodDeclaration.Body with
+            | TypedIntegerLiteral value ->
+                Fingerprint.parts [
+                    methodDeclaration.StableId
+                    value.ToString(CultureInfo.InvariantCulture)
+                ]
+            | TypedTraitCall(receiverName, memberName, arguments) ->
+                Fingerprint.parts [
+                    methodDeclaration.StableId
+                    receiverName
+                    memberName
+
+                    yield!
+                        arguments
+                        |> List.map TypeIdentity.callArgument
+                ]
+
         let modulesWithContentHashes =
             typedModules
             |> List.map (fun typed ->
                 let declarationsWithContentHashes =
                     typed.Declarations
                     |> List.map (fun declaration ->
-                        let implementation =
+                        let contentHash =
                             match declaration with
                             | TypedMethod methodDeclaration ->
-                                match methodDeclaration.Body with
-                                | TypedIntegerLiteral value ->
-                                    methodDeclaration.StableId
-                                    + "="
-                                    + value.ToString()
-                                | TypedTraitCall(receiverName, memberName, arguments) ->
-                                    Fingerprint.parts [
-                                        methodDeclaration.StableId
-                                        "trait-call"
-                                        receiverName
-                                        memberName
-
-                                        yield!
-                                            arguments
-                                            |> List.map TypeIdentity.callArgument
-                                    ]
+                                methodImplementationHash methodDeclaration
                             | TypedLiteralField fieldDeclaration ->
-                                fieldDeclaration.StableId
-                                + "="
-                                + fieldDeclaration.Value
+                                Fingerprint.text (
+                                    fieldDeclaration.StableId
+                                    + "="
+                                    + fieldDeclaration.Value
+                                )
                             | TypedTypeAbbreviation typeDeclaration ->
                                 Fingerprint.parts [
                                     typeDeclaration.StableId
@@ -1328,6 +1378,7 @@ type internal CompilerService() =
 
                                     if typeDeclaration.AllowsNull then "null" else "non-null"
                                 ]
+                                |> Fingerprint.text
                             | TypedStaticType typeDeclaration ->
                                 Fingerprint.parts [
                                     typeDeclaration.StableId
@@ -1339,6 +1390,20 @@ type internal CompilerService() =
                                             methodDeclaration.ExportFingerprint
                                         ])
                                 ]
+                                |> Fingerprint.text
+                            | TypedObjectType typeDeclaration ->
+                                Fingerprint.parts [
+                                    typeDeclaration.StableId
+
+                                    yield!
+                                        typeDeclaration.Methods
+                                        |> List.collect (fun methodDeclaration -> [
+                                            methodDeclaration.StableId
+                                            methodDeclaration.ExportFingerprint
+                                            methodImplementationHash methodDeclaration
+                                        ])
+                                ]
+                                |> Fingerprint.text
                             | TypedStructType typeDeclaration ->
                                 Fingerprint.parts [
                                     typeDeclaration.StableId
@@ -1356,8 +1421,9 @@ type internal CompilerService() =
                                         typeDeclaration.Fields
                                         |> List.map _.ExportFingerprint
                                 ]
+                                |> Fingerprint.text
 
-                        declaration, Fingerprint.text implementation
+                        declaration, contentHash
                     )
 
                 typed, declarationsWithContentHashes
@@ -1500,6 +1566,7 @@ type internal CompilerService() =
                         | TypedMethod _
                         | TypedLiteralField _
                         | TypedStaticType _
+                        | TypedObjectType _
                         | TypedStructType _ -> None
                     )
                 )
@@ -1618,6 +1685,7 @@ type internal CompilerService() =
                             | TypedMethod _
                             | TypedTypeAbbreviation _
                             | TypedStaticType _
+                            | TypedObjectType _
                             | TypedStructType _ -> None
                         )
 
@@ -1639,22 +1707,25 @@ type internal CompilerService() =
                             | TypedLiteralField _
                             | TypedTypeAbbreviation _
                             | TypedStaticType _
+                            | TypedObjectType _
                             | TypedStructType _ -> None
                         )
 
-                    let containsNestedStruct =
-                        declarationsWithContentHashes
-                        |> List.exists (
-                            fst
-                            >> function
-                                | TypedStructType _ -> true
-                                | _ -> false
-                        )
+                    let containsNestedType =
+                        typed.ContainerKind = ModuleSource
+                        && (declarationsWithContentHashes
+                            |> List.exists (
+                                fst
+                                >> function
+                                    | TypedObjectType _
+                                    | TypedStructType _ -> true
+                                    | _ -> false
+                            ))
 
                     let customAttributes =
                         if
                             List.isEmpty typed.Attributes
-                            && not containsNestedStruct
+                            && not containsNestedType
                         then
                             []
                         else
@@ -1668,7 +1739,7 @@ type internal CompilerService() =
                     if
                         List.isEmpty literalFields
                         && List.isEmpty methods
-                        && not containsNestedStruct
+                        && not containsNestedType
                         && List.isEmpty customAttributes
                     then
                         None
@@ -1732,6 +1803,102 @@ type internal CompilerService() =
                         | TypedMethod _
                         | TypedLiteralField _
                         | TypedTypeAbbreviation _
+                        | TypedObjectType _
+                        | TypedStructType _ -> None
+                    )
+                )
+                |> List.collect id
+
+            let objectTypes =
+                modulesWithContentHashes
+                |> List.mapi (fun documentIndex (typed, declarationsWithContentHashes) ->
+                    let moduleTypeStableId =
+                        moduleStableId
+                        + "/type:"
+                        + typed.StableId
+
+                    let isNested =
+                        typed.ContainerKind = ModuleSource
+
+                    declarationsWithContentHashes
+                    |> List.choose (fun (declaration, _) ->
+                        match declaration with
+                        | TypedObjectType typeDeclaration ->
+                            let constructorStableId =
+                                typeDeclaration.StableId
+                                + "/constructor:unit"
+
+                            let objectConstructor = {
+                                DeclaringType = {
+                                    Namespace = "System"
+                                    Name = "Object"
+                                }
+                                Name = ".ctor"
+                                IsInstance = true
+                                ParameterTypes = []
+                                ReturnType = CliVoid
+                            }
+
+                            let constructor = {
+                                SchemaVersion = querySchema
+                                StableId = constructorStableId
+                                Name = ".ctor"
+                                Kind = InstanceConstructor
+                                GenericParameters = []
+                                Constraints = []
+                                Parameters = []
+                                ReturnType = CliVoid
+                                Instructions = [
+                                    LoadArgumentZero
+                                    CallMethod objectConstructor
+                                    Return
+                                ]
+                                DependencyIds = [ objectConstructor.StableId ]
+                                ContentHash =
+                                    Fingerprint.parts [
+                                        constructorStableId
+                                        objectConstructor.StableId
+                                    ]
+                                DocumentIndex = documentIndex
+                                DocumentChecksum = typed.SourceChecksum
+                                Range = typeDeclaration.ConstructorRange
+                            }
+
+                            let methods =
+                                typeDeclaration.Methods
+                                |> List.map (fun methodDeclaration ->
+                                    methodFragment
+                                        InstanceInlineMember
+                                        documentIndex
+                                        typed.SourceChecksum
+                                        methodDeclaration.StableId
+                                        (methodImplementationHash methodDeclaration)
+                                        methodDeclaration
+                                )
+
+                            Some {
+                                SchemaVersion = querySchema
+                                StableId = typeDeclaration.StableId
+                                Namespace = if isNested then String.Empty else typed.Namespace
+                                Name = typeDeclaration.Name
+                                IsPublic = true
+                                EnclosingTypeStableId =
+                                    if isNested then Some moduleTypeStableId else None
+                                Kind = ObjectContainer
+                                GenericParameters = []
+                                Attributes = [
+                                    compilationMappingAttribute
+                                        typeDeclaration.StableId
+                                        ObjectTypeConstruct
+                                ]
+                                LiteralFields = []
+                                InstanceFields = []
+                                Methods = constructor :: methods
+                            }
+                        | TypedMethod _
+                        | TypedLiteralField _
+                        | TypedTypeAbbreviation _
+                        | TypedStaticType _
                         | TypedStructType _ -> None
                     )
                 )
@@ -1789,13 +1956,15 @@ type internal CompilerService() =
                         | TypedMethod _
                         | TypedLiteralField _
                         | TypedTypeAbbreviation _
-                        | TypedStaticType _ -> None
+                        | TypedStaticType _
+                        | TypedObjectType _ -> None
                     )
                 )
 
             let types =
                 moduleTypes
                 @ staticTypes
+                @ objectTypes
                 @ structTypes
 
             let symbolic: SymbolicAssembly = {

@@ -837,6 +837,7 @@ module internal Frontend =
                                 StableId =
                                     "module:"
                                     + moduleName
+                                ContainerKind = ModuleSource
                                 Namespace = String.Empty
                                 Name = moduleName
                                 IsPublic = true
@@ -1278,7 +1279,8 @@ module internal Frontend =
                                         "expected 'type' or 'and'"
                                 )
 
-                        let! declarationName, _ = identifier "expected a type-abbreviation name"
+                        let! declarationName, declarationNameToken =
+                            identifier "expected a type-abbreviation name"
 
                         let parseConstraint () =
                             parseResult {
@@ -1581,6 +1583,56 @@ module internal Frontend =
                                         "expected a static member, type declaration, or end of file"
                                 )
 
+                        let parseInstanceMethod () =
+                            parseResult {
+                                let! memberToken = expected MemberKeyword "expected 'member'"
+                                let! _ = expected InlineKeyword "expected 'inline'"
+
+                                let! receiverName, _ =
+                                    identifier "expected an instance member receiver"
+
+                                let! _ = expected Dot "expected '.'"
+                                let! methodName, _ = identifier "expected an instance member name"
+                                let! _ = expected LeftParenthesis "expected '('"
+                                let! _ = expected RightParenthesis "expected ')'"
+                                let! _ = expected Equals "expected '='"
+                                let! body, bodyRange = parseExpression ()
+
+                                return {
+                                    ReceiverName = receiverName
+                                    Name = methodName
+                                    Body = body
+                                    BodyRange = bodyRange
+                                    Range = {
+                                        Start = memberToken.Range.Start
+                                        End = bodyRange.End
+                                    }
+                                }
+                            }
+
+                        let rec parseInstanceMethods methods =
+                            match (current ()).Kind with
+                            | MemberKeyword ->
+                                parseResult {
+                                    let! methodDeclaration = parseInstanceMethod ()
+
+                                    return!
+                                        parseInstanceMethods (
+                                            methodDeclaration
+                                            :: methods
+                                        )
+                                }
+                            | TypeKeyword
+                            | AndKeyword
+                            | EndOfFile -> Ok(List.rev methods)
+                            | _ ->
+                                Error(
+                                    prototypeDiagnostic
+                                        source.Path
+                                        (current ()).Range
+                                        "expected an instance member, type declaration, or end of file"
+                                )
+
                         let parseField fieldAttributes =
                             parseResult {
                                 let! fieldToken = expected ValKeyword "expected 'val'"
@@ -1625,11 +1677,63 @@ module internal Frontend =
                                 }
                             | _ -> Ok(List.rev fields)
 
+                        let! isObjectType =
+                            match (current ()).Kind with
+                            | LeftParenthesis ->
+                                parseResult {
+                                    let! _ = expected LeftParenthesis "expected '('"
+                                    let! _ = expected RightParenthesis "expected ')'"
+                                    return true
+                                }
+                            | _ -> Ok false
+
                         let! _ = expected Equals "expected '='"
 
                         return!
-                            match (current ()).Kind with
-                            | AttributeStart when not (List.isEmpty attributes) ->
+                            match isObjectType, (current ()).Kind with
+                            | true, _ when
+                                not (List.isEmpty attributes)
+                                || not (List.isEmpty typeParameters)
+                                || not (List.isEmpty constraints)
+                                ->
+                                Error(
+                                    prototypeDiagnostic
+                                        source.Path
+                                        typeToken.Range
+                                        "attributed or generic object types are not yet supported"
+                                )
+                            | true, MemberKeyword ->
+                                parseInstanceMethods []
+                                |> Result.bind (fun methods ->
+                                    match List.tryLast methods with
+                                    | Some lastMethod ->
+                                        Ok(
+                                            ParsedObjectType {
+                                                Name = declarationName
+                                                Methods = methods
+                                                ConstructorRange = declarationNameToken.Range
+                                                Range = {
+                                                    Start = typeToken.Range.Start
+                                                    End = lastMethod.Range.End
+                                                }
+                                            }
+                                        )
+                                    | None ->
+                                        Error(
+                                            prototypeDiagnostic
+                                                source.Path
+                                                (current ()).Range
+                                                "an object type must declare an instance member"
+                                        )
+                                )
+                            | true, _ ->
+                                Error(
+                                    prototypeDiagnostic
+                                        source.Path
+                                        (current ()).Range
+                                        "an object type must declare an instance member"
+                                )
+                            | false, AttributeStart when not (List.isEmpty attributes) ->
                                 parseFields []
                                 |> Result.bind (fun fields ->
                                     match List.tryLast fields with
@@ -1654,7 +1758,7 @@ module internal Frontend =
                                                 "an attributed struct type must declare a field"
                                         )
                                 )
-                            | StaticKeyword when
+                            | false, StaticKeyword when
                                 List.isEmpty typeParameters
                                 && List.isEmpty constraints
                                 ->
@@ -1680,7 +1784,7 @@ module internal Frontend =
                                                 "a static type must declare a member"
                                         )
                                 )
-                            | _ ->
+                            | false, _ ->
                                 parseResult {
                                     let targetStart = (current ()).Range.Start
                                     let! targetType = parseTypeExpression ()
@@ -1803,6 +1907,7 @@ module internal Frontend =
                     StableId =
                         "namespace:"
                         + namespaceName
+                    ContainerKind = NamespaceSource
                     Namespace = namespaceName
                     Name = namespaceName
                     IsPublic = false
@@ -1832,6 +1937,7 @@ module internal Frontend =
                             StableId =
                                 "namespace:"
                                 + namespaceName
+                            ContainerKind = NamespaceSource
                             Namespace = namespaceName
                             Name = namespaceName
                             IsPublic = false
@@ -1867,6 +1973,7 @@ module internal Frontend =
                                     + namespaceName
                                     + "."
                                     + moduleName
+                                ContainerKind = ModuleSource
                                 Namespace = namespaceName
                                 Name = moduleName
                                 IsPublic = isPublic

@@ -27,6 +27,23 @@ module CompilerTargetTests =
         Signature: byte array
     }
 
+    type private MethodMetadataShape = {
+        Attributes: MethodAttributes
+        ImplementationAttributes: MethodImplAttributes
+        Signature: string
+        CustomAttributes: (string * string) array
+        SequencePoints: string array
+    }
+
+    type private ObjectTypeMetadataShape = {
+        Attributes: TypeAttributes
+        BaseType: string
+        DeclaringType: string
+        CustomAttributes: (string * string) array
+        Constructor: MethodMetadataShape
+        InstanceMember: MethodMetadataShape
+    }
+
     let private repositoryRoot =
         Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, "..", ".."))
 
@@ -116,6 +133,190 @@ module CompilerTargetTests =
             timeoutMilliseconds
             $"{fileName} did not exit within {timeoutMilliseconds} milliseconds"
             startInfo
+
+    let private compatibilityOraclePath () =
+        let versionResult = invokeProcess repositoryRoot 10_000 "dotnet" [ "--version" ]
+
+        Expect.equal
+            versionResult.ExitCode
+            0
+            (versionResult.StandardOutput
+             + versionResult.StandardError)
+
+        let version = versionResult.StandardOutput.Trim()
+        let sdkList = invokeProcess repositoryRoot 10_000 "dotnet" [ "--list-sdks" ]
+
+        Expect.equal
+            sdkList.ExitCode
+            0
+            (sdkList.StandardOutput
+             + sdkList.StandardError)
+
+        let prefix =
+            version
+            + " ["
+
+        let sdkRoot =
+            sdkList.StandardOutput.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
+            |> Array.tryPick (fun line ->
+                let line = line.Trim()
+
+                if
+                    line.StartsWith(prefix, StringComparison.Ordinal)
+                    && line.EndsWith(']')
+                then
+                    Some(
+                        line.Substring(
+                            prefix.Length,
+                            line.Length
+                            - prefix.Length
+                            - 1
+                        )
+                    )
+                else
+                    None
+            )
+            |> Option.defaultWith (fun () ->
+                failtestf "the active .NET SDK '%s' was not present in dotnet --list-sdks" version
+            )
+
+        let compilerPath = Path.Combine(sdkRoot, version, "FSharp", "fsc.dll")
+
+        Expect.isTrue
+            (File.Exists(compilerPath))
+            $"the Compatibility Oracle should exist at {compilerPath}"
+
+        compilerPath
+
+    let private invokeCompatibilityOracle workingDirectory responsePath (arguments: string list) =
+        File.WriteAllLines(responsePath, arguments)
+
+        invokeProcess workingDirectory 30_000 "dotnet" [
+            compatibilityOraclePath ()
+            "@"
+            + responsePath
+        ]
+
+    let private objectTypeMetadataShape assemblyPath pdbPath =
+        use implementationStream = File.OpenRead(assemblyPath)
+        use implementation = new PEReader(implementationStream)
+        let metadata = implementation.GetMetadataReader()
+        use pdbStream = File.OpenRead(pdbPath)
+        use pdbProvider = MetadataReaderProvider.FromPortablePdbStream(pdbStream)
+        let pdb = pdbProvider.GetMetadataReader()
+
+        let typeName (handle: EntityHandle) =
+            match handle.Kind with
+            | HandleKind.TypeDefinition ->
+                let definition =
+                    handle
+                    |> MetadataTokens.GetRowNumber
+                    |> MetadataTokens.TypeDefinitionHandle
+                    |> metadata.GetTypeDefinition
+
+                let namespaceName = metadata.GetString(definition.Namespace)
+                let name = metadata.GetString(definition.Name)
+
+                if String.IsNullOrEmpty(namespaceName) then
+                    name
+                else
+                    namespaceName
+                    + "."
+                    + name
+            | HandleKind.TypeReference ->
+                let reference =
+                    handle
+                    |> MetadataTokens.GetRowNumber
+                    |> MetadataTokens.TypeReferenceHandle
+                    |> metadata.GetTypeReference
+
+                let namespaceName = metadata.GetString(reference.Namespace)
+                let name = metadata.GetString(reference.Name)
+
+                if String.IsNullOrEmpty(namespaceName) then
+                    name
+                else
+                    namespaceName
+                    + "."
+                    + name
+            | kind -> failtestf "unsupported metadata type handle %A" kind
+
+        let customAttributeShape handle =
+            let attribute = metadata.GetCustomAttribute(handle)
+
+            let attributeTypeName =
+                match attribute.Constructor.Kind with
+                | HandleKind.MemberReference ->
+                    let constructor =
+                        attribute.Constructor
+                        |> MetadataTokens.GetRowNumber
+                        |> MetadataTokens.MemberReferenceHandle
+                        |> metadata.GetMemberReference
+
+                    typeName constructor.Parent
+                | kind -> failtestf "unsupported custom-attribute constructor %A" kind
+
+            attributeTypeName, Convert.ToHexString(metadata.GetBlobBytes(attribute.Value))
+
+        let typeHandle, typeDefinition =
+            metadata.TypeDefinitions
+            |> Seq.map (fun handle -> handle, metadata.GetTypeDefinition(handle))
+            |> Seq.find (fun (_, definition) ->
+                metadata.GetString(definition.Name) = "TaskBuilderBase"
+            )
+
+        let methodShape methodName =
+            let methodHandle, definition =
+                typeDefinition.GetMethods()
+                |> Seq.map (fun handle -> handle, metadata.GetMethodDefinition(handle))
+                |> Seq.find (fun (_, definition) ->
+                    metadata.GetString(definition.Name) = methodName
+                )
+
+            let debugInformation = pdb.GetMethodDebugInformation(methodHandle)
+
+            {
+                Attributes = definition.Attributes
+                ImplementationAttributes = definition.ImplAttributes
+                Signature = Convert.ToHexString(metadata.GetBlobBytes(definition.Signature))
+                CustomAttributes =
+                    definition.GetCustomAttributes()
+                    |> Seq.map customAttributeShape
+                    |> Seq.toArray
+                SequencePoints =
+                    debugInformation.GetSequencePoints()
+                    |> Seq.map (fun point ->
+                        if point.IsHidden then
+                            "hidden"
+                        else
+                            $"{point.StartLine}:{point.StartColumn}-{point.EndLine}:{point.EndColumn}"
+                    )
+                    |> Seq.toArray
+            }
+
+        let declaringType =
+            let declaringHandle = typeDefinition.GetDeclaringType()
+
+            if declaringHandle.IsNil then
+                String.Empty
+            else
+                MetadataTokens.EntityHandle(
+                    TableIndex.TypeDef,
+                    MetadataTokens.GetRowNumber(declaringHandle)
+                )
+                |> typeName
+
+        {
+            Attributes = typeDefinition.Attributes
+            BaseType = typeName typeDefinition.BaseType
+            DeclaringType = declaringType
+            CustomAttributes =
+                typeDefinition.GetCustomAttributes()
+                |> Seq.map customAttributeShape
+                |> Seq.toArray
+            Constructor = methodShape ".ctor"
+            InstanceMember = methodShape "Zero"
+        }
 
     let private invokeConsumer workingDirectory assemblyPath expected =
         let startInfo =
@@ -1849,6 +2050,285 @@ module CompilerTargetTests =
                         firstFingerprint
                         "the referenced assembly is part of an exported alias target's identity"
                 finally
+                    Directory.Delete(root, true)
+
+            testCase
+                "matches Oracle CLR metadata and portable-PDB shape for an IcedTasks-style object type"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-icedtasks-object-type",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "TaskBuilderBase.fs")
+
+                    let sourceText =
+                        "namespace IcedTasks.TaskBase\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n"
+
+                    File.WriteAllText(sourcePath, sourceText)
+
+                    let oracleOutputPath = Path.Combine(root, "TaskBuilderBase-oracle.dll")
+                    let oraclePdbPath = Path.Combine(root, "TaskBuilderBase-oracle.pdb")
+                    let oracleResponsePath = Path.Combine(root, "oracle.rsp")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root oracleResponsePath [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{oracleOutputPath}"
+                            $"--pdb:{oraclePdbPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let responsePath = Path.Combine(root, "fsharp2.rsp")
+
+                    let outputPath, _ =
+                        compileForExportFingerprint
+                            root
+                            responsePath
+                            sourcePath
+                            "TaskBuilderBase-fsharp2"
+                            []
+
+                    let pdbPath = Path.ChangeExtension(outputPath, ".pdb")
+
+                    Expect.equal
+                        (objectTypeMetadataShape outputPath pdbPath)
+                        (objectTypeMetadataShape oracleOutputPath oraclePdbPath)
+                        "the emitted object type should match the Compatibility Oracle's CLR and portable-PDB surface"
+
+                    let emittedAssembly = Assembly.Load(File.ReadAllBytes(outputPath))
+
+                    let builderType =
+                        emittedAssembly.GetType(
+                            "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                            throwOnError = true
+                        )
+
+                    let builder = Activator.CreateInstance(builderType)
+
+                    let zero =
+                        builderType.GetMethod(
+                            "Zero",
+                            BindingFlags.Public
+                            ||| BindingFlags.Instance
+                        )
+
+                    Expect.equal
+                        (zero.Invoke(builder, Array.empty<obj>))
+                        (box 0)
+                        "the emitted object member should execute its F# body"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "retained service invalidates an IcedTasks inline object-member edit"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-icedtasks-object-type-edit",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                let pipeName =
+                    "fsharp2-"
+                    + Guid.NewGuid().ToString("N")
+
+                use service = startCompilerService root pipeName
+
+                try
+                    let sourcePath = Path.Combine(root, "TaskBuilderBase.fs")
+                    let outputPath = Path.Combine(root, "TaskBuilderBase.dll")
+                    let pdbPath = Path.Combine(root, "TaskBuilderBase.pdb")
+                    let systemRuntimePath = Assembly.Load("System.Runtime").Location
+
+                    let compile value traceName =
+                        let responsePath =
+                            Path.Combine(
+                                root,
+                                traceName
+                                + ".rsp"
+                            )
+
+                        let tracePath =
+                            Path.Combine(
+                                root,
+                                traceName
+                                + ".trace"
+                            )
+
+                        File.WriteAllText(
+                            sourcePath,
+                            $"namespace IcedTasks.TaskBase\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = {value}\n"
+                        )
+
+                        File.WriteAllLines(
+                            responsePath,
+                            [|
+                                $"--fsharp2-server:{pipeName}"
+                                $"--fsharp2-trace:{tracePath}"
+                                "--target:library"
+                                "--deterministic+"
+                                "--debug:portable"
+                                $"--reference:{typeof<Microsoft.FSharp.Core.AutoOpenAttribute>.Assembly.Location}"
+                                $"--reference:{systemRuntimePath}"
+                                $"--out:{outputPath}"
+                                $"--pdb:{pdbPath}"
+                                sourcePath
+                            |]
+                        )
+
+                        let result = invokeFsc2 root responsePath
+
+                        Expect.equal
+                            result.ExitCode
+                            0
+                            (result.StandardOutput
+                             + result.StandardError)
+
+                        readTrace tracePath
+
+                    let baseline = compile 0 "baseline"
+                    let edited = compile 1 "edited"
+                    let replay = compile 1 "replay"
+
+                    for traceName, trace in
+                        [
+                            "baseline", baseline
+                            "edited", edited
+                            "replay", replay
+                        ] do
+                        Expect.equal
+                            trace.["servicePid"]
+                            baseline.["servicePid"]
+                            $"the {traceName} request should use the retained compiler service"
+
+                    Expect.notEqual
+                        edited.["exportFingerprint"]
+                        baseline.["exportFingerprint"]
+                        "an inline object-member edit should change consumer-visible F# export identity"
+
+                    Expect.notEqual
+                        edited.["fragmentHash"]
+                        baseline.["fragmentHash"]
+                        "the edited object-member implementation should have a new symbolic fragment hash"
+
+                    Expect.equal edited.["parse"] "miss" "changed object source should be reparsed"
+                    Expect.equal edited.["check"] "miss" "changed object source should be rechecked"
+
+                    Expect.equal
+                        edited.["lower"]
+                        "miss"
+                        "changed object source should be re-emitted"
+
+                    Expect.equal
+                        edited.["previousContentFingerprint"]
+                        baseline.["contentFingerprint"]
+                        "the edit should identify the retained semantic state it replaced"
+
+                    Expect.equal
+                        edited.["dependencyCount"]
+                        "1"
+                        "the object constructor should retain its symbolic System.Object constructor dependency"
+
+                    Expect.equal edited.["emitted"] "true" "the edit should be linked and published"
+
+                    Expect.equal
+                        replay.["parse"]
+                        "hit"
+                        "identical object source should reuse parsing"
+
+                    Expect.equal
+                        replay.["check"]
+                        "hit"
+                        "identical object source should reuse checking"
+
+                    Expect.equal
+                        replay.["lower"]
+                        "hit"
+                        "identical object source should reuse lowering"
+
+                    Expect.equal
+                        replay.["fragmentHash"]
+                        edited.["fragmentHash"]
+                        "replay should retain the edited symbolic fragment"
+
+                    let warmImplementation = File.ReadAllBytes(outputPath)
+                    let warmPdb = File.ReadAllBytes(pdbPath)
+                    let cleanResponsePath = Path.Combine(root, "clean.rsp")
+
+                    File.WriteAllLines(
+                        cleanResponsePath,
+                        [|
+                            "--target:library"
+                            "--deterministic+"
+                            "--debug:portable"
+                            $"--reference:{typeof<Microsoft.FSharp.Core.AutoOpenAttribute>.Assembly.Location}"
+                            $"--reference:{systemRuntimePath}"
+                            $"--out:{outputPath}"
+                            $"--pdb:{pdbPath}"
+                            sourcePath
+                        |]
+                    )
+
+                    let cleanResult = invokeFsc2 root cleanResponsePath
+
+                    Expect.equal
+                        cleanResult.ExitCode
+                        0
+                        (cleanResult.StandardOutput
+                         + cleanResult.StandardError)
+
+                    Expect.sequenceEqual
+                        (File.ReadAllBytes(outputPath))
+                        warmImplementation
+                        "the warm implementation should match a clean standalone compile of the edited input"
+
+                    Expect.sequenceEqual
+                        (File.ReadAllBytes(pdbPath))
+                        warmPdb
+                        "the warm PDB should match a clean standalone compile of the edited input"
+
+                    let emittedAssembly = Assembly.Load(File.ReadAllBytes(outputPath))
+
+                    let builderType =
+                        emittedAssembly.GetType(
+                            "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                            throwOnError = true
+                        )
+
+                    let builder = Activator.CreateInstance(builderType)
+                    let zero = builderType.GetMethod("Zero")
+
+                    Expect.equal
+                        (zero.Invoke(builder, Array.empty<obj>))
+                        (box 1)
+                        "the published warm artifact should execute the edited object-member body"
+                finally
+                    if not service.HasExited then
+                        service.Kill(true)
+
+                        service.WaitForExit(10_000)
+                        |> ignore
+
                     Directory.Delete(root, true)
 
             testCase "attribute edits change IcedTasks struct export fingerprints"
@@ -3763,7 +4243,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "11"
+                        "12"
                         "query cache evidence should be versioned"
 
                     Expect.equal
