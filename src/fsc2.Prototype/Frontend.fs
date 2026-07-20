@@ -1159,10 +1159,41 @@ module internal Frontend =
                                 LeftParenthesis
                                 "expected '(' after an object-expression member"
 
-                        let! _ =
-                            expected
-                                RightParenthesis
-                                "only parameterless object-expression members are supported"
+                        let rec parseMemberParameters parameters =
+                            match (current ()).Kind with
+                            | RightParenthesis -> Ok(List.rev parameters)
+                            | Identifier _ ->
+                                parseResult {
+                                    let! parameterName, _ =
+                                        identifier "expected an object-expression parameter"
+
+                                    return!
+                                        match (current ()).Kind with
+                                        | Comma ->
+                                            consume ()
+                                            |> ignore
+
+                                            parseMemberParameters (parameterName :: parameters)
+                                        | RightParenthesis ->
+                                            Ok(List.rev (parameterName :: parameters))
+                                        | _ ->
+                                            Error(
+                                                prototypeDiagnostic
+                                                    source.Path
+                                                    (current ()).Range
+                                                    "expected ',' or ')' after an object-expression parameter"
+                                            )
+                                }
+                            | _ ->
+                                Error(
+                                    prototypeDiagnostic
+                                        source.Path
+                                        (current ()).Range
+                                        "expected an object-expression parameter"
+                                )
+
+                        let! memberParameters = parseMemberParameters []
+                        let! _ = expected RightParenthesis "expected ')'"
 
                         let! _ =
                             expected Equals "expected '=' before an object-expression member body"
@@ -1184,6 +1215,7 @@ module internal Frontend =
                                 isOverride,
                                 receiverName,
                                 memberName,
+                                memberParameters,
                                 memberBody,
                                 range
                             ),

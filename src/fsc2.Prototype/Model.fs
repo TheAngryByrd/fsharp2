@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 51
+    let Query = 52
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -251,6 +251,7 @@ type internal ParsedExpression =
         isOverride: bool *
         receiverName: string *
         memberName: string *
+        memberParameters: string list *
         memberBody: ParsedExpression *
         range: SourceRange
 
@@ -762,6 +763,50 @@ type internal TypedUnitLambdaExpression = {
 
     override _.ToString() = "TypedUnitLambdaExpression"
 
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal KnownAttributeKind =
+    | AutoOpenAttribute
+    | StructAttribute
+    | NoComparisonAttribute
+    | NoEqualityAttribute
+    | DefaultValueAttribute
+    | InlineIfLambdaAttribute
+    | NoEagerConstraintApplicationAttribute
+    | CompilationMappingAttribute
+
+    override _.ToString() = "KnownAttributeKind"
+
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal SourceConstructKind =
+    | ObjectTypeConstruct
+    | ModuleConstruct
+
+    override _.ToString() = "SourceConstructKind"
+
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal TypedAttributeArgument =
+    | TypedBooleanAttributeArgument of bool
+    | TypedSourceConstructAttributeArgument of SourceConstructKind
+
+    override _.ToString() = "TypedAttributeArgument"
+
+type internal TypedCustomAttribute = {
+    StableId: string
+    Kind: KnownAttributeKind
+    ConstructorArguments: TypedAttributeArgument list
+    ExportFingerprint: string
+} with
+
+    override _.ToString() = "TypedCustomAttribute"
+
+type internal TypedParameter = {
+    Name: string
+    Type: CliType
+    Attributes: TypedCustomAttribute list
+} with
+
+    override _.ToString() = "TypedParameter"
+
 type internal TypedExpression =
     | TypedIntegerLiteral of int
     | TypedStringLiteral of string
@@ -832,6 +877,7 @@ type internal TypedExpression =
         isOverride: bool *
         receiverName: string *
         memberName: string *
+        memberParameters: TypedParameter list *
         memberReturnType: CliType *
         memberBody: TypedExpression *
         range: SourceRange
@@ -871,50 +917,6 @@ type internal TypedMethodConstraint =
     | TypedDirectConstraint of TypedTypeConstraint
 
     override _.ToString() = "TypedMethodConstraint"
-
-[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
-type internal KnownAttributeKind =
-    | AutoOpenAttribute
-    | StructAttribute
-    | NoComparisonAttribute
-    | NoEqualityAttribute
-    | DefaultValueAttribute
-    | InlineIfLambdaAttribute
-    | NoEagerConstraintApplicationAttribute
-    | CompilationMappingAttribute
-
-    override _.ToString() = "KnownAttributeKind"
-
-[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
-type internal SourceConstructKind =
-    | ObjectTypeConstruct
-    | ModuleConstruct
-
-    override _.ToString() = "SourceConstructKind"
-
-[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
-type internal TypedAttributeArgument =
-    | TypedBooleanAttributeArgument of bool
-    | TypedSourceConstructAttributeArgument of SourceConstructKind
-
-    override _.ToString() = "TypedAttributeArgument"
-
-type internal TypedCustomAttribute = {
-    StableId: string
-    Kind: KnownAttributeKind
-    ConstructorArguments: TypedAttributeArgument list
-    ExportFingerprint: string
-} with
-
-    override _.ToString() = "TypedCustomAttribute"
-
-type internal TypedParameter = {
-    Name: string
-    Type: CliType
-    Attributes: TypedCustomAttribute list
-} with
-
-    override _.ToString() = "TypedParameter"
 
 type internal TypedMethodDeclaration = {
     StableId: string

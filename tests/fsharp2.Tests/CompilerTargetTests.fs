@@ -5409,6 +5409,45 @@ module CompilerTargetTests =
                         "object-expression"
                         "the override should provide the object-expression result"
 
+            testCase "emits a parameterized object-expression override"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen System\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        static member inline Make() : System.Object =\n            { new System.Object() with\n                override _.Equals(value) = Object.ReferenceEquals(value, value) }\n"
+
+                withObjectMemberDifferential
+                    "fsharp2-parameterized-object-expression"
+                    sourceText
+                    "Make"
+                <| fun oracleOutputPath outputPath ->
+                    let inspectAndInvoke assemblyPath =
+                        let assembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            assembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        let instance = builderType.GetMethod("Make").Invoke(null, null)
+                        let equals = instance.GetType().GetMethod("Equals")
+
+                        equals.Attributes,
+                        (equals.GetParameters()
+                         |> Array.map _.ParameterType.FullName),
+                        equals.ReturnType.FullName,
+                        instance.Equals(obj ())
+
+                    let oracleShape = inspectAndInvoke oracleOutputPath
+                    let fsharp2Shape = inspectAndInvoke outputPath
+
+                    Expect.equal
+                        fsharp2Shape
+                        oracleShape
+                        "the parameterized override should match the Compatibility Oracle"
+
+                    let _, _, _, result = fsharp2Shape
+                    Expect.isTrue result "the override should execute its body"
+
             testCase "emits and executes a runtime type-test match"
             <| fun _ ->
                 let sourceText =
@@ -7552,7 +7591,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "51"
+                        "52"
                         "query cache evidence should be versioned"
 
                     Expect.equal

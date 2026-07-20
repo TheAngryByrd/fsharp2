@@ -355,6 +355,7 @@ module private TypeIdentity =
                                 isOverride,
                                 receiverName,
                                 memberName,
+                                memberParameters,
                                 memberReturnType,
                                 memberBody,
                                 _) ->
@@ -366,6 +367,17 @@ module private TypeIdentity =
                 receiverName
                 memberName
                 cliType memberReturnType
+
+                yield!
+                    memberParameters
+                    |> List.map (fun parameter ->
+                        Fingerprint.parts [
+                            parameter.Name
+                            cliType parameter.Type
+                            "attributes"
+                            yield! parameter.Attributes |> List.map _.ExportFingerprint
+                        ]
+                    )
 
                 yield!
                     constructorArguments
@@ -1283,16 +1295,49 @@ type internal CompilerService() =
                         with
                         | Error _ -> []
                         | Ok resolvedType ->
-                            references.Methods(
-                                resolvedType.DeclarationId,
-                                memberName,
-                                true
-                            )
-                            |> List.choose (fun methodDefinition ->
-                                tryInferReferenceStaticMethod
-                                    methodDefinition
+                            let referenceCandidates =
+                                references.Methods(
+                                    resolvedType.DeclarationId,
+                                    memberName,
+                                    true
+                                )
+                                |> List.choose (fun methodDefinition ->
+                                    tryInferReferenceStaticMethod
+                                        methodDefinition
+                                        argumentTypes
+                                )
+
+                            let intrinsicCandidates =
+                                match
+                                    resolvedType.TypeName.Namespace,
+                                    resolvedType.TypeName.Name,
+                                    memberName,
                                     argumentTypes
-                            )
+                                with
+                                | "System", "Object", "ReferenceEquals", [ CliObject; CliObject ] ->
+                                    [
+                                        {
+                                            DeclaringType = {
+                                                DeclarationId = resolvedType.DeclarationId
+                                                AssemblyName = resolvedType.AssemblyName
+                                                TypeName = resolvedType.TypeName
+                                                IsValueType = resolvedType.IsValueType
+                                            }
+                                            StableId =
+                                                resolvedType.DeclarationId
+                                                + "|method|ReferenceEquals|generic|0|object|object|return|bool"
+                                            Name = "ReferenceEquals"
+                                            GenericArity = 0
+                                            ParameterTypes = [ CliObject; CliObject ]
+                                            ReturnType = CliBoolean
+                                        },
+                                        [],
+                                        CliBoolean
+                                    ]
+                                | _ -> []
+
+                            intrinsicCandidates
+                            @ referenceCandidates
                     else
                         sourceCandidates
 
@@ -2278,7 +2323,7 @@ type internal CompilerService() =
                                 collect constraints body
                             | LambdaExpression(_, _, body)
                             | UnitLambdaExpression body -> collect constraints body
-                            | ObjectExpression(_, arguments, _, _, _, body, _) ->
+                            | ObjectExpression(_, arguments, _, _, _, _, body, _) ->
                                 let constraints =
                                     (constraints, arguments)
                                     ||> List.fold collect
@@ -2572,10 +2617,24 @@ type internal CompilerService() =
                                                     fieldType
                                                     remaining
 
-                                let rec typeStaticExpression localBindings nextLocalIndex =
-                                    function
+                                let rec typeStaticExpressionFor
+                                    (expressionParameters: TypedParameter list)
+                                    localBindings
+                                    nextLocalIndex
+                                    expression
+                                    =
+                                    let typeStaticExpression =
+                                        typeStaticExpressionFor expressionParameters
+
+                                    match expression with
                                     | IntegerLiteral value ->
                                         Ok(TypedIntegerLiteral value, CliInt32, nextLocalIndex)
+                                    | BooleanLiteral value ->
+                                        Ok(
+                                            TypedIntegerLiteral(if value then 1 else 0),
+                                            CliBoolean,
+                                            nextLocalIndex
+                                        )
                                     | StringLiteral value ->
                                         Ok(TypedStringLiteral value, CliString, nextLocalIndex)
                                     | UnitLiteral -> Ok(TypedUnitLiteral, CliVoid, nextLocalIndex)
@@ -2592,7 +2651,7 @@ type internal CompilerService() =
                                             )
                                         | None ->
                                             match
-                                                parameters
+                                                expressionParameters
                                                 |> List.tryFindIndex (fun parameter ->
                                                     parameter.Name = name
                                                 )
@@ -2600,7 +2659,7 @@ type internal CompilerService() =
                                             | Some index ->
                                                 Ok(
                                                     TypedParameterReference index,
-                                                    parameters.[index].Type,
+                                                    expressionParameters.[index].Type,
                                                     nextLocalIndex
                                                 )
                                             | None ->
@@ -2616,7 +2675,7 @@ type internal CompilerService() =
                                             let unitType = CliNamedType fsharpUnitType
 
                                             match
-                                                parameters
+                                                expressionParameters
                                                 |> List.tryFindIndex (fun parameter ->
                                                     parameter.Name = captureName
                                                 )
@@ -2633,7 +2692,7 @@ type internal CompilerService() =
                                                     methodDeclaration.BodyRange
                                                     "a unit lambda needs a unit-domain F# function type"
                                             | Some captureParameterIndex when
-                                                parameters.[captureParameterIndex].Type
+                                                expressionParameters.[captureParameterIndex].Type
                                                 <> rangeType
                                                 ->
                                                 diagnostic
@@ -2722,13 +2781,13 @@ type internal CompilerService() =
                                                         localType
                                                     )
                                             | None ->
-                                                parameters
+                                                expressionParameters
                                                 |> List.tryFindIndex (fun parameter ->
                                                     parameter.Name = rootName
                                                 )
                                                 |> Option.map (fun parameterIndex ->
                                                     let parameterType =
-                                                        parameters.[parameterIndex].Type
+                                                        expressionParameters.[parameterIndex].Type
 
                                                     TypedParameterAddress(
                                                         parameterIndex,
@@ -3492,6 +3551,7 @@ type internal CompilerService() =
                                                        isOverride,
                                                        receiverName,
                                                        memberName,
+                                                       memberParameterNames,
                                                        memberBody,
                                                        range) ->
                                         if not (List.isEmpty constructorArguments) then
@@ -3502,13 +3562,11 @@ type internal CompilerService() =
                                             diagnostic
                                                 range
                                                 "only object-expression overrides are currently supported"
-                                        elif
-                                            memberName
-                                            <> "ToString"
-                                        then
+                                        elif (memberParameterNames |> Set.ofList).Count
+                                             <> memberParameterNames.Length then
                                             diagnostic
                                                 range
-                                                "only the parameterless System.Object.ToString override is currently supported"
+                                                "object-expression parameter names must be unique"
                                         else
                                             match
                                                 baseType
@@ -3516,61 +3574,171 @@ type internal CompilerService() =
                                                 |> resolveType declaredMethodParameters
                                             with
                                             | Error error -> Error error
-                                            | Ok(TypedNamedType resolvedBaseType) when
-                                                resolvedBaseType.TypeName.Namespace = "System"
-                                                && resolvedBaseType.TypeName.Name = "Object"
-                                                ->
-                                                match memberBody with
-                                                | StringLiteral value ->
-                                                    let objectTypeStableId =
-                                                        stableId
-                                                        + "/method:"
-                                                        + methodDeclaration.Name
-                                                        + "/object-expression:"
-                                                        + range.Start.Offset.ToString(
-                                                            CultureInfo.InvariantCulture
-                                                        )
-
-                                                    let objectTypeReference = {
-                                                        DeclarationId = objectTypeStableId
-                                                        AssemblyName = String.Empty
-                                                        TypeName = {
-                                                            Namespace = String.Empty
-                                                            Name =
-                                                                "objectExpression@"
-                                                                + range.Start.Line.ToString(
-                                                                    CultureInfo.InvariantCulture
-                                                                )
-                                                        }
-                                                        IsValueType = false
-                                                    }
-
-                                                    let baseCliType = CliObject
-
-                                                    Ok(
-                                                        TypedObjectExpression(
-                                                            objectTypeReference,
-                                                            baseCliType,
-                                                            [],
-                                                            true,
-                                                            receiverName,
-                                                            memberName,
-                                                            CliString,
-                                                            TypedStringLiteral value,
-                                                            range
-                                                        ),
-                                                        baseCliType,
-                                                        nextLocalIndex
-                                                    )
-                                                | _ ->
-                                                    diagnostic
+                                            | Ok typedBaseType ->
+                                                match
+                                                    toCliType
+                                                        methodParameterIndex
                                                         range
-                                                        "the System.Object.ToString object-expression override must return a string literal"
-                                            | Ok _ ->
-                                                diagnostic
-                                                    range
-                                                    "only a System.Object object expression is currently supported"
-                                    | BooleanLiteral _
+                                                        typedBaseType
+                                                with
+                                                | Error error -> Error error
+                                                | Ok baseCliType ->
+                                                    let resolvedBase =
+                                                        match typedBaseType with
+                                                        | TypedNamedType resolved -> Some resolved
+                                                        | TypedGenericTypeApplication(
+                                                            TypedNamedType resolved,
+                                                            _
+                                                          ) -> Some resolved
+                                                        | _ -> None
+
+                                                    let baseMethodOwner =
+                                                        match baseCliType, resolvedBase with
+                                                        | CliObject, Some resolved ->
+                                                            Some(
+                                                                {
+                                                                    DeclarationId =
+                                                                        resolved.DeclarationId
+                                                                    AssemblyName =
+                                                                        resolved.AssemblyName
+                                                                    TypeName = resolved.TypeName
+                                                                    IsValueType =
+                                                                        resolved.IsValueType
+                                                                },
+                                                                []
+                                                            )
+                                                        | CliNamedType typeReference, _ ->
+                                                            Some(typeReference, [])
+                                                        | CliGenericType(typeReference, arguments), _ ->
+                                                            Some(typeReference, arguments)
+                                                        | _ -> None
+
+                                                    match baseMethodOwner with
+                                                    | None ->
+                                                        diagnostic
+                                                            range
+                                                            "an object expression requires a named reference base type"
+                                                    | Some(baseTypeReference, typeArguments) ->
+                                                        let indexedCandidates =
+                                                            references.Methods(
+                                                                baseTypeReference.DeclarationId,
+                                                                memberName,
+                                                                false
+                                                            )
+                                                            |> List.filter (fun candidate ->
+                                                                candidate.GenericArity = 0
+                                                                && candidate.ParameterTypes.Length
+                                                                   = memberParameterNames.Length
+                                                            )
+                                                            |> List.map (fun candidate ->
+                                                                let parameterTypes =
+                                                                    candidate.ParameterTypes
+                                                                    |> List.map (
+                                                                        substituteTypeArguments
+                                                                            typeArguments
+                                                                    )
+
+                                                                let returnType =
+                                                                    candidate.ReturnType
+                                                                    |> substituteTypeArguments
+                                                                        typeArguments
+
+                                                                parameterTypes, returnType
+                                                            )
+
+                                                        let intrinsicCandidates =
+                                                            match baseCliType, memberName with
+                                                            | CliObject, "ToString" -> [ [], CliString ]
+                                                            | CliObject, "Equals" ->
+                                                                [ [ CliObject ], CliBoolean ]
+                                                            | CliObject, "GetHashCode" -> [ [], CliInt32 ]
+                                                            | _ -> []
+
+                                                        let candidates =
+                                                            intrinsicCandidates
+                                                            @ indexedCandidates
+                                                            |> List.filter (fun (parameterTypes, _) ->
+                                                                List.length parameterTypes =
+                                                                    List.length memberParameterNames
+                                                            )
+                                                            |> List.distinct
+
+                                                        match candidates with
+                                                        | [] ->
+                                                            diagnostic
+                                                                range
+                                                                $"the base type has no instance member '{memberName}' with {memberParameterNames.Length} parameter(s)"
+                                                        | [ parameterTypes, memberReturnType ] ->
+                                                            let memberParameters: TypedParameter list =
+                                                                (memberParameterNames, parameterTypes)
+                                                                ||> List.map2 (fun name parameterType ->
+                                                                    ({
+                                                                        Name = name
+                                                                        Type = parameterType
+                                                                        Attributes = []
+                                                                     }
+                                                                     : TypedParameter)
+                                                                )
+
+                                                            match
+                                                                typeStaticExpressionFor
+                                                                    memberParameters
+                                                                    Map.empty
+                                                                    0
+                                                                    memberBody
+                                                            with
+                                                            | Error error -> Error error
+                                                            | Ok(_, inferredReturnType, _) when
+                                                                inferredReturnType
+                                                                <> memberReturnType
+                                                                ->
+                                                                diagnostic
+                                                                    range
+                                                                    $"the object-expression member body has type '{TypeIdentity.cliType inferredReturnType}', but the overridden member returns '{TypeIdentity.cliType memberReturnType}'"
+                                                            | Ok(typedMemberBody, _, _) ->
+                                                                let objectTypeStableId =
+                                                                    stableId
+                                                                    + "/method:"
+                                                                    + methodDeclaration.Name
+                                                                    + "/object-expression:"
+                                                                    + range.Start.Offset.ToString(
+                                                                        CultureInfo.InvariantCulture
+                                                                    )
+
+                                                                let objectTypeReference = {
+                                                                    DeclarationId = objectTypeStableId
+                                                                    AssemblyName = String.Empty
+                                                                    TypeName = {
+                                                                        Namespace = String.Empty
+                                                                        Name =
+                                                                            "objectExpression@"
+                                                                            + range.Start.Line.ToString(
+                                                                                CultureInfo.InvariantCulture
+                                                                            )
+                                                                    }
+                                                                    IsValueType = false
+                                                                }
+
+                                                                Ok(
+                                                                    TypedObjectExpression(
+                                                                        objectTypeReference,
+                                                                        baseCliType,
+                                                                        [],
+                                                                        true,
+                                                                        receiverName,
+                                                                        memberName,
+                                                                        memberParameters,
+                                                                        memberReturnType,
+                                                                        typedMemberBody,
+                                                                        range
+                                                                    ),
+                                                                    baseCliType,
+                                                                    nextLocalIndex
+                                                                )
+                                                        | _ ->
+                                                            diagnostic
+                                                                range
+                                                                $"the object-expression member '{memberName}' is ambiguous on the base type"
                                     | UnitApplication _
                                     | BoundInstanceMember _
                                     | MemberAssignment _
@@ -3579,6 +3747,9 @@ type internal CompilerService() =
                                         diagnostic
                                             methodDeclaration.BodyRange
                                             "this static-member expression is not yet supported"
+
+                                let typeStaticExpression =
+                                    typeStaticExpressionFor parameters
 
                                 let rec inferredSubtypeConstraints =
                                     function
@@ -3623,7 +3794,7 @@ type internal CompilerService() =
                                         inferredSubtypeConstraints condition
                                         @ inferredSubtypeConstraints ifTrue
                                         @ inferredSubtypeConstraints ifFalse
-                                    | TypedObjectExpression(_, _, arguments, _, _, _, _, body, _) ->
+                                    | TypedObjectExpression(_, _, arguments, _, _, _, _, _, body, _) ->
                                         (arguments
                                          |> List.collect inferredSubtypeConstraints)
                                         @ inferredSubtypeConstraints body
@@ -6300,7 +6471,16 @@ type internal CompilerService() =
                     ]
                     @ matchedLocals
                     @ notMatchedLocals
-                | TypedObjectExpression(typeReference, _, constructorArguments, _, _, _, _, _, _) ->
+                | TypedObjectExpression(typeReference,
+                                        _,
+                                        constructorArguments,
+                                        _,
+                                        _,
+                                        _,
+                                        _,
+                                        _,
+                                        _,
+                                        _) ->
                     if not (List.isEmpty constructorArguments) then
                         invalidOp
                             "object-expression constructor arguments reached an unsupported lowering path"
@@ -6873,7 +7053,7 @@ type internal CompilerService() =
 
             let rec objectExpressions =
                 function
-                | (TypedObjectExpression(_, _, constructorArguments, _, _, _, _, body, _) as expression) -> [
+                | (TypedObjectExpression(_, _, constructorArguments, _, _, _, _, _, body, _) as expression) -> [
                     yield expression
 
                     for argument in constructorArguments do
@@ -7180,6 +7360,7 @@ type internal CompilerService() =
                                                     isOverride,
                                                     receiverName,
                                                     memberName,
+                                                    memberParameters,
                                                     memberReturnType,
                                                     memberBody,
                                                     range) ->
@@ -7254,7 +7435,7 @@ type internal CompilerService() =
                                     GenericParameters = []
                                     Constraints = []
                                     Attributes = []
-                                    Parameters = []
+                                    Parameters = memberParameters
                                     ReturnType = memberReturnType
                                     Body = memberBody
                                     ExportFingerprint =
@@ -7262,6 +7443,9 @@ type internal CompilerService() =
                                             overrideStableId
                                             "override"
                                             receiverName
+                                            yield!
+                                                memberParameters
+                                                |> List.map TypeIdentity.parameter
                                             TypeIdentity.cliType memberReturnType
                                             TypeIdentity.inlineBody memberBody
                                         ]
