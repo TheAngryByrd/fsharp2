@@ -4900,7 +4900,7 @@ module CompilerTargetTests =
             testCase "emits a static type augmentation in the current module"
             <| fun _ ->
                 let sourceText =
-                    "namespace IcedTasks.ValueTasks\n\nopen System\n\n[<AutoOpen>]\nmodule ValueTaskExtensions =\n    type String with\n        static member inline Echo(value: int) : int = value\n"
+                    "namespace IcedTasks.ValueTasks\n\nopen System\n\n[<AutoOpen>]\nmodule ValueTaskExtensions =\n    type String with\n        static member Echo(value: int) : int = value\n"
 
                 let root =
                     Path.Combine(
@@ -4938,7 +4938,7 @@ module CompilerTargetTests =
 
                     let responsePath = Path.Combine(root, "fsharp2.rsp")
 
-                    let outputPath, _ =
+                    let outputPath, originalExportFingerprint =
                         compileForExportFingerprint root responsePath sourcePath "ValueTask-fsharp2" []
 
                     let inspectAndInvoke assemblyPath =
@@ -4988,6 +4988,27 @@ module CompilerTargetTests =
 
                     let _, _, _, _, result = fsharp2Shape
                     Expect.equal result 42 "Echo should return its argument"
+
+                    File.WriteAllText(
+                        sourcePath,
+                        sourceText.Replace("= value", "= 43", StringComparison.Ordinal)
+                    )
+
+                    let changedOutputPath, changedExportFingerprint =
+                        compileForExportFingerprint
+                            root
+                            responsePath
+                            sourcePath
+                            "ValueTask-changed-fsharp2"
+                            []
+
+                    let _, _, _, _, changedResult = inspectAndInvoke changedOutputPath
+                    Expect.equal changedResult 43 "the changed non-inline body should be emitted"
+
+                    Expect.equal
+                        changedExportFingerprint
+                        originalExportFingerprint
+                        "a non-inline body edit should preserve the consumer-visible export fingerprint"
                 finally
                     Directory.Delete(root, true)
 
@@ -7165,7 +7186,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "43"
+                        "44"
                         "query cache evidence should be versioned"
 
                     Expect.equal

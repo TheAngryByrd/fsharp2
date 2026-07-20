@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 43
+    let Query = 44
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -308,6 +308,7 @@ type internal ParsedParameter = {
 
 type internal ParsedStaticMethodDeclaration = {
     Attributes: ParsedAttribute list
+    IsInline: bool
     Name: string
     TypeParameters: string list
     Constraints: ParsedMethodConstraint list

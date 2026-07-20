@@ -427,6 +427,7 @@ type private ObjectMethodKind =
 type private ObjectMethodCompletion = {
     Kind: ObjectMethodKind
     Name: string
+    IsInline: bool
     IsPublic: bool
     GenericParameters: string list
     Constraints: TypedMethodConstraint list
@@ -1566,6 +1567,10 @@ type internal CompilerService() =
                                             let exportFingerprint =
                                                 Fingerprint.parts [
                                                     methodStableId
+                                                    if methodDeclaration.IsInline then
+                                                        "inline"
+                                                    else
+                                                        "non-inline"
                                                     "generic-parameters"
                                                     yield! methodDeclaration.TypeParameters
                                                     "constraints"
@@ -1914,6 +1919,7 @@ type internal CompilerService() =
                                 Fingerprint.parts [
                                     methodStableId
                                     completion.Kind.ExportIdentity
+                                    if completion.IsInline then "inline" else "non-inline"
                                     if completion.IsPublic then "public" else "internal"
                                     "generic-parameters"
                                     yield! completion.GenericParameters
@@ -1937,8 +1943,12 @@ type internal CompilerService() =
 
                                     "return"
                                     TypeIdentity.cliType completion.ReturnType
-                                    "inline-body"
-                                    TypeIdentity.inlineBody completion.Body
+
+                                    if completion.IsInline then
+                                        "inline-body"
+                                        TypeIdentity.inlineBody completion.Body
+                                    else
+                                        "non-inline-body-hidden"
                                 ]
 
                             Ok {
@@ -2992,6 +3002,7 @@ type internal CompilerService() =
                                         finishObjectMethod {
                                             Kind = StaticObjectMethod
                                             Name = methodDeclaration.Name
+                                            IsInline = methodDeclaration.IsInline
                                             IsPublic = true
                                             GenericParameters = methodTypeParameters
                                             Constraints =
@@ -4006,6 +4017,7 @@ type internal CompilerService() =
                                 finishObjectMethod {
                                     Kind = InstanceObjectMethod
                                     Name = methodDeclaration.Name
+                                    IsInline = true
                                     IsPublic = methodDeclaration.IsPublic
                                     GenericParameters = methodTypeParameters
                                     Constraints = constraints

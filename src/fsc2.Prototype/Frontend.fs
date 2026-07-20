@@ -2565,7 +2565,15 @@ module internal Frontend =
                             parseResult {
                                 let! staticToken = expected StaticKeyword "expected 'static'"
                                 let! _ = expected MemberKeyword "expected 'member'"
-                                let! _ = expected InlineKeyword "expected 'inline'"
+
+                                let isInline =
+                                    match (current ()).Kind with
+                                    | InlineKeyword ->
+                                        consume ()
+                                        |> ignore
+
+                                        true
+                                    | _ -> false
 
                                 let! methodName, _ = identifier "expected a static member name"
 
@@ -2603,6 +2611,7 @@ module internal Frontend =
 
                                 return {
                                     Attributes = attributes
+                                    IsInline = isInline
                                     Name = methodName
                                     TypeParameters = methodTypeParameters
                                     Constraints = methodConstraints
