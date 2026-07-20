@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 12
+    let Query = 13
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -115,6 +115,7 @@ type internal ParsedCallArgument =
 type internal ParsedExpression =
     | IntegerLiteral of int
     | StringLiteral of string
+    | ValueReference of string
     | TraitCall of receiverName: string * memberName: string * arguments: ParsedCallArgument list
 
     override _.ToString() = "ParsedExpression"
@@ -259,6 +260,8 @@ type internal ParsedStaticTypeDeclaration = {
 type internal ParsedInstanceMethodDeclaration = {
     ReceiverName: string
     Name: string
+    Parameters: ParsedParameter list
+    ReturnType: ParsedTypeExpression option
     Body: ParsedExpression
     BodyRange: SourceRange
     Range: SourceRange
@@ -490,6 +493,7 @@ type internal TypedCallArgument =
 
 type internal TypedExpression =
     | TypedIntegerLiteral of int
+    | TypedParameterReference of int
     | TypedTraitCall of
         receiverName: string *
         memberName: string *
@@ -708,7 +712,7 @@ type internal TypedModule = {
 type internal SymbolicInstruction =
     | LoadInt32 of int
     | LoadString of string
-    | LoadArgumentZero
+    | LoadArgument of int
     | CallMethod of SymbolicMethodReference
     | NewObject of declaringType: QualifiedTypeName * parameterTypes: CliType list
     | Throw

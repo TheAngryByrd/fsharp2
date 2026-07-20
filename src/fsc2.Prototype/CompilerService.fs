@@ -115,6 +115,26 @@ module private TypeIdentity =
                 name
             ]
 
+    let inlineBody =
+        function
+        | TypedIntegerLiteral value ->
+            Fingerprint.parts [
+                "integer"
+                value.ToString(CultureInfo.InvariantCulture)
+            ]
+        | TypedParameterReference index ->
+            Fingerprint.parts [
+                "parameter"
+                index.ToString(CultureInfo.InvariantCulture)
+            ]
+        | TypedTraitCall(receiverName, memberName, arguments) ->
+            Fingerprint.parts [
+                "trait-call"
+                receiverName
+                memberName
+                yield! arguments |> List.map callArgument
+            ]
+
     let attributeKind =
         function
         | AutoOpenAttribute -> "auto-open"
@@ -493,6 +513,10 @@ type internal CompilerService() =
                         diagnostic
                             declaration.BodyRange
                             "trait calls are supported only in static inline members"
+                    | _, ValueReference _ ->
+                        diagnostic
+                            declaration.BodyRange
+                            "value references are supported only in parameterized members"
                 | ParsedLiteralField declaration ->
                     let stableId =
                         parsed.StableId
@@ -929,7 +953,8 @@ type internal CompilerService() =
                                             Range = methodDeclaration.Range
                                         }
                             | Ok _, Ok _, IntegerLiteral _
-                            | Ok _, Ok _, StringLiteral _ ->
+                            | Ok _, Ok _, StringLiteral _
+                            | Ok _, Ok _, ValueReference _ ->
                                 diagnostic
                                     methodDeclaration.BodyRange
                                     "static inline members require a constrained trait call"
@@ -959,45 +984,211 @@ type internal CompilerService() =
                         + "/type:"
                         + declaration.Name
 
+                    let rec collectTypeParameters collected =
+                        function
+                        | ParsedTypeParameter(name, _) ->
+                            if
+                                collected
+                                |> List.contains name
+                            then
+                                collected
+                            else
+                                collected
+                                @ [ name ]
+                        | ParsedNamedType _ -> collected
+                        | ParsedGenericTypeApplication(genericType, arguments, _) ->
+                            (collectTypeParameters collected genericType, arguments)
+                            ||> List.fold collectTypeParameters
+                        | ParsedTupleType(elements, _) ->
+                            (collected, elements)
+                            ||> List.fold collectTypeParameters
+                        | ParsedFunctionType(domain, range, _) ->
+                            domain
+                            |> collectTypeParameters collected
+                            |> fun parameters -> collectTypeParameters parameters range
+
+                    let toCliType methodParameterIndex range =
+                        function
+                        | TypedTypeParameter name ->
+                            match
+                                methodParameterIndex
+                                |> Map.tryFind name
+                            with
+                            | Some index -> Ok(CliMethodTypeParameter index)
+                            | None ->
+                                diagnostic
+                                    range
+                                    $"the inferred method type parameter '{name}' is not declared"
+                        | TypedNamedType resolvedType when
+                            resolvedType.TypeName.Namespace = "System"
+                            && resolvedType.TypeName.Name = "Int32"
+                            ->
+                            Ok CliInt32
+                        | TypedNamedType resolvedType when
+                            resolvedType.TypeName.Namespace = "System"
+                            && resolvedType.TypeName.Name = "Boolean"
+                            ->
+                            Ok CliBoolean
+                        | TypedNamedType resolvedType when
+                            resolvedType.TypeName.Namespace = "System"
+                            && resolvedType.TypeName.Name = "String"
+                            ->
+                            Ok CliString
+                        | TypedNamedType resolvedType when
+                            resolvedType.TypeName.Namespace = "Microsoft.FSharp.Core"
+                            && resolvedType.TypeName.Name = "Unit"
+                            ->
+                            Ok CliVoid
+                        | typedType ->
+                            diagnostic
+                                range
+                                $"the instance-member CLI type '{TypeIdentity.expression typedType}' is not yet supported"
+
                     let typeMethod (methodDeclaration: ParsedInstanceMethodDeclaration) =
-                        match methodDeclaration.Body with
-                        | IntegerLiteral value ->
-                            let methodStableId =
-                                stableId
-                                + "/method:"
-                                + methodDeclaration.Name
-                                + ":unit->int32"
+                        let methodTypeParameters =
+                            let fromParameters =
+                                ([], methodDeclaration.Parameters)
+                                ||> List.fold (fun collected parameter ->
+                                    collectTypeParameters collected parameter.Type
+                                )
 
-                            let exportFingerprint =
-                                Fingerprint.parts [
-                                    methodStableId
-                                    "instance"
-                                    "parameters"
-                                    "return"
-                                    TypeIdentity.cliType CliInt32
-                                    "inline-body"
-                                    value.ToString(CultureInfo.InvariantCulture)
-                                ]
+                            match methodDeclaration.ReturnType with
+                            | Some returnType ->
+                                collectTypeParameters fromParameters returnType
+                            | None -> fromParameters
 
-                            Ok {
-                                StableId = methodStableId
-                                Name = methodDeclaration.Name
-                                GenericParameters = []
-                                Constraints = []
-                                Parameters = []
-                                ReturnType = CliInt32
-                                Body = TypedIntegerLiteral value
-                                ExportFingerprint = exportFingerprint
-                                Range = methodDeclaration.BodyRange
-                            }
-                        | StringLiteral _ ->
+                        let declaredMethodParameters =
+                            HashSet<string>(methodTypeParameters, StringComparer.Ordinal)
+
+                        let methodParameterIndex =
+                            methodTypeParameters
+                            |> List.mapi (fun index name -> name, index)
+                            |> Map.ofList
+
+                        let typedParameters =
+                            methodDeclaration.Parameters
+                            |> List.map (fun parameter ->
+                                resolveType declaredMethodParameters parameter.Type
+                                |> Result.bind (toCliType methodParameterIndex parameter.Range)
+                                |> Result.map (fun parameterType -> {
+                                    Name = parameter.Name
+                                    Type = parameterType
+                                })
+                            )
+                            |> collectResults []
+
+                        match typedParameters with
+                        | Error error -> Error error
+                        | Ok parameters when
+                            (parameters
+                             |> List.map _.Name
+                             |> Set.ofList
+                             |> Set.count)
+                            <> parameters.Length
+                            ->
                             diagnostic
-                                methodDeclaration.BodyRange
-                                "string-valued instance members are not yet supported"
-                        | TraitCall _ ->
-                            diagnostic
-                                methodDeclaration.BodyRange
-                                "trait calls are not yet supported in instance members"
+                                methodDeclaration.Range
+                                "instance-member parameter names must be unique"
+                        | Ok parameters ->
+                            let typedBody =
+                                match methodDeclaration.Body with
+                                | IntegerLiteral value ->
+                                    Ok(TypedIntegerLiteral value, CliInt32)
+                                | ValueReference name ->
+                                    match
+                                        parameters
+                                        |> List.tryFindIndex (fun parameter ->
+                                            parameter.Name = name
+                                        )
+                                    with
+                                    | Some index ->
+                                        Ok(TypedParameterReference index, parameters.[index].Type)
+                                    | None ->
+                                        diagnostic
+                                            methodDeclaration.BodyRange
+                                            $"the value '{name}' is not an instance-member parameter"
+                                | StringLiteral _ ->
+                                    diagnostic
+                                        methodDeclaration.BodyRange
+                                        "string-valued instance members are not yet supported"
+                                | TraitCall _ ->
+                                    diagnostic
+                                        methodDeclaration.BodyRange
+                                        "trait calls are not yet supported in instance members"
+
+                            let declaredReturnType =
+                                match methodDeclaration.ReturnType with
+                                | None -> Ok None
+                                | Some returnType ->
+                                    resolveType declaredMethodParameters returnType
+                                    |> Result.bind (toCliType methodParameterIndex returnType.Range)
+                                    |> Result.map Some
+
+                            match typedBody, declaredReturnType with
+                            | Error error, _
+                            | _, Error error -> Error error
+                            | Ok(body, inferredReturnType), Ok(Some returnType) when
+                                returnType <> inferredReturnType
+                                ->
+                                diagnostic
+                                    methodDeclaration.BodyRange
+                                    "the instance-member body does not match its declared return type"
+                            | Ok(body, inferredReturnType), Ok declaredReturnType ->
+                                let returnType =
+                                    declaredReturnType
+                                    |> Option.defaultValue inferredReturnType
+
+                                let parameterIdentity =
+                                    match parameters with
+                                    | [] -> "unit"
+                                    | _ ->
+                                        parameters
+                                        |> List.map (fun parameter ->
+                                            TypeIdentity.cliType parameter.Type
+                                        )
+                                        |> String.concat "*"
+
+                                let methodStableId =
+                                    stableId
+                                    + "/method:"
+                                    + methodDeclaration.Name
+                                    + ":"
+                                    + parameterIdentity
+                                    + "->"
+                                    + TypeIdentity.cliType returnType
+
+                                let exportFingerprint =
+                                    Fingerprint.parts [
+                                        methodStableId
+                                        "instance"
+                                        "generic-parameters"
+                                        yield! methodTypeParameters
+                                        "parameters"
+
+                                        yield!
+                                            parameters
+                                            |> List.collect (fun parameter -> [
+                                                parameter.Name
+                                                TypeIdentity.cliType parameter.Type
+                                            ])
+
+                                        "return"
+                                        TypeIdentity.cliType returnType
+                                        "inline-body"
+                                        TypeIdentity.inlineBody body
+                                    ]
+
+                                Ok {
+                                    StableId = methodStableId
+                                    Name = methodDeclaration.Name
+                                    GenericParameters = methodTypeParameters
+                                    Constraints = []
+                                    Parameters = parameters
+                                    ReturnType = returnType
+                                    Body = body
+                                    ExportFingerprint = exportFingerprint
+                                    Range = methodDeclaration.BodyRange
+                                }
 
                     match
                         declaration.Methods
@@ -1329,22 +1520,10 @@ type internal CompilerService() =
 
     let lower (assemblyName: string) (typedModules: TypedModule list) =
         let methodImplementationHash (methodDeclaration: TypedMethodDeclaration) =
-            match methodDeclaration.Body with
-            | TypedIntegerLiteral value ->
-                Fingerprint.parts [
-                    methodDeclaration.StableId
-                    value.ToString(CultureInfo.InvariantCulture)
-                ]
-            | TypedTraitCall(receiverName, memberName, arguments) ->
-                Fingerprint.parts [
-                    methodDeclaration.StableId
-                    receiverName
-                    memberName
-
-                    yield!
-                        arguments
-                        |> List.map TypeIdentity.callArgument
-                ]
+            Fingerprint.parts [
+                methodDeclaration.StableId
+                TypeIdentity.inlineBody methodDeclaration.Body
+            ]
 
         let modulesWithContentHashes =
             typedModules
@@ -1601,12 +1780,26 @@ type internal CompilerService() =
                         ]
                 }
 
-            let methodInstructions (methodDeclaration: TypedMethodDeclaration) =
+            let methodInstructions kind (methodDeclaration: TypedMethodDeclaration) =
                 match methodDeclaration.Body with
                 | TypedIntegerLiteral value -> [
                     LoadInt32 value
                     Return
                   ]
+                | TypedParameterReference index ->
+                    let argumentIndex =
+                        match kind with
+                        | InstanceConstructor
+                        | InstanceInlineMember ->
+                            index
+                            + 1
+                        | ModuleFunction
+                        | StaticInlineMemberStub -> index
+
+                    [
+                        LoadArgument argumentIndex
+                        Return
+                    ]
                 | TypedTraitCall(_, memberName, _) -> [
                     LoadString(
                         "Dynamic invocation of "
@@ -1651,7 +1844,7 @@ type internal CompilerService() =
                     Constraints = methodDeclaration.Constraints
                     Parameters = methodDeclaration.Parameters
                     ReturnType = methodDeclaration.ReturnType
-                    Instructions = methodInstructions methodDeclaration
+                    Instructions = methodInstructions kind methodDeclaration
                     DependencyIds = methodDependencies methodDeclaration
                     ContentHash = contentHash
                     DocumentIndex = documentIndex
@@ -1849,7 +2042,7 @@ type internal CompilerService() =
                                 Parameters = []
                                 ReturnType = CliVoid
                                 Instructions = [
-                                    LoadArgumentZero
+                                    LoadArgument 0
                                     CallMethod objectConstructor
                                     Return
                                 ]

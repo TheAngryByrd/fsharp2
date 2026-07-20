@@ -64,6 +64,11 @@ type internal ReferenceTypeIndex
         ) =
         let knownAlias =
             match syntaxName.Namespace, syntaxName.Name with
+            | "", "int" ->
+                Some {
+                    Namespace = "System"
+                    Name = "Int32"
+                }
             | "", "bool" ->
                 Some {
                     Namespace = "System"

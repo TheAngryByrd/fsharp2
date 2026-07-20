@@ -373,7 +373,7 @@ module internal Linker =
                 value
                 |> metadata.GetOrAddUserString
                 |> instructions.LoadString
-            | LoadArgumentZero -> instructions.OpCode(ILOpCode.Ldarg_0)
+            | LoadArgument index -> instructions.LoadArgument(index)
             | CallMethod methodReference ->
                 let target =
                     metadata.AddMemberReference(

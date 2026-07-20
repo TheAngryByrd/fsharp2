@@ -31,6 +31,8 @@ module CompilerTargetTests =
         Attributes: MethodAttributes
         ImplementationAttributes: MethodImplAttributes
         Signature: string
+        Parameters: (int * string * ParameterAttributes) array
+        GenericParameters: (int * string * GenericParameterAttributes) array
         CustomAttributes: (string * string) array
         SequencePoints: string array
     }
@@ -197,7 +199,7 @@ module CompilerTargetTests =
             + responsePath
         ]
 
-    let private objectTypeMetadataShape assemblyPath pdbPath =
+    let private objectTypeMetadataShape assemblyPath pdbPath instanceMemberName =
         use implementationStream = File.OpenRead(assemblyPath)
         use implementation = new PEReader(implementationStream)
         let metadata = implementation.GetMetadataReader()
@@ -279,6 +281,24 @@ module CompilerTargetTests =
                 Attributes = definition.Attributes
                 ImplementationAttributes = definition.ImplAttributes
                 Signature = Convert.ToHexString(metadata.GetBlobBytes(definition.Signature))
+                Parameters =
+                    definition.GetParameters()
+                    |> Seq.map (fun handle ->
+                        let parameter = metadata.GetParameter(handle)
+
+                        int parameter.SequenceNumber,
+                        metadata.GetString(parameter.Name),
+                        parameter.Attributes
+                    )
+                    |> Seq.toArray
+                GenericParameters =
+                    definition.GetGenericParameters()
+                    |> Seq.map (fun handle ->
+                        let parameter = metadata.GetGenericParameter(handle)
+
+                        parameter.Index, metadata.GetString(parameter.Name), parameter.Attributes
+                    )
+                    |> Seq.toArray
                 CustomAttributes =
                     definition.GetCustomAttributes()
                     |> Seq.map customAttributeShape
@@ -315,7 +335,7 @@ module CompilerTargetTests =
                 |> Seq.map customAttributeShape
                 |> Seq.toArray
             Constructor = methodShape ".ctor"
-            InstanceMember = methodShape "Zero"
+            InstanceMember = methodShape instanceMemberName
         }
 
     let private invokeConsumer workingDirectory assemblyPath expected =
@@ -2108,8 +2128,8 @@ module CompilerTargetTests =
                     let pdbPath = Path.ChangeExtension(outputPath, ".pdb")
 
                     Expect.equal
-                        (objectTypeMetadataShape outputPath pdbPath)
-                        (objectTypeMetadataShape oracleOutputPath oraclePdbPath)
+                        (objectTypeMetadataShape outputPath pdbPath "Zero")
+                        (objectTypeMetadataShape oracleOutputPath oraclePdbPath "Zero")
                         "the emitted object type should match the Compatibility Oracle's CLR and portable-PDB surface"
 
                     let emittedAssembly = Assembly.Load(File.ReadAllBytes(outputPath))
@@ -2133,6 +2153,162 @@ module CompilerTargetTests =
                         (zero.Invoke(builder, Array.empty<obj>))
                         (box 0)
                         "the emitted object member should execute its F# body"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "matches Oracle shape and executes a parameterized inline object member"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-parameterized-object-member",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "TaskBuilderBase.fs")
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "namespace IcedTasks.TaskBase\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Return(value: int) : int = value\n"
+                    )
+
+                    let oracleOutputPath = Path.Combine(root, "TaskBuilderBase-oracle.dll")
+                    let oraclePdbPath = Path.Combine(root, "TaskBuilderBase-oracle.pdb")
+                    let oracleResponsePath = Path.Combine(root, "oracle.rsp")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root oracleResponsePath [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{oracleOutputPath}"
+                            $"--pdb:{oraclePdbPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let responsePath = Path.Combine(root, "fsharp2.rsp")
+
+                    let outputPath, _ =
+                        compileForExportFingerprint
+                            root
+                            responsePath
+                            sourcePath
+                            "TaskBuilderBase-fsharp2"
+                            []
+
+                    let pdbPath = Path.ChangeExtension(outputPath, ".pdb")
+
+                    Expect.equal
+                        (objectTypeMetadataShape outputPath pdbPath "Return")
+                        (objectTypeMetadataShape oracleOutputPath oraclePdbPath "Return")
+                        "the parameterized member should match the Compatibility Oracle's CLR and portable-PDB surface"
+
+                    let emittedAssembly = Assembly.Load(File.ReadAllBytes(outputPath))
+
+                    let builderType =
+                        emittedAssembly.GetType(
+                            "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                            throwOnError = true
+                        )
+
+                    let builder = Activator.CreateInstance(builderType)
+                    let returnMethod = builderType.GetMethod("Return")
+
+                    Expect.equal
+                        (returnMethod.Invoke(builder, [| box 37 |]))
+                        (box 37)
+                        "the emitted parameterized member should return its argument"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "infers an inline object member generic parameter in Oracle order"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-generic-object-member",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "TaskBuilderBase.fs")
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "namespace IcedTasks.TaskBase\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Return(value: 'T) : 'T = value\n"
+                    )
+
+                    let oracleOutputPath = Path.Combine(root, "TaskBuilderBase-oracle.dll")
+                    let oraclePdbPath = Path.Combine(root, "TaskBuilderBase-oracle.pdb")
+                    let oracleResponsePath = Path.Combine(root, "oracle.rsp")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root oracleResponsePath [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{oracleOutputPath}"
+                            $"--pdb:{oraclePdbPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let responsePath = Path.Combine(root, "fsharp2.rsp")
+
+                    let outputPath, _ =
+                        compileForExportFingerprint
+                            root
+                            responsePath
+                            sourcePath
+                            "TaskBuilderBase-fsharp2"
+                            []
+
+                    let pdbPath = Path.ChangeExtension(outputPath, ".pdb")
+
+                    Expect.equal
+                        (objectTypeMetadataShape outputPath pdbPath "Return")
+                        (objectTypeMetadataShape oracleOutputPath oraclePdbPath "Return")
+                        "the generic member should match the Compatibility Oracle's CLR and portable-PDB surface"
+
+                    let emittedAssembly = Assembly.Load(File.ReadAllBytes(outputPath))
+
+                    let builderType =
+                        emittedAssembly.GetType(
+                            "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                            throwOnError = true
+                        )
+
+                    let builder = Activator.CreateInstance(builderType)
+
+                    let returnMethod =
+                        builderType.GetMethod("Return").MakeGenericMethod(typeof<int>)
+
+                    Expect.equal
+                        (returnMethod.Invoke(builder, [| box 37 |]))
+                        (box 37)
+                        "the emitted generic member should return its specialized argument"
                 finally
                     Directory.Delete(root, true)
 
@@ -4243,7 +4419,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "12"
+                        "13"
                         "query cache evidence should be versioned"
 
                     Expect.equal
