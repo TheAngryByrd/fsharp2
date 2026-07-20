@@ -936,6 +936,96 @@ module CompilerTargetTests =
                 finally
                     Directory.Delete(root, true)
 
+            testCase "emits tupled inline-member parameters in Oracle order"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-inline-srtp-tuple-parameters",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "TaskLike.fs")
+                    let outputPath = Path.Combine(root, "TaskLike.dll")
+                    let pdbPath = Path.Combine(root, "TaskLike.pdb")
+                    let responsePath = Path.Combine(root, "compile.rsp")
+                    let systemRuntimePath = Assembly.Load("System.Runtime").Location
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "namespace IcedTasks.TaskLike\n\nopen System.Runtime.CompilerServices\n\ntype Awaiter<'Awaiter, 'TResult\n    when 'Awaiter :> ICriticalNotifyCompletion\n    and 'Awaiter: (member get_IsCompleted: unit -> bool)\n    and 'Awaiter: (member GetResult: unit -> 'TResult)> = 'Awaiter\n\ntype Awaiter =\n    static member inline IsCompleted<'Awaiter, 'TResult when Awaiter<'Awaiter, 'TResult>>\n        (awaiter: 'Awaiter, context: 'TResult)\n        =\n        awaiter.get_IsCompleted ()\n"
+                    )
+
+                    File.WriteAllLines(
+                        responsePath,
+                        [|
+                            "--target:library"
+                            "--deterministic+"
+                            "--debug:portable"
+                            $"--reference:{typeof<System.Runtime.CompilerServices.ICriticalNotifyCompletion>.Assembly.Location}"
+                            $"--reference:{typeof<Microsoft.FSharp.Core.Unit>.Assembly.Location}"
+                            $"--reference:{systemRuntimePath}"
+                            $"--out:{outputPath}"
+                            $"--pdb:{pdbPath}"
+                            sourcePath
+                        |]
+                    )
+
+                    let result = invokeFsc2 root responsePath
+
+                    Expect.equal
+                        result.ExitCode
+                        0
+                        (result.StandardOutput
+                         + result.StandardError)
+
+                    use implementationStream = File.OpenRead(outputPath)
+                    use implementation = new PEReader(implementationStream)
+                    let metadata = implementation.GetMetadataReader()
+
+                    let methodDefinition =
+                        metadata.TypeDefinitions
+                        |> Seq.map metadata.GetTypeDefinition
+                        |> Seq.find (fun definition ->
+                            metadata.GetString(definition.Namespace) = "IcedTasks.TaskLike"
+                            && metadata.GetString(definition.Name) = "Awaiter"
+                        )
+                        |> _.GetMethods()
+                        |> Seq.map metadata.GetMethodDefinition
+                        |> Seq.find (fun definition ->
+                            metadata.GetString(definition.Name) = "IsCompleted"
+                        )
+
+                    Expect.sequenceEqual
+                        (metadata.GetBlobBytes(methodDefinition.Signature))
+                        (Convert.FromHexString("100202021E001E01"))
+                        "the generic signature should preserve both tupled parameter types"
+
+                    let parameters =
+                        methodDefinition.GetParameters()
+                        |> Seq.map (fun handle ->
+                            let parameter = metadata.GetParameter(handle)
+
+                            parameter.SequenceNumber,
+                            metadata.GetString(parameter.Name),
+                            parameter.Attributes
+                        )
+                        |> Seq.toArray
+
+                    Expect.sequenceEqual
+                        parameters
+                        [|
+                            1, "awaiter", ParameterAttributes.None
+                            2, "context", ParameterAttributes.None
+                        |]
+                        "the CLR parameter rows should preserve Oracle source order and names"
+                finally
+                    Directory.Delete(root, true)
+
             testCase "namespace moves change same-named module export fingerprints"
             <| fun _ ->
                 let root =
@@ -2785,7 +2875,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "4"
+                        "5"
                         "query cache evidence should be versioned"
 
                     Expect.equal

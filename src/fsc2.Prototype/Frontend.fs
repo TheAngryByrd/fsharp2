@@ -1252,11 +1252,47 @@ module internal Frontend =
 
                                 let! _ = expected LeftParenthesis "expected '('"
 
-                                let! parameterName, parameterToken =
-                                    identifier "expected a parameter name"
+                                let parseParameter () =
+                                    parseResult {
+                                        let! parameterName, parameterToken =
+                                            identifier "expected a parameter name"
 
-                                let! _ = expected Colon "expected ':'"
-                                let! parameterType = parseTypeExpression ()
+                                        let! _ = expected Colon "expected ':'"
+                                        let! parameterType = parseTypeExpression ()
+
+                                        return {
+                                            Name = parameterName
+                                            Type = parameterType
+                                            Range = {
+                                                Start = parameterToken.Range.Start
+                                                End = parameterType.Range.End
+                                            }
+                                        }
+                                    }
+
+                                let rec parseParameters parameters =
+                                    parseResult {
+                                        let! parameter = parseParameter ()
+                                        let parameters = parameter :: parameters
+
+                                        return!
+                                            match (current ()).Kind with
+                                            | Comma ->
+                                                consume ()
+                                                |> ignore
+
+                                                parseParameters parameters
+                                            | RightParenthesis -> Ok(List.rev parameters)
+                                            | _ ->
+                                                Error(
+                                                    prototypeDiagnostic
+                                                        source.Path
+                                                        (current ()).Range
+                                                        "expected ',' or ')' after a method parameter"
+                                                )
+                                    }
+
+                                let! parameters = parseParameters []
                                 let! _ = expected RightParenthesis "expected ')'"
                                 let! _ = expected Equals "expected '='"
                                 let! body, bodyRange = parseExpression ()
@@ -1265,16 +1301,7 @@ module internal Frontend =
                                     Name = methodName
                                     TypeParameters = methodTypeParameters
                                     Constraints = methodConstraints
-                                    Parameters = [
-                                        {
-                                            Name = parameterName
-                                            Type = parameterType
-                                            Range = {
-                                                Start = parameterToken.Range.Start
-                                                End = parameterType.Range.End
-                                            }
-                                        }
-                                    ]
+                                    Parameters = parameters
                                     Body = body
                                     BodyRange = bodyRange
                                     Range = {
