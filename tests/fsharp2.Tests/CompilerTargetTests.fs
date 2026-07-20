@@ -3955,6 +3955,38 @@ module CompilerTargetTests =
 
                     Expect.equal fsharp2Behavior "42" "Keep should return its function argument"
 
+            testCase "executes a static object member with a local let expression"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Alias(value: 'T) : 'T =\n            let result = value\n            result\n"
+
+                withObjectMemberDifferential "fsharp2-local-let-expression" sourceText "Alias"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeAlias assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        builderType
+                            .GetMethod("Alias")
+                            .MakeGenericMethod(typeof<int>)
+                            .Invoke(null, [| box 42 |])
+                        :?> int
+
+                    let oracleBehavior = invokeAlias oracleOutputPath
+                    let fsharp2Behavior = invokeAlias outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the emitted static member should preserve the locally bound value"
+
+                    Expect.equal fsharp2Behavior 42 "Alias should return its local binding"
+
             testCase "retained service invalidates an IcedTasks inline object-member edit"
             <| fun _ ->
                 let root =
@@ -6062,7 +6094,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "23"
+                        "24"
                         "query cache evidence should be versioned"
 
                     Expect.equal

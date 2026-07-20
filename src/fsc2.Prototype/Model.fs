@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 23
+    let Query = 24
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -184,6 +184,12 @@ type internal ParsedExpression =
     | MemberCall of receiverName: string * memberName: string * arguments: ParsedExpression list
     | MemberAssignment of rootName: string * memberPath: string list * value: ParsedExpression
     | SequentialExpression of ParsedExpression list
+    | LetExpression of
+        bindingName: string *
+        value: ParsedExpression *
+        body: ParsedExpression *
+        bindingRange: SourceRange *
+        bodyRange: SourceRange
     | LambdaExpression of parameterName: string * body: ParsedExpression
     | TypeConstruction of
         constructedType: ParsedTypeExpression *
@@ -611,6 +617,15 @@ type internal TypedResumableTryFinallyExpression = {
 type internal TypedExpression =
     | TypedIntegerLiteral of int
     | TypedParameterReference of int
+    | TypedLocalReference of int
+    | TypedLet of
+        localIndex: int *
+        name: string *
+        localType: CliType *
+        value: TypedExpression *
+        body: TypedExpression *
+        bindingRange: SourceRange *
+        bodyRange: SourceRange
     | TypedResumableCode of TypedResumableCodeExpression
     | TypedResumableTryFinally of TypedResumableTryFinallyExpression
     | TypedTraitCall of
@@ -865,10 +880,13 @@ type internal SymbolicFieldReference = {
 
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
 type internal SymbolicInstruction =
+    | MarkSequencePoint of SourceRange
     | LoadInt32 of int
     | LoadString of string
     | LoadNull
     | LoadArgument of int
+    | LoadLocal of int
+    | StoreLocal of int
     | LoadField of SymbolicFieldReference
     | LoadFieldAddress of SymbolicFieldReference
     | StoreField of SymbolicFieldReference
@@ -912,6 +930,14 @@ type internal SymbolicParameterFragment = {
 
     override _.ToString() = "SymbolicParameterFragment"
 
+type internal SymbolicLocalFragment = {
+    Index: int
+    Name: string
+    Type: CliType
+} with
+
+    override _.ToString() = "SymbolicLocalFragment"
+
 type internal SymbolicMethodFragment = {
     SchemaVersion: int
     StableId: string
@@ -922,6 +948,7 @@ type internal SymbolicMethodFragment = {
     GenericParameterConstraints: (int * CliType) list
     Attributes: SymbolicCustomAttributeFragment list
     Parameters: SymbolicParameterFragment list
+    Locals: SymbolicLocalFragment list
     ReturnType: CliType
     Instructions: SymbolicInstruction list
     MaxStack: int

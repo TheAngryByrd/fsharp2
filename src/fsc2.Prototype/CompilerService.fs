@@ -138,7 +138,7 @@ module private TypeIdentity =
             resumableCodeBody expression.Body
         ]
 
-    let inlineBody =
+    let rec inlineBody =
         function
         | TypedIntegerLiteral value ->
             Fingerprint.parts [
@@ -149,6 +149,19 @@ module private TypeIdentity =
             Fingerprint.parts [
                 "parameter"
                 index.ToString(CultureInfo.InvariantCulture)
+            ]
+        | TypedLocalReference index ->
+            Fingerprint.parts [
+                "local"
+                index.ToString(CultureInfo.InvariantCulture)
+            ]
+        | TypedLet(localIndex, _, localType, value, body, _, _) ->
+            Fingerprint.parts [
+                "let"
+                localIndex.ToString(CultureInfo.InvariantCulture)
+                cliType localType
+                inlineBody value
+                inlineBody body
             ]
         | TypedResumableCode expression -> resumableCode expression
         | TypedResumableTryFinally expression ->
@@ -778,6 +791,7 @@ type internal CompilerService() =
                     | _, BooleanLiteral _
                     | _, MemberAssignment _
                     | _, SequentialExpression _
+                    | _, LetExpression _
                     | _, LambdaExpression _
                     | _, TypeConstruction _ ->
                         diagnostic
@@ -1211,6 +1225,7 @@ type internal CompilerService() =
                             | Ok _, Ok _, UnitApplication _
                             | Ok _, Ok _, MemberAssignment _
                             | Ok _, Ok _, SequentialExpression _
+                            | Ok _, Ok _, LetExpression _
                             | Ok _, Ok _, LambdaExpression _
                             | Ok _, Ok _, TypeConstruction _ ->
                                 diagnostic
@@ -1564,26 +1579,73 @@ type internal CompilerService() =
                                     methodDeclaration.Range
                                     "static-member parameter names must be unique"
                             | Ok parameters, Ok declaredReturnType ->
-                                let typedBody =
-                                    match methodDeclaration.Body with
+                                let rec typeStaticExpression localBindings nextLocalIndex =
+                                    function
                                     | IntegerLiteral value ->
-                                        Ok(TypedIntegerLiteral value, CliInt32)
+                                        Ok(TypedIntegerLiteral value, CliInt32, nextLocalIndex)
                                     | ValueReference name ->
                                         match
-                                            parameters
-                                            |> List.tryFindIndex (fun parameter ->
-                                                parameter.Name = name
-                                            )
+                                            localBindings
+                                            |> Map.tryFind name
                                         with
-                                        | Some index ->
+                                        | Some(localIndex, localType) ->
                                             Ok(
-                                                TypedParameterReference index,
-                                                parameters.[index].Type
+                                                TypedLocalReference localIndex,
+                                                localType,
+                                                nextLocalIndex
                                             )
                                         | None ->
-                                            diagnostic
-                                                methodDeclaration.BodyRange
-                                                $"the value '{name}' is not a static-member parameter"
+                                            match
+                                                parameters
+                                                |> List.tryFindIndex (fun parameter ->
+                                                    parameter.Name = name
+                                                )
+                                            with
+                                            | Some index ->
+                                                Ok(
+                                                    TypedParameterReference index,
+                                                    parameters.[index].Type,
+                                                    nextLocalIndex
+                                                )
+                                            | None ->
+                                                diagnostic
+                                                    methodDeclaration.BodyRange
+                                                    $"the value '{name}' is not a static-member parameter or local binding"
+                                    | LetExpression(bindingName,
+                                                    value,
+                                                    body,
+                                                    bindingRange,
+                                                    bodyRange) ->
+                                        match
+                                            typeStaticExpression localBindings nextLocalIndex value
+                                        with
+                                        | Error error -> Error error
+                                        | Ok(typedValue, valueType, nextValueLocalIndex) ->
+                                            let localIndex = nextValueLocalIndex
+
+                                            match
+                                                typeStaticExpression
+                                                    (localBindings
+                                                     |> Map.add bindingName (localIndex, valueType))
+                                                    (localIndex
+                                                     + 1)
+                                                    body
+                                            with
+                                            | Error error -> Error error
+                                            | Ok(typedBody, bodyType, nextBodyLocalIndex) ->
+                                                Ok(
+                                                    TypedLet(
+                                                        localIndex,
+                                                        bindingName,
+                                                        valueType,
+                                                        typedValue,
+                                                        typedBody,
+                                                        bindingRange,
+                                                        bodyRange
+                                                    ),
+                                                    bodyType,
+                                                    nextBodyLocalIndex
+                                                )
                                     | BooleanLiteral _
                                     | StringLiteral _
                                     | MemberCall _
@@ -1597,9 +1659,12 @@ type internal CompilerService() =
                                             methodDeclaration.BodyRange
                                             "this static-member expression is not yet supported"
 
+                                let typedBody =
+                                    typeStaticExpression Map.empty 0 methodDeclaration.Body
+
                                 match typedBody with
                                 | Error error -> Error error
-                                | Ok(body, inferredReturnType) ->
+                                | Ok(body, inferredReturnType, _) ->
                                     match declaredReturnType with
                                     | Some returnType when
                                         returnType
@@ -2215,6 +2280,7 @@ type internal CompilerService() =
                                 | UnitApplication _
                                 | MemberAssignment _
                                 | SequentialExpression _
+                                | LetExpression _
                                 | LambdaExpression _
                                 | TypeConstruction _ ->
                                     diagnostic
@@ -2247,6 +2313,8 @@ type internal CompilerService() =
                                     | TypedResumableCode expression -> expression.Range
                                     | TypedIntegerLiteral _
                                     | TypedParameterReference _
+                                    | TypedLocalReference _
+                                    | TypedLet _
                                     | TypedResumableTryFinally _
                                     | TypedTraitCall _ -> methodDeclaration.BodyRange
 
@@ -3065,19 +3133,61 @@ type internal CompilerService() =
                     NewObject delegateConstructor
                 ]
 
+            let rec valueExpressionInstructions kind =
+                function
+                | TypedIntegerLiteral value -> [ LoadInt32 value ], []
+                | TypedParameterReference index ->
+                    [ LoadArgument(methodArgumentIndex kind index) ], []
+                | TypedLocalReference index -> [ LoadLocal index ], []
+                | TypedLet(localIndex, name, localType, value, body, bindingRange, bodyRange) ->
+                    let valueInstructions, valueLocals = valueExpressionInstructions kind value
+
+                    let bodyInstructions, bodyLocals = valueExpressionInstructions kind body
+
+                    [ MarkSequencePoint bindingRange ]
+                    @ valueInstructions
+                    @ [
+                        StoreLocal localIndex
+                        MarkSequencePoint bodyRange
+                    ]
+                    @ bodyInstructions,
+                    valueLocals
+                    @ [
+                        {
+                            Index = localIndex
+                            Name = name
+                            Type = localType
+                        }
+                    ]
+                    @ bodyLocals
+                | TypedResumableCode _
+                | TypedResumableTryFinally _
+                | TypedTraitCall _ -> invalidOp "this expression cannot be lowered as a local value"
+
             let methodInstructions kind (methodDeclaration: TypedMethodDeclaration) =
                 match methodDeclaration.Body with
-                | TypedIntegerLiteral value -> [
-                    LoadInt32 value
-                    Return
-                  ]
-                | TypedParameterReference index -> [
-                    LoadArgument(methodArgumentIndex kind index)
-                    Return
-                  ]
+                | TypedIntegerLiteral value ->
+                    [
+                        LoadInt32 value
+                        Return
+                    ],
+                    []
+                | TypedParameterReference index ->
+                    [
+                        LoadArgument(methodArgumentIndex kind index)
+                        Return
+                    ],
+                    []
+                | (TypedLocalReference _ | TypedLet _) as expression ->
+                    let instructions, locals = valueExpressionInstructions kind expression
+
+                    instructions
+                    @ [ Return ],
+                    locals
                 | TypedResumableCode expression ->
                     resumableCodeConstructionInstructions kind methodDeclaration expression
-                    @ [ Return ]
+                    @ [ Return ],
+                    []
                 | TypedResumableTryFinally expression ->
                     match expression.DelegateType with
                     | CliGenericType(delegateReference, _) ->
@@ -3136,31 +3246,34 @@ type internal CompilerService() =
                                 ]
                             )
                             Return
-                        ]
+                        ],
+                        []
                     | _ -> invalidOp "the TryFinally delegate type must be generic"
-                | TypedTraitCall(_, memberName, _) -> [
-                    LoadString(
-                        "Dynamic invocation of "
-                        + memberName
-                        + " is not supported"
-                    )
-                    NewObject(
-                        {
-                            DeclaringType =
-                                CoreDeclaringType {
-                                    Namespace = "System"
-                                    Name = "NotSupportedException"
-                                }
-                            Name = ".ctor"
-                            GenericArity = 0
-                            IsInstance = true
-                            ParameterTypes = [ CliString ]
-                            ReturnType = CliVoid
-                            TargetStableId = None
-                        }
-                    )
-                    Throw
-                  ]
+                | TypedTraitCall(_, memberName, _) ->
+                    [
+                        LoadString(
+                            "Dynamic invocation of "
+                            + memberName
+                            + " is not supported"
+                        )
+                        NewObject(
+                            {
+                                DeclaringType =
+                                    CoreDeclaringType {
+                                        Namespace = "System"
+                                        Name = "NotSupportedException"
+                                    }
+                                Name = ".ctor"
+                                GenericArity = 0
+                                IsInstance = true
+                                ParameterTypes = [ CliString ]
+                                ReturnType = CliVoid
+                                TargetStableId = None
+                            }
+                        )
+                        Throw
+                    ],
+                    []
 
             let rec constraintTypeDependencyIds =
                 function
@@ -3277,7 +3390,7 @@ type internal CompilerService() =
                 contentHash
                 (methodDeclaration: TypedMethodDeclaration)
                 =
-                let instructions = methodInstructions kind methodDeclaration
+                let instructions, locals = methodInstructions kind methodDeclaration
 
                 let instructionDependencies =
                     instructions
@@ -3298,6 +3411,9 @@ type internal CompilerService() =
                         | LoadString _
                         | LoadNull
                         | LoadArgument _
+                        | LoadLocal _
+                        | StoreLocal _
+                        | MarkSequencePoint _
                         | Pop
                         | Throw
                         | Return -> []
@@ -3317,6 +3433,7 @@ type internal CompilerService() =
                     Parameters =
                         methodDeclaration.Parameters
                         |> List.map parameterFragment
+                    Locals = locals
                     ReturnType = methodDeclaration.ReturnType
                     Instructions = instructions
                     MaxStack =
@@ -3325,6 +3442,8 @@ type internal CompilerService() =
                         | TypedResumableTryFinally _ -> 8
                         | TypedIntegerLiteral _
                         | TypedParameterReference _
+                        | TypedLocalReference _
+                        | TypedLet _
                         | TypedTraitCall _ -> 1
                     DependencyIds =
                         methodDependencies methodDeclaration
@@ -3528,6 +3647,7 @@ type internal CompilerService() =
                                 GenericParameterConstraints = []
                                 Attributes = []
                                 Parameters = []
+                                Locals = []
                                 ReturnType = CliVoid
                                 Instructions = [
                                     LoadArgument 0
@@ -3620,6 +3740,8 @@ type internal CompilerService() =
                                         Some expression.Compensation
                                     | TypedIntegerLiteral _
                                     | TypedParameterReference _
+                                    | TypedLocalReference _
+                                    | TypedLet _
                                     | TypedTraitCall _ -> None
 
                                 match closureExpression with
@@ -3656,6 +3778,7 @@ type internal CompilerService() =
                                                 Attributes = []
                                             }
                                         ]
+                                        Locals = []
                                         ReturnType = CliVoid
                                         Instructions = [
                                             LoadArgument 0
@@ -3758,6 +3881,7 @@ type internal CompilerService() =
                                                 Attributes = []
                                             }
                                         ]
+                                        Locals = []
                                         ReturnType = CliBoolean
                                         Instructions = invokeInstructions
                                         MaxStack = 8

@@ -837,6 +837,26 @@ module internal Frontend =
                     |> Result.map (fun members -> rootName, members)
 
                 match expressionToken.Kind with
+                | LetKeyword ->
+                    parseResult {
+                        let! letToken = expected LetKeyword "expected 'let'"
+                        let! bindingName, _ = identifier "expected a local binding name"
+                        let! _ = expected Equals "expected '=' after a local binding name"
+                        let! value, valueRange = parseExpression ()
+                        let! body, bodyRange = parseExpression ()
+
+                        let bindingRange = {
+                            Start = letToken.Range.Start
+                            End = valueRange.End
+                        }
+
+                        return
+                            LetExpression(bindingName, value, body, bindingRange, bodyRange),
+                            {
+                                Start = letToken.Range.Start
+                                End = bodyRange.End
+                            }
+                    }
                 | Integer value ->
                     consume ()
                     |> ignore

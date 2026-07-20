@@ -384,6 +384,36 @@ module internal Linker =
         encodeCliType resolveTypeReference (BlobEncoder(signature).FieldSignature()) fieldType
         signature
 
+    let private encodeLocalType resolveTypeReference (encoder: LocalVariableTypeEncoder) =
+        function
+        | CliVoid -> invalidOp "a local variable cannot have type void"
+        | CliByRef elementType ->
+            encodeCliType resolveTypeReference (encoder.Type(true, false)) elementType
+        | localType -> encodeCliType resolveTypeReference (encoder.Type(false, false)) localType
+
+    let private encodeLocalSignature resolveTypeReference (locals: SymbolicLocalFragment list) =
+        let orderedLocals =
+            locals
+            |> List.sortBy _.Index
+
+        orderedLocals
+        |> List.iteri (fun expectedIndex local ->
+            if
+                local.Index
+                <> expectedIndex
+            then
+                invalidOp "symbolic local indices must be contiguous and zero-based"
+        )
+
+        let signature = BlobBuilder()
+
+        let variables = BlobEncoder(signature).LocalVariableSignature(orderedLocals.Length)
+
+        for local in orderedLocals do
+            encodeLocalType resolveTypeReference (variables.AddVariable()) local.Type
+
+        signature
+
     let private encodeMethodReferenceSignature
         resolveTypeReference
         (methodReference: SymbolicMethodReference)
@@ -404,6 +434,16 @@ module internal Linker =
         =
         let code = BlobBuilder()
         let instructions = InstructionEncoder(code)
+        let sequencePoints = ResizeArray<int * SourceRange>()
+
+        let localSignature =
+            if List.isEmpty methodFragment.Locals then
+                Unchecked.defaultof<StandaloneSignatureHandle>
+            else
+                methodFragment.Locals
+                |> encodeLocalSignature resolveTypeReference
+                |> metadata.GetOrAddBlob
+                |> metadata.AddStandaloneSignature
 
         let addMethodReference (methodReference: SymbolicMethodReference) =
             metadata.AddMemberReference(
@@ -440,6 +480,7 @@ module internal Linker =
 
         for instruction in methodFragment.Instructions do
             match instruction with
+            | MarkSequencePoint range -> sequencePoints.Add(instructions.Offset, range)
             | LoadInt32 value -> instructions.LoadConstantI4(value)
             | LoadString value ->
                 value
@@ -447,6 +488,8 @@ module internal Linker =
                 |> instructions.LoadString
             | LoadNull -> instructions.OpCode(ILOpCode.Ldnull)
             | LoadArgument index -> instructions.LoadArgument(index)
+            | LoadLocal index -> instructions.LoadLocal(index)
+            | StoreLocal index -> instructions.StoreLocal(index)
             | LoadField fieldReference ->
                 instructions.OpCode(ILOpCode.Ldfld)
                 instructions.Token(addFieldReference fieldReference)
@@ -476,7 +519,15 @@ module internal Linker =
             | Return -> instructions.OpCode(ILOpCode.Ret)
 
         let codeSize = code.Count
-        stream.AddMethodBody(instructions, maxStack = methodFragment.MaxStack), codeSize
+
+        stream.AddMethodBody(
+            instructions,
+            maxStack = methodFragment.MaxStack,
+            localVariablesSignature = localSignature
+        ),
+        codeSize,
+        localSignature,
+        List.ofSeq sequencePoints
 
     let private encodeStringConstructorSignature (parameterCount: int) =
         let signature = BlobBuilder()
@@ -609,31 +660,77 @@ module internal Linker =
 
         value
 
-    let private encodeSequencePoint (methodFragment: SymbolicMethodFragment) =
+    let private encodeSequencePoints
+        (localSignature: StandaloneSignatureHandle)
+        (instructionSequencePoints: (int * SourceRange) list)
+        (methodFragment: SymbolicMethodFragment)
+        =
         let sequencePoints = BlobBuilder()
-        let range = methodFragment.Range
 
-        let deltaLines =
-            range.End.Line
-            - range.Start.Line
+        let points =
+            match instructionSequencePoints with
+            | [] -> [ 0, methodFragment.Range ]
+            | points -> points
 
-        let deltaColumns =
-            range.End.Column
-            - range.Start.Column
+        let localSignatureRow =
+            if localSignature.IsNil then
+                0
+            else
+                MetadataTokens.GetRowNumber(localSignature)
 
-        // Local-signature row id, followed by one sequence point at IL offset 0.
-        sequencePoints.WriteCompressedInteger(0)
-        sequencePoints.WriteCompressedInteger(0)
-        sequencePoints.WriteCompressedInteger(deltaLines)
+        sequencePoints.WriteCompressedInteger(localSignatureRow)
 
-        if deltaLines = 0 then
-            sequencePoints.WriteCompressedInteger(deltaColumns)
-        else
-            sequencePoints.WriteCompressedSignedInteger(deltaColumns)
+        let mutable previousOffset = 0
+        let mutable previousStartLine = 0
+        let mutable previousStartColumn = 0
 
-        // The first non-hidden point stores an absolute start line and column.
-        sequencePoints.WriteCompressedInteger(range.Start.Line)
-        sequencePoints.WriteCompressedInteger(range.Start.Column)
+        points
+        |> List.iteri (fun index (offset, range) ->
+            if offset < previousOffset then
+                invalidOp "sequence-point offsets must be nondecreasing"
+
+            let offsetDelta =
+                if index = 0 then
+                    offset
+                else
+                    offset
+                    - previousOffset
+
+            let deltaLines =
+                range.End.Line
+                - range.Start.Line
+
+            let deltaColumns =
+                range.End.Column
+                - range.Start.Column
+
+            sequencePoints.WriteCompressedInteger(offsetDelta)
+            sequencePoints.WriteCompressedInteger(deltaLines)
+
+            if deltaLines = 0 then
+                sequencePoints.WriteCompressedInteger(deltaColumns)
+            else
+                sequencePoints.WriteCompressedSignedInteger(deltaColumns)
+
+            if index = 0 then
+                sequencePoints.WriteCompressedInteger(range.Start.Line)
+                sequencePoints.WriteCompressedInteger(range.Start.Column)
+            else
+                sequencePoints.WriteCompressedSignedInteger(
+                    range.Start.Line
+                    - previousStartLine
+                )
+
+                sequencePoints.WriteCompressedSignedInteger(
+                    range.Start.Column
+                    - previousStartColumn
+                )
+
+            previousOffset <- offset
+            previousStartLine <- range.Start.Line
+            previousStartColumn <- range.Start.Column
+        )
+
         sequencePoints
 
     let private escapeXml (value: string) =
@@ -1169,7 +1266,7 @@ module internal Linker =
         let encodedMethods =
             methodFragments
             |> List.map (fun methodFragment ->
-                let bodyOffset, codeSize =
+                let bodyOffset, codeSize, localSignature, sequencePoints =
                     encodeMethodBody
                         metadata
                         resolveDeclaringType
@@ -1177,7 +1274,7 @@ module internal Linker =
                         methodBodies
                         methodFragment
 
-                methodFragment, bodyOffset, codeSize
+                methodFragment, bodyOffset, codeSize, localSignature, sequencePoints
             )
 
         for typeFragment in typeFragments do
@@ -1386,7 +1483,7 @@ module internal Linker =
 
         let mutable nextParameterRow = 1
 
-        for methodFragment, bodyOffset, _ in encodedMethods do
+        for methodFragment, bodyOffset, _, _, _ in encodedMethods do
             let attributes = (methodKindEncoding methodFragment.Kind).Attributes
 
             let methodDefinition =
@@ -1447,10 +1544,9 @@ module internal Linker =
                 )
             )
 
-        for methodFragment in methodFragments do
+        for methodFragment, _, _, localSignature, instructionSequencePoints in encodedMethods do
             let sequencePoints =
-                methodFragment
-                |> encodeSequencePoint
+                encodeSequencePoints localSignature instructionSequencePoints methodFragment
                 |> pdbMetadata.GetOrAddBlob
 
             pdbMetadata.AddMethodDebugInformation(
@@ -1474,14 +1570,30 @@ module internal Linker =
                 pdbMetadata.GetOrAddBlob(importDefinitions)
             )
 
-        for methodIndex, (_, _, methodCodeSize) in List.indexed encodedMethods do
+        for methodIndex, (methodFragment, _, methodCodeSize, _, _) in List.indexed encodedMethods do
+            let localVariables =
+                methodFragment.Locals
+                |> List.sortBy _.Index
+                |> List.map (fun local ->
+                    pdbMetadata.AddLocalVariable(
+                        LocalVariableAttributes.None,
+                        local.Index,
+                        pdbMetadata.GetOrAddString(local.Name)
+                    )
+                )
+
+            let firstLocalVariable =
+                localVariables
+                |> List.tryHead
+                |> Option.defaultValue Unchecked.defaultof<LocalVariableHandle>
+
             pdbMetadata.AddLocalScope(
                 MetadataTokens.MethodDefinitionHandle(
                     methodIndex
                     + 1
                 ),
                 importScope,
-                Unchecked.defaultof<LocalVariableHandle>,
+                firstLocalVariable,
                 Unchecked.defaultof<LocalConstantHandle>,
                 0,
                 methodCodeSize
