@@ -3745,6 +3745,67 @@ module CompilerTargetTests =
                 finally
                     Directory.Delete(root, true)
 
+            testCase "executes a resumable member with a typed lambda parameter"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    [<Struct; NoComparison; NoEquality>]\n    type Data<'T> =\n        [<DefaultValue(false)>]\n        val mutable Result: 'T\n\n    type Code<'T> = ResumableCode<Data<'T>, 'T>\n\n    type TaskBuilderBase() =\n        member inline _.ReturnTyped(value: 'T) : Code<'T> =\n            Code<'T>(fun (sm: byref<ResumableStateMachine<Data<'T>>>) ->\n                sm.Data.Result <- value\n                true\n            )\n"
+
+                withObjectMemberDifferential
+                    "fsharp2-typed-resumable-lambda"
+                    sourceText
+                    "ReturnTyped"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeReturnTyped assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        let dataType =
+                            emittedAssembly
+                                .GetType("IcedTasks.TaskBase.TaskBase+Data`1", throwOnError = true)
+                                .MakeGenericType(typeof<int>)
+
+                        let stateMachineType =
+                            typedefof<
+                                Microsoft.FSharp.Core.CompilerServices.ResumableStateMachine<_>
+                             >
+                                .MakeGenericType(dataType)
+
+                        let builder = Activator.CreateInstance(builderType)
+
+                        let code =
+                            builderType
+                                .GetMethod("ReturnTyped")
+                                .MakeGenericMethod(typeof<int>)
+                                .Invoke(builder, [| box 42 |])
+
+                        let invokeArguments = [| Activator.CreateInstance(stateMachineType) |]
+
+                        let completed =
+                            code.GetType().GetMethod("Invoke").Invoke(code, invokeArguments)
+                            :?> bool
+
+                        let data = stateMachineType.GetField("Data").GetValue(invokeArguments.[0])
+                        let result = dataType.GetField("Result").GetValue(data) :?> int
+                        completed, result
+
+                    let oracleBehavior = invokeReturnTyped oracleOutputPath
+                    let fsharp2Behavior = invokeReturnTyped outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the typed resumable lambda should behave like the Compatibility Oracle"
+
+                    Expect.equal
+                        fsharp2Behavior
+                        (true, 42)
+                        "ReturnTyped should complete and store its captured value"
+
             testCase "executes an IcedTasks resumable TryFinally member"
             <| fun _ ->
                 let root =
@@ -6707,7 +6768,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "39"
+                        "40"
                         "query cache evidence should be versioned"
 
                     Expect.equal

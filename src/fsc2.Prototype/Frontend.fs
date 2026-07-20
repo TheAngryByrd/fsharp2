@@ -1185,7 +1185,7 @@ module internal Frontend =
                     parseResult {
                         let! funToken = expected FunKeyword "expected 'fun'"
 
-                        let! parameterName =
+                        let! parameter =
                             match (current ()).Kind with
                             | LeftParenthesis when
                                 index + 1 < input.Length
@@ -1198,9 +1198,21 @@ module internal Frontend =
                                 |> ignore
 
                                 Ok None
+                            | LeftParenthesis ->
+                                parseResult {
+                                    let! _ = expected LeftParenthesis "expected '('"
+
+                                    let! parameterName, _ = identifier "expected a lambda parameter"
+
+                                    let! _ = expected Colon "expected ':'"
+                                    let! parameterType = parseTypeExpression ()
+                                    let! _ = expected RightParenthesis "expected ')'"
+
+                                    return Some(parameterName, Some parameterType)
+                                }
                             | Identifier _ ->
                                 identifier "expected a lambda parameter"
-                                |> Result.map (fun (name, _) -> Some name)
+                                |> Result.map (fun (name, _) -> Some(name, None))
                             | _ ->
                                 Error(
                                     prototypeDiagnostic
@@ -1247,8 +1259,9 @@ module internal Frontend =
                         let! body, bodyRange = parseBody [] None
 
                         return
-                            (match parameterName with
-                             | Some parameterName -> LambdaExpression(parameterName, body)
+                            (match parameter with
+                             | Some(parameterName, parameterType) ->
+                                 LambdaExpression(parameterName, parameterType, body)
                              | None -> UnitLambdaExpression body),
                             {
                                 Start = funToken.Range.Start

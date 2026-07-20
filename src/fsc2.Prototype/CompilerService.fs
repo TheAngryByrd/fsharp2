@@ -2945,6 +2945,7 @@ type internal CompilerService() =
                                 captureParameterIndex
                                 captureName
                                 lambdaParameter
+                                lambdaParameterType
                                 body
                                 argumentRange
                                 =
@@ -2970,10 +2971,32 @@ type internal CompilerService() =
                                         IsValueType = resolvedStateMachine.IsValueType
                                     }
 
-                                    Ok {
+                                    let stateMachineType =
+                                        CliGenericType(stateMachineReference, [ dataType ])
+
+                                    let validateLambdaParameterType () =
+                                        match lambdaParameterType with
+                                        | None -> Ok()
+                                        | Some parameterType ->
+                                            parameterType
+                                            |> expandTypeAbbreviations Set.empty
+                                            |> resolveType declaredMethodParameters
+                                            |> Result.bind (
+                                                toCliType methodParameterIndex parameterType.Range
+                                            )
+                                            |> Result.bind (fun actualType ->
+                                                if actualType = CliByRef stateMachineType then
+                                                    Ok()
+                                                else
+                                                    diagnostic
+                                                        parameterType.Range
+                                                        "the lambda parameter type does not match the resumable state machine"
+                                            )
+
+                                    validateLambdaParameterType ()
+                                    |> Result.map (fun () -> {
                                         DelegateType = delegateType
-                                        StateMachineType =
-                                            CliGenericType(stateMachineReference, [ dataType ])
+                                        StateMachineType = stateMachineType
                                         DataType = dataType
                                         CaptureParameterIndex = captureParameterIndex
                                         CaptureName = captureName
@@ -2981,7 +3004,7 @@ type internal CompilerService() =
                                         Body = body
                                         SourceLine = argumentRange.Start.Line
                                         Range = argumentRange
-                                    }
+                                    })
                                 | Ok _ ->
                                     diagnostic
                                         methodDeclaration.BodyRange
@@ -2991,6 +3014,7 @@ type internal CompilerService() =
                                 expectedType
                                 constructedType
                                 lambdaParameter
+                                lambdaParameterType
                                 lambdaBody
                                 argumentRange
                                 =
@@ -3120,6 +3144,7 @@ type internal CompilerService() =
                                                         captureParameterIndex
                                                         captureName
                                                         lambdaParameter
+                                                        lambdaParameterType
                                                         (TypedStoreCapturedResult(
                                                             dataFieldName,
                                                             resultFieldName,
@@ -3173,6 +3198,7 @@ type internal CompilerService() =
                                                 captureParameterIndex
                                                 captureName
                                                 lambdaParameter
+                                                lambdaParameterType
                                                 TypedInvokeCapturedUnitFunction
                                                 argumentRange
                                             |> Result.map (fun expression ->
@@ -3188,6 +3214,7 @@ type internal CompilerService() =
                                 computationName
                                 constructedType
                                 lambdaParameter
+                                lambdaParameterType
                                 lambdaBody
                                 argumentRange
                                 =
@@ -3220,6 +3247,7 @@ type internal CompilerService() =
                                                 (Some compensationDelegateType)
                                                 constructedType
                                                 lambdaParameter
+                                                lambdaParameterType
                                                 lambdaBody
                                                 argumentRange
                                         with
@@ -3478,12 +3506,14 @@ type internal CompilerService() =
                                              [ ValueReference computationName
                                                TypeConstruction(constructedType,
                                                                 LambdaExpression(lambdaParameter,
+                                                                                 lambdaParameterType,
                                                                                  lambdaBody),
                                                                 argumentRange) ]) ->
                                     typeResumableTryFinally
                                         computationName
                                         constructedType
                                         lambdaParameter
+                                        lambdaParameterType
                                         lambdaBody
                                         argumentRange
                                 | MemberCall _ ->
@@ -3491,12 +3521,15 @@ type internal CompilerService() =
                                         methodDeclaration.BodyRange
                                         "trait calls are not yet supported in instance members"
                                 | TypeConstruction(constructedType,
-                                                   LambdaExpression(lambdaParameter, lambdaBody),
+                                                   LambdaExpression(lambdaParameter,
+                                                                    lambdaParameterType,
+                                                                    lambdaBody),
                                                    argumentRange) ->
                                     typeResumableCode
                                         None
                                         constructedType
                                         lambdaParameter
+                                        lambdaParameterType
                                         lambdaBody
                                         argumentRange
                                 | UnitLiteral
