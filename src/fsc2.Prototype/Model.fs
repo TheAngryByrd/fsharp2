@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 17
+    let Query = 18
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -159,6 +159,7 @@ type internal ParsedAttribute = {
 type internal ParsedTypeExpression =
     | ParsedNamedType of QualifiedTypeName * SourceRange
     | ParsedTypeParameter of string * SourceRange
+    | ParsedFlexibleType of superType: ParsedTypeExpression * range: SourceRange
     | ParsedGenericTypeApplication of
         genericType: ParsedTypeExpression *
         arguments: ParsedTypeExpression list *
@@ -170,6 +171,7 @@ type internal ParsedTypeExpression =
         match this with
         | ParsedNamedType(_, range)
         | ParsedTypeParameter(_, range)
+        | ParsedFlexibleType(_, range)
         | ParsedGenericTypeApplication(_, _, range)
         | ParsedTupleType(_, range)
         | ParsedFunctionType(_, _, range) -> range
@@ -183,10 +185,7 @@ type internal ParsedExpression =
     | StringLiteral of string
     | ValueReference of string
     | TraitCall of receiverName: string * memberName: string * arguments: ParsedCallArgument list
-    | MemberAssignment of
-        rootName: string *
-        memberPath: string list *
-        value: ParsedExpression
+    | MemberAssignment of rootName: string * memberPath: string list * value: ParsedExpression
     | SequentialExpression of ParsedExpression list
     | LambdaExpression of parameterName: string * body: ParsedExpression
     | TypeConstruction of
@@ -511,7 +510,9 @@ module internal StableIdentity =
                 typeReference.AssemblyName
                 qualifiedTypeName typeReference.TypeName
                 if typeReference.IsValueType then "value" else "reference"
-                yield! arguments |> List.map cliType
+                yield!
+                    arguments
+                    |> List.map cliType
             ]
 
     let symbolicDeclaringType =
@@ -533,17 +534,17 @@ type internal SymbolicMethodReference = {
 } with
 
     member this.StableId =
-        String.concat
-            "|"
-            [
-                "method-reference"
-                StableIdentity.symbolicDeclaringType this.DeclaringType
-                this.Name
-                if this.IsInstance then "instance" else "static"
-                yield! this.ParameterTypes |> List.map StableIdentity.cliType
-                "return"
-                StableIdentity.cliType this.ReturnType
-            ]
+        String.concat "|" [
+            "method-reference"
+            StableIdentity.symbolicDeclaringType this.DeclaringType
+            this.Name
+            if this.IsInstance then "instance" else "static"
+            yield!
+                this.ParameterTypes
+                |> List.map StableIdentity.cliType
+            "return"
+            StableIdentity.cliType this.ReturnType
+        ]
 
     member this.DependencyId =
         this.TargetStableId
@@ -799,14 +800,12 @@ type internal SymbolicFieldReference = {
 } with
 
     member this.StableId =
-        String.concat
-            "|"
-            [
-                "field-reference"
-                StableIdentity.symbolicDeclaringType this.DeclaringType
-                this.Name
-                StableIdentity.cliType this.FieldType
-            ]
+        String.concat "|" [
+            "field-reference"
+            StableIdentity.symbolicDeclaringType this.DeclaringType
+            this.Name
+            StableIdentity.cliType this.FieldType
+        ]
 
     member this.DependencyId =
         this.TargetStableId
@@ -848,6 +847,7 @@ type internal SymbolicMethodFragment = {
     Kind: SymbolicMethodKind
     GenericParameters: string list
     Constraints: TypedMethodConstraint list
+    GenericParameterConstraints: (int * CliType) list
     Parameters: TypedParameter list
     ReturnType: CliType
     Instructions: SymbolicInstruction list

@@ -44,6 +44,7 @@ module internal Frontend =
         | Arrow
         | LeftArrow
         | Ampersand
+        | Hash
         | Star
         | Equals
         | Bar
@@ -489,6 +490,7 @@ module internal Frontend =
                     | '<' -> add LessThan start
                     | '>' -> add GreaterThan start
                     | '&' -> add Ampersand start
+                    | '#' -> add Hash start
                     | '*' -> add Star start
                     | '=' -> add Equals start
                     | '|' -> add Bar start
@@ -680,6 +682,19 @@ module internal Frontend =
                         | TypeParameter value ->
                             let token = consume ()
                             Ok(ParsedTypeParameter(value, token.Range))
+                        | Hash ->
+                            let hashToken = consume ()
+
+                            parseTypeAtom ()
+                            |> Result.map (fun superType ->
+                                ParsedFlexibleType(
+                                    superType,
+                                    {
+                                        Start = hashToken.Range.Start
+                                        End = superType.Range.End
+                                    }
+                                )
+                            )
                         | Identifier _ ->
                             let start = (current ()).Range.Start
 
@@ -761,8 +776,7 @@ module internal Frontend =
                                     true
                                 | _ -> false
 
-                            let! argumentName, _ =
-                                identifier "expected a trait-call argument"
+                            let! argumentName, _ = identifier "expected a trait-call argument"
 
                             let argument =
                                 if isAddressOf then
@@ -905,11 +919,7 @@ module internal Frontend =
                         }
 
                         return
-                            TypeConstruction(
-                                constructedType,
-                                argument,
-                                argumentRange
-                            ),
+                            TypeConstruction(constructedType, argument, argumentRange),
                             {
                                 Start = expressionToken.Range.Start
                                 End = closeToken.Range.End

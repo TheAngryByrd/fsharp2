@@ -33,6 +33,7 @@ module CompilerTargetTests =
         Signature: string
         Parameters: (int * string * ParameterAttributes) array
         GenericParameters: (int * string * GenericParameterAttributes) array
+        GenericParameterConstraints: (int * string array) array
         CustomAttributes: (string * string) array
         SequencePoints: string array
     }
@@ -365,6 +366,12 @@ module CompilerTargetTests =
                     namespaceName
                     + "."
                     + name
+            | HandleKind.TypeSpecification ->
+                handle
+                |> MetadataTokens.GetRowNumber
+                |> MetadataTokens.TypeSpecificationHandle
+                |> metadata.GetTypeSpecification
+                |> fun specification -> specification.DecodeSignature(SignatureShapeProvider(), ())
             | kind -> failtestf "unsupported metadata type handle %A" kind
 
         let customAttributeShape handle =
@@ -423,6 +430,20 @@ module CompilerTargetTests =
                         let parameter = metadata.GetGenericParameter(handle)
 
                         parameter.Index, metadata.GetString(parameter.Name), parameter.Attributes
+                    )
+                    |> Seq.toArray
+                GenericParameterConstraints =
+                    definition.GetGenericParameters()
+                    |> Seq.map (fun handle ->
+                        let parameter = metadata.GetGenericParameter(handle)
+
+                        int parameter.Index,
+                        parameter.GetConstraints()
+                        |> Seq.map (fun constraintHandle ->
+                            metadata.GetGenericParameterConstraint(constraintHandle).Type
+                            |> typeName
+                        )
+                        |> Seq.toArray
                     )
                     |> Seq.toArray
                 CustomAttributes =
@@ -2435,6 +2456,155 @@ module CompilerTargetTests =
                         (returnMethod.Invoke(builder, [| box 37 |]))
                         (box 37)
                         "the emitted generic member should return its specialized argument"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "matches the Oracle flexible-type constraint for an object member"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-flexible-object-member",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "TaskBuilderBase.fs")
+
+                    let sourceText =
+                        "namespace IcedTasks.TaskBase\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Identity(resource: #System.IAsyncDisposable) = resource\n"
+
+                    File.WriteAllText(sourcePath, sourceText)
+
+                    let oracleOutputPath = Path.Combine(root, "TaskBuilderBase-oracle.dll")
+                    let oraclePdbPath = Path.Combine(root, "TaskBuilderBase-oracle.pdb")
+                    let oracleResponsePath = Path.Combine(root, "oracle.rsp")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root oracleResponsePath [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{oracleOutputPath}"
+                            $"--pdb:{oraclePdbPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let responsePath = Path.Combine(root, "fsharp2.rsp")
+
+                    let outputPath, baselineExportFingerprint =
+                        compileForExportFingerprint
+                            root
+                            responsePath
+                            sourcePath
+                            "TaskBuilderBase-fsharp2"
+                            []
+
+                    let pdbPath = Path.ChangeExtension(outputPath, ".pdb")
+
+                    let baselineTrace =
+                        Path.Combine(root, "TaskBuilderBase-fsharp2.trace")
+                        |> readTrace
+
+                    Expect.equal
+                        baselineTrace.["dependencyCount"]
+                        "2"
+                        "the object constructor and constrained interface should be explicit symbolic dependencies"
+
+                    Expect.equal
+                        (objectTypeMetadataShape outputPath pdbPath "Identity")
+                        (objectTypeMetadataShape oracleOutputPath oraclePdbPath "Identity")
+                        "the flexible-type member should match the Compatibility Oracle's CLR constraints and portable-PDB surface"
+
+                    let emittedAssembly = Assembly.Load(File.ReadAllBytes(outputPath))
+
+                    let builderType =
+                        emittedAssembly.GetType(
+                            "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                            throwOnError = true
+                        )
+
+                    let builder = Activator.CreateInstance(builderType)
+
+                    let identityMethod =
+                        builderType.GetMethod("Identity").MakeGenericMethod(typeof<MemoryStream>)
+
+                    use resource = new MemoryStream()
+
+                    Expect.isTrue
+                        (Object.ReferenceEquals(
+                            identityMethod.Invoke(builder, [| resource |]),
+                            resource
+                        ))
+                        "the emitted flexible-type member should return its constrained argument"
+
+                    File.WriteAllText(
+                        sourcePath,
+                        sourceText.Replace(
+                            "System.IAsyncDisposable",
+                            "System.IDisposable",
+                            StringComparison.Ordinal
+                        )
+                    )
+
+                    let _, editedExportFingerprint =
+                        compileForExportFingerprint
+                            root
+                            (Path.Combine(root, "fsharp2-edited.rsp"))
+                            sourcePath
+                            "TaskBuilderBase-fsharp2-edited"
+                            []
+
+                    let editedTrace =
+                        Path.Combine(root, "TaskBuilderBase-fsharp2-edited.trace")
+                        |> readTrace
+
+                    Expect.notEqual
+                        editedExportFingerprint
+                        baselineExportFingerprint
+                        "a changed flexible constraint should change consumer-visible export identity"
+
+                    Expect.notEqual
+                        editedTrace.["fragmentHash"]
+                        baselineTrace.["fragmentHash"]
+                        "a changed flexible constraint should invalidate the symbolic method fragment"
+
+                    File.WriteAllText(
+                        sourcePath,
+                        sourceText.Replace(
+                            "System.IAsyncDisposable",
+                            "System.Collections.Generic.IEnumerable<System.IDisposable>",
+                            StringComparison.Ordinal
+                        )
+                    )
+
+                    let _ =
+                        compileForExportFingerprint
+                            root
+                            (Path.Combine(root, "fsharp2-generic.rsp"))
+                            sourcePath
+                            "TaskBuilderBase-fsharp2-generic"
+                            []
+
+                    let genericTrace =
+                        Path.Combine(root, "TaskBuilderBase-fsharp2-generic.trace")
+                        |> readTrace
+
+                    Expect.equal
+                        genericTrace.["dependencyCount"]
+                        "3"
+                        "a generic flexible constraint should depend on its type definition and argument declarations"
                 finally
                     Directory.Delete(root, true)
 
@@ -5027,7 +5197,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "17"
+                        "18"
                         "query cache evidence should be versioned"
 
                     Expect.equal

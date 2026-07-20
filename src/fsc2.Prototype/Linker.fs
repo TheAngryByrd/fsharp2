@@ -289,8 +289,7 @@ module internal Linker =
         | CliVoid -> invalidOp "a method parameter cannot have type void"
         | CliByRef elementType ->
             encodeCliType resolveTypeReference (encoder.Type(true)) elementType
-        | parameterType ->
-            encodeCliType resolveTypeReference (encoder.Type(false)) parameterType
+        | parameterType -> encodeCliType resolveTypeReference (encoder.Type(false)) parameterType
 
     type private MethodKindEncoding = {
         IsInstance: bool
@@ -368,7 +367,10 @@ module internal Linker =
 
         signature
 
-    let private encodeMethodSignature resolveTypeReference (methodFragment: SymbolicMethodFragment) =
+    let private encodeMethodSignature
+        resolveTypeReference
+        (methodFragment: SymbolicMethodFragment)
+        =
         encodeCallableSignature
             resolveTypeReference
             methodFragment.GenericParameters.Length
@@ -895,7 +897,7 @@ module internal Linker =
 
         let cliTypeSpecifications = Dictionary<CliType, EntityHandle>()
 
-        let resolveCliDeclaringType cliType =
+        let resolveCliTypeEntity cliType =
             match cliType with
             | CliNamedType typeReference -> resolveCliTypeReference typeReference
             | CliGenericType _ ->
@@ -909,10 +911,7 @@ module internal Linker =
                         (BlobEncoder(signature).TypeSpecificationSignature())
                         cliType
 
-                    let handle =
-                        metadata.AddTypeSpecification(
-                            metadata.GetOrAddBlob(signature)
-                        )
+                    let handle = metadata.AddTypeSpecification(metadata.GetOrAddBlob(signature))
 
                     let entityHandle =
                         MetadataTokens.EntityHandle(
@@ -930,19 +929,15 @@ module internal Linker =
             | CliVoid
             | CliTypeParameter _
             | CliMethodTypeParameter _
-            | CliByRef _ ->
-                invalidOp "a member declaring type must be a named or constructed CLI type"
+            | CliByRef _ -> invalidOp "a CLI type entity must be a named or constructed CLI type"
 
         let resolveDeclaringType =
             function
             | CoreDeclaringType typeName ->
                 let handle = resolveCoreTypeReference typeName
 
-                MetadataTokens.EntityHandle(
-                    TableIndex.TypeRef,
-                    MetadataTokens.GetRowNumber(handle)
-                )
-            | CliDeclaringType cliType -> resolveCliDeclaringType cliType
+                MetadataTokens.EntityHandle(TableIndex.TypeRef, MetadataTokens.GetRowNumber(handle))
+            | CliDeclaringType cliType -> resolveCliTypeEntity cliType
 
         let fsharpCore =
             if List.isEmpty customAttributeFragments then
@@ -1199,40 +1194,53 @@ module internal Linker =
                 yield!
                     typeFragments
                     |> List.mapi (fun index typeFragment ->
-                        let row =
-                            index
-                            + 2
+                        let row = index + 2
 
                         row * 2,
                         MetadataTokens.EntityHandle(TableIndex.TypeDef, row),
-                        typeFragment.GenericParameters
+                        typeFragment.GenericParameters,
+                        []
                     )
 
                 yield!
                     methodFragments
                     |> List.mapi (fun index methodFragment ->
-                        let row =
-                            index
-                            + 1
+                        let row = index + 1
 
-                        row * 2 + 1,
+                        row * 2
+                        + 1,
                         MetadataTokens.EntityHandle(TableIndex.MethodDef, row),
-                        methodFragment.GenericParameters
+                        methodFragment.GenericParameters,
+                        methodFragment.GenericParameterConstraints
                     )
             ]
-            |> List.sortBy (fun (codedOwner, _, _) -> codedOwner)
+            |> List.sortBy (fun (codedOwner, _, _, _) -> codedOwner)
 
-        for _, owner, genericParameters in genericParameterOwners do
-            genericParameters
-            |> List.iteri (fun index name ->
-                metadata.AddGenericParameter(
-                    owner,
-                    GenericParameterAttributes.None,
-                    metadata.GetOrAddString(name),
-                    index
+        for _, owner, genericParameters, constraints in genericParameterOwners do
+            let parameterHandles =
+                genericParameters
+                |> List.mapi (fun index name ->
+                    metadata.AddGenericParameter(
+                        owner,
+                        GenericParameterAttributes.None,
+                        metadata.GetOrAddString(name),
+                        index
+                    )
+                )
+
+            for parameterIndex, constraintType in constraints do
+                if
+                    parameterIndex < 0
+                    || parameterIndex
+                       >= parameterHandles.Length
+                then
+                    invalidOp "a generic constraint has no matching generic parameter"
+
+                metadata.AddGenericParameterConstraint(
+                    parameterHandles.[parameterIndex],
+                    resolveCliTypeEntity constraintType
                 )
                 |> ignore
-            )
 
         for typeFragment in typeFragments do
             let parent = typeDefinitionEntities.[typeFragment.StableId]

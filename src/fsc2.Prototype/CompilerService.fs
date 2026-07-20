@@ -145,7 +145,9 @@ module private TypeIdentity =
                 "trait-call"
                 receiverName
                 memberName
-                yield! arguments |> List.map callArgument
+                yield!
+                    arguments
+                    |> List.map callArgument
             ]
 
     let attributeKind =
@@ -332,6 +334,8 @@ type internal CompilerService() =
                         Ok(TypedTypeParameter name)
                     else
                         diagnostic range $"the type parameter '{name}' is not declared"
+                | ParsedFlexibleType(_, range) ->
+                    diagnostic range "a flexible type must be generalized by its member declaration"
                 | ParsedNamedType(typeName, range) -> resolveNamedType 0 typeName range
                 | ParsedGenericTypeApplication(ParsedNamedType(typeName, _), [ argument ], _) when
                     String.IsNullOrEmpty(typeName.Namespace)
@@ -387,15 +391,14 @@ type internal CompilerService() =
                         resolveType declaredParameters range
                         |> Result.map (fun typedRange -> TypedFunctionType(typedDomain, typedRange))
 
-            let rec substituteType
-                (substitutions: Map<string, ParsedTypeExpression>)
-                expression
-                =
+            let rec substituteType (substitutions: Map<string, ParsedTypeExpression>) expression =
                 match expression with
                 | ParsedTypeParameter(name, _) ->
                     substitutions
                     |> Map.tryFind name
                     |> Option.defaultValue expression
+                | ParsedFlexibleType(superType, range) ->
+                    ParsedFlexibleType(substituteType substitutions superType, range)
                 | ParsedNamedType _ -> expression
                 | ParsedGenericTypeApplication(genericType, arguments, range) ->
                     ParsedGenericTypeApplication(
@@ -424,19 +427,30 @@ type internal CompilerService() =
                 | ParsedGenericTypeApplication(ParsedNamedType(typeName, _), arguments, _) when
                     String.IsNullOrEmpty(typeName.Namespace)
                     ->
-                    let expandedArguments = arguments |> List.map expand
+                    let expandedArguments =
+                        arguments
+                        |> List.map expand
 
-                    match typeAbbreviations |> Map.tryFind typeName.Name with
+                    match
+                        typeAbbreviations
+                        |> Map.tryFind typeName.Name
+                    with
                     | Some abbreviation when
                         abbreviation.TypeParameters.Length = expandedArguments.Length
-                        && not (expanding |> Set.contains typeName.Name)
+                        && not (
+                            expanding
+                            |> Set.contains typeName.Name
+                        )
                         ->
                         abbreviation.Target.Type
                         |> substituteType (
                             List.zip abbreviation.TypeParameters expandedArguments
                             |> Map.ofList
                         )
-                        |> expandTypeAbbreviations (expanding |> Set.add typeName.Name)
+                        |> expandTypeAbbreviations (
+                            expanding
+                            |> Set.add typeName.Name
+                        )
                     | _ ->
                         match expression with
                         | ParsedGenericTypeApplication(genericType, _, range) ->
@@ -446,27 +460,41 @@ type internal CompilerService() =
                                 range
                             )
                         | _ -> expression
-                | ParsedNamedType(typeName, _) when
-                    String.IsNullOrEmpty(typeName.Namespace)
-                    ->
-                    match typeAbbreviations |> Map.tryFind typeName.Name with
+                | ParsedNamedType(typeName, _) when String.IsNullOrEmpty(typeName.Namespace) ->
+                    match
+                        typeAbbreviations
+                        |> Map.tryFind typeName.Name
+                    with
                     | Some abbreviation when
                         List.isEmpty abbreviation.TypeParameters
-                        && not (expanding |> Set.contains typeName.Name)
+                        && not (
+                            expanding
+                            |> Set.contains typeName.Name
+                        )
                         ->
                         abbreviation.Target.Type
-                        |> expandTypeAbbreviations (expanding |> Set.add typeName.Name)
+                        |> expandTypeAbbreviations (
+                            expanding
+                            |> Set.add typeName.Name
+                        )
                     | _ -> expression
                 | ParsedGenericTypeApplication(genericType, arguments, range) ->
                     ParsedGenericTypeApplication(
                         expand genericType,
-                        arguments |> List.map expand,
+                        arguments
+                        |> List.map expand,
                         range
                     )
                 | ParsedTupleType(elements, range) ->
-                    ParsedTupleType(elements |> List.map expand, range)
+                    ParsedTupleType(
+                        elements
+                        |> List.map expand,
+                        range
+                    )
                 | ParsedFunctionType(domain, range, sourceRange) ->
                     ParsedFunctionType(expand domain, expand range, sourceRange)
+                | ParsedFlexibleType(superType, range) ->
+                    ParsedFlexibleType(expand superType, range)
                 | ParsedTypeParameter _
                 | ParsedNamedType _ -> expression
 
@@ -1084,6 +1112,8 @@ type internal CompilerService() =
                             else
                                 collected
                                 @ [ name ]
+                        | ParsedFlexibleType(superType, _) ->
+                            collectTypeParameters collected superType
                         | ParsedNamedType _ -> collected
                         | ParsedGenericTypeApplication(genericType, arguments, _) ->
                             (collectTypeParameters collected genericType, arguments)
@@ -1192,7 +1222,10 @@ type internal CompilerService() =
                                 Ok(
                                     CliGenericType(
                                         fsharpFunctionType,
-                                        [ domainType; rangeType ]
+                                        [
+                                            domainType
+                                            rangeType
+                                        ]
                                     )
                                 )
                         | typedType ->
@@ -1210,16 +1243,95 @@ type internal CompilerService() =
                         | _ -> toCliType methodParameterIndex range typedType
 
                     let typeMethod (methodDeclaration: ParsedInstanceMethodDeclaration) =
+                        let usedTypeParameterNames = HashSet<string>(StringComparer.Ordinal)
+
+                        let collectUsedTypeParameterNames typeExpression =
+                            collectTypeParameters [] typeExpression
+                            |> List.iter (fun name ->
+                                usedTypeParameterNames.Add(name)
+                                |> ignore
+                            )
+
+                        methodDeclaration.Parameters
+                        |> List.iter (fun parameter -> collectUsedTypeParameterNames parameter.Type)
+
+                        methodDeclaration.ReturnType
+                        |> Option.iter collectUsedTypeParameterNames
+
+                        let flexibleConstraints = ResizeArray<_>()
+                        let mutable flexibleNameIndex = 0
+
+                        let rec nextFlexibleTypeParameterName () =
+                            let index = flexibleNameIndex
+
+                            flexibleNameIndex <-
+                                flexibleNameIndex
+                                + 1
+
+                            let candidate =
+                                if index < 26 then
+                                    char (
+                                        int 'a'
+                                        + index
+                                    )
+                                    |> string
+                                else
+                                    "a"
+                                    + index.ToString(CultureInfo.InvariantCulture)
+
+                            if usedTypeParameterNames.Add(candidate) then
+                                candidate
+                            else
+                                nextFlexibleTypeParameterName ()
+
+                        let rec generalizeFlexibleTypes =
+                            function
+                            | ParsedFlexibleType(superType, range) ->
+                                let parameterName = nextFlexibleTypeParameterName ()
+                                flexibleConstraints.Add(parameterName, superType, range)
+                                ParsedTypeParameter(parameterName, range)
+                            | ParsedGenericTypeApplication(genericType, arguments, range) ->
+                                ParsedGenericTypeApplication(
+                                    generalizeFlexibleTypes genericType,
+                                    arguments
+                                    |> List.map generalizeFlexibleTypes,
+                                    range
+                                )
+                            | ParsedTupleType(elements, range) ->
+                                ParsedTupleType(
+                                    elements
+                                    |> List.map generalizeFlexibleTypes,
+                                    range
+                                )
+                            | ParsedFunctionType(domain, range, sourceRange) ->
+                                ParsedFunctionType(
+                                    generalizeFlexibleTypes domain,
+                                    generalizeFlexibleTypes range,
+                                    sourceRange
+                                )
+                            | ParsedTypeParameter _
+                            | ParsedNamedType _ as typeExpression -> typeExpression
+
+                        let generalizedParameters =
+                            methodDeclaration.Parameters
+                            |> List.map (fun parameter -> {
+                                parameter with
+                                    Type = generalizeFlexibleTypes parameter.Type
+                            })
+
+                        let generalizedReturnType =
+                            methodDeclaration.ReturnType
+                            |> Option.map generalizeFlexibleTypes
+
                         let methodTypeParameters =
                             let fromParameters =
-                                ([], methodDeclaration.Parameters)
+                                ([], generalizedParameters)
                                 ||> List.fold (fun collected parameter ->
                                     collectTypeParameters collected parameter.Type
                                 )
 
-                            match methodDeclaration.ReturnType with
-                            | Some returnType ->
-                                collectTypeParameters fromParameters returnType
+                            match generalizedReturnType with
+                            | Some returnType -> collectTypeParameters fromParameters returnType
                             | None -> fromParameters
 
                         let declaredMethodParameters =
@@ -1231,7 +1343,7 @@ type internal CompilerService() =
                             |> Map.ofList
 
                         let typedParameters =
-                            methodDeclaration.Parameters
+                            generalizedParameters
                             |> List.map (fun parameter ->
                                 parameter.Type
                                 |> expandTypeAbbreviations Set.empty
@@ -1244,9 +1356,25 @@ type internal CompilerService() =
                             )
                             |> collectResults []
 
-                        match typedParameters with
-                        | Error error -> Error error
-                        | Ok parameters when
+                        let typedFlexibleConstraints =
+                            flexibleConstraints
+                            |> Seq.map (fun (parameterName, superType, range) ->
+                                superType
+                                |> expandTypeAbbreviations Set.empty
+                                |> resolveType declaredMethodParameters
+                                |> Result.map (fun typedSuperType ->
+                                    TypedDirectConstraint(
+                                        TypedSubtypeConstraint(parameterName, typedSuperType)
+                                    )
+                                )
+                            )
+                            |> Seq.toList
+                            |> collectResults []
+
+                        match typedParameters, typedFlexibleConstraints with
+                        | Error error, _
+                        | _, Error error -> Error error
+                        | Ok parameters, Ok constraints when
                             (parameters
                              |> List.map _.Name
                              |> Set.ofList
@@ -1256,7 +1384,7 @@ type internal CompilerService() =
                             diagnostic
                                 methodDeclaration.Range
                                 "instance-member parameter names must be unique"
-                        | Ok parameters ->
+                        | Ok parameters, Ok constraints ->
                             let typeResumableCode
                                 constructedType
                                 lambdaParameter
@@ -1273,33 +1401,24 @@ type internal CompilerService() =
                                     |> expandTypeAbbreviations Set.empty
                                     |> resolveType declaredMethodParameters
                                     |> Result.bind (
-                                        toCliType
-                                            methodParameterIndex
-                                            methodDeclaration.BodyRange
+                                        toCliType methodParameterIndex methodDeclaration.BodyRange
                                     )
 
                                 match constructedCliType with
                                 | Error error -> Error error
-                                | Ok(
-                                    CliGenericType(
-                                        delegateReference,
-                                        [ dataType; resultType ]
-                                    ) as delegateType
-                                  ) when
+                                | Ok(CliGenericType(delegateReference, [ dataType; resultType ]) as delegateType) when
                                     delegateReference.AssemblyName = "FSharp.Core"
-                                    && delegateReference.TypeName.Namespace
-                                       = "Microsoft.FSharp.Core.CompilerServices"
+                                    && delegateReference.TypeName.Namespace = "Microsoft.FSharp.Core.CompilerServices"
                                     && delegateReference.TypeName.Name = "ResumableCode`2"
                                     ->
                                     match lambdaBody with
-                                    | SequentialExpression [
-                                        MemberAssignment(
-                                            assignmentRoot,
-                                            [ dataFieldName; resultFieldName ],
-                                            ValueReference captureName
-                                        )
-                                        BooleanLiteral true
-                                      ] when assignmentRoot = lambdaParameter ->
+                                    | SequentialExpression [ MemberAssignment(assignmentRoot,
+                                                                              [ dataFieldName
+                                                                                resultFieldName ],
+                                                                              ValueReference captureName)
+                                                             BooleanLiteral true ] when
+                                        assignmentRoot = lambdaParameter
+                                        ->
                                         match
                                             parameters
                                             |> List.tryFindIndex (fun parameter ->
@@ -1311,7 +1430,8 @@ type internal CompilerService() =
                                                 methodDeclaration.BodyRange
                                                 $"the captured value '{captureName}' is not an instance-member parameter"
                                         | Some captureParameterIndex when
-                                            parameters.[captureParameterIndex].Type <> resultType
+                                            parameters.[captureParameterIndex].Type
+                                            <> resultType
                                             ->
                                             diagnostic
                                                 methodDeclaration.BodyRange
@@ -1320,9 +1440,7 @@ type internal CompilerService() =
                                             let localDataShape =
                                                 match dataType with
                                                 | CliGenericType(dataReference, dataArguments) when
-                                                    String.IsNullOrEmpty(
-                                                        dataReference.AssemblyName
-                                                    )
+                                                    String.IsNullOrEmpty(dataReference.AssemblyName)
                                                     && dataReference.IsValueType
                                                     ->
                                                     parsed.Declarations
@@ -1335,8 +1453,7 @@ type internal CompilerService() =
                                                         with
                                                         | ParsedStructType structDeclaration,
                                                           Some(_, declarationId) when
-                                                            declarationId
-                                                            = dataReference.DeclarationId
+                                                            declarationId = dataReference.DeclarationId
                                                             ->
                                                             Some(
                                                                 structDeclaration,
@@ -1352,11 +1469,7 @@ type internal CompilerService() =
                                                 diagnostic
                                                     methodDeclaration.BodyRange
                                                     "the resumable data type must be a local struct"
-                                            | Some(
-                                                dataDeclaration,
-                                                dataArguments,
-                                                dataDeclarationId
-                                              ) ->
+                                            | Some(dataDeclaration, dataArguments, dataDeclarationId) ->
                                                 let resultFieldIndex =
                                                     dataDeclaration.Fields
                                                     |> List.tryFindIndex (fun field ->
@@ -1368,8 +1481,7 @@ type internal CompilerService() =
                                                     | Some index when
                                                         dataDeclaration.Fields.[index].IsMutable
                                                         ->
-                                                        let field =
-                                                            dataDeclaration.Fields.[index]
+                                                        let field = dataDeclaration.Fields.[index]
 
                                                         match field.Type with
                                                         | ParsedTypeParameter(name, _) ->
@@ -1377,10 +1489,8 @@ type internal CompilerService() =
                                                             |> List.tryFindIndex ((=) name)
                                                             |> Option.bind (fun typeIndex ->
                                                                 if
-                                                                    typeIndex
-                                                                    < dataArguments.Length
-                                                                    && dataArguments.[typeIndex]
-                                                                   = resultType
+                                                                    typeIndex < dataArguments.Length
+                                                                    && dataArguments.[typeIndex] = resultType
                                                                 then
                                                                     Some index
                                                                 else
@@ -1394,7 +1504,10 @@ type internal CompilerService() =
                                                     diagnostic
                                                         methodDeclaration.BodyRange
                                                         $"the resumable data field '{resultFieldName}' must be mutable and match the result type"
-                                                | Some _ when dataFieldName <> "Data" ->
+                                                | Some _ when
+                                                    dataFieldName
+                                                    <> "Data"
+                                                    ->
                                                     diagnostic
                                                         methodDeclaration.BodyRange
                                                         "the resumable state-machine field must be 'Data'"
@@ -1474,8 +1587,7 @@ type internal CompilerService() =
 
                             let typedBody =
                                 match methodDeclaration.Body with
-                                | IntegerLiteral value ->
-                                    Ok(TypedIntegerLiteral value, CliInt32)
+                                | IntegerLiteral value -> Ok(TypedIntegerLiteral value, CliInt32)
                                 | ValueReference name ->
                                     match
                                         parameters
@@ -1497,11 +1609,9 @@ type internal CompilerService() =
                                     diagnostic
                                         methodDeclaration.BodyRange
                                         "trait calls are not yet supported in instance members"
-                                | TypeConstruction(
-                                    constructedType,
-                                    LambdaExpression(lambdaParameter, lambdaBody),
-                                    argumentRange
-                                  ) ->
+                                | TypeConstruction(constructedType,
+                                                   LambdaExpression(lambdaParameter, lambdaBody),
+                                                   argumentRange) ->
                                     typeResumableCode
                                         constructedType
                                         lambdaParameter
@@ -1517,7 +1627,7 @@ type internal CompilerService() =
                                         "this instance-member expression is not yet supported"
 
                             let declaredReturnType =
-                                match methodDeclaration.ReturnType with
+                                match generalizedReturnType with
                                 | None -> Ok None
                                 | Some returnType ->
                                     returnType
@@ -1532,7 +1642,8 @@ type internal CompilerService() =
                             | Error error, _
                             | _, Error error -> Error error
                             | Ok(body, inferredReturnType), Ok(Some returnType) when
-                                returnType <> inferredReturnType
+                                returnType
+                                <> inferredReturnType
                                 ->
                                 diagnostic
                                     methodDeclaration.BodyRange
@@ -1567,6 +1678,11 @@ type internal CompilerService() =
                                         "instance"
                                         "generic-parameters"
                                         yield! methodTypeParameters
+                                        "constraints"
+
+                                        yield!
+                                            constraints
+                                            |> List.map TypeIdentity.methodConstraintIdentity
                                         "parameters"
 
                                         yield!
@@ -1586,19 +1702,17 @@ type internal CompilerService() =
                                     StableId = methodStableId
                                     Name = methodDeclaration.Name
                                     GenericParameters = methodTypeParameters
-                                    Constraints = []
+                                    Constraints = constraints
                                     Parameters = parameters
                                     ReturnType = returnType
                                     Body = body
                                     ExportFingerprint = exportFingerprint
                                     Range =
                                         match body with
-                                        | TypedResumableCode expression ->
-                                            expression.Range
+                                        | TypedResumableCode expression -> expression.Range
                                         | TypedIntegerLiteral _
                                         | TypedParameterReference _
-                                        | TypedTraitCall _ ->
-                                            methodDeclaration.BodyRange
+                                        | TypedTraitCall _ -> methodDeclaration.BodyRange
                                 }
 
                     match
@@ -1933,6 +2047,7 @@ type internal CompilerService() =
         let methodImplementationHash (methodDeclaration: TypedMethodDeclaration) =
             Fingerprint.parts [
                 methodDeclaration.StableId
+                methodDeclaration.ExportFingerprint
                 TypeIdentity.inlineBody methodDeclaration.Body
             ]
 
@@ -2194,22 +2309,15 @@ type internal CompilerService() =
             let rec methodTypeParametersToTypeParameters =
                 function
                 | CliMethodTypeParameter index -> CliTypeParameter index
-                | CliByRef elementType ->
-                    CliByRef(methodTypeParametersToTypeParameters elementType)
+                | CliByRef elementType -> CliByRef(methodTypeParametersToTypeParameters elementType)
                 | CliGenericType(typeReference, arguments) ->
                     CliGenericType(
                         typeReference,
                         arguments
                         |> List.map methodTypeParametersToTypeParameters
                     )
-                | (CliInt32
-                  | CliBoolean
-                  | CliString
-                  | CliObject
-                  | CliNativeInt
-                  | CliVoid
-                  | CliTypeParameter _
-                  | CliNamedType _) as cliType -> cliType
+                | (CliInt32 | CliBoolean | CliString | CliObject | CliNativeInt | CliVoid | CliTypeParameter _ | CliNamedType _) as cliType ->
+                    cliType
 
             let closureName (methodDeclaration: TypedMethodDeclaration) expression =
                 methodDeclaration.Name
@@ -2220,10 +2328,7 @@ type internal CompilerService() =
                 methodDeclaration.StableId
                 + "/closure:resumable-code"
 
-            let closureTypeReference
-                (methodDeclaration: TypedMethodDeclaration)
-                expression
-                =
+            let closureTypeReference (methodDeclaration: TypedMethodDeclaration) expression =
                 let name = closureName methodDeclaration expression
 
                 {
@@ -2313,8 +2418,12 @@ type internal CompilerService() =
                         stableId
                         + "/field:"
                         + expression.CaptureName
-                    ConstructorStableId = stableId + "/constructor"
-                    InvokeStableId = stableId + "/method:Invoke"
+                    ConstructorStableId =
+                        stableId
+                        + "/constructor"
+                    InvokeStableId =
+                        stableId
+                        + "/method:Invoke"
                     MethodType = methodType
                     CaptureType = captureType
                     StateMachineType = stateMachineType
@@ -2333,9 +2442,7 @@ type internal CompilerService() =
                     let argumentIndex =
                         match kind with
                         | InstanceConstructor
-                        | InstanceInlineMember ->
-                            index
-                            + 1
+                        | InstanceInlineMember -> index + 1
                         | ModuleFunction
                         | StaticInlineMemberStub
                         | ClosureConstructor
@@ -2370,7 +2477,10 @@ type internal CompilerService() =
                         DeclaringType = CliDeclaringType expression.DelegateType
                         Name = ".ctor"
                         IsInstance = true
-                        ParameterTypes = [ CliObject; CliNativeInt ]
+                        ParameterTypes = [
+                            CliObject
+                            CliNativeInt
+                        ]
                         ReturnType = CliVoid
                         TargetStableId = None
                     }
@@ -2378,7 +2488,9 @@ type internal CompilerService() =
                     let captureArgumentIndex =
                         match kind with
                         | InstanceConstructor
-                        | InstanceInlineMember -> expression.CaptureParameterIndex + 1
+                        | InstanceInlineMember ->
+                            expression.CaptureParameterIndex
+                            + 1
                         | ModuleFunction
                         | StaticInlineMemberStub
                         | ClosureConstructor
@@ -2414,15 +2526,94 @@ type internal CompilerService() =
                     Throw
                   ]
 
+            let rec constraintTypeDependencyIds =
+                function
+                | TypedNamedType resolvedType -> [ resolvedType.DeclarationId ]
+                | TypedTypeParameter _ -> []
+                | TypedGenericTypeApplication(genericType, arguments) ->
+                    constraintTypeDependencyIds genericType
+                    @ (arguments
+                       |> List.collect constraintTypeDependencyIds)
+                | TypedByRefType elementType -> constraintTypeDependencyIds elementType
+                | TypedTupleType elements ->
+                    elements
+                    |> List.collect constraintTypeDependencyIds
+                | TypedFunctionType(domain, range) ->
+                    constraintTypeDependencyIds domain
+                    @ constraintTypeDependencyIds range
+
             let methodDependencies (methodDeclaration: TypedMethodDeclaration) =
+                methodDeclaration.Constraints
+                |> List.collect (
+                    function
+                    | TypedAbbreviationConstraint typeExpression ->
+                        constraintTypeDependencyIds typeExpression
+                    | TypedDirectConstraint(TypedSubtypeConstraint(_, superType)) ->
+                        constraintTypeDependencyIds superType
+                    | TypedDirectConstraint(TypedMemberConstraint _) -> []
+                )
+
+            let rec constraintCliType methodParameterIndex =
+                function
+                | TypedTypeParameter name ->
+                    match
+                        methodParameterIndex
+                        |> Map.tryFind name
+                    with
+                    | Some index -> CliMethodTypeParameter index
+                    | None ->
+                        invalidOp (
+                            "the constrained method type parameter '"
+                            + name
+                            + "' has no generic-parameter index"
+                        )
+                | TypedNamedType resolvedType ->
+                    CliNamedType {
+                        DeclarationId = resolvedType.DeclarationId
+                        AssemblyName = resolvedType.AssemblyName
+                        TypeName = resolvedType.TypeName
+                        IsValueType = resolvedType.IsValueType
+                    }
+                | TypedGenericTypeApplication(TypedNamedType resolvedType, arguments) ->
+                    CliGenericType(
+                        {
+                            DeclarationId = resolvedType.DeclarationId
+                            AssemblyName = resolvedType.AssemblyName
+                            TypeName = {
+                                Namespace = resolvedType.TypeName.Namespace
+                                Name =
+                                    resolvedType.TypeName.Name
+                                    + "`"
+                                    + arguments.Length.ToString(CultureInfo.InvariantCulture)
+                            }
+                            IsValueType = resolvedType.IsValueType
+                        },
+                        arguments
+                        |> List.map (constraintCliType methodParameterIndex)
+                    )
+                | TypedGenericTypeApplication _
+                | TypedByRefType _
+                | TypedTupleType _
+                | TypedFunctionType _ ->
+                    invalidOp "the CLR generic constraint type is not supported"
+
+            let genericParameterConstraints (methodDeclaration: TypedMethodDeclaration) =
+                let methodParameterIndex =
+                    methodDeclaration.GenericParameters
+                    |> List.mapi (fun index name -> name, index)
+                    |> Map.ofList
+
                 methodDeclaration.Constraints
                 |> List.choose (
                     function
-                    | TypedAbbreviationConstraint(TypedGenericTypeApplication(TypedNamedType resolvedType,
-                                                                              _)) ->
-                        Some resolvedType.DeclarationId
+                    | TypedDirectConstraint(TypedSubtypeConstraint(parameterName, superType)) ->
+                        methodParameterIndex
+                        |> Map.tryFind parameterName
+                        |> Option.map (fun index ->
+                            index, constraintCliType methodParameterIndex superType
+                        )
                     | TypedAbbreviationConstraint _
-                    | TypedDirectConstraint _ -> None
+                    | TypedDirectConstraint(TypedMemberConstraint _) -> None
                 )
 
             let methodFragment
@@ -2437,7 +2628,8 @@ type internal CompilerService() =
 
                 let instructionDependencies =
                     instructions
-                    |> List.choose (function
+                    |> List.choose (
+                        function
                         | LoadField fieldReference
                         | LoadFieldAddress fieldReference
                         | StoreField fieldReference -> Some fieldReference.DependencyId
@@ -2458,6 +2650,7 @@ type internal CompilerService() =
                     Kind = kind
                     GenericParameters = methodDeclaration.GenericParameters
                     Constraints = methodDeclaration.Constraints
+                    GenericParameterConstraints = genericParameterConstraints methodDeclaration
                     Parameters = methodDeclaration.Parameters
                     ReturnType = methodDeclaration.ReturnType
                     Instructions = instructions
@@ -2635,8 +2828,7 @@ type internal CompilerService() =
                         + "/type:"
                         + typed.StableId
 
-                    let isNested =
-                        typed.ContainerKind = ModuleSource
+                    let isNested = typed.ContainerKind = ModuleSource
 
                     declarationsWithContentHashes
                     |> List.choose (fun (declaration, _) ->
@@ -2666,6 +2858,7 @@ type internal CompilerService() =
                                 Kind = InstanceConstructor
                                 GenericParameters = []
                                 Constraints = []
+                                GenericParameterConstraints = []
                                 Parameters = []
                                 ReturnType = CliVoid
                                 Instructions = [
@@ -2714,7 +2907,9 @@ type internal CompilerService() =
                                 ]
                                 LiteralFields = []
                                 InstanceFields = []
-                                Methods = constructor :: methods
+                                Methods =
+                                    constructor
+                                    :: methods
                             }
                         | TypedMethod _
                         | TypedLiteralField _
@@ -2743,8 +2938,7 @@ type internal CompilerService() =
                             |> List.choose (fun methodDeclaration ->
                                 match methodDeclaration.Body with
                                 | TypedResumableCode expression ->
-                                    let layout =
-                                        closureLayout methodDeclaration expression
+                                    let layout = closureLayout methodDeclaration expression
 
                                     let objectConstructor = {
                                         DeclaringType =
@@ -2766,6 +2960,7 @@ type internal CompilerService() =
                                         Kind = ClosureConstructor
                                         GenericParameters = []
                                         Constraints = []
+                                        GenericParameterConstraints = []
                                         Parameters = [
                                             {
                                                 Name = expression.CaptureName
@@ -2804,10 +2999,10 @@ type internal CompilerService() =
                                         Kind = ClosureInvoke
                                         GenericParameters = []
                                         Constraints = []
+                                        GenericParameterConstraints = []
                                         Parameters = [
                                             {
-                                                Name =
-                                                    expression.StateMachineParameterName
+                                                Name = expression.StateMachineParameterName
                                                 Type = CliByRef layout.StateMachineType
                                             }
                                         ]
@@ -2844,20 +3039,13 @@ type internal CompilerService() =
                                         SchemaVersion = querySchema
                                         StableId = layout.StableId
                                         Namespace =
-                                            if isNested then
-                                                String.Empty
-                                            else
-                                                typed.Namespace
+                                            if isNested then String.Empty else typed.Namespace
                                         Name = layout.Name
                                         IsPublic = false
                                         EnclosingTypeStableId =
-                                            if isNested then
-                                                Some moduleTypeStableId
-                                            else
-                                                None
+                                            if isNested then Some moduleTypeStableId else None
                                         Kind = ClosureContainer
-                                        GenericParameters =
-                                            methodDeclaration.GenericParameters
+                                        GenericParameters = methodDeclaration.GenericParameters
                                         Attributes = []
                                         LiteralFields = []
                                         InstanceFields = [
@@ -2874,7 +3062,10 @@ type internal CompilerService() =
                                                     ]
                                             }
                                         ]
-                                        Methods = [ constructor; invoke ]
+                                        Methods = [
+                                            constructor
+                                            invoke
+                                        ]
                                     }
                                 | TypedIntegerLiteral _
                                 | TypedParameterReference _
