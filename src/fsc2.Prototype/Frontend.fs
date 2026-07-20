@@ -1027,11 +1027,64 @@ module internal Frontend =
                     }
                 | LetKeyword ->
                     parseResult {
+                        let sequenceExpression expressions =
+                            let expressions = List.rev expressions
+
+                            match expressions with
+                            | [ expression, range ] -> expression, range
+                            | _ ->
+                                let _, firstRange = List.head expressions
+                                let _, lastRange = List.last expressions
+
+                                SequentialValueExpression expressions,
+                                {
+                                    Start = firstRange.Start
+                                    End = lastRange.End
+                                }
+
                         let! letToken = expected LetKeyword "expected 'let'"
+
+                        let isMutable =
+                            match (current ()).Kind with
+                            | MutableKeyword ->
+                                consume ()
+                                |> ignore
+
+                                true
+                            | _ -> false
+
                         let! bindingName, _ = identifier "expected a local binding name"
                         let! _ = expected Equals "expected '=' after a local binding name"
                         let! value, valueRange = parseExpression ()
-                        let! body, bodyRange = parseExpression ()
+                        let bodyIndent = (current ()).Range.Start.Column
+                        let! firstBody, firstBodyRange = parseExpression ()
+
+                        let rec parseBody expressions =
+                            let token = current ()
+
+                            match token.Kind with
+                            | RightParenthesis
+                            | EndOfFile
+                            | MemberKeyword
+                            | StaticKeyword
+                            | AttributeStart
+                            | TypeKeyword
+                            | AndKeyword
+                            | ElseKeyword -> Ok(sequenceExpression expressions)
+                            | _ when
+                                token.Range.Start.Column
+                                >= bodyIndent
+                                ->
+                                parseExpression ()
+                                |> Result.bind (fun expression ->
+                                    parseBody (
+                                        expression
+                                        :: expressions
+                                    )
+                                )
+                            | _ -> Ok(sequenceExpression expressions)
+
+                        let! body, bodyRange = parseBody [ firstBody, firstBodyRange ]
 
                         let bindingRange = {
                             Start = letToken.Range.Start
@@ -1039,7 +1092,14 @@ module internal Frontend =
                         }
 
                         return
-                            LetExpression(bindingName, value, body, bindingRange, bodyRange),
+                            LetExpression(
+                                bindingName,
+                                isMutable,
+                                value,
+                                body,
+                                bindingRange,
+                                bodyRange
+                            ),
                             {
                                 Start = letToken.Range.Start
                                 End = bodyRange.End
@@ -1156,6 +1216,22 @@ module internal Frontend =
                             {
                                 Start = expressionToken.Range.Start
                                 End = closeToken.Range.End
+                            }
+                    }
+                | Identifier name when
+                    index + 1 < input.Length
+                    && input.[index + 1].Kind = LeftArrow
+                    ->
+                    parseResult {
+                        let startToken = consume ()
+                        let! _ = expected LeftArrow "expected '<-'"
+                        let! value, valueRange = parseExpression ()
+
+                        return
+                            LocalAssignment(name, value),
+                            {
+                                Start = startToken.Range.Start
+                                End = valueRange.End
                             }
                     }
                 | Identifier receiverName when

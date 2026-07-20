@@ -3987,6 +3987,43 @@ module CompilerTargetTests =
 
                     Expect.equal fsharp2Behavior 42 "Alias should return its local binding"
 
+            testCase "executes assignment to a mutable local binding"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Replace(initial: int, replacement: int) : int =\n            let mutable result = initial\n            result <- replacement\n            result\n"
+
+                withObjectMemberDifferential "fsharp2-mutable-local" sourceText "Replace"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeReplace assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        builderType
+                            .GetMethod("Replace")
+                            .Invoke(
+                                null,
+                                [|
+                                    box 1
+                                    box 42
+                                |]
+                            )
+                        :?> int
+
+                    let oracleBehavior = invokeReplace oracleOutputPath
+                    let fsharp2Behavior = invokeReplace outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the emitted mutable local should behave like the Compatibility Oracle"
+
+                    Expect.equal fsharp2Behavior 42 "Replace should return the assigned value"
+
             testCase "executes a whitespace-applied static object member call"
             <| fun _ ->
                 let sourceText =
@@ -6322,7 +6359,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "30"
+                        "31"
                         "query cache evidence should be versioned"
 
                     Expect.equal

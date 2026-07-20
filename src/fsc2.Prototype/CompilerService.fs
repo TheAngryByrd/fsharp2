@@ -155,13 +155,21 @@ module private TypeIdentity =
                 "local"
                 index.ToString(CultureInfo.InvariantCulture)
             ]
-        | TypedLet(localIndex, _, localType, value, body, _, _) ->
+        | TypedLet(localIndex, _, isMutable, localType, value, body, _, _) ->
             Fingerprint.parts [
                 "let"
                 localIndex.ToString(CultureInfo.InvariantCulture)
+                if isMutable then "mutable" else "immutable"
                 cliType localType
                 inlineBody value
                 inlineBody body
+            ]
+        | TypedLocalAssignment(localIndex, localType, value) ->
+            Fingerprint.parts [
+                "local-assignment"
+                localIndex.ToString(CultureInfo.InvariantCulture)
+                cliType localType
+                inlineBody value
             ]
         | TypedStaticMethodCall(target, genericArguments, arguments) ->
             Fingerprint.parts [
@@ -1045,6 +1053,7 @@ type internal CompilerService() =
                     | _, ConditionalExpression _
                     | _, ExplicitUpcastExpression _
                     | _, SequentialValueExpression _
+                    | _, LocalAssignment _
                     | _, LetExpression _
                     | _, LambdaExpression _
                     | _, TypeConstruction _ ->
@@ -1484,6 +1493,7 @@ type internal CompilerService() =
                             | Ok _, Ok _, ConditionalExpression _
                             | Ok _, Ok _, ExplicitUpcastExpression _
                             | Ok _, Ok _, SequentialValueExpression _
+                            | Ok _, Ok _, LocalAssignment _
                             | Ok _, Ok _, LetExpression _
                             | Ok _, Ok _, LambdaExpression _
                             | Ok _, Ok _, TypeConstruction _ ->
@@ -1847,7 +1857,7 @@ type internal CompilerService() =
                                             localBindings
                                             |> Map.tryFind name
                                         with
-                                        | Some(localIndex, localType) ->
+                                        | Some(localIndex, localType, _) ->
                                             Ok(
                                                 TypedLocalReference localIndex,
                                                 localType,
@@ -2168,6 +2178,43 @@ type internal CompilerService() =
                                             diagnostic
                                                 methodDeclaration.BodyRange
                                                 "this explicit upcast source is not yet supported"
+                                    | LocalAssignment(name, value) ->
+                                        match
+                                            localBindings
+                                            |> Map.tryFind name
+                                        with
+                                        | None ->
+                                            diagnostic
+                                                methodDeclaration.BodyRange
+                                                $"the mutable local '{name}' is not defined"
+                                        | Some(_, _, false) ->
+                                            diagnostic
+                                                methodDeclaration.BodyRange
+                                                $"the local '{name}' is not mutable"
+                                        | Some(localIndex, localType, true) ->
+                                            match
+                                                typeStaticExpression
+                                                    localBindings
+                                                    nextLocalIndex
+                                                    value
+                                            with
+                                            | Error error -> Error error
+                                            | Ok(typedValue, valueType, nextValueLocalIndex) when
+                                                valueType = localType
+                                                ->
+                                                Ok(
+                                                    TypedLocalAssignment(
+                                                        localIndex,
+                                                        localType,
+                                                        typedValue
+                                                    ),
+                                                    CliVoid,
+                                                    nextValueLocalIndex
+                                                )
+                                            | Ok _ ->
+                                                diagnostic
+                                                    methodDeclaration.BodyRange
+                                                    "the assigned value does not match the mutable local type"
                                     | SequentialValueExpression expressions ->
                                         let rec typeExpressions
                                             typedExpressions
@@ -2209,6 +2256,7 @@ type internal CompilerService() =
 
                                         typeExpressions [] nextLocalIndex expressions
                                     | LetExpression(bindingName,
+                                                    isMutable,
                                                     value,
                                                     body,
                                                     bindingRange,
@@ -2223,7 +2271,9 @@ type internal CompilerService() =
                                             match
                                                 typeStaticExpression
                                                     (localBindings
-                                                     |> Map.add bindingName (localIndex, valueType))
+                                                     |> Map.add
+                                                         bindingName
+                                                         (localIndex, valueType, isMutable))
                                                     (localIndex
                                                      + 1)
                                                     body
@@ -2234,6 +2284,7 @@ type internal CompilerService() =
                                                     TypedLet(
                                                         localIndex,
                                                         bindingName,
+                                                        isMutable,
                                                         valueType,
                                                         typedValue,
                                                         typedBody,
@@ -2270,9 +2321,11 @@ type internal CompilerService() =
                                         :: inferredSubtypeConstraints expression
                                     | TypedUpcast(_, _, _, expression) ->
                                         inferredSubtypeConstraints expression
-                                    | TypedLet(_, _, _, value, body, _, _) ->
+                                    | TypedLet(_, _, _, _, value, body, _, _) ->
                                         inferredSubtypeConstraints value
                                         @ inferredSubtypeConstraints body
+                                    | TypedLocalAssignment(_, _, value) ->
+                                        inferredSubtypeConstraints value
                                     | TypedStaticMethodCall(_, _, arguments) ->
                                         arguments
                                         |> List.collect inferredSubtypeConstraints
@@ -2933,6 +2986,7 @@ type internal CompilerService() =
                                 | ConditionalExpression _
                                 | ExplicitUpcastExpression _
                                 | SequentialValueExpression _
+                                | LocalAssignment _
                                 | LetExpression _
                                 | LambdaExpression _
                                 | TypeConstruction _ ->
@@ -2974,6 +3028,7 @@ type internal CompilerService() =
                                     | TypedConditional _
                                     | TypedUpcast _
                                     | TypedSequential _
+                                    | TypedLocalAssignment _
                                     | TypedResumableTryFinally _
                                     | TypedTraitCall _ -> methodDeclaration.BodyRange
 
@@ -3811,19 +3866,29 @@ type internal CompilerService() =
                 | TypedParameterReference index ->
                     [ LoadArgument(methodArgumentIndex kind index) ], []
                 | TypedLocalReference index -> [ LoadLocal index ], []
-                | TypedLet(localIndex, name, localType, value, body, bindingRange, bodyRange) ->
+                | TypedLocalAssignment(localIndex, _, value) ->
+                    let valueInstructions, valueLocals =
+                        valueExpressionInstructions freshLabel kind value
+
+                    valueInstructions
+                    @ [ StoreLocal localIndex ],
+                    valueLocals
+                | TypedLet(localIndex, name, _, localType, value, body, bindingRange, bodyRange) ->
                     let valueInstructions, valueLocals =
                         valueExpressionInstructions freshLabel kind value
 
                     let bodyInstructions, bodyLocals =
                         valueExpressionInstructions freshLabel kind body
 
+                    let bodySequencePoint =
+                        match body with
+                        | TypedSequential _ -> []
+                        | _ -> [ MarkSequencePoint bodyRange ]
+
                     [ MarkSequencePoint bindingRange ]
                     @ valueInstructions
-                    @ [
-                        StoreLocal localIndex
-                        MarkSequencePoint bodyRange
-                    ]
+                    @ [ StoreLocal localIndex ]
+                    @ bodySequencePoint
                     @ bodyInstructions,
                     valueLocals
                     @ [
@@ -4021,7 +4086,7 @@ type internal CompilerService() =
                         Return
                     ],
                     []
-                | (TypedLocalReference _ | TypedLet _ | TypedStaticMethodCall _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _ | TypedUpcast _ | TypedSequential _) as expression ->
+                | (TypedLocalReference _ | TypedLet _ | TypedLocalAssignment _ | TypedStaticMethodCall _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _ | TypedUpcast _ | TypedSequential _) as expression ->
                     let instructions, locals =
                         valueExpressionInstructions freshLabel kind expression
 
@@ -4300,7 +4365,8 @@ type internal CompilerService() =
                         | TypedInstanceMethodCall _
                         | TypedConditional _
                         | TypedUpcast _
-                        | TypedSequential _ -> 8
+                        | TypedSequential _
+                        | TypedLocalAssignment _ -> 8
                     DependencyIds =
                         methodDependencies methodDeclaration
                         @ instructionDependencies
@@ -4604,6 +4670,7 @@ type internal CompilerService() =
                                     | TypedConditional _
                                     | TypedUpcast _
                                     | TypedSequential _
+                                    | TypedLocalAssignment _
                                     | TypedTraitCall _ -> None
 
                                 match closureExpression with
