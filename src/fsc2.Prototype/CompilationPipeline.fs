@@ -50,12 +50,7 @@ module internal CompilationPipeline =
         let query =
             match ReferenceTypeIndex.Create(invocation.ReferencePaths) with
             | Ok references ->
-                service.Compile(
-                    assemblyName,
-                    invocation.Defines,
-                    references,
-                    sources
-                )
+                service.Compile(assemblyName, invocation.Defines, references, sources)
             | Error message ->
                 Error {
                     Code = "FSC2P1001"

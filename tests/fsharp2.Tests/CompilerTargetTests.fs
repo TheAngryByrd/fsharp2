@@ -204,6 +204,127 @@ module CompilerTargetTests =
         )
         |> Map.ofArray
 
+    let private writeReferenceTypeAssembly path assemblyName namespaceName typeName =
+        let metadata = MetadataBuilder()
+        let firstField = MetadataTokens.FieldDefinitionHandle(1)
+        let firstMethod = MetadataTokens.MethodDefinitionHandle(1)
+
+        metadata.AddModule(
+            0,
+            metadata.GetOrAddString(
+                assemblyName
+                + ".dll"
+            ),
+            metadata.GetOrAddGuid(Guid.NewGuid()),
+            Unchecked.defaultof<GuidHandle>,
+            Unchecked.defaultof<GuidHandle>
+        )
+        |> ignore
+
+        metadata.AddAssembly(
+            metadata.GetOrAddString(assemblyName),
+            System.Version(1, 0, 0, 0),
+            Unchecked.defaultof<StringHandle>,
+            Unchecked.defaultof<BlobHandle>,
+            enum<AssemblyFlags> 0,
+            AssemblyHashAlgorithm.None
+        )
+        |> ignore
+
+        metadata.AddTypeDefinition(
+            TypeAttributes.NotPublic,
+            Unchecked.defaultof<StringHandle>,
+            metadata.GetOrAddString("<Module>"),
+            Unchecked.defaultof<EntityHandle>,
+            firstField,
+            firstMethod
+        )
+        |> ignore
+
+        metadata.AddTypeDefinition(
+            TypeAttributes.Public,
+            metadata.GetOrAddString(namespaceName),
+            metadata.GetOrAddString(typeName),
+            Unchecked.defaultof<EntityHandle>,
+            firstField,
+            firstMethod
+        )
+        |> ignore
+
+        let image = BlobBuilder()
+
+        ManagedPEBuilder(
+            PEHeaderBuilder.CreateLibraryHeader(),
+            MetadataRootBuilder(metadata),
+            BlobBuilder()
+        )
+            .Serialize(image)
+        |> ignore
+
+        File.WriteAllBytes(path, image.ToArray())
+
+    let private compileForExportFingerprint
+        root
+        responsePath
+        sourcePath
+        outputStem
+        additionalReferences
+        =
+        let outputPath =
+            Path.Combine(
+                root,
+                outputStem
+                + ".dll"
+            )
+
+        let pdbPath =
+            Path.Combine(
+                root,
+                outputStem
+                + ".pdb"
+            )
+
+        let tracePath =
+            Path.Combine(
+                root,
+                outputStem
+                + ".trace"
+            )
+
+        let systemRuntimePath = Assembly.Load("System.Runtime").Location
+
+        let arguments =
+            [
+                [
+                    "--target:library"
+                    "--deterministic+"
+                    "--debug:portable"
+                    $"--reference:{typeof<Microsoft.FSharp.Core.StructAttribute>.Assembly.Location}"
+                    $"--reference:{systemRuntimePath}"
+                ]
+                additionalReferences
+                |> List.map (fun referencePath -> $"--reference:{referencePath}")
+                [
+                    $"--out:{outputPath}"
+                    $"--pdb:{pdbPath}"
+                    $"--fsharp2-trace:{tracePath}"
+                    sourcePath
+                ]
+            ]
+            |> List.concat
+
+        File.WriteAllLines(responsePath, arguments)
+
+        let result = invokeFsc2 root responsePath
+
+        Expect.equal
+            result.ExitCode
+            0
+            (result.StandardOutput
+             + result.StandardError)
+
+        outputPath, (readTrace tracePath).["exportFingerprint"]
+
     let private findAssemblyAttributes (metadata: MetadataReader) expectedTypeName =
         metadata.CustomAttributes
         |> Seq.choose (fun handle ->
@@ -1606,6 +1727,127 @@ module CompilerTargetTests =
                             value
                             (Convert.FromHexString("0100000000"))
                             "DefaultValue(false) should preserve the Oracle fixed argument"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase
+                "keeps the mutually defined IcedTasks state-machine abbreviations out of CLR metadata"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-icedtasks-state-machine-abbreviations",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "TaskBuilderBase.fs")
+                    let responsePath = Path.Combine(root, "compile.rsp")
+
+                    let sourceText resumptionFunctionType =
+                        $"namespace IcedTasks.TaskBase\n\nopen IcedTasks.Nullness\nopen IcedTasks.TaskLike\n\n[<AutoOpen>]\nmodule TaskBase =\n    open System\n    open System.Runtime.CompilerServices\n    open System.Threading.Tasks\n    open Microsoft.FSharp.Core\n    open Microsoft.FSharp.Core.CompilerServices\n    open Microsoft.FSharp.Core.CompilerServices.StateMachineHelpers\n    open Microsoft.FSharp.Core.LanguagePrimitives.IntrinsicOperators\n    open Microsoft.FSharp.Collections\n    open System.Collections.Generic\n    open System.Threading\n\n    [<Struct; NoComparison; NoEquality>]\n    type TaskBaseStateMachineData<'T, 'Builder> =\n        [<DefaultValue(false)>]\n        val mutable Result: 'T\n\n        [<DefaultValue(false)>]\n        val mutable MethodBuilder: 'Builder\n\n    and TaskBaseStateMachine<'TOverall, 'Builder> =\n        ResumableStateMachine<TaskBaseStateMachineData<'TOverall, 'Builder>>\n\n    and TaskBaseResumptionFunc<'TOverall, 'Builder> =\n        {resumptionFunctionType}<TaskBaseStateMachineData<'TOverall, 'Builder>>\n\n    and TaskBaseResumptionDynamicInfo<'TOverall, 'Builder> =\n        ResumptionDynamicInfo<TaskBaseStateMachineData<'TOverall, 'Builder>>\n\n    and TaskBaseCode<'TOverall, 'T, 'Builder> =\n        ResumableCode<TaskBaseStateMachineData<'TOverall, 'Builder>, 'T>\n"
+
+                    let compile suffix resumptionFunctionType =
+                        File.WriteAllText(sourcePath, sourceText resumptionFunctionType)
+
+                        compileForExportFingerprint
+                            root
+                            responsePath
+                            sourcePath
+                            $"TaskBuilderBase-{suffix}"
+                            []
+
+                    let outputPath, baselineFingerprint = compile "baseline" "ResumptionFunc"
+
+                    use implementationStream = File.OpenRead(outputPath)
+                    use implementation = new PEReader(implementationStream)
+                    let metadata = implementation.GetMetadataReader()
+
+                    let emittedTypeNames =
+                        metadata.TypeDefinitions
+                        |> Seq.map (
+                            metadata.GetTypeDefinition
+                            >> fun definition -> metadata.GetString(definition.Name)
+                        )
+                        |> Seq.toArray
+
+                    Expect.contains
+                        emittedTypeNames
+                        "TaskBaseStateMachineData`2"
+                        "the concrete state-data struct should remain in CLR metadata"
+
+                    for abbreviation in
+                        [|
+                            "TaskBaseStateMachine`2"
+                            "TaskBaseResumptionFunc`2"
+                            "TaskBaseResumptionDynamicInfo`2"
+                            "TaskBaseCode`3"
+                        |] do
+                        Expect.isFalse
+                            (emittedTypeNames
+                             |> Array.contains abbreviation)
+                            $"the type abbreviation {abbreviation} should remain erased"
+
+                    let _, editedFingerprint = compile "edited" "ResumptionDynamicInfo"
+
+                    Expect.notEqual
+                        editedFingerprint
+                        baselineFingerprint
+                        "an alias-target edit must invalidate the exported semantic fingerprint"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "includes referenced declaration identity in alias export fingerprints"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-reference-type-identity",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "Alias.fs")
+                    let responsePath = Path.Combine(root, "compile.rsp")
+                    let firstReferencePath = Path.Combine(root, "FirstReference.dll")
+                    let secondReferencePath = Path.Combine(root, "SecondReference.dll")
+
+                    writeReferenceTypeAssembly
+                        firstReferencePath
+                        "FirstReference"
+                        "Collision"
+                        "Shared`1"
+
+                    writeReferenceTypeAssembly
+                        secondReferencePath
+                        "SecondReference"
+                        "Collision"
+                        "Shared`1"
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "namespace Collision\ntype Alias<'T> = Shared<'T>\n"
+                    )
+
+                    let compile referencePath outputName =
+                        compileForExportFingerprint root responsePath sourcePath outputName [
+                            referencePath
+                        ]
+                        |> snd
+
+                    let firstFingerprint = compile firstReferencePath "first"
+                    let secondFingerprint = compile secondReferencePath "second"
+
+                    Expect.notEqual
+                        secondFingerprint
+                        firstFingerprint
+                        "the referenced assembly is part of an exported alias target's identity"
                 finally
                     Directory.Delete(root, true)
 
@@ -3521,7 +3763,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "10"
+                        "11"
                         "query cache evidence should be versioned"
 
                     Expect.equal

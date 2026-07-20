@@ -37,10 +37,11 @@ module private TypeIdentity =
 
     let rec expression =
         function
-        | TypedNamedType typeName ->
+        | TypedNamedType resolvedType ->
             Fingerprint.parts [
                 "named"
-                qualifiedName typeName
+                qualifiedName resolvedType.TypeName
+                resolvedType.DeclarationId
             ]
         | TypedTypeParameter name ->
             Fingerprint.parts [
@@ -146,7 +147,8 @@ module private TypeIdentity =
     let attributeArgument =
         function
         | TypedBooleanAttributeArgument value -> if value then "bool:true" else "bool:false"
-        | TypedSourceConstructAttributeArgument ObjectTypeConstruct -> "source-construct:object-type"
+        | TypedSourceConstructAttributeArgument ObjectTypeConstruct ->
+            "source-construct:object-type"
         | TypedSourceConstructAttributeArgument ModuleConstruct -> "source-construct:module"
 
     let customAttribute (attribute: TypedCustomAttribute) =
@@ -258,17 +260,46 @@ type internal CompilerService() =
                 )
                 |> Map.ofList
 
-            let localTypeNames =
-                parsed.Declarations
-                |> List.choose (
-                    function
-                    | ParsedTypeAbbreviation declaration -> Some declaration.Name
-                    | ParsedStaticType declaration -> Some declaration.Name
-                    | ParsedStructType declaration -> Some declaration.Name
-                    | ParsedMethod _
-                    | ParsedLiteralField _ -> None
-                )
-                |> HashSet<string>
+            let localTypes = Dictionary<TypeNameArity, ResolvedTypeName>()
+
+            for declaration in parsed.Declarations do
+                match ParsedDeclaration.tryTypeIdentity parsed.StableId declaration with
+                | Some(key, declarationId) ->
+                    localTypes.TryAdd(
+                        key,
+                        {
+                            TypeName = {
+                                Namespace = parsed.Namespace
+                                Name = key.Name
+                            }
+                            DeclarationId = declarationId
+                        }
+                    )
+                    |> ignore
+                | None -> ()
+
+            let resolveNamedType
+                (genericArity: int)
+                (typeName: QualifiedTypeName)
+                (range: SourceRange)
+                =
+                let localKey = ReferenceTypeName.simpleKey typeName.Name genericArity
+
+                match
+                    String.IsNullOrEmpty(typeName.Namespace), localTypes.TryGetValue(localKey)
+                with
+                | true, (true, resolved) -> Ok(TypedNamedType resolved)
+                | _ ->
+                    match
+                        references.Resolve(
+                            parsed.Namespace,
+                            parsed.OpenedNamespaces,
+                            typeName,
+                            genericArity
+                        )
+                    with
+                    | Ok resolved -> Ok(TypedNamedType resolved)
+                    | Error message -> diagnostic range message
 
             let rec resolveType (declaredParameters: HashSet<string>) =
                 function
@@ -277,23 +308,7 @@ type internal CompilerService() =
                         Ok(TypedTypeParameter name)
                     else
                         diagnostic range $"the type parameter '{name}' is not declared"
-                | ParsedNamedType(typeName, range) ->
-                    if
-                        String.IsNullOrEmpty(typeName.Namespace)
-                        && localTypeNames.Contains(typeName.Name)
-                    then
-                        Ok(
-                            TypedNamedType {
-                                Namespace = parsed.Namespace
-                                Name = typeName.Name
-                            }
-                        )
-                    else
-                        match
-                            references.Resolve(parsed.Namespace, parsed.OpenedNamespaces, typeName)
-                        with
-                        | Ok resolved -> Ok(TypedNamedType resolved)
-                        | Error message -> diagnostic range message
+                | ParsedNamedType(typeName, range) -> resolveNamedType 0 typeName range
                 | ParsedGenericTypeApplication(ParsedNamedType(typeName, _), [ argument ], _) when
                     String.IsNullOrEmpty(typeName.Namespace)
                     && typeName.Name = "byref"
@@ -301,7 +316,13 @@ type internal CompilerService() =
                     resolveType declaredParameters argument
                     |> Result.map TypedByRefType
                 | ParsedGenericTypeApplication(genericType, arguments, _) ->
-                    match resolveType declaredParameters genericType with
+                    let typedGenericType =
+                        match genericType with
+                        | ParsedNamedType(typeName, range) ->
+                            resolveNamedType arguments.Length typeName range
+                        | _ -> resolveType declaredParameters genericType
+
+                    match typedGenericType with
                     | Error error -> Error error
                     | Ok typedGenericType ->
                         let rec resolveArguments resolved =
@@ -658,14 +679,14 @@ type internal CompilerService() =
                                     diagnostic
                                         range
                                         $"the method type parameter '{name}' is not declared"
-                            | TypedNamedType typeName when
-                                typeName.Namespace = "System"
-                                && typeName.Name = "Boolean"
+                            | TypedNamedType resolvedType when
+                                resolvedType.TypeName.Namespace = "System"
+                                && resolvedType.TypeName.Name = "Boolean"
                                 ->
                                 Ok CliBoolean
-                            | TypedNamedType typeName when
-                                typeName.Namespace = "Microsoft.FSharp.Core"
-                                && typeName.Name = "Unit"
+                            | TypedNamedType resolvedType when
+                                resolvedType.TypeName.Namespace = "Microsoft.FSharp.Core"
+                                && resolvedType.TypeName.Name = "Unit"
                                 ->
                                 Ok CliVoid
                             | TypedByRefType elementType ->
@@ -983,19 +1004,19 @@ type internal CompilerService() =
                             | Some index -> Ok(CliTypeParameter index)
                             | None ->
                                 diagnostic range $"the type parameter '{name}' is not declared"
-                        | TypedNamedType typeName when
-                            typeName.Namespace = "System"
-                            && typeName.Name = "Int32"
+                        | TypedNamedType resolvedType when
+                            resolvedType.TypeName.Namespace = "System"
+                            && resolvedType.TypeName.Name = "Int32"
                             ->
                             Ok CliInt32
-                        | TypedNamedType typeName when
-                            typeName.Namespace = "System"
-                            && typeName.Name = "Boolean"
+                        | TypedNamedType resolvedType when
+                            resolvedType.TypeName.Namespace = "System"
+                            && resolvedType.TypeName.Name = "Boolean"
                             ->
                             Ok CliBoolean
-                        | TypedNamedType typeName when
-                            typeName.Namespace = "System"
-                            && typeName.Name = "String"
+                        | TypedNamedType resolvedType when
+                            resolvedType.TypeName.Namespace = "System"
+                            && resolvedType.TypeName.Name = "String"
                             ->
                             Ok CliString
                         | typedType ->
@@ -1539,12 +1560,9 @@ type internal CompilerService() =
                 methodDeclaration.Constraints
                 |> List.choose (
                     function
-                    | TypedAbbreviationConstraint(TypedGenericTypeApplication(TypedNamedType typeName,
+                    | TypedAbbreviationConstraint(TypedGenericTypeApplication(TypedNamedType resolvedType,
                                                                               _)) ->
-                        Some(
-                            "type-abbreviation:"
-                            + TypeIdentity.qualifiedName typeName
-                        )
+                        Some resolvedType.DeclarationId
                     | TypedAbbreviationConstraint _
                     | TypedDirectConstraint _ -> None
                 )

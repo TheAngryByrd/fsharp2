@@ -5,7 +5,7 @@ open System.Collections.Immutable
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 10
+    let Query = 11
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -129,6 +129,21 @@ type internal QualifiedTypeName = {
 } with
 
     override _.ToString() = "QualifiedTypeName"
+
+[<Struct>]
+type internal TypeNameArity = {
+    Name: string
+    GenericArity: int
+} with
+
+    override _.ToString() = "TypeNameArity"
+
+type internal ResolvedTypeName = {
+    TypeName: QualifiedTypeName
+    DeclarationId: string
+} with
+
+    override _.ToString() = "ResolvedTypeName"
 
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
 type internal ParsedAttributeArgument =
@@ -287,6 +302,46 @@ type internal ParsedDeclaration =
 
     override _.ToString() = "ParsedDeclaration"
 
+module internal ParsedDeclaration =
+    let tryTypeIdentity moduleStableId =
+        function
+        | ParsedTypeAbbreviation declaration ->
+            Some(
+                {
+                    Name = declaration.Name
+                    GenericArity = declaration.TypeParameters.Length
+                },
+                moduleStableId
+                + "/type-abbreviation:"
+                + declaration.Name
+            )
+        | ParsedStaticType declaration ->
+            Some(
+                {
+                    Name = declaration.Name
+                    GenericArity = 0
+                },
+                moduleStableId
+                + "/type:"
+                + declaration.Name
+            )
+        | ParsedStructType declaration ->
+            Some(
+                {
+                    Name = declaration.Name
+                    GenericArity = declaration.TypeParameters.Length
+                },
+                moduleStableId
+                + "/type:"
+                + declaration.Name
+            )
+        | ParsedMethod _
+        | ParsedLiteralField _ -> None
+
+    let isTypeDeclaration declaration =
+        tryTypeIdentity String.Empty declaration
+        |> Option.isSome
+
 type internal ParsedNamedStringArgument = {
     Name: string
     Value: string
@@ -357,7 +412,7 @@ type internal TypedExpression =
 
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
 type internal TypedTypeExpression =
-    | TypedNamedType of QualifiedTypeName
+    | TypedNamedType of ResolvedTypeName
     | TypedTypeParameter of string
     | TypedGenericTypeApplication of
         genericType: TypedTypeExpression *

@@ -424,8 +424,7 @@ module internal Linker =
                         match attribute.Kind, argument with
                         | DefaultValueAttribute, TypedBooleanAttributeArgument _ ->
                             parameter.Boolean()
-                        | CompilationMappingAttribute,
-                          TypedSourceConstructAttributeArgument _ ->
+                        | CompilationMappingAttribute, TypedSourceConstructAttributeArgument _ ->
                             parameter.Type(sourceConstructFlags, true)
                         | _ ->
                             invalidOp
@@ -535,7 +534,9 @@ module internal Linker =
 
         let rec invalidTypeExpression =
             function
-            | TypedNamedType typeName -> String.IsNullOrWhiteSpace(typeName.Name)
+            | TypedNamedType resolvedType ->
+                String.IsNullOrWhiteSpace(resolvedType.TypeName.Name)
+                || String.IsNullOrWhiteSpace(resolvedType.DeclarationId)
             | TypedTypeParameter name -> String.IsNullOrWhiteSpace(name)
             | TypedGenericTypeApplication(genericType, arguments) ->
                 invalidTypeExpression genericType

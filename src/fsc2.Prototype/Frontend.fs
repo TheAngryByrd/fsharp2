@@ -1264,7 +1264,19 @@ module internal Frontend =
 
                 let parseTypeDeclaration attributes =
                     parseResult {
-                        let! typeToken = expected TypeKeyword "expected 'type'"
+                        let declarationToken = consume ()
+
+                        let! typeToken =
+                            match declarationToken.Kind with
+                            | TypeKeyword
+                            | AndKeyword -> Ok declarationToken
+                            | _ ->
+                                Error(
+                                    prototypeDiagnostic
+                                        source.Path
+                                        declarationToken.Range
+                                        "expected 'type' or 'and'"
+                                )
 
                         let! declarationName, _ = identifier "expected a type-abbreviation name"
 
@@ -1704,9 +1716,18 @@ module internal Frontend =
                                 }
                     }
 
+                let canStartTypeDeclaration declarations token =
+                    match token with
+                    | TypeKeyword -> true
+                    | AndKeyword ->
+                        match declarations with
+                        | declaration :: _ -> ParsedDeclaration.isTypeDeclaration declaration
+                        | _ -> false
+                    | _ -> false
+
                 let rec parseTypeAbbreviations declarations =
                     match (current ()).Kind with
-                    | TypeKeyword ->
+                    | token when canStartTypeDeclaration declarations token ->
                         parseResult {
                             let! declaration = parseTypeDeclaration []
 
@@ -1737,7 +1758,7 @@ module internal Frontend =
                                     :: declarations
                                 )
                         }
-                    | TypeKeyword ->
+                    | token when canStartTypeDeclaration declarations token ->
                         parseResult {
                             let! declaration = parseTypeDeclaration []
 
@@ -1753,7 +1774,8 @@ module internal Frontend =
 
                             let! declaration =
                                 match (current ()).Kind with
-                                | TypeKeyword -> parseTypeDeclaration attributes
+                                | token when canStartTypeDeclaration declarations token ->
+                                    parseTypeDeclaration attributes
                                 | _ ->
                                     Error(
                                         prototypeDiagnostic
