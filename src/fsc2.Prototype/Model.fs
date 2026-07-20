@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 44
+    let Query = 45
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -359,7 +359,7 @@ type internal ParsedObjectMethodDeclaration =
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
 type internal ParsedObjectTypeContainer =
     | OrdinaryObjectType
-    | ParsedCurrentModuleAugmentation
+    | ParsedCurrentModuleAugmentation of targetTypeName: QualifiedTypeName
     | ParsedExtensionModule of name: string * attributes: ParsedAttribute list
 
     override _.ToString() = "ParsedObjectTypeContainer"
@@ -457,7 +457,7 @@ module internal ParsedDeclaration =
                     + "/type:"
                     + declaration.Name
                 )
-            | ParsedCurrentModuleAugmentation
+            | ParsedCurrentModuleAugmentation _
             | ParsedExtensionModule _ -> None
         | ParsedStructType declaration ->
             Some(

@@ -1668,10 +1668,10 @@ type internal CompilerService() =
                             parsed.StableId
                             + "/type:"
                             + declaration.Name
-                        | ParsedCurrentModuleAugmentation ->
+                        | ParsedCurrentModuleAugmentation targetTypeName ->
                             parsed.StableId
                             + "/augmentation:"
-                            + declaration.Name
+                            + StableIdentity.qualifiedTypeName targetTypeName
                         | ParsedExtensionModule(moduleName, _) ->
                             parsed.StableId
                             + "/module:"
@@ -4053,12 +4053,7 @@ type internal CompilerService() =
                         let typedContainer =
                             match declaration.Container with
                             | OrdinaryObjectType -> Ok OrdinaryTypedObjectType
-                            | ParsedCurrentModuleAugmentation ->
-                                let targetTypeName = {
-                                    Namespace = String.Empty
-                                    Name = declaration.Name
-                                }
-
+                            | ParsedCurrentModuleAugmentation targetTypeName ->
                                 resolveNamedType 0 targetTypeName declaration.ConstructorRange
                                 |> Result.bind (toCliType Map.empty declaration.ConstructorRange)
                                 |> Result.map TypedCurrentModuleAugmentation

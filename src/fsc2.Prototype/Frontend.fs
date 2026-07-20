@@ -2366,8 +2366,13 @@ module internal Frontend =
                                         "expected 'type' or 'and'"
                                 )
 
-                        let! declarationName, declarationNameToken =
-                            identifier "expected a type-abbreviation name"
+                        let declarationNameToken = current ()
+
+                        let! declaredTypeName =
+                            qualifiedIdentifier "expected a type-abbreviation name"
+                            |> Result.map qualifiedTypeName
+
+                        let declarationName = declaredTypeName.Name
 
                         let parseConstraint () =
                             parseResult {
@@ -2798,7 +2803,9 @@ module internal Frontend =
                                         | Some lastMethod ->
                                             Ok(
                                                 ParsedObjectType {
-                                                    Container = ParsedCurrentModuleAugmentation
+                                                    Container =
+                                                        ParsedCurrentModuleAugmentation
+                                                            declaredTypeName
                                                     Name = declarationName
                                                     Methods = methods
                                                     ConstructorRange = declarationNameToken.Range
@@ -2816,6 +2823,13 @@ module internal Frontend =
                                                     "a type augmentation must declare a member"
                                             )
                                     )
+                            elif not (String.IsNullOrEmpty(declaredTypeName.Namespace)) then
+                                Error(
+                                    prototypeDiagnostic
+                                        source.Path
+                                        declarationNameToken.Range
+                                        "qualified type names are supported only for type augmentations"
+                                )
                             else
                                 match isObjectType, (current ()).Kind with
                                 | true, _ when

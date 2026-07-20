@@ -4900,7 +4900,7 @@ module CompilerTargetTests =
             testCase "emits a static type augmentation in the current module"
             <| fun _ ->
                 let sourceText =
-                    "namespace IcedTasks.ValueTasks\n\nopen System\n\n[<AutoOpen>]\nmodule ValueTaskExtensions =\n    type String with\n        static member Echo(value: int) : int = value\n"
+                    "namespace IcedTasks.ValueTasks\n\nopen System\n\n[<AutoOpen>]\nmodule ValueTaskExtensions =\n    type String with\n        static member Echo(value: int) : int = value\n\n    type System.Object with\n        static member Kind() : int = 7\n"
 
                 let root =
                     Path.Combine(
@@ -4956,10 +4956,14 @@ module CompilerTargetTests =
                                 ||| BindingFlags.Static
                             )
 
-                        let extensionMethod =
+                        let augmentationMethod memberName =
                             publicStaticMethods
                             |> Array.tryFind (fun methodInfo ->
-                                methodInfo.Name.Contains(".Echo", StringComparison.Ordinal)
+                                methodInfo.Name.Contains(
+                                    "."
+                                    + memberName,
+                                    StringComparison.Ordinal
+                                )
                             )
                             |> Option.defaultWith (fun () ->
                                 publicStaticMethods
@@ -4969,14 +4973,18 @@ module CompilerTargetTests =
                                     "the source module should expose the static type-augmentation member; found: %s"
                             )
 
-                        extensionMethod.Name,
-                        extensionMethod.Attributes,
-                        (extensionMethod.GetParameters()
-                         |> Array.map (fun parameter ->
-                             parameter.Name, parameter.ParameterType.FullName
-                         )),
-                        extensionMethod.ReturnType.FullName,
-                        (extensionMethod.Invoke(null, [| box 42 |]) :?> int)
+                        let methodShape (methodInfo: MethodInfo) arguments =
+                            methodInfo.Name,
+                            methodInfo.Attributes,
+                            (methodInfo.GetParameters()
+                             |> Array.map (fun parameter ->
+                                 parameter.Name, parameter.ParameterType.FullName
+                             )),
+                            methodInfo.ReturnType.FullName,
+                            (methodInfo.Invoke(null, arguments) :?> int)
+
+                        methodShape (augmentationMethod "Echo") [| box 42 |],
+                        methodShape (augmentationMethod "Kind") Array.empty
 
                     let oracleShape = inspectAndInvoke oracleOutputPath
                     let fsharp2Shape = inspectAndInvoke outputPath
@@ -4986,8 +4994,9 @@ module CompilerTargetTests =
                         oracleShape
                         "the static type augmentation should match the Compatibility Oracle"
 
-                    let _, _, _, _, result = fsharp2Shape
+                    let (_, _, _, _, result), (_, _, _, _, kind) = fsharp2Shape
                     Expect.equal result 42 "Echo should return its argument"
+                    Expect.equal kind 7 "Kind should execute from the qualified augmentation"
 
                     File.WriteAllText(
                         sourcePath,
@@ -5002,7 +5011,7 @@ module CompilerTargetTests =
                             "ValueTask-changed-fsharp2"
                             []
 
-                    let _, _, _, _, changedResult = inspectAndInvoke changedOutputPath
+                    let (_, _, _, _, changedResult), _ = inspectAndInvoke changedOutputPath
                     Expect.equal changedResult 43 "the changed non-inline body should be emitted"
 
                     Expect.equal
@@ -7186,7 +7195,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "44"
+                        "45"
                         "query cache evidence should be versioned"
 
                     Expect.equal
