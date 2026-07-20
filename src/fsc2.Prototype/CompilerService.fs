@@ -207,6 +207,13 @@ module private TypeIdentity =
                     arguments
                     |> List.map inlineBody
             ]
+        | TypedConditional(condition, ifTrue, ifFalse, _, _, _) ->
+            Fingerprint.parts [
+                "conditional"
+                inlineBody condition
+                inlineBody ifTrue
+                inlineBody ifFalse
+            ]
         | TypedResumableCode expression -> resumableCode expression
         | TypedResumableTryFinally expression ->
             Fingerprint.parts [
@@ -1017,6 +1024,7 @@ type internal CompilerService() =
                     | _, SequentialExpression _
                     | _, FunctionApplication _
                     | _, ExpressionMemberCall _
+                    | _, ConditionalExpression _
                     | _, LetExpression _
                     | _, LambdaExpression _
                     | _, TypeConstruction _ ->
@@ -1453,6 +1461,7 @@ type internal CompilerService() =
                             | Ok _, Ok _, SequentialExpression _
                             | Ok _, Ok _, FunctionApplication _
                             | Ok _, Ok _, ExpressionMemberCall _
+                            | Ok _, Ok _, ConditionalExpression _
                             | Ok _, Ok _, LetExpression _
                             | Ok _, Ok _, LambdaExpression _
                             | Ok _, Ok _, TypeConstruction _ ->
@@ -2039,6 +2048,60 @@ type internal CompilerService() =
                                             diagnostic
                                                 methodDeclaration.BodyRange
                                                 "this expression member call is not yet supported"
+                                    | ConditionalExpression(condition,
+                                                            ifTrue,
+                                                            ifFalse,
+                                                            conditionRange,
+                                                            ifTrueRange,
+                                                            ifFalseRange) ->
+                                        match
+                                            typeStaticExpression
+                                                localBindings
+                                                nextLocalIndex
+                                                condition
+                                        with
+                                        | Error error -> Error error
+                                        | Ok(typedCondition, CliBoolean, nextConditionLocalIndex) ->
+                                            match
+                                                typeStaticExpression
+                                                    localBindings
+                                                    nextConditionLocalIndex
+                                                    ifTrue
+                                            with
+                                            | Error error -> Error error
+                                            | Ok(typedIfTrue, ifTrueType, nextIfTrueLocalIndex) ->
+                                                match
+                                                    typeStaticExpression
+                                                        localBindings
+                                                        nextIfTrueLocalIndex
+                                                        ifFalse
+                                                with
+                                                | Error error -> Error error
+                                                | Ok(typedIfFalse,
+                                                     ifFalseType,
+                                                     nextIfFalseLocalIndex) when
+                                                    ifTrueType = ifFalseType
+                                                    ->
+                                                    Ok(
+                                                        TypedConditional(
+                                                            typedCondition,
+                                                            typedIfTrue,
+                                                            typedIfFalse,
+                                                            conditionRange,
+                                                            ifTrueRange,
+                                                            ifFalseRange
+                                                        ),
+                                                        ifTrueType,
+                                                        nextIfFalseLocalIndex
+                                                    )
+                                                | Ok _ ->
+                                                    diagnostic
+                                                        methodDeclaration.BodyRange
+                                                        "the if expression branches do not have the same type"
+                                        | Ok _ ->
+                                            diagnostic
+                                                methodDeclaration.BodyRange
+                                                "the if expression condition is not bool"
                                     | LetExpression(bindingName,
                                                     value,
                                                     body,
@@ -2709,6 +2772,7 @@ type internal CompilerService() =
                                 | SequentialExpression _
                                 | FunctionApplication _
                                 | ExpressionMemberCall _
+                                | ConditionalExpression _
                                 | LetExpression _
                                 | LambdaExpression _
                                 | TypeConstruction _ ->
@@ -2747,6 +2811,7 @@ type internal CompilerService() =
                                     | TypedStaticMethodCall _
                                     | TypedFunctionApplication _
                                     | TypedInstanceMethodCall _
+                                    | TypedConditional _
                                     | TypedResumableTryFinally _
                                     | TypedTraitCall _ -> methodDeclaration.BodyRange
 
@@ -3578,16 +3643,18 @@ type internal CompilerService() =
                     NewObject delegateConstructor
                 ]
 
-            let rec valueExpressionInstructions kind =
+            let rec valueExpressionInstructions freshLabel kind =
                 function
                 | TypedIntegerLiteral value -> [ LoadInt32 value ], []
                 | TypedParameterReference index ->
                     [ LoadArgument(methodArgumentIndex kind index) ], []
                 | TypedLocalReference index -> [ LoadLocal index ], []
                 | TypedLet(localIndex, name, localType, value, body, bindingRange, bodyRange) ->
-                    let valueInstructions, valueLocals = valueExpressionInstructions kind value
+                    let valueInstructions, valueLocals =
+                        valueExpressionInstructions freshLabel kind value
 
-                    let bodyInstructions, bodyLocals = valueExpressionInstructions kind body
+                    let bodyInstructions, bodyLocals =
+                        valueExpressionInstructions freshLabel kind body
 
                     [ MarkSequencePoint bindingRange ]
                     @ valueInstructions
@@ -3608,7 +3675,7 @@ type internal CompilerService() =
                 | TypedStaticMethodCall(target, genericArguments, arguments) ->
                     let loweredArguments =
                         arguments
-                        |> List.map (valueExpressionInstructions kind)
+                        |> List.map (valueExpressionInstructions freshLabel kind)
 
                     let methodReference = {
                         DeclaringType = CliDeclaringType(CliNamedType target.DeclaringType)
@@ -3637,10 +3704,10 @@ type internal CompilerService() =
                                            functionExpression,
                                            argumentExpression) ->
                     let functionInstructions, functionLocals =
-                        valueExpressionInstructions kind functionExpression
+                        valueExpressionInstructions freshLabel kind functionExpression
 
                     let argumentInstructions, argumentLocals =
-                        valueExpressionInstructions kind argumentExpression
+                        valueExpressionInstructions freshLabel kind argumentExpression
 
                     let invoke = {
                         DeclaringType = CliDeclaringType functionType
@@ -3659,11 +3726,11 @@ type internal CompilerService() =
                     @ argumentLocals
                 | TypedInstanceMethodCall(target, receiver, arguments) ->
                     let receiverInstructions, receiverLocals =
-                        valueExpressionInstructions kind receiver
+                        valueExpressionInstructions freshLabel kind receiver
 
                     let loweredArguments =
                         arguments
-                        |> List.map (valueExpressionInstructions kind)
+                        |> List.map (valueExpressionInstructions freshLabel kind)
 
                     let methodReference = {
                         DeclaringType = CliDeclaringType target.DeclaringType
@@ -3682,11 +3749,61 @@ type internal CompilerService() =
                     receiverLocals
                     @ (loweredArguments
                        |> List.collect snd)
+                | TypedConditional(condition,
+                                   ifTrue,
+                                   ifFalse,
+                                   conditionRange,
+                                   ifTrueRange,
+                                   ifFalseRange) ->
+                    let falseLabel = freshLabel ()
+                    let endLabel = freshLabel ()
+
+                    let conditionInstructions, conditionLocals =
+                        valueExpressionInstructions freshLabel kind condition
+
+                    let ifTrueInstructions, ifTrueLocals =
+                        valueExpressionInstructions freshLabel kind ifTrue
+
+                    let ifFalseInstructions, ifFalseLocals =
+                        valueExpressionInstructions freshLabel kind ifFalse
+
+                    [
+                        MarkSequencePoint conditionRange
+                        Nop
+                        MarkHiddenSequencePoint
+                    ]
+                    @ conditionInstructions
+                    @ [
+                        BranchIfFalse falseLabel
+                        MarkSequencePoint ifTrueRange
+                    ]
+                    @ ifTrueInstructions
+                    @ [
+                        Branch endLabel
+                        MarkLabel falseLabel
+                        MarkSequencePoint ifFalseRange
+                    ]
+                    @ ifFalseInstructions
+                    @ [ MarkLabel endLabel ],
+                    conditionLocals
+                    @ ifTrueLocals
+                    @ ifFalseLocals
                 | TypedResumableCode _
                 | TypedResumableTryFinally _
                 | TypedTraitCall _ -> invalidOp "this expression cannot be lowered as a local value"
 
             let methodInstructions kind (methodDeclaration: TypedMethodDeclaration) =
+                let mutable nextLabel = 0
+
+                let freshLabel () =
+                    let label = nextLabel
+
+                    nextLabel <-
+                        nextLabel
+                        + 1
+
+                    label
+
                 match methodDeclaration.Body with
                 | TypedIntegerLiteral value ->
                     [
@@ -3700,8 +3817,9 @@ type internal CompilerService() =
                         Return
                     ],
                     []
-                | (TypedLocalReference _ | TypedLet _ | TypedStaticMethodCall _ | TypedFunctionApplication _ | TypedInstanceMethodCall _) as expression ->
-                    let instructions, locals = valueExpressionInstructions kind expression
+                | (TypedLocalReference _ | TypedLet _ | TypedStaticMethodCall _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _) as expression ->
+                    let instructions, locals =
+                        valueExpressionInstructions freshLabel kind expression
 
                     instructions
                     @ [ Return ],
@@ -3929,6 +4047,11 @@ type internal CompilerService() =
                             methodReference.DependencyId
                             :: (genericArguments
                                 |> List.collect cliTypeDependencyIds)
+                        | MarkHiddenSequencePoint
+                        | MarkLabel _
+                        | BranchIfFalse _
+                        | Branch _
+                        | Nop
                         | LoadInt32 _
                         | LoadString _
                         | LoadNull
@@ -3969,7 +4092,8 @@ type internal CompilerService() =
                         | TypedTraitCall _ -> 1
                         | TypedStaticMethodCall _
                         | TypedFunctionApplication _
-                        | TypedInstanceMethodCall _ -> 8
+                        | TypedInstanceMethodCall _
+                        | TypedConditional _ -> 8
                     DependencyIds =
                         methodDependencies methodDeclaration
                         @ instructionDependencies
@@ -4270,6 +4394,7 @@ type internal CompilerService() =
                                     | TypedStaticMethodCall _
                                     | TypedFunctionApplication _
                                     | TypedInstanceMethodCall _
+                                    | TypedConditional _
                                     | TypedTraitCall _ -> None
 
                                 match closureExpression with

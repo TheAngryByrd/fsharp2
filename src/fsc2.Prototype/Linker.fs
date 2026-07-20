@@ -433,8 +433,18 @@ module internal Linker =
         (methodFragment: SymbolicMethodFragment)
         =
         let code = BlobBuilder()
-        let instructions = InstructionEncoder(code)
-        let sequencePoints = ResizeArray<int * SourceRange>()
+        let controlFlow = ControlFlowBuilder()
+        let instructions = InstructionEncoder(code, controlFlow)
+        let sequencePoints = ResizeArray<int * SourceRange option>()
+        let labels = Dictionary<int, LabelHandle>()
+
+        let resolveLabel label =
+            match labels.TryGetValue(label) with
+            | true, handle -> handle
+            | false, _ ->
+                let handle = instructions.DefineLabel()
+                labels.Add(label, handle)
+                handle
 
         let localSignature =
             if List.isEmpty methodFragment.Locals then
@@ -480,7 +490,12 @@ module internal Linker =
 
         for instruction in methodFragment.Instructions do
             match instruction with
-            | MarkSequencePoint range -> sequencePoints.Add(instructions.Offset, range)
+            | MarkSequencePoint range -> sequencePoints.Add(instructions.Offset, Some range)
+            | MarkHiddenSequencePoint -> sequencePoints.Add(instructions.Offset, None)
+            | MarkLabel label -> instructions.MarkLabel(resolveLabel label)
+            | BranchIfFalse label -> instructions.Branch(ILOpCode.Brfalse, resolveLabel label)
+            | Branch label -> instructions.Branch(ILOpCode.Br, resolveLabel label)
+            | Nop -> instructions.OpCode(ILOpCode.Nop)
             | LoadInt32 value -> instructions.LoadConstantI4(value)
             | LoadString value ->
                 value
@@ -662,14 +677,14 @@ module internal Linker =
 
     let private encodeSequencePoints
         (localSignature: StandaloneSignatureHandle)
-        (instructionSequencePoints: (int * SourceRange) list)
+        (instructionSequencePoints: (int * SourceRange option) list)
         (methodFragment: SymbolicMethodFragment)
         =
         let sequencePoints = BlobBuilder()
 
         let points =
             match instructionSequencePoints with
-            | [] -> [ 0, methodFragment.Range ]
+            | [] -> [ 0, Some methodFragment.Range ]
             | points -> points
 
         let localSignatureRow =
@@ -683,6 +698,7 @@ module internal Linker =
         let mutable previousOffset = 0
         let mutable previousStartLine = 0
         let mutable previousStartColumn = 0
+        let mutable hasPreviousVisiblePoint = false
 
         points
         |> List.iteri (fun index (offset, range) ->
@@ -696,39 +712,47 @@ module internal Linker =
                     offset
                     - previousOffset
 
-            let deltaLines =
-                range.End.Line
-                - range.Start.Line
-
-            let deltaColumns =
-                range.End.Column
-                - range.Start.Column
-
             sequencePoints.WriteCompressedInteger(offsetDelta)
-            sequencePoints.WriteCompressedInteger(deltaLines)
 
-            if deltaLines = 0 then
-                sequencePoints.WriteCompressedInteger(deltaColumns)
-            else
-                sequencePoints.WriteCompressedSignedInteger(deltaColumns)
+            match range with
+            | None ->
+                sequencePoints.WriteCompressedInteger(0)
+                sequencePoints.WriteCompressedInteger(0)
+            | Some range ->
+                let deltaLines =
+                    range.End.Line
+                    - range.Start.Line
 
-            if index = 0 then
-                sequencePoints.WriteCompressedInteger(range.Start.Line)
-                sequencePoints.WriteCompressedInteger(range.Start.Column)
-            else
-                sequencePoints.WriteCompressedSignedInteger(
-                    range.Start.Line
-                    - previousStartLine
-                )
+                let deltaColumns =
+                    range.End.Column
+                    - range.Start.Column
 
-                sequencePoints.WriteCompressedSignedInteger(
-                    range.Start.Column
-                    - previousStartColumn
-                )
+                sequencePoints.WriteCompressedInteger(deltaLines)
+
+                if deltaLines = 0 then
+                    sequencePoints.WriteCompressedInteger(deltaColumns)
+                else
+                    sequencePoints.WriteCompressedSignedInteger(deltaColumns)
+
+                if not hasPreviousVisiblePoint then
+                    sequencePoints.WriteCompressedInteger(range.Start.Line)
+                    sequencePoints.WriteCompressedInteger(range.Start.Column)
+                    hasPreviousVisiblePoint <- true
+                else
+                    sequencePoints.WriteCompressedSignedInteger(
+                        range.Start.Line
+                        - previousStartLine
+                    )
+
+                    sequencePoints.WriteCompressedSignedInteger(
+                        range.Start.Column
+                        - previousStartColumn
+                    )
+
+                previousStartLine <- range.Start.Line
+                previousStartColumn <- range.Start.Column
 
             previousOffset <- offset
-            previousStartLine <- range.Start.Line
-            previousStartColumn <- range.Start.Column
         )
 
         sequencePoints

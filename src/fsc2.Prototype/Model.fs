@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 27
+    let Query = 28
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -191,6 +191,13 @@ type internal ParsedExpression =
         receiver: ParsedExpression *
         memberName: string *
         arguments: ParsedExpression list
+    | ConditionalExpression of
+        condition: ParsedExpression *
+        ifTrue: ParsedExpression *
+        ifFalse: ParsedExpression *
+        conditionRange: SourceRange *
+        ifTrueRange: SourceRange *
+        ifFalseRange: SourceRange
     | LetExpression of
         bindingName: string *
         value: ParsedExpression *
@@ -668,6 +675,13 @@ type internal TypedExpression =
         target: TypedInstanceMethodCallTarget *
         receiver: TypedExpression *
         arguments: TypedExpression list
+    | TypedConditional of
+        condition: TypedExpression *
+        ifTrue: TypedExpression *
+        ifFalse: TypedExpression *
+        conditionRange: SourceRange *
+        ifTrueRange: SourceRange *
+        ifFalseRange: SourceRange
     | TypedResumableCode of TypedResumableCodeExpression
     | TypedResumableTryFinally of TypedResumableTryFinallyExpression
     | TypedTraitCall of
@@ -923,6 +937,11 @@ type internal SymbolicFieldReference = {
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
 type internal SymbolicInstruction =
     | MarkSequencePoint of SourceRange
+    | MarkHiddenSequencePoint
+    | MarkLabel of int
+    | BranchIfFalse of int
+    | Branch of int
+    | Nop
     | LoadInt32 of int
     | LoadString of string
     | LoadNull

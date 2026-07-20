@@ -4103,6 +4103,37 @@ module CompilerTargetTests =
 
                     Expect.equal fsharp2Behavior "42" "Run should invoke the returned delegate"
 
+            testCase "executes an if-then-else expression"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Choose(condition: bool) : int =\n            if condition then 42 else 0\n"
+
+                withObjectMemberDifferential "fsharp2-if-then-else" sourceText "Choose"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeChoose assemblyPath condition =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        builderType.GetMethod("Choose").Invoke(null, [| box condition |]) :?> int
+
+                    let oracleBehavior =
+                        invokeChoose oracleOutputPath false, invokeChoose oracleOutputPath true
+
+                    let fsharp2Behavior =
+                        invokeChoose outputPath false, invokeChoose outputPath true
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the emitted conditional should behave like the Compatibility Oracle"
+
+                    Expect.equal fsharp2Behavior (0, 42) "Choose should select one branch"
+
             testCase "retained service invalidates an IcedTasks inline object-member edit"
             <| fun _ ->
                 let root =
@@ -6210,7 +6241,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "27"
+                        "28"
                         "query cache evidence should be versioned"
 
                     Expect.equal

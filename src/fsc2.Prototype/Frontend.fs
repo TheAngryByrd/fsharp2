@@ -26,6 +26,9 @@ module internal Frontend =
         | ValKeyword
         | MutableKeyword
         | FunKeyword
+        | IfKeyword
+        | ThenKeyword
+        | ElseKeyword
         | Identifier of string
         | TypeParameter of string
         | Integer of int
@@ -380,6 +383,9 @@ module internal Frontend =
                 | "val" -> add ValKeyword start
                 | "mutable" -> add MutableKeyword start
                 | "fun" -> add FunKeyword start
+                | "if" -> add IfKeyword start
+                | "then" -> add ThenKeyword start
+                | "else" -> add ElseKeyword start
                 | _ -> add (Identifier value) start
             elif Char.IsDigit(current) then
                 let start = position ()
@@ -902,6 +908,35 @@ module internal Frontend =
                             }
 
                         return! parseApplications firstExpression firstRange
+                    }
+                | IfKeyword ->
+                    parseResult {
+                        let! ifToken = expected IfKeyword "expected 'if'"
+                        let! condition, _ = parseExpression ()
+
+                        let! thenToken =
+                            expected ThenKeyword "expected 'then' after an if condition"
+
+                        let! ifTrue, ifTrueRange = parseExpression ()
+                        let! _ = expected ElseKeyword "expected 'else' after an if branch"
+                        let! ifFalse, ifFalseRange = parseExpression ()
+
+                        return
+                            ConditionalExpression(
+                                condition,
+                                ifTrue,
+                                ifFalse,
+                                {
+                                    Start = ifToken.Range.Start
+                                    End = thenToken.Range.End
+                                },
+                                ifTrueRange,
+                                ifFalseRange
+                            ),
+                            {
+                                Start = ifToken.Range.Start
+                                End = ifFalseRange.End
+                            }
                     }
                 | LetKeyword ->
                     parseResult {
