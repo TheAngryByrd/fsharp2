@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 29
+    let Query = 30
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -199,6 +199,7 @@ type internal ParsedExpression =
         ifTrueRange: SourceRange *
         ifFalseRange: SourceRange
     | ExplicitUpcastExpression of expression: ParsedExpression * targetType: ParsedTypeExpression
+    | SequentialValueExpression of (ParsedExpression * SourceRange) list
     | LetExpression of
         bindingName: string *
         value: ParsedExpression *
@@ -688,6 +689,7 @@ type internal TypedExpression =
         targetType: CliType *
         targetResolvedType: ResolvedTypeName *
         expression: TypedExpression
+    | TypedSequential of (TypedExpression * CliType * SourceRange) list
     | TypedResumableCode of TypedResumableCodeExpression
     | TypedResumableTryFinally of TypedResumableTryFinallyExpression
     | TypedTraitCall of

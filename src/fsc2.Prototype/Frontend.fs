@@ -928,15 +928,85 @@ module internal Frontend =
                     }
                 | IfKeyword ->
                     parseResult {
+                        let sequenceExpression expressions =
+                            let expressions = List.rev expressions
+
+                            match expressions with
+                            | [ expression, range ] -> expression, range
+                            | _ ->
+                                let _, firstRange = List.head expressions
+                                let _, lastRange = List.last expressions
+
+                                SequentialValueExpression expressions,
+                                {
+                                    Start = firstRange.Start
+                                    End = lastRange.End
+                                }
+
                         let! ifToken = expected IfKeyword "expected 'if'"
                         let! condition, _ = parseExpression ()
 
                         let! thenToken =
                             expected ThenKeyword "expected 'then' after an if condition"
 
-                        let! ifTrue, ifTrueRange = parseExpression ()
+                        let ifTrueIndent = (current ()).Range.Start.Column
+                        let! firstIfTrue, firstIfTrueRange = parseExpression ()
+
+                        let rec parseIfTrue expressions =
+                            match (current ()).Kind with
+                            | ElseKeyword -> Ok(sequenceExpression expressions)
+                            | _ when
+                                (current ()).Range.Start.Column
+                                >= ifTrueIndent
+                                ->
+                                parseExpression ()
+                                |> Result.bind (fun expression ->
+                                    parseIfTrue (
+                                        expression
+                                        :: expressions
+                                    )
+                                )
+                            | _ ->
+                                Error(
+                                    prototypeDiagnostic
+                                        source.Path
+                                        (current ()).Range
+                                        "expected 'else' after an if branch"
+                                )
+
+                        let! ifTrue, ifTrueRange = parseIfTrue [ firstIfTrue, firstIfTrueRange ]
+
                         let! _ = expected ElseKeyword "expected 'else' after an if branch"
-                        let! ifFalse, ifFalseRange = parseExpression ()
+                        let ifFalseIndent = (current ()).Range.Start.Column
+                        let! firstIfFalse, firstIfFalseRange = parseExpression ()
+
+                        let rec parseIfFalse expressions =
+                            let token = current ()
+
+                            match token.Kind with
+                            | RightParenthesis
+                            | EndOfFile
+                            | MemberKeyword
+                            | StaticKeyword
+                            | AttributeStart
+                            | TypeKeyword
+                            | AndKeyword
+                            | ElseKeyword -> Ok(sequenceExpression expressions)
+                            | _ when
+                                token.Range.Start.Column
+                                >= ifFalseIndent
+                                ->
+                                parseExpression ()
+                                |> Result.bind (fun expression ->
+                                    parseIfFalse (
+                                        expression
+                                        :: expressions
+                                    )
+                                )
+                            | _ -> Ok(sequenceExpression expressions)
+
+                        let! ifFalse, ifFalseRange =
+                            parseIfFalse [ firstIfFalse, firstIfFalseRange ]
 
                         return
                             ConditionalExpression(

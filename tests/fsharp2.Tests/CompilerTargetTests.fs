@@ -4134,6 +4134,45 @@ module CompilerTargetTests =
 
                     Expect.equal fsharp2Behavior (0, 42) "Choose should select one branch"
 
+            testCase "executes a multi-expression conditional branch"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline ChooseMany(condition: bool) : int =\n            if condition then\n                42\n            else\n                1\n                0\n"
+
+                withObjectMemberDifferential
+                    "fsharp2-multi-expression-conditional"
+                    sourceText
+                    "ChooseMany"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeChooseMany assemblyPath condition =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        builderType.GetMethod("ChooseMany").Invoke(null, [| box condition |])
+                        :?> int
+
+                    let oracleBehavior =
+                        invokeChooseMany oracleOutputPath false,
+                        invokeChooseMany oracleOutputPath true
+
+                    let fsharp2Behavior =
+                        invokeChooseMany outputPath false, invokeChooseMany outputPath true
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the emitted branch sequence should behave like the Compatibility Oracle"
+
+                    Expect.equal
+                        fsharp2Behavior
+                        (0, 42)
+                        "ChooseMany should return the final expression in its selected branch"
+
             testCase "executes a constrained generic upcast"
             <| fun _ ->
                 let sourceText =
@@ -6283,7 +6322,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "29"
+                        "30"
                         "query cache evidence should be versioned"
 
                     Expect.equal

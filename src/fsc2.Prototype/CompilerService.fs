@@ -221,6 +221,17 @@ module private TypeIdentity =
                 cliType targetType
                 inlineBody expression
             ]
+        | TypedSequential expressions ->
+            Fingerprint.parts [
+                "sequence"
+
+                yield!
+                    expressions
+                    |> List.collect (fun (expression, expressionType, _) -> [
+                        cliType expressionType
+                        inlineBody expression
+                    ])
+            ]
         | TypedResumableCode expression -> resumableCode expression
         | TypedResumableTryFinally expression ->
             Fingerprint.parts [
@@ -1033,6 +1044,7 @@ type internal CompilerService() =
                     | _, ExpressionMemberCall _
                     | _, ConditionalExpression _
                     | _, ExplicitUpcastExpression _
+                    | _, SequentialValueExpression _
                     | _, LetExpression _
                     | _, LambdaExpression _
                     | _, TypeConstruction _ ->
@@ -1471,6 +1483,7 @@ type internal CompilerService() =
                             | Ok _, Ok _, ExpressionMemberCall _
                             | Ok _, Ok _, ConditionalExpression _
                             | Ok _, Ok _, ExplicitUpcastExpression _
+                            | Ok _, Ok _, SequentialValueExpression _
                             | Ok _, Ok _, LetExpression _
                             | Ok _, Ok _, LambdaExpression _
                             | Ok _, Ok _, TypeConstruction _ ->
@@ -2155,6 +2168,46 @@ type internal CompilerService() =
                                             diagnostic
                                                 methodDeclaration.BodyRange
                                                 "this explicit upcast source is not yet supported"
+                                    | SequentialValueExpression expressions ->
+                                        let rec typeExpressions
+                                            typedExpressions
+                                            expressionLocalIndex
+                                            =
+                                            function
+                                            | [] ->
+                                                let typedExpressions = List.rev typedExpressions
+
+                                                match List.tryLast typedExpressions with
+                                                | Some(_, resultType, _) ->
+                                                    Ok(
+                                                        TypedSequential typedExpressions,
+                                                        resultType,
+                                                        expressionLocalIndex
+                                                    )
+                                                | None ->
+                                                    diagnostic
+                                                        methodDeclaration.BodyRange
+                                                        "a sequential expression must not be empty"
+                                            | (expression, expressionRange) :: remaining ->
+                                                match
+                                                    typeStaticExpression
+                                                        localBindings
+                                                        expressionLocalIndex
+                                                        expression
+                                                with
+                                                | Error error -> Error error
+                                                | Ok(typedExpression,
+                                                     expressionType,
+                                                     nextExpressionLocalIndex) ->
+                                                    typeExpressions
+                                                        ((typedExpression,
+                                                          expressionType,
+                                                          expressionRange)
+                                                         :: typedExpressions)
+                                                        nextExpressionLocalIndex
+                                                        remaining
+
+                                        typeExpressions [] nextLocalIndex expressions
                                     | LetExpression(bindingName,
                                                     value,
                                                     body,
@@ -2238,6 +2291,11 @@ type internal CompilerService() =
                                         inferredSubtypeConstraints condition
                                         @ inferredSubtypeConstraints ifTrue
                                         @ inferredSubtypeConstraints ifFalse
+                                    | TypedSequential expressions ->
+                                        expressions
+                                        |> List.collect (fun (expression, _, _) ->
+                                            inferredSubtypeConstraints expression
+                                        )
                                     | TypedIntegerLiteral _
                                     | TypedParameterReference _
                                     | TypedLocalReference _
@@ -2874,6 +2932,7 @@ type internal CompilerService() =
                                 | ExpressionMemberCall _
                                 | ConditionalExpression _
                                 | ExplicitUpcastExpression _
+                                | SequentialValueExpression _
                                 | LetExpression _
                                 | LambdaExpression _
                                 | TypeConstruction _ ->
@@ -2914,6 +2973,7 @@ type internal CompilerService() =
                                     | TypedInstanceMethodCall _
                                     | TypedConditional _
                                     | TypedUpcast _
+                                    | TypedSequential _
                                     | TypedResumableTryFinally _
                                     | TypedTraitCall _ -> methodDeclaration.BodyRange
 
@@ -3858,6 +3918,33 @@ type internal CompilerService() =
                     expressionInstructions
                     @ [ Box sourceType ],
                     expressionLocals
+                | TypedSequential expressions ->
+                    let expressionCount = expressions.Length
+
+                    let loweredExpressions =
+                        expressions
+                        |> List.mapi (fun index (expression, expressionType, expressionRange) ->
+                            let instructions, locals =
+                                valueExpressionInstructions freshLabel kind expression
+
+                            [ MarkSequencePoint expressionRange ]
+                            @ instructions
+                            @ (if
+                                   index < expressionCount
+                                           - 1
+                                   && expressionType
+                                      <> CliVoid
+                               then
+                                   [ Pop ]
+                               else
+                                   []),
+                            locals
+                        )
+
+                    loweredExpressions
+                    |> List.collect fst,
+                    loweredExpressions
+                    |> List.collect snd
                 | TypedConditional(condition,
                                    ifTrue,
                                    ifFalse,
@@ -3876,22 +3963,30 @@ type internal CompilerService() =
                     let ifFalseInstructions, ifFalseLocals =
                         valueExpressionInstructions freshLabel kind ifFalse
 
+                    let ifTrueSequencePoint =
+                        match ifTrue with
+                        | TypedSequential _ -> []
+                        | _ -> [ MarkSequencePoint ifTrueRange ]
+
+                    let ifFalseSequencePoint =
+                        match ifFalse with
+                        | TypedSequential _ -> []
+                        | _ -> [ MarkSequencePoint ifFalseRange ]
+
                     [
                         MarkSequencePoint conditionRange
                         Nop
                         MarkHiddenSequencePoint
                     ]
                     @ conditionInstructions
-                    @ [
-                        BranchIfFalse falseLabel
-                        MarkSequencePoint ifTrueRange
-                    ]
+                    @ [ BranchIfFalse falseLabel ]
+                    @ ifTrueSequencePoint
                     @ ifTrueInstructions
                     @ [
                         Branch endLabel
                         MarkLabel falseLabel
-                        MarkSequencePoint ifFalseRange
                     ]
+                    @ ifFalseSequencePoint
                     @ ifFalseInstructions
                     @ [ MarkLabel endLabel ],
                     conditionLocals
@@ -3926,7 +4021,7 @@ type internal CompilerService() =
                         Return
                     ],
                     []
-                | (TypedLocalReference _ | TypedLet _ | TypedStaticMethodCall _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _ | TypedUpcast _) as expression ->
+                | (TypedLocalReference _ | TypedLet _ | TypedStaticMethodCall _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _ | TypedUpcast _ | TypedSequential _) as expression ->
                     let instructions, locals =
                         valueExpressionInstructions freshLabel kind expression
 
@@ -4204,7 +4299,8 @@ type internal CompilerService() =
                         | TypedFunctionApplication _
                         | TypedInstanceMethodCall _
                         | TypedConditional _
-                        | TypedUpcast _ -> 8
+                        | TypedUpcast _
+                        | TypedSequential _ -> 8
                     DependencyIds =
                         methodDependencies methodDeclaration
                         @ instructionDependencies
@@ -4507,6 +4603,7 @@ type internal CompilerService() =
                                     | TypedInstanceMethodCall _
                                     | TypedConditional _
                                     | TypedUpcast _
+                                    | TypedSequential _
                                     | TypedTraitCall _ -> None
 
                                 match closureExpression with
