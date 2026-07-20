@@ -805,7 +805,11 @@ module internal Frontend =
                                                         identifier
                                                             "expected a member name after '.'"
 
-                                                    return! parseMemberPath (memberName :: members)
+                                                    return!
+                                                        parseMemberPath (
+                                                            memberName
+                                                            :: members
+                                                        )
                                                 }
                                             | _ -> Ok(List.rev members)
 
@@ -824,10 +828,7 @@ module internal Frontend =
                                                 parseExpression ()
                                                 |> Result.bind (fun (argument, _) ->
                                                     parseApplications (
-                                                        FunctionApplication(
-                                                            expression,
-                                                            argument
-                                                        )
+                                                        FunctionApplication(expression, argument)
                                                     )
                                                 )
 
@@ -1183,7 +1184,31 @@ module internal Frontend =
                 | FunKeyword ->
                     parseResult {
                         let! funToken = expected FunKeyword "expected 'fun'"
-                        let! parameterName, _ = identifier "expected a lambda parameter"
+
+                        let! parameterName =
+                            match (current ()).Kind with
+                            | LeftParenthesis when
+                                index + 1 < input.Length
+                                && input.[index + 1].Kind = RightParenthesis
+                                ->
+                                consume ()
+                                |> ignore
+
+                                consume ()
+                                |> ignore
+
+                                Ok None
+                            | Identifier _ ->
+                                identifier "expected a lambda parameter"
+                                |> Result.map (fun (name, _) -> Some name)
+                            | _ ->
+                                Error(
+                                    prototypeDiagnostic
+                                        source.Path
+                                        (current ()).Range
+                                        "expected a lambda parameter"
+                                )
+
                         let! _ = expected Arrow "expected '->'"
 
                         let rec parseBody expressions firstRange =
@@ -1200,7 +1225,8 @@ module internal Frontend =
 
                                 return!
                                     match (current ()).Kind with
-                                    | RightParenthesis ->
+                                    | RightParenthesis
+                                    | EndOfFile ->
                                         let expressions = List.rev expressions
 
                                         let body =
@@ -1215,20 +1241,15 @@ module internal Frontend =
                                                 End = expressionRange.End
                                             }
                                         )
-                                    | EndOfFile ->
-                                        Error(
-                                            prototypeDiagnostic
-                                                source.Path
-                                                (current ()).Range
-                                                "expected ')' after a lambda body"
-                                        )
                                     | _ -> parseBody expressions (Some firstRange)
                             }
 
                         let! body, bodyRange = parseBody [] None
 
                         return
-                            LambdaExpression(parameterName, body),
+                            (match parameterName with
+                             | Some parameterName -> LambdaExpression(parameterName, body)
+                             | None -> UnitLambdaExpression body),
                             {
                                 Start = funToken.Range.Start
                                 End = bodyRange.End

@@ -692,86 +692,89 @@ module internal Linker =
         (instructionSequencePoints: (int * SourceRange option) list)
         (methodFragment: SymbolicMethodFragment)
         =
-        let sequencePoints = BlobBuilder()
-
         let points =
-            match instructionSequencePoints with
-            | [] -> [ 0, Some methodFragment.Range ]
-            | points -> points
+            match instructionSequencePoints, methodFragment.EmitDefaultSequencePoint with
+            | [], true -> [ 0, Some methodFragment.Range ]
+            | points, _ -> points
 
-        let localSignatureRow =
-            if localSignature.IsNil then
-                0
-            else
-                MetadataTokens.GetRowNumber(localSignature)
+        match points with
+        | [] -> BlobBuilder()
+        | points ->
+            let sequencePoints = BlobBuilder()
 
-        sequencePoints.WriteCompressedInteger(localSignatureRow)
-
-        let mutable previousOffset = 0
-        let mutable previousStartLine = 0
-        let mutable previousStartColumn = 0
-        let mutable hasPreviousVisiblePoint = false
-
-        points
-        |> List.iteri (fun index (offset, range) ->
-            if
-                index > 0
-                && offset
-                   <= previousOffset
-            then
-                invalidOp "sequence-point offsets must be strictly increasing"
-
-            let offsetDelta =
-                if index = 0 then
-                    offset
+            let localSignatureRow =
+                if localSignature.IsNil then
+                    0
                 else
-                    offset
-                    - previousOffset
+                    MetadataTokens.GetRowNumber(localSignature)
 
-            sequencePoints.WriteCompressedInteger(offsetDelta)
+            sequencePoints.WriteCompressedInteger(localSignatureRow)
 
-            match range with
-            | None ->
-                sequencePoints.WriteCompressedInteger(0)
-                sequencePoints.WriteCompressedInteger(0)
-            | Some range ->
-                let deltaLines =
-                    range.End.Line
-                    - range.Start.Line
+            let mutable previousOffset = 0
+            let mutable previousStartLine = 0
+            let mutable previousStartColumn = 0
+            let mutable hasPreviousVisiblePoint = false
 
-                let deltaColumns =
-                    range.End.Column
-                    - range.Start.Column
+            points
+            |> List.iteri (fun index (offset, range) ->
+                if
+                    index > 0
+                    && offset
+                       <= previousOffset
+                then
+                    invalidOp "sequence-point offsets must be strictly increasing"
 
-                sequencePoints.WriteCompressedInteger(deltaLines)
+                let offsetDelta =
+                    if index = 0 then
+                        offset
+                    else
+                        offset
+                        - previousOffset
 
-                if deltaLines = 0 then
-                    sequencePoints.WriteCompressedInteger(deltaColumns)
-                else
-                    sequencePoints.WriteCompressedSignedInteger(deltaColumns)
+                sequencePoints.WriteCompressedInteger(offsetDelta)
 
-                if not hasPreviousVisiblePoint then
-                    sequencePoints.WriteCompressedInteger(range.Start.Line)
-                    sequencePoints.WriteCompressedInteger(range.Start.Column)
-                    hasPreviousVisiblePoint <- true
-                else
-                    sequencePoints.WriteCompressedSignedInteger(
-                        range.Start.Line
-                        - previousStartLine
-                    )
+                match range with
+                | None ->
+                    sequencePoints.WriteCompressedInteger(0)
+                    sequencePoints.WriteCompressedInteger(0)
+                | Some range ->
+                    let deltaLines =
+                        range.End.Line
+                        - range.Start.Line
 
-                    sequencePoints.WriteCompressedSignedInteger(
-                        range.Start.Column
-                        - previousStartColumn
-                    )
+                    let deltaColumns =
+                        range.End.Column
+                        - range.Start.Column
 
-                previousStartLine <- range.Start.Line
-                previousStartColumn <- range.Start.Column
+                    sequencePoints.WriteCompressedInteger(deltaLines)
 
-            previousOffset <- offset
-        )
+                    if deltaLines = 0 then
+                        sequencePoints.WriteCompressedInteger(deltaColumns)
+                    else
+                        sequencePoints.WriteCompressedSignedInteger(deltaColumns)
 
-        sequencePoints
+                    if not hasPreviousVisiblePoint then
+                        sequencePoints.WriteCompressedInteger(range.Start.Line)
+                        sequencePoints.WriteCompressedInteger(range.Start.Column)
+                        hasPreviousVisiblePoint <- true
+                    else
+                        sequencePoints.WriteCompressedSignedInteger(
+                            range.Start.Line
+                            - previousStartLine
+                        )
+
+                        sequencePoints.WriteCompressedSignedInteger(
+                            range.Start.Column
+                            - previousStartColumn
+                        )
+
+                    previousStartLine <- range.Start.Line
+                    previousStartColumn <- range.Start.Column
+
+                previousOffset <- offset
+            )
+
+            sequencePoints
 
     let private escapeXml (value: string) =
         value

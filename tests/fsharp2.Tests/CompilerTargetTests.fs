@@ -4525,6 +4525,38 @@ module CompilerTargetTests =
 
                     Expect.equal fsharp2Behavior 42 "the bound Zero member should remain callable"
 
+            testCase "returns a captured unit lambda as an FSharp function"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Make(value: int) : (unit -> int) =\n            fun () -> value\n"
+
+                withObjectMemberDifferential "fsharp2-captured-unit-lambda" sourceText "Make"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeMake assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        let make =
+                            builderType.GetMethod("Make").Invoke(null, [| box 42 |])
+                            :?> (unit -> int)
+
+                        make ()
+
+                    let oracleBehavior = invokeMake oracleOutputPath
+                    let fsharp2Behavior = invokeMake outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the captured unit lambda should behave like the Compatibility Oracle"
+
+                    Expect.equal fsharp2Behavior 42 "the lambda should return its captured value"
+
             testCase "executes a static call with an address-of struct field"
             <| fun _ ->
                 let sourceText =
@@ -6675,7 +6707,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "38"
+                        "39"
                         "query cache evidence should be versioned"
 
                     Expect.equal

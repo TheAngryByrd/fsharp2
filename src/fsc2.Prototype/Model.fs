@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 38
+    let Query = 39
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -212,6 +212,7 @@ type internal ParsedExpression =
         bindingRange: SourceRange *
         bodyRange: SourceRange
     | LambdaExpression of parameterName: string * body: ParsedExpression
+    | UnitLambdaExpression of body: ParsedExpression
     | TypeConstruction of
         constructedType: ParsedTypeExpression *
         argument: ParsedExpression *
@@ -686,6 +687,20 @@ type internal TypedBoundInstanceMethodExpression = {
 
     override _.ToString() = "TypedBoundInstanceMethodExpression"
 
+type internal TypedUnitLambdaExpression = {
+    FunctionType: CliType
+    DelegateType: CliType
+    CaptureParameterIndex: int
+    CaptureName: string
+    CaptureType: CliType
+    DomainType: CliType
+    RangeType: CliType
+    SourceLine: int
+    Range: SourceRange
+} with
+
+    override _.ToString() = "TypedUnitLambdaExpression"
+
 type internal TypedExpression =
     | TypedIntegerLiteral of int
     | TypedUnitLiteral
@@ -717,6 +732,7 @@ type internal TypedExpression =
         receiver: TypedExpression *
         arguments: TypedExpression list
     | TypedBoundInstanceMethod of TypedBoundInstanceMethodExpression
+    | TypedUnitLambda of TypedUnitLambdaExpression
     | TypedConditional of
         condition: TypedExpression *
         ifTrue: TypedExpression *
@@ -1067,6 +1083,7 @@ type internal SymbolicMethodFragment = {
     Locals: SymbolicLocalFragment list
     ReturnType: CliType
     Instructions: SymbolicInstruction list
+    EmitDefaultSequencePoint: bool
     MaxStack: int
     DependencyIds: string list
     ContentHash: string
