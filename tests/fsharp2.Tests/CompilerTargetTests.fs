@@ -982,6 +982,60 @@ module CompilerTargetTests =
         writeLittleEndian writer parameters.InverseQ
         writeLittleEndian writer parameters.D
 
+    let private withObjectMemberDifferential
+        (temporaryDirectoryName: string)
+        (sourceText: string)
+        (memberName: string)
+        (assertRuntimeBehavior: string -> string -> unit)
+        =
+        let root =
+            Path.Combine(Path.GetTempPath(), temporaryDirectoryName, Guid.NewGuid().ToString("N"))
+
+        Directory.CreateDirectory(root)
+        |> ignore
+
+        try
+            let sourcePath = Path.Combine(root, "TaskBuilderBase.fs")
+            File.WriteAllText(sourcePath, sourceText)
+
+            let oracleOutputPath = Path.Combine(root, "TaskBuilderBase-oracle.dll")
+            let oraclePdbPath = Path.Combine(root, "TaskBuilderBase-oracle.pdb")
+            let oracleResponsePath = Path.Combine(root, "oracle.rsp")
+
+            let oracleResult =
+                invokeCompatibilityOracle root oracleResponsePath [
+                    "--target:library"
+                    "--targetprofile:netcore"
+                    "--deterministic+"
+                    "--debug:portable"
+                    "--optimize-"
+                    $"--out:{oracleOutputPath}"
+                    $"--pdb:{oraclePdbPath}"
+                    sourcePath
+                ]
+
+            Expect.equal
+                oracleResult.ExitCode
+                0
+                (oracleResult.StandardOutput
+                 + oracleResult.StandardError)
+
+            let responsePath = Path.Combine(root, "fsharp2.rsp")
+
+            let outputPath, _ =
+                compileForExportFingerprint root responsePath sourcePath "TaskBuilderBase-fsharp2" []
+
+            let pdbPath = Path.ChangeExtension(outputPath, ".pdb")
+
+            Expect.equal
+                (objectTypeMetadataShape outputPath pdbPath memberName)
+                (objectTypeMetadataShape oracleOutputPath oraclePdbPath memberName)
+                $"the '{memberName}' member should match the Compatibility Oracle's CLR and portable-PDB surface"
+
+            assertRuntimeBehavior oracleOutputPath outputPath
+        finally
+            Directory.Delete(root, true)
+
     [<Tests>]
     let tests =
         testList "Compiler Target Invocation" [
@@ -3830,63 +3884,14 @@ module CompilerTargetTests =
 
             testCase "executes an attributed static inline object member"
             <| fun _ ->
-                let root =
-                    Path.Combine(
-                        Path.GetTempPath(),
-                        "fsharp2-attributed-static-object-member",
-                        Guid.NewGuid().ToString("N")
-                    )
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Identity(value: 'T) : 'T = value\n"
 
-                Directory.CreateDirectory(root)
-                |> ignore
-
-                try
-                    let sourcePath = Path.Combine(root, "TaskBuilderBase.fs")
-
-                    let sourceText =
-                        "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Identity(value: 'T) : 'T = value\n"
-
-                    File.WriteAllText(sourcePath, sourceText)
-
-                    let oracleOutputPath = Path.Combine(root, "TaskBuilderBase-oracle.dll")
-                    let oraclePdbPath = Path.Combine(root, "TaskBuilderBase-oracle.pdb")
-                    let oracleResponsePath = Path.Combine(root, "oracle.rsp")
-
-                    let oracleResult =
-                        invokeCompatibilityOracle root oracleResponsePath [
-                            "--target:library"
-                            "--targetprofile:netcore"
-                            "--deterministic+"
-                            "--debug:portable"
-                            "--optimize-"
-                            $"--out:{oracleOutputPath}"
-                            $"--pdb:{oraclePdbPath}"
-                            sourcePath
-                        ]
-
-                    Expect.equal
-                        oracleResult.ExitCode
-                        0
-                        (oracleResult.StandardOutput
-                         + oracleResult.StandardError)
-
-                    let responsePath = Path.Combine(root, "fsharp2.rsp")
-
-                    let outputPath, _ =
-                        compileForExportFingerprint
-                            root
-                            responsePath
-                            sourcePath
-                            "TaskBuilderBase-fsharp2"
-                            []
-
-                    let pdbPath = Path.ChangeExtension(outputPath, ".pdb")
-
-                    Expect.equal
-                        (objectTypeMetadataShape outputPath pdbPath "Identity")
-                        (objectTypeMetadataShape oracleOutputPath oraclePdbPath "Identity")
-                        "the attributed static member should match the Compatibility Oracle's CLR and portable-PDB surface"
-
+                withObjectMemberDifferential
+                    "fsharp2-attributed-static-object-member"
+                    sourceText
+                    "Identity"
+                <| fun oracleOutputPath outputPath ->
                     let invokeIdentity assemblyPath =
                         let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
 
@@ -3911,8 +3916,44 @@ module CompilerTargetTests =
                         "the emitted static member should behave like the Compatibility Oracle"
 
                     Expect.equal fsharp2Behavior 42 "Identity should return its argument"
-                finally
-                    Directory.Delete(root, true)
+
+            testCase "executes a static object member with a parenthesized function type"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Keep(continuation: ('T -> 'U)) : ('T -> 'U) = continuation\n"
+
+                withObjectMemberDifferential "fsharp2-parenthesized-function-type" sourceText "Keep"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeKeep assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        let keepMethod =
+                            builderType
+                                .GetMethod("Keep")
+                                .MakeGenericMethod(typeof<int>, typeof<string>)
+
+                        let continuation (value: int) = string value
+
+                        let returned =
+                            keepMethod.Invoke(null, [| box continuation |]) :?> (int -> string)
+
+                        returned 42
+
+                    let oracleBehavior = invokeKeep oracleOutputPath
+                    let fsharp2Behavior = invokeKeep outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the emitted static member should preserve the function value"
+
+                    Expect.equal fsharp2Behavior "42" "Keep should return its function argument"
 
             testCase "retained service invalidates an IcedTasks inline object-member edit"
             <| fun _ ->
@@ -6021,7 +6062,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "22"
+                        "23"
                         "query cache evidence should be versioned"
 
                     Expect.equal

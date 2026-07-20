@@ -685,6 +685,13 @@ module internal Frontend =
                         | Identifier "_" ->
                             let token = consume ()
                             Ok(ParsedWildcardType token.Range)
+                        | LeftParenthesis ->
+                            parseResult {
+                                let! _ = expected LeftParenthesis "expected '('"
+                                let! groupedType = parseTypeExpression ()
+                                let! _ = expected RightParenthesis "expected ')' after a type"
+                                return groupedType
+                            }
                         | Hash ->
                             let hashToken = consume ()
 
