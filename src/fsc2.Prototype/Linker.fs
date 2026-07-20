@@ -390,7 +390,7 @@ module internal Linker =
         =
         encodeCallableSignature
             resolveTypeReference
-            0
+            methodReference.GenericArity
             methodReference.IsInstance
             methodReference.ParameterTypes
             methodReference.ReturnType
@@ -413,6 +413,23 @@ module internal Linker =
                 |> metadata.GetOrAddBlob
             )
 
+        let addMethodSpecification
+            (methodReference: SymbolicMethodReference)
+            (genericArguments: CliType list)
+            =
+            let signature = BlobBuilder()
+
+            let arguments =
+                BlobEncoder(signature).MethodSpecificationSignature(genericArguments.Length)
+
+            for argument in genericArguments do
+                encodeCliType resolveTypeReference (arguments.AddArgument()) argument
+
+            metadata.AddMethodSpecification(
+                addMethodReference methodReference,
+                metadata.GetOrAddBlob(signature)
+            )
+
         let addFieldReference (fieldReference: SymbolicFieldReference) =
             metadata.AddMemberReference(
                 resolveDeclaringType fieldReference.DeclaringType,
@@ -428,6 +445,7 @@ module internal Linker =
                 value
                 |> metadata.GetOrAddUserString
                 |> instructions.LoadString
+            | LoadNull -> instructions.OpCode(ILOpCode.Ldnull)
             | LoadArgument index -> instructions.LoadArgument(index)
             | LoadField fieldReference ->
                 instructions.OpCode(ILOpCode.Ldfld)
@@ -441,12 +459,19 @@ module internal Linker =
             | CallMethod methodReference ->
                 instructions.OpCode(ILOpCode.Call)
                 instructions.Token(addMethodReference methodReference)
+            | CallVirtualMethod methodReference ->
+                instructions.OpCode(ILOpCode.Callvirt)
+                instructions.Token(addMethodReference methodReference)
+            | CallGenericMethod(methodReference, genericArguments) ->
+                instructions.OpCode(ILOpCode.Call)
+                instructions.Token(addMethodSpecification methodReference genericArguments)
             | LoadFunctionPointer methodReference ->
                 instructions.OpCode(ILOpCode.Ldftn)
                 instructions.Token(addMethodReference methodReference)
             | NewObject methodReference ->
                 instructions.OpCode(ILOpCode.Newobj)
                 instructions.Token(addMethodReference methodReference)
+            | Pop -> instructions.OpCode(ILOpCode.Pop)
             | Throw -> instructions.OpCode(ILOpCode.Throw)
             | Return -> instructions.OpCode(ILOpCode.Ret)
 

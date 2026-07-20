@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 20
+    let Query = 21
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -104,13 +104,6 @@ type internal CompilerInvocation = {
 
     override _.ToString() = "CompilerInvocation"
 
-[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
-type internal ParsedCallArgument =
-    | ParsedValueArgument of string
-    | ParsedAddressOfArgument of string
-
-    override _.ToString() = "ParsedCallArgument"
-
 type internal ParsedType =
     | ParsedInt32
 
@@ -159,6 +152,7 @@ type internal ParsedAttribute = {
 type internal ParsedTypeExpression =
     | ParsedNamedType of QualifiedTypeName * SourceRange
     | ParsedTypeParameter of string * SourceRange
+    | ParsedWildcardType of SourceRange
     | ParsedFlexibleType of superType: ParsedTypeExpression * range: SourceRange
     | ParsedGenericTypeApplication of
         genericType: ParsedTypeExpression *
@@ -171,6 +165,7 @@ type internal ParsedTypeExpression =
         match this with
         | ParsedNamedType(_, range)
         | ParsedTypeParameter(_, range)
+        | ParsedWildcardType range
         | ParsedFlexibleType(_, range)
         | ParsedGenericTypeApplication(_, _, range)
         | ParsedTupleType(_, range)
@@ -184,7 +179,9 @@ type internal ParsedExpression =
     | BooleanLiteral of bool
     | StringLiteral of string
     | ValueReference of string
-    | TraitCall of receiverName: string * memberName: string * arguments: ParsedCallArgument list
+    | AddressOfExpression of string
+    | UnitApplication of functionName: string
+    | MemberCall of receiverName: string * memberName: string * arguments: ParsedExpression list
     | MemberAssignment of rootName: string * memberPath: string list * value: ParsedExpression
     | SequentialExpression of ParsedExpression list
     | LambdaExpression of parameterName: string * body: ParsedExpression
@@ -529,6 +526,7 @@ module internal StableIdentity =
 type internal SymbolicMethodReference = {
     DeclaringType: SymbolicDeclaringType
     Name: string
+    GenericArity: int
     IsInstance: bool
     ParameterTypes: CliType list
     ReturnType: CliType
@@ -540,6 +538,8 @@ type internal SymbolicMethodReference = {
             "method-reference"
             StableIdentity.symbolicDeclaringType this.DeclaringType
             this.Name
+            "generic:"
+            this.GenericArity.ToString(CultureInfo.InvariantCulture)
             if this.IsInstance then "instance" else "static"
             yield!
                 this.ParameterTypes
@@ -560,6 +560,15 @@ type internal TypedCallArgument =
 
     override _.ToString() = "TypedCallArgument"
 
+type internal TypedResumableCodeBody =
+    | TypedStoreCapturedResult of
+        dataFieldName: string *
+        resultFieldName: string *
+        resultFieldStableId: string
+    | TypedInvokeCapturedUnitFunction
+
+    override _.ToString() = "TypedResumableCodeBody"
+
 type internal TypedResumableCodeExpression = {
     DelegateType: CliType
     StateMachineType: CliType
@@ -567,19 +576,30 @@ type internal TypedResumableCodeExpression = {
     CaptureParameterIndex: int
     CaptureName: string
     StateMachineParameterName: string
-    DataFieldName: string
-    ResultFieldName: string
-    ResultFieldStableId: string
+    Body: TypedResumableCodeBody
     SourceLine: int
     Range: SourceRange
 } with
 
     override _.ToString() = "TypedResumableCodeExpression"
 
+type internal TypedResumableTryFinallyExpression = {
+    ResumableCodeModuleType: CliType
+    DelegateType: CliType
+    DataType: CliType
+    ResultType: CliType
+    ComputationParameterIndex: int
+    ComputationName: string
+    Compensation: TypedResumableCodeExpression
+} with
+
+    override _.ToString() = "TypedResumableTryFinallyExpression"
+
 type internal TypedExpression =
     | TypedIntegerLiteral of int
     | TypedParameterReference of int
     | TypedResumableCode of TypedResumableCodeExpression
+    | TypedResumableTryFinally of TypedResumableTryFinallyExpression
     | TypedTraitCall of
         receiverName: string *
         memberName: string *
@@ -822,13 +842,17 @@ type internal SymbolicFieldReference = {
 type internal SymbolicInstruction =
     | LoadInt32 of int
     | LoadString of string
+    | LoadNull
     | LoadArgument of int
     | LoadField of SymbolicFieldReference
     | LoadFieldAddress of SymbolicFieldReference
     | StoreField of SymbolicFieldReference
     | CallMethod of SymbolicMethodReference
+    | CallVirtualMethod of SymbolicMethodReference
+    | CallGenericMethod of methodReference: SymbolicMethodReference * genericArguments: CliType list
     | LoadFunctionPointer of SymbolicMethodReference
     | NewObject of SymbolicMethodReference
+    | Pop
     | Throw
     | Return
 

@@ -47,6 +47,18 @@ module CompilerTargetTests =
         InstanceMember: MethodMetadataShape
     }
 
+    type private ResumableTryFinallyProbe() =
+        member val ComputationInvocations = 0 with get, set
+
+        member this.InvokeComputation
+            (_stateMachine: byref<Microsoft.FSharp.Core.CompilerServices.ResumableStateMachine<int>>)
+            =
+            this.ComputationInvocations <-
+                this.ComputationInvocations
+                + 1
+
+            true
+
     type private SignatureShapeProvider() as this =
         let fullTypeName
             (metadata: MetadataReader)
@@ -3679,6 +3691,143 @@ module CompilerTargetTests =
                 finally
                     Directory.Delete(root, true)
 
+            testCase "executes an IcedTasks resumable TryFinally member"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-resumable-try-finally-member",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "TaskBuilderBase.fs")
+
+                    let sourceText =
+                        "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type Code<'T> = ResumableCode<int, 'T>\n\n    type TaskBuilderBase() =\n        member inline _.TryFinally\n            (\n                computation: Code<'T>,\n                [<InlineIfLambda>] compensation: unit -> unit\n            ) : Code<'T> =\n            ResumableCode.TryFinally(\n                computation,\n                ResumableCode<_, _>(fun _ ->\n                    compensation ()\n                    true\n                )\n            )\n"
+
+                    File.WriteAllText(sourcePath, sourceText)
+
+                    let oracleOutputPath = Path.Combine(root, "TaskBuilderBase-oracle.dll")
+                    let oraclePdbPath = Path.Combine(root, "TaskBuilderBase-oracle.pdb")
+                    let oracleResponsePath = Path.Combine(root, "oracle.rsp")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root oracleResponsePath [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{oracleOutputPath}"
+                            $"--pdb:{oraclePdbPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let responsePath = Path.Combine(root, "fsharp2.rsp")
+
+                    let outputPath, _ =
+                        compileForExportFingerprint
+                            root
+                            responsePath
+                            sourcePath
+                            "TaskBuilderBase-fsharp2"
+                            []
+
+                    let pdbPath = Path.ChangeExtension(outputPath, ".pdb")
+
+                    Expect.equal
+                        (objectTypeMetadataShape outputPath pdbPath "TryFinally")
+                        (objectTypeMetadataShape oracleOutputPath oraclePdbPath "TryFinally")
+                        "the resumable TryFinally member should match the Compatibility Oracle's CLR and portable-PDB surface"
+
+                    let invokeTryFinally assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        let builder = Activator.CreateInstance(builderType)
+
+                        let tryFinallyMethod =
+                            builderType.GetMethod("TryFinally").MakeGenericMethod(typeof<int>)
+
+                        let probe = ResumableTryFinallyProbe()
+
+                        let resumableCodeType =
+                            typedefof<Microsoft.FSharp.Core.CompilerServices.ResumableCode<_, _>>
+                                .MakeGenericType(typeof<int>, typeof<int>)
+
+                        let computation =
+                            Delegate.CreateDelegate(
+                                resumableCodeType,
+                                probe,
+                                typeof<ResumableTryFinallyProbe>
+                                    .GetMethod(
+                                        "InvokeComputation",
+                                        BindingFlags.Instance
+                                        ||| BindingFlags.Public
+                                        ||| BindingFlags.NonPublic
+                                    )
+                            )
+
+                        let mutable compensationInvocations = 0
+
+                        let compensation () =
+                            compensationInvocations <-
+                                compensationInvocations
+                                + 1
+
+                        let code =
+                            tryFinallyMethod.Invoke(
+                                builder,
+                                [|
+                                    box computation
+                                    box compensation
+                                |]
+                            )
+
+                        let stateMachineType =
+                            typedefof<
+                                Microsoft.FSharp.Core.CompilerServices.ResumableStateMachine<_>
+                             >
+                                .MakeGenericType(typeof<int>)
+
+                        let invokeArguments = [| Activator.CreateInstance(stateMachineType) |]
+
+                        let completed =
+                            code.GetType().GetMethod("Invoke").Invoke(code, invokeArguments)
+                            :?> bool
+
+                        completed, probe.ComputationInvocations, compensationInvocations
+
+                    let oracleBehavior = invokeTryFinally oracleOutputPath
+                    let fsharp2Behavior = invokeTryFinally outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the emitted TryFinally function should behave like the Compatibility Oracle"
+
+                    Expect.equal
+                        fsharp2Behavior
+                        (true, 1, 1)
+                        "TryFinally should execute both the computation and compensation once"
+                finally
+                    Directory.Delete(root, true)
+
             testCase "retained service invalidates an IcedTasks inline object-member edit"
             <| fun _ ->
                 let root =
@@ -5786,7 +5935,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "20"
+                        "21"
                         "query cache evidence should be versioned"
 
                     Expect.equal

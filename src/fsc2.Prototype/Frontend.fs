@@ -682,6 +682,9 @@ module internal Frontend =
                         | TypeParameter value ->
                             let token = consume ()
                             Ok(ParsedTypeParameter(value, token.Range))
+                        | Identifier "_" ->
+                            let token = consume ()
+                            Ok(ParsedWildcardType token.Range)
                         | Hash ->
                             let hashToken = consume ()
 
@@ -767,22 +770,20 @@ module internal Frontend =
                 let parseCallArguments () =
                     let rec loop arguments =
                         parseResult {
-                            let isAddressOf =
+                            let! argument =
                                 match (current ()).Kind with
                                 | Ampersand ->
                                     consume ()
                                     |> ignore
 
-                                    true
-                                | _ -> false
-
-                            let! argumentName, _ = identifier "expected a trait-call argument"
-
-                            let argument =
-                                if isAddressOf then
-                                    ParsedAddressOfArgument argumentName
-                                else
-                                    ParsedValueArgument argumentName
+                                    identifier "expected a trait-call argument"
+                                    |> Result.map (
+                                        fst
+                                        >> AddressOfExpression
+                                    )
+                                | _ ->
+                                    parseExpression ()
+                                    |> Result.map fst
 
                             let arguments =
                                 argument
@@ -903,6 +904,23 @@ module internal Frontend =
                                 End = bodyRange.End
                             }
                     }
+                | Identifier functionName when
+                    index + 2 < input.Length
+                    && input.[index + 1].Kind = LeftParenthesis
+                    && input.[index + 2].Kind = RightParenthesis
+                    ->
+                    parseResult {
+                        let startToken = consume ()
+                        let! _ = expected LeftParenthesis "expected '('"
+                        let! closeToken = expected RightParenthesis "expected ')'"
+
+                        return
+                            UnitApplication functionName,
+                            {
+                                Start = startToken.Range.Start
+                                End = closeToken.Range.End
+                            }
+                    }
                 | Identifier _ when
                     index + 1 < input.Length
                     && input.[index + 1].Kind = LessThan
@@ -944,7 +962,7 @@ module internal Frontend =
                                     let! closeToken = expected RightParenthesis "expected ')'"
 
                                     return
-                                        TraitCall(receiverName, memberPath.Head, arguments),
+                                        MemberCall(receiverName, memberPath.Head, arguments),
                                         {
                                             Start = expressionToken.Range.Start
                                             End = closeToken.Range.End

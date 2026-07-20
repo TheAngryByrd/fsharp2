@@ -115,6 +115,29 @@ module private TypeIdentity =
                 name
             ]
 
+    let resumableCodeBody =
+        function
+        | TypedStoreCapturedResult(dataFieldName, resultFieldName, resultFieldStableId) ->
+            Fingerprint.parts [
+                "store-captured-result"
+                dataFieldName
+                resultFieldName
+                resultFieldStableId
+            ]
+        | TypedInvokeCapturedUnitFunction -> "invoke-captured-unit-function"
+
+    let resumableCode (expression: TypedResumableCodeExpression) =
+        Fingerprint.parts [
+            "resumable-code"
+            cliType expression.DelegateType
+            cliType expression.StateMachineType
+            cliType expression.DataType
+            expression.CaptureParameterIndex.ToString(CultureInfo.InvariantCulture)
+            expression.CaptureName
+            expression.StateMachineParameterName
+            resumableCodeBody expression.Body
+        ]
+
     let inlineBody =
         function
         | TypedIntegerLiteral value ->
@@ -127,18 +150,17 @@ module private TypeIdentity =
                 "parameter"
                 index.ToString(CultureInfo.InvariantCulture)
             ]
-        | TypedResumableCode expression ->
+        | TypedResumableCode expression -> resumableCode expression
+        | TypedResumableTryFinally expression ->
             Fingerprint.parts [
-                "resumable-code"
+                "resumable-try-finally"
+                cliType expression.ResumableCodeModuleType
                 cliType expression.DelegateType
-                cliType expression.StateMachineType
                 cliType expression.DataType
-                expression.CaptureParameterIndex.ToString(CultureInfo.InvariantCulture)
-                expression.CaptureName
-                expression.StateMachineParameterName
-                expression.DataFieldName
-                expression.ResultFieldName
-                expression.ResultFieldStableId
+                cliType expression.ResultType
+                expression.ComputationParameterIndex.ToString(CultureInfo.InvariantCulture)
+                expression.ComputationName
+                resumableCode expression.Compensation
             ]
         | TypedTraitCall(receiverName, memberName, arguments) ->
             Fingerprint.parts [
@@ -346,6 +368,8 @@ type internal CompilerService() =
                         Ok(TypedTypeParameter name)
                     else
                         diagnostic range $"the type parameter '{name}' is not declared"
+                | ParsedWildcardType range ->
+                    diagnostic range "a wildcard type requires an expected type"
                 | ParsedFlexibleType(_, range) ->
                     diagnostic range "a flexible type must be generalized by its member declaration"
                 | ParsedNamedType(typeName, range) -> resolveNamedType 0 typeName range
@@ -411,6 +435,7 @@ type internal CompilerService() =
                     |> Option.defaultValue expression
                 | ParsedFlexibleType(superType, range) ->
                     ParsedFlexibleType(substituteType substitutions superType, range)
+                | ParsedWildcardType _
                 | ParsedNamedType _ -> expression
                 | ParsedGenericTypeApplication(genericType, arguments, range) ->
                     ParsedGenericTypeApplication(
@@ -508,6 +533,7 @@ type internal CompilerService() =
                 | ParsedFlexibleType(superType, range) ->
                     ParsedFlexibleType(expand superType, range)
                 | ParsedTypeParameter _
+                | ParsedWildcardType _
                 | ParsedNamedType _ -> expression
 
             let rec collectResults completed remaining =
@@ -708,11 +734,13 @@ type internal CompilerService() =
                             Path = Some sourcePath
                             Range = Some declaration.BodyRange
                         }
-                    | _, TraitCall _ ->
+                    | _, MemberCall _ ->
                         diagnostic
                             declaration.BodyRange
                             "trait calls are supported only in static inline members"
-                    | _, ValueReference _ ->
+                    | _, ValueReference _
+                    | _, AddressOfExpression _
+                    | _, UnitApplication _ ->
                         diagnostic
                             declaration.BodyRange
                             "value references are supported only in parameterized members"
@@ -1035,22 +1063,30 @@ type internal CompilerService() =
                             | _, Error error, _ -> Error error
                             | Ok constraints,
                               Ok parameters,
-                              TraitCall(receiverName, memberName, arguments) ->
+                              MemberCall(receiverName, memberName, arguments) ->
                                 let argumentName =
                                     function
-                                    | ParsedValueArgument name
-                                    | ParsedAddressOfArgument name -> name
+                                    | TypedValueArgument name
+                                    | TypedAddressOfArgument name -> name
 
                                 let typedArguments =
                                     arguments
-                                    |> List.map (
+                                    |> List.choose (
                                         function
-                                        | ParsedValueArgument name -> TypedValueArgument name
-                                        | ParsedAddressOfArgument name ->
-                                            TypedAddressOfArgument name
+                                        | ValueReference name -> Some(TypedValueArgument name)
+                                        | AddressOfExpression name ->
+                                            Some(TypedAddressOfArgument name)
+                                        | _ -> None
                                     )
 
                                 if
+                                    typedArguments.Length
+                                    <> arguments.Length
+                                then
+                                    diagnostic
+                                        methodDeclaration.BodyRange
+                                        "a trait-call argument is not a method parameter"
+                                elif
                                     parameters
                                     |> List.exists (fun parameter -> parameter.Name = receiverName)
                                     |> not
@@ -1059,7 +1095,7 @@ type internal CompilerService() =
                                         methodDeclaration.BodyRange
                                         $"the receiver '{receiverName}' is not a method parameter"
                                 elif
-                                    arguments
+                                    typedArguments
                                     |> List.exists (fun argument ->
                                         let argumentName = argumentName argument
 
@@ -1140,6 +1176,8 @@ type internal CompilerService() =
                             | Ok _, Ok _, BooleanLiteral _
                             | Ok _, Ok _, StringLiteral _
                             | Ok _, Ok _, ValueReference _
+                            | Ok _, Ok _, AddressOfExpression _
+                            | Ok _, Ok _, UnitApplication _
                             | Ok _, Ok _, MemberAssignment _
                             | Ok _, Ok _, SequentialExpression _
                             | Ok _, Ok _, LambdaExpression _
@@ -1186,6 +1224,7 @@ type internal CompilerService() =
                                 @ [ name ]
                         | ParsedFlexibleType(superType, _) ->
                             collectTypeParameters collected superType
+                        | ParsedWildcardType _
                         | ParsedNamedType _ -> collected
                         | ParsedGenericTypeApplication(genericType, arguments, _) ->
                             (collectTypeParameters collected genericType, arguments)
@@ -1382,6 +1421,7 @@ type internal CompilerService() =
                                     sourceRange
                                 )
                             | ParsedTypeParameter _
+                            | ParsedWildcardType _
                             | ParsedNamedType _ as typeExpression -> typeExpression
 
                         let generalizedParameters =
@@ -1461,7 +1501,126 @@ type internal CompilerService() =
                                 methodDeclaration.Range
                                 "instance-member parameter names must be unique"
                         | Ok parameters, Ok constraints ->
+                            let isResumableCodeReference (reference: CliTypeReference) =
+                                reference.AssemblyName = "FSharp.Core"
+                                && reference.TypeName.Namespace = "Microsoft.FSharp.Core.CompilerServices"
+                                && reference.TypeName.Name = "ResumableCode`2"
+
+                            let resolveConstructedCliType expectedType constructedType =
+                                let expandedType =
+                                    constructedType
+                                    |> expandTypeAbbreviations Set.empty
+
+                                let resolveNormally () =
+                                    expandedType
+                                    |> resolveType declaredMethodParameters
+                                    |> Result.bind (
+                                        toCliType methodParameterIndex methodDeclaration.BodyRange
+                                    )
+
+                                match expectedType, expandedType with
+                                | Some(CliGenericType(expectedReference, expectedArguments) as expected),
+                                  ParsedGenericTypeApplication(ParsedNamedType(typeName, typeRange),
+                                                               arguments,
+                                                               _) when
+                                    expectedArguments.Length = arguments.Length
+                                    ->
+                                    match resolveNamedType arguments.Length typeName typeRange with
+                                    | Error error -> Error error
+                                    | Ok(TypedNamedType resolvedGeneric) when
+                                        resolvedGeneric.DeclarationId = expectedReference.DeclarationId
+                                        ->
+                                        List.map2
+                                            (fun expectedArgument argument ->
+                                                match argument with
+                                                | ParsedWildcardType _ -> Ok()
+                                                | _ ->
+                                                    argument
+                                                    |> resolveType declaredMethodParameters
+                                                    |> Result.bind (
+                                                        toCliType
+                                                            methodParameterIndex
+                                                            methodDeclaration.BodyRange
+                                                    )
+                                                    |> Result.bind (fun actualArgument ->
+                                                        if actualArgument = expectedArgument then
+                                                            Ok()
+                                                        else
+                                                            diagnostic
+                                                                argument.Range
+                                                                "the constructed type argument does not match its expected type"
+                                                    )
+                                            )
+                                            expectedArguments
+                                            arguments
+                                        |> collectResults []
+                                        |> Result.map (fun _ -> expected)
+                                    | Ok _ ->
+                                        diagnostic
+                                            constructedType.Range
+                                            "the constructed type does not match its expected type"
+                                | Some expected, _ ->
+                                    resolveNormally ()
+                                    |> Result.bind (fun actual ->
+                                        if actual = expected then
+                                            Ok actual
+                                        else
+                                            diagnostic
+                                                constructedType.Range
+                                                "the constructed type does not match its expected type"
+                                    )
+                                | None, _ -> resolveNormally ()
+
+                            let createResumableExpression
+                                delegateType
+                                dataType
+                                captureParameterIndex
+                                captureName
+                                lambdaParameter
+                                body
+                                argumentRange
+                                =
+                                let stateMachineName = {
+                                    Namespace = "Microsoft.FSharp.Core.CompilerServices"
+                                    Name = "ResumableStateMachine"
+                                }
+
+                                match
+                                    resolveNamedType 1 stateMachineName methodDeclaration.BodyRange
+                                with
+                                | Error error -> Error error
+                                | Ok(TypedNamedType resolvedStateMachine) ->
+                                    let stateMachineReference = {
+                                        DeclarationId = resolvedStateMachine.DeclarationId
+                                        AssemblyName = resolvedStateMachine.AssemblyName
+                                        TypeName = {
+                                            Namespace = resolvedStateMachine.TypeName.Namespace
+                                            Name =
+                                                resolvedStateMachine.TypeName.Name
+                                                + "`1"
+                                        }
+                                        IsValueType = resolvedStateMachine.IsValueType
+                                    }
+
+                                    Ok {
+                                        DelegateType = delegateType
+                                        StateMachineType =
+                                            CliGenericType(stateMachineReference, [ dataType ])
+                                        DataType = dataType
+                                        CaptureParameterIndex = captureParameterIndex
+                                        CaptureName = captureName
+                                        StateMachineParameterName = lambdaParameter
+                                        Body = body
+                                        SourceLine = argumentRange.Start.Line
+                                        Range = argumentRange
+                                    }
+                                | Ok _ ->
+                                    diagnostic
+                                        methodDeclaration.BodyRange
+                                        "the resumable state-machine type did not resolve to a named CLI type"
+
                             let typeResumableCode
+                                expectedType
                                 constructedType
                                 lambdaParameter
                                 lambdaBody
@@ -1470,22 +1629,12 @@ type internal CompilerService() =
                                 let unsupported () =
                                     diagnostic
                                         methodDeclaration.BodyRange
-                                        "only the IcedTasks resumable Return lambda shape is supported"
+                                        "only the IcedTasks resumable Return and TryFinally compensation lambda shapes are supported"
 
-                                let constructedCliType =
-                                    constructedType
-                                    |> expandTypeAbbreviations Set.empty
-                                    |> resolveType declaredMethodParameters
-                                    |> Result.bind (
-                                        toCliType methodParameterIndex methodDeclaration.BodyRange
-                                    )
-
-                                match constructedCliType with
+                                match resolveConstructedCliType expectedType constructedType with
                                 | Error error -> Error error
                                 | Ok(CliGenericType(delegateReference, [ dataType; resultType ]) as delegateType) when
-                                    delegateReference.AssemblyName = "FSharp.Core"
-                                    && delegateReference.TypeName.Namespace = "Microsoft.FSharp.Core.CompilerServices"
-                                    && delegateReference.TypeName.Name = "ResumableCode`2"
+                                    isResumableCodeReference delegateReference
                                     ->
                                     match lambdaBody with
                                     | SequentialExpression [ MemberAssignment(assignmentRoot,
@@ -1597,69 +1746,167 @@ type internal CompilerService() =
                                                         + ":"
                                                         + resultFieldName
 
-                                                    let stateMachineName = {
-                                                        Namespace =
-                                                            "Microsoft.FSharp.Core.CompilerServices"
-                                                        Name = "ResumableStateMachine"
-                                                    }
+                                                    createResumableExpression
+                                                        delegateType
+                                                        dataType
+                                                        captureParameterIndex
+                                                        captureName
+                                                        lambdaParameter
+                                                        (TypedStoreCapturedResult(
+                                                            dataFieldName,
+                                                            resultFieldName,
+                                                            resultFieldStableId
+                                                        ))
+                                                        argumentRange
+                                                    |> Result.map (fun expression ->
+                                                        TypedResumableCode expression, delegateType
+                                                    )
+                                    | SequentialExpression [ UnitApplication captureName
+                                                             BooleanLiteral true ] ->
+                                        let unitType = CliNamedType fsharpUnitType
 
-                                                    match
-                                                        resolveNamedType
-                                                            1
-                                                            stateMachineName
-                                                            methodDeclaration.BodyRange
-                                                    with
-                                                    | Error error -> Error error
-                                                    | Ok(TypedNamedType resolvedStateMachine) ->
-                                                        let stateMachineReference = {
-                                                            DeclarationId =
-                                                                resolvedStateMachine.DeclarationId
-                                                            AssemblyName =
-                                                                resolvedStateMachine.AssemblyName
-                                                            TypeName = {
-                                                                Namespace =
-                                                                    resolvedStateMachine.TypeName.Namespace
-                                                                Name =
-                                                                    resolvedStateMachine.TypeName.Name
-                                                                    + "`1"
-                                                            }
-                                                            IsValueType =
-                                                                resolvedStateMachine.IsValueType
-                                                        }
+                                        let expectedCaptureType =
+                                            CliGenericType(
+                                                fsharpFunctionType,
+                                                [
+                                                    unitType
+                                                    unitType
+                                                ]
+                                            )
 
-                                                        Ok(
-                                                            TypedResumableCode {
-                                                                DelegateType = delegateType
-                                                                StateMachineType =
-                                                                    CliGenericType(
-                                                                        stateMachineReference,
-                                                                        [ dataType ]
-                                                                    )
-                                                                DataType = dataType
-                                                                CaptureParameterIndex =
-                                                                    captureParameterIndex
-                                                                CaptureName = captureName
-                                                                StateMachineParameterName =
-                                                                    lambdaParameter
-                                                                DataFieldName = dataFieldName
-                                                                ResultFieldName = resultFieldName
-                                                                ResultFieldStableId =
-                                                                    resultFieldStableId
-                                                                SourceLine =
-                                                                    argumentRange.Start.Line
-                                                                Range = argumentRange
-                                                            },
-                                                            delegateType
-                                                        )
-                                                    | Ok _ ->
-                                                        diagnostic
-                                                            methodDeclaration.BodyRange
-                                                            "the resumable state-machine type did not resolve to a named CLI type"
+                                        match
+                                            parameters
+                                            |> List.tryFindIndex (fun parameter ->
+                                                parameter.Name = captureName
+                                            )
+                                        with
+                                        | None ->
+                                            diagnostic
+                                                methodDeclaration.BodyRange
+                                                $"the captured function '{captureName}' is not an instance-member parameter"
+                                        | Some captureParameterIndex when
+                                            resultType
+                                            <> unitType
+                                            ->
+                                            diagnostic
+                                                methodDeclaration.BodyRange
+                                                "the compensation resumable code must return unit"
+                                        | Some captureParameterIndex when
+                                            parameters.[captureParameterIndex].Type
+                                            <> expectedCaptureType
+                                            ->
+                                            diagnostic
+                                                methodDeclaration.BodyRange
+                                                "the compensation capture must have type unit -> unit"
+                                        | Some captureParameterIndex ->
+                                            createResumableExpression
+                                                delegateType
+                                                dataType
+                                                captureParameterIndex
+                                                captureName
+                                                lambdaParameter
+                                                TypedInvokeCapturedUnitFunction
+                                                argumentRange
+                                            |> Result.map (fun expression ->
+                                                TypedResumableCode expression, delegateType
+                                            )
                                     | _ -> unsupported ()
                                 | Ok _ ->
                                     diagnostic
                                         methodDeclaration.BodyRange
                                         "the constructed expression must produce ResumableCode<'Data, 'T>"
+
+                            let typeResumableTryFinally
+                                computationName
+                                constructedType
+                                lambdaParameter
+                                lambdaBody
+                                argumentRange
+                                =
+                                match
+                                    parameters
+                                    |> List.tryFindIndex (fun parameter ->
+                                        parameter.Name = computationName
+                                    )
+                                with
+                                | None ->
+                                    diagnostic
+                                        methodDeclaration.BodyRange
+                                        $"the computation '{computationName}' is not an instance-member parameter"
+                                | Some computationParameterIndex ->
+                                    match parameters.[computationParameterIndex].Type with
+                                    | CliGenericType(delegateReference, [ dataType; resultType ]) as delegateType when
+                                        isResumableCodeReference delegateReference
+                                        ->
+                                        let compensationDelegateType =
+                                            CliGenericType(
+                                                delegateReference,
+                                                [
+                                                    dataType
+                                                    CliNamedType fsharpUnitType
+                                                ]
+                                            )
+
+                                        match
+                                            typeResumableCode
+                                                (Some compensationDelegateType)
+                                                constructedType
+                                                lambdaParameter
+                                                lambdaBody
+                                                argumentRange
+                                        with
+                                        | Error error -> Error error
+                                        | Ok(TypedResumableCode compensation, actualType) when
+                                            actualType = compensationDelegateType
+                                            ->
+                                            let moduleTypeName = {
+                                                Namespace = "Microsoft.FSharp.Core.CompilerServices"
+                                                Name = "ResumableCode"
+                                            }
+
+                                            match
+                                                resolveNamedType
+                                                    0
+                                                    moduleTypeName
+                                                    methodDeclaration.BodyRange
+                                            with
+                                            | Error error -> Error error
+                                            | Ok(TypedNamedType resolvedModuleType) ->
+                                                let moduleType =
+                                                    CliNamedType {
+                                                        DeclarationId =
+                                                            resolvedModuleType.DeclarationId
+                                                        AssemblyName =
+                                                            resolvedModuleType.AssemblyName
+                                                        TypeName = resolvedModuleType.TypeName
+                                                        IsValueType = resolvedModuleType.IsValueType
+                                                    }
+
+                                                Ok(
+                                                    TypedResumableTryFinally {
+                                                        ResumableCodeModuleType = moduleType
+                                                        DelegateType = delegateType
+                                                        DataType = dataType
+                                                        ResultType = resultType
+                                                        ComputationParameterIndex =
+                                                            computationParameterIndex
+                                                        ComputationName = computationName
+                                                        Compensation = compensation
+                                                    },
+                                                    delegateType
+                                                )
+                                            | Ok _ ->
+                                                diagnostic
+                                                    methodDeclaration.BodyRange
+                                                    "the ResumableCode module did not resolve to a named CLI type"
+                                        | Ok _ ->
+                                            diagnostic
+                                                methodDeclaration.BodyRange
+                                                "the compensation expression does not match ResumableCode<'Data, unit>"
+                                    | _ ->
+                                        diagnostic
+                                            methodDeclaration.BodyRange
+                                            "the computation must have type ResumableCode<'Data, 'T>"
 
                             let typedBody =
                                 match methodDeclaration.Body with
@@ -1681,7 +1928,20 @@ type internal CompilerService() =
                                     diagnostic
                                         methodDeclaration.BodyRange
                                         "string-valued instance members are not yet supported"
-                                | TraitCall _ ->
+                                | MemberCall("ResumableCode",
+                                             "TryFinally",
+                                             [ ValueReference computationName
+                                               TypeConstruction(constructedType,
+                                                                LambdaExpression(lambdaParameter,
+                                                                                 lambdaBody),
+                                                                argumentRange) ]) ->
+                                    typeResumableTryFinally
+                                        computationName
+                                        constructedType
+                                        lambdaParameter
+                                        lambdaBody
+                                        argumentRange
+                                | MemberCall _ ->
                                     diagnostic
                                         methodDeclaration.BodyRange
                                         "trait calls are not yet supported in instance members"
@@ -1689,11 +1949,14 @@ type internal CompilerService() =
                                                    LambdaExpression(lambdaParameter, lambdaBody),
                                                    argumentRange) ->
                                     typeResumableCode
+                                        None
                                         constructedType
                                         lambdaParameter
                                         lambdaBody
                                         argumentRange
                                 | BooleanLiteral _
+                                | AddressOfExpression _
+                                | UnitApplication _
                                 | MemberAssignment _
                                 | SequentialExpression _
                                 | LambdaExpression _
@@ -1806,6 +2069,7 @@ type internal CompilerService() =
                                             | TypedResumableCode expression -> expression.Range
                                             | TypedIntegerLiteral _
                                             | TypedParameterReference _
+                                            | TypedResumableTryFinally _
                                             | TypedTraitCall _ -> methodDeclaration.BodyRange
                                     }
 
@@ -2499,19 +2763,22 @@ type internal CompilerService() =
                         )
                 }
 
-                let dataFieldReference = {
-                    DeclaringType = CliDeclaringType stateMachineType
-                    Name = expression.DataFieldName
-                    FieldType = CliTypeParameter 0
-                    TargetStableId = None
-                }
-
-                let resultFieldReference = {
-                    DeclaringType = CliDeclaringType dataType
-                    Name = expression.ResultFieldName
-                    FieldType = captureType
-                    TargetStableId = Some expression.ResultFieldStableId
-                }
+                let dataFieldReference, resultFieldReference =
+                    match expression.Body with
+                    | TypedStoreCapturedResult(dataFieldName, resultFieldName, resultFieldStableId) ->
+                        Some {
+                            DeclaringType = CliDeclaringType stateMachineType
+                            Name = dataFieldName
+                            FieldType = CliTypeParameter 0
+                            TargetStableId = None
+                        },
+                        Some {
+                            DeclaringType = CliDeclaringType dataType
+                            Name = resultFieldName
+                            FieldType = captureType
+                            TargetStableId = Some resultFieldStableId
+                        }
+                    | TypedInvokeCapturedUnitFunction -> None, None
 
                 {|
                     StableId = stableId
@@ -2534,77 +2801,137 @@ type internal CompilerService() =
                     ResultFieldReference = resultFieldReference
                 |}
 
+            let methodArgumentIndex kind parameterIndex =
+                match kind with
+                | InstanceConstructor
+                | InstanceInlineMember ->
+                    parameterIndex
+                    + 1
+                | ModuleFunction
+                | StaticInlineMemberStub
+                | ClosureConstructor
+                | ClosureInvoke -> parameterIndex
+
+            let resumableCodeConstructionInstructions
+                kind
+                (methodDeclaration: TypedMethodDeclaration)
+                expression
+                =
+                let layout = closureLayout methodDeclaration expression
+
+                let constructor = {
+                    DeclaringType = CliDeclaringType layout.MethodType
+                    Name = ".ctor"
+                    GenericArity = 0
+                    IsInstance = true
+                    ParameterTypes = [ layout.CaptureType ]
+                    ReturnType = CliVoid
+                    TargetStableId = Some layout.ConstructorStableId
+                }
+
+                let invoke = {
+                    DeclaringType = CliDeclaringType layout.MethodType
+                    Name = "Invoke"
+                    GenericArity = 0
+                    IsInstance = true
+                    ParameterTypes = [ CliByRef layout.StateMachineType ]
+                    ReturnType = CliBoolean
+                    TargetStableId = Some layout.InvokeStableId
+                }
+
+                let delegateConstructor = {
+                    DeclaringType = CliDeclaringType expression.DelegateType
+                    Name = ".ctor"
+                    GenericArity = 0
+                    IsInstance = true
+                    ParameterTypes = [
+                        CliObject
+                        CliNativeInt
+                    ]
+                    ReturnType = CliVoid
+                    TargetStableId = None
+                }
+
+                [
+                    LoadArgument(methodArgumentIndex kind expression.CaptureParameterIndex)
+                    NewObject constructor
+                    LoadFunctionPointer invoke
+                    NewObject delegateConstructor
+                ]
+
             let methodInstructions kind (methodDeclaration: TypedMethodDeclaration) =
                 match methodDeclaration.Body with
                 | TypedIntegerLiteral value -> [
                     LoadInt32 value
                     Return
                   ]
-                | TypedParameterReference index ->
-                    let argumentIndex =
-                        match kind with
-                        | InstanceConstructor
-                        | InstanceInlineMember -> index + 1
-                        | ModuleFunction
-                        | StaticInlineMemberStub
-                        | ClosureConstructor
-                        | ClosureInvoke -> index
-
-                    [
-                        LoadArgument argumentIndex
-                        Return
-                    ]
+                | TypedParameterReference index -> [
+                    LoadArgument(methodArgumentIndex kind index)
+                    Return
+                  ]
                 | TypedResumableCode expression ->
-                    let layout = closureLayout methodDeclaration expression
+                    resumableCodeConstructionInstructions kind methodDeclaration expression
+                    @ [ Return ]
+                | TypedResumableTryFinally expression ->
+                    match expression.DelegateType with
+                    | CliGenericType(delegateReference, _) ->
+                        let unitType =
+                            CliNamedType {
+                                DeclarationId =
+                                    "reference:FSharp.Core/type:Microsoft.FSharp.Core.Unit`0"
+                                AssemblyName = "FSharp.Core"
+                                TypeName = {
+                                    Namespace = "Microsoft.FSharp.Core"
+                                    Name = "Unit"
+                                }
+                                IsValueType = false
+                            }
 
-                    let constructor = {
-                        DeclaringType = CliDeclaringType layout.MethodType
-                        Name = ".ctor"
-                        IsInstance = true
-                        ParameterTypes = [ layout.CaptureType ]
-                        ReturnType = CliVoid
-                        TargetStableId = Some layout.ConstructorStableId
-                    }
+                        let referencedDataType = CliMethodTypeParameter 0
+                        let referencedResultType = CliMethodTypeParameter 1
 
-                    let invoke = {
-                        DeclaringType = CliDeclaringType layout.MethodType
-                        Name = "Invoke"
-                        IsInstance = true
-                        ParameterTypes = [ CliByRef layout.StateMachineType ]
-                        ReturnType = CliBoolean
-                        TargetStableId = Some layout.InvokeStableId
-                    }
+                        let referencedDelegateType resultType =
+                            CliGenericType(
+                                delegateReference,
+                                [
+                                    referencedDataType
+                                    resultType
+                                ]
+                            )
 
-                    let delegateConstructor = {
-                        DeclaringType = CliDeclaringType expression.DelegateType
-                        Name = ".ctor"
-                        IsInstance = true
-                        ParameterTypes = [
-                            CliObject
-                            CliNativeInt
+                        let tryFinally = {
+                            DeclaringType = CliDeclaringType expression.ResumableCodeModuleType
+                            Name = "TryFinally"
+                            GenericArity = 2
+                            IsInstance = false
+                            ParameterTypes = [
+                                referencedDelegateType referencedResultType
+                                referencedDelegateType unitType
+                            ]
+                            ReturnType = referencedDelegateType referencedResultType
+                            TargetStableId = None
+                        }
+
+                        [
+                            LoadArgument(
+                                methodArgumentIndex kind expression.ComputationParameterIndex
+                            )
                         ]
-                        ReturnType = CliVoid
-                        TargetStableId = None
-                    }
-
-                    let captureArgumentIndex =
-                        match kind with
-                        | InstanceConstructor
-                        | InstanceInlineMember ->
-                            expression.CaptureParameterIndex
-                            + 1
-                        | ModuleFunction
-                        | StaticInlineMemberStub
-                        | ClosureConstructor
-                        | ClosureInvoke -> expression.CaptureParameterIndex
-
-                    [
-                        LoadArgument captureArgumentIndex
-                        NewObject constructor
-                        LoadFunctionPointer invoke
-                        NewObject delegateConstructor
-                        Return
-                    ]
+                        @ resumableCodeConstructionInstructions
+                            kind
+                            methodDeclaration
+                            expression.Compensation
+                        @ [
+                            CallGenericMethod(
+                                tryFinally,
+                                [
+                                    expression.DataType
+                                    expression.ResultType
+                                ]
+                            )
+                            Return
+                        ]
+                    | _ -> invalidOp "the TryFinally delegate type must be generic"
                 | TypedTraitCall(_, memberName, _) -> [
                     LoadString(
                         "Dynamic invocation of "
@@ -2619,6 +2946,7 @@ type internal CompilerService() =
                                     Name = "NotSupportedException"
                                 }
                             Name = ".ctor"
+                            GenericArity = 0
                             IsInstance = true
                             ParameterTypes = [ CliString ]
                             ReturnType = CliVoid
@@ -2718,6 +3046,23 @@ type internal CompilerService() =
                     | TypedDirectConstraint(TypedMemberConstraint _) -> None
                 )
 
+            let rec cliTypeDependencyIds =
+                function
+                | CliNamedType reference -> [ reference.DeclarationId ]
+                | CliGenericType(reference, arguments) ->
+                    reference.DeclarationId
+                    :: (arguments
+                        |> List.collect cliTypeDependencyIds)
+                | CliByRef elementType -> cliTypeDependencyIds elementType
+                | CliInt32
+                | CliBoolean
+                | CliString
+                | CliObject
+                | CliNativeInt
+                | CliVoid
+                | CliTypeParameter _
+                | CliMethodTypeParameter _ -> []
+
             let methodFragment
                 kind
                 documentIndex
@@ -2730,19 +3075,26 @@ type internal CompilerService() =
 
                 let instructionDependencies =
                     instructions
-                    |> List.choose (
+                    |> List.collect (
                         function
                         | LoadField fieldReference
                         | LoadFieldAddress fieldReference
-                        | StoreField fieldReference -> Some fieldReference.DependencyId
+                        | StoreField fieldReference -> [ fieldReference.DependencyId ]
                         | CallMethod methodReference
+                        | CallVirtualMethod methodReference
                         | LoadFunctionPointer methodReference
-                        | NewObject methodReference -> Some methodReference.DependencyId
+                        | NewObject methodReference -> [ methodReference.DependencyId ]
+                        | CallGenericMethod(methodReference, genericArguments) ->
+                            methodReference.DependencyId
+                            :: (genericArguments
+                                |> List.collect cliTypeDependencyIds)
                         | LoadInt32 _
                         | LoadString _
+                        | LoadNull
                         | LoadArgument _
+                        | Pop
                         | Throw
-                        | Return -> None
+                        | Return -> []
                     )
 
                 {
@@ -2763,7 +3115,8 @@ type internal CompilerService() =
                     Instructions = instructions
                     MaxStack =
                         match methodDeclaration.Body with
-                        | TypedResumableCode _ -> 8
+                        | TypedResumableCode _
+                        | TypedResumableTryFinally _ -> 8
                         | TypedIntegerLiteral _
                         | TypedParameterReference _
                         | TypedTraitCall _ -> 1
@@ -2952,6 +3305,7 @@ type internal CompilerService() =
                                         Name = "Object"
                                     }
                                 Name = ".ctor"
+                                GenericArity = 0
                                 IsInstance = true
                                 ParameterTypes = []
                                 ReturnType = CliVoid
@@ -3044,8 +3398,17 @@ type internal CompilerService() =
                         | TypedObjectType typeDeclaration ->
                             typeDeclaration.Methods
                             |> List.choose (fun methodDeclaration ->
-                                match methodDeclaration.Body with
-                                | TypedResumableCode expression ->
+                                let closureExpression =
+                                    match methodDeclaration.Body with
+                                    | TypedResumableCode expression -> Some expression
+                                    | TypedResumableTryFinally expression ->
+                                        Some expression.Compensation
+                                    | TypedIntegerLiteral _
+                                    | TypedParameterReference _
+                                    | TypedTraitCall _ -> None
+
+                                match closureExpression with
+                                | Some expression ->
                                     let layout = closureLayout methodDeclaration expression
 
                                     let objectConstructor = {
@@ -3055,6 +3418,7 @@ type internal CompilerService() =
                                                 Name = "Object"
                                             }
                                         Name = ".ctor"
+                                        GenericArity = 0
                                         IsInstance = true
                                         ParameterTypes = []
                                         ReturnType = CliVoid
@@ -3102,6 +3466,67 @@ type internal CompilerService() =
                                         Range = methodDeclaration.Range
                                     }
 
+                                    let invokeInstructions, invokeDependencies, invokeIdentity =
+                                        match
+                                            expression.Body,
+                                            layout.DataFieldReference,
+                                            layout.ResultFieldReference
+                                        with
+                                        | TypedStoreCapturedResult _,
+                                          Some dataFieldReference,
+                                          Some resultFieldReference ->
+                                            [
+                                                LoadArgument 1
+                                                LoadFieldAddress dataFieldReference
+                                                LoadArgument 0
+                                                LoadField layout.CaptureFieldReference
+                                                StoreField resultFieldReference
+                                                LoadInt32 1
+                                                Return
+                                            ],
+                                            [
+                                                dataFieldReference.DependencyId
+                                                layout.CaptureFieldReference.DependencyId
+                                                resultFieldReference.DependencyId
+                                            ],
+                                            [
+                                                dataFieldReference.StableId
+                                                layout.CaptureFieldReference.StableId
+                                                resultFieldReference.StableId
+                                            ]
+                                        | TypedInvokeCapturedUnitFunction, None, None ->
+                                            let invokeFunction = {
+                                                DeclaringType =
+                                                    CliDeclaringType layout.CaptureType
+                                                Name = "Invoke"
+                                                GenericArity = 0
+                                                IsInstance = true
+                                                ParameterTypes = [ CliTypeParameter 0 ]
+                                                ReturnType = CliTypeParameter 1
+                                                TargetStableId = None
+                                            }
+
+                                            [
+                                                LoadArgument 0
+                                                LoadField layout.CaptureFieldReference
+                                                LoadNull
+                                                CallVirtualMethod invokeFunction
+                                                Pop
+                                                LoadInt32 1
+                                                Return
+                                            ],
+                                            [
+                                                layout.CaptureFieldReference.DependencyId
+                                                invokeFunction.DependencyId
+                                            ],
+                                            [
+                                                layout.CaptureFieldReference.StableId
+                                                invokeFunction.StableId
+                                            ]
+                                        | _ ->
+                                            invalidOp
+                                                "the resumable closure layout does not match its body"
+
                                     let invoke = {
                                         SchemaVersion = querySchema
                                         StableId = layout.InvokeStableId
@@ -3119,28 +3544,14 @@ type internal CompilerService() =
                                             }
                                         ]
                                         ReturnType = CliBoolean
-                                        Instructions = [
-                                            LoadArgument 1
-                                            LoadFieldAddress layout.DataFieldReference
-                                            LoadArgument 0
-                                            LoadField layout.CaptureFieldReference
-                                            StoreField layout.ResultFieldReference
-                                            LoadInt32 1
-                                            Return
-                                        ]
+                                        Instructions = invokeInstructions
                                         MaxStack = 8
-                                        DependencyIds = [
-                                            layout.DataFieldReference.DependencyId
-                                            layout.CaptureFieldReference.DependencyId
-                                            layout.ResultFieldReference.DependencyId
-                                        ]
+                                        DependencyIds = invokeDependencies
                                         ContentHash =
                                             Fingerprint.parts [
                                                 layout.InvokeStableId
                                                 methodImplementationHash methodDeclaration
-                                                layout.DataFieldReference.StableId
-                                                layout.CaptureFieldReference.StableId
-                                                layout.ResultFieldReference.StableId
+                                                yield! invokeIdentity
                                             ]
                                         DocumentIndex = documentIndex
                                         DocumentChecksum = typed.SourceChecksum
@@ -3179,9 +3590,7 @@ type internal CompilerService() =
                                             invoke
                                         ]
                                     }
-                                | TypedIntegerLiteral _
-                                | TypedParameterReference _
-                                | TypedTraitCall _ -> None
+                                | None -> None
                             )
                         | TypedMethod _
                         | TypedLiteralField _
