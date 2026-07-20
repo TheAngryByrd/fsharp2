@@ -2376,6 +2376,108 @@ module CompilerTargetTests =
                 finally
                     Directory.Delete(root, true)
 
+            testCase "emits an inherited IcedTasks builder with only static members"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-inherited-icedtasks-builder",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "ValueTask.fs")
+
+                    let sourceText =
+                        "namespace IcedTasks.ValueTasks\n\n[<AutoOpen>]\nmodule ValueTasks =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n    type ValueTaskBuilder() =\n        inherit TaskBuilderBase()\n\n        static member inline Kind() : int = 7\n"
+
+                    File.WriteAllText(sourcePath, sourceText)
+
+                    let oracleOutputPath = Path.Combine(root, "ValueTask-oracle.dll")
+                    let oracleResponsePath = Path.Combine(root, "oracle.rsp")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root oracleResponsePath [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{oracleOutputPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let outputPath, _ =
+                        compileForExportFingerprint
+                            root
+                            (Path.Combine(root, "fsharp2.rsp"))
+                            sourcePath
+                            "ValueTask-fsharp2"
+                            []
+
+                    let inspect assemblyPath =
+                        let assembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            assembly.GetType(
+                                "IcedTasks.ValueTasks.ValueTasks+ValueTaskBuilder",
+                                throwOnError = true
+                            )
+
+                        let constructor = builderType.GetConstructor(Type.EmptyTypes)
+
+                        let kind =
+                            builderType.GetMethod(
+                                "Kind",
+                                BindingFlags.Public
+                                ||| BindingFlags.Static
+                            )
+
+                        (builderType.BaseType.FullName,
+                         constructor.Attributes,
+                         kind.Attributes,
+                         kind.ReturnType.FullName),
+                        builderType,
+                        kind
+
+                    let oracleShape, _, _ = inspect oracleOutputPath
+                    let fsharp2Shape, builderType, kind = inspect outputPath
+
+                    Expect.equal
+                        fsharp2Shape
+                        oracleShape
+                        "the derived builder should match the Compatibility Oracle's base, constructor, and static-member shape"
+
+                    let builder = Activator.CreateInstance(builderType)
+
+                    let zero =
+                        builderType.GetMethod(
+                            "Zero",
+                            BindingFlags.Public
+                            ||| BindingFlags.Instance
+                        )
+
+                    Expect.equal
+                        (zero.Invoke(builder, Array.empty<obj>))
+                        (box 0)
+                        "the derived builder should inherit the base implementation"
+
+                    Expect.equal
+                        (kind.Invoke(null, Array.empty<obj>))
+                        (box 7)
+                        "the static member should execute from the derived builder"
+                finally
+                    Directory.Delete(root, true)
+
             testCase "matches Oracle shape and executes a parameterized inline object member"
             <| fun _ ->
                 let root =
@@ -5107,6 +5209,93 @@ module CompilerTargetTests =
                 finally
                     Directory.Delete(root, true)
 
+            testCase "emits multiple namespace fragments from one source document"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.ValueTasks\n\n[<AutoOpen>]\nmodule First =\n    type System.Object with\n        static member First() : int = 1\n\nnamespace IcedTasks.ValueTasks\n\n[<AutoOpen>]\nmodule Second =\n    type System.Object with\n        static member Second() : int = 2\n"
+
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-multiple-namespace-fragments",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "Fragments.fs")
+                    File.WriteAllText(sourcePath, sourceText)
+
+                    let oracleOutputPath = Path.Combine(root, "Fragments-oracle.dll")
+                    let oracleResponsePath = Path.Combine(root, "oracle.rsp")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root oracleResponsePath [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{oracleOutputPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let responsePath = Path.Combine(root, "fsharp2.rsp")
+
+                    let outputPath, _ =
+                        compileForExportFingerprint root responsePath sourcePath "Fragments-fsharp2" []
+
+                    let inspectAndInvoke assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let invoke moduleName memberName =
+                            let moduleType =
+                                emittedAssembly.GetType(
+                                    "IcedTasks.ValueTasks."
+                                    + moduleName,
+                                    throwOnError = true
+                                )
+
+                            let method =
+                                moduleType.GetMethods(
+                                    BindingFlags.Public
+                                    ||| BindingFlags.Static
+                                )
+                                |> Array.find (fun methodInfo ->
+                                    methodInfo.Name.Contains(
+                                        "."
+                                        + memberName,
+                                        StringComparison.Ordinal
+                                    )
+                                )
+
+                            method.Invoke(null, Array.empty) :?> int
+
+                        invoke "First" "First", invoke "Second" "Second"
+
+                    let oracleBehavior = inspectAndInvoke oracleOutputPath
+                    let fsharp2Behavior = inspectAndInvoke outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "both namespace fragments should match the Compatibility Oracle"
+
+                    Expect.equal
+                        fsharp2Behavior
+                        (1, 2)
+                        "both module containers should execute from the same source document"
+                finally
+                    Directory.Delete(root, true)
+
             testCase "emits and executes an object expression"
             <| fun _ ->
                 let sourceText =
@@ -7281,7 +7470,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "48"
+                        "50"
                         "query cache evidence should be versioned"
 
                     Expect.equal

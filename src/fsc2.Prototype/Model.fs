@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 48
+    let Query = 50
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -372,6 +372,7 @@ type internal ParsedObjectTypeContainer =
 type internal ParsedObjectTypeDeclaration = {
     Container: ParsedObjectTypeContainer
     Name: string
+    BaseType: ParsedTypeExpression option
     Methods: ParsedObjectMethodDeclaration list
     ConstructorRange: SourceRange
     Range: SourceRange
@@ -1012,6 +1013,7 @@ type internal TypedObjectTypeDeclaration = {
     StableId: string
     Container: TypedObjectTypeContainer
     Name: string
+    BaseType: CliType option
     Methods: TypedObjectMethodDeclaration list
     ExportFingerprint: string
     ConstructorRange: SourceRange
@@ -1066,6 +1068,7 @@ type internal TypedModule = {
     Namespace: string
     Name: string
     IsPublic: bool
+    DocumentIndex: int
     SourceChecksum: ImmutableArray<byte>
     ContentFingerprint: string
     Attributes: TypedCustomAttribute list
@@ -1221,7 +1224,7 @@ type internal SymbolicTypeKind =
     | ModuleContainer
     | ExtensionModuleContainer
     | StaticMemberContainer
-    | ObjectContainer
+    | ObjectContainer of baseType: CliType
     | StructContainer
     | ClosureContainer
     | ObjectExpressionContainer

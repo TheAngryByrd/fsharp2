@@ -17,6 +17,7 @@ module internal Frontend =
         | TypeKeyword
         | StaticKeyword
         | InlineKeyword
+        | InheritKeyword
         | NewKeyword
         | OverrideKeyword
         | MatchKeyword
@@ -385,6 +386,7 @@ module internal Frontend =
                 | "type" -> add TypeKeyword start
                 | "static" -> add StaticKeyword start
                 | "inline" -> add InlineKeyword start
+                | "inherit" -> add InheritKeyword start
                 | "new" -> add NewKeyword start
                 | "override" -> add OverrideKeyword start
                 | "match" -> add MatchKeyword start
@@ -2800,6 +2802,7 @@ module internal Frontend =
                             | ModuleKeyword
                             | TypeKeyword
                             | AndKeyword
+                            | NamespaceKeyword
                             | EndOfFile -> Ok(List.rev methods)
                             | _ ->
                                 Error(
@@ -2876,6 +2879,23 @@ module internal Frontend =
                             else
                                 expected Equals "expected '='"
 
+                        let! baseType =
+                            if isObjectType then
+                                match (current ()).Kind with
+                                | InheritKeyword ->
+                                    consume ()
+                                    |> ignore
+
+                                    parseResult {
+                                        let! parsedBaseType = parseTypeExpression ()
+                                        let! _ = expected LeftParenthesis "expected '('"
+                                        let! _ = expected RightParenthesis "expected ')'"
+                                        return Some parsedBaseType
+                                    }
+                                | _ -> Ok None
+                            else
+                                Ok None
+
                         return!
                             if isCurrentModuleAugmentation then
                                 if
@@ -2900,6 +2920,7 @@ module internal Frontend =
                                                         ParsedCurrentModuleAugmentation
                                                             declaredTypeName
                                                     Name = declarationName
+                                                    BaseType = None
                                                     Methods = methods
                                                     ConstructorRange = declarationNameToken.Range
                                                     Range = {
@@ -2947,6 +2968,7 @@ module internal Frontend =
                                                 ParsedObjectType {
                                                     Container = OrdinaryObjectType
                                                     Name = declarationName
+                                                    BaseType = baseType
                                                     Methods = methods
                                                     ConstructorRange = declarationNameToken.Range
                                                     Range = {
@@ -3119,6 +3141,7 @@ module internal Frontend =
                                     ParsedObjectType {
                                         Container = ParsedExtensionModule(moduleName, attributes)
                                         Name = extendedTypeName
+                                        BaseType = None
                                         Methods = methods
                                         ConstructorRange = extendedTypeToken.Range
                                         Range = {
@@ -3157,6 +3180,7 @@ module internal Frontend =
                                     :: declarations
                                 )
                         }
+                    | NamespaceKeyword
                     | EndOfFile -> Ok(List.rev declarations)
                     | _ ->
                         Error(
@@ -3221,6 +3245,7 @@ module internal Frontend =
                                     :: declarations
                                 )
                         }
+                    | NamespaceKeyword
                     | EndOfFile -> Ok(List.rev declarations)
                     | _ ->
                         Error(
@@ -3259,6 +3284,7 @@ module internal Frontend =
                         |> ImmutableArray.CreateRange<byte>
 
                     match (current ()).Kind with
+                    | NamespaceKeyword
                     | EndOfFile ->
                         Ok {
                             StableId =
@@ -3398,6 +3424,7 @@ module internal Frontend =
                                 return namespaceFile namespaceName openNamespaces [] declarations
                             }
                         | ModuleKeyword -> finishNamespaceFile namespaceName openNamespaces [] []
+                        | NamespaceKeyword
                         | EndOfFile -> Ok(namespaceFile namespaceName openNamespaces [] [])
                         | _ ->
                             Error(
@@ -3408,21 +3435,36 @@ module internal Frontend =
                             )
                 }
 
-            match (current ()).Kind with
-            | ModuleKeyword ->
-                consume ()
-                |> ignore
+            let parseContainer () =
+                match (current ()).Kind with
+                | ModuleKeyword ->
+                    consume ()
+                    |> ignore
 
-                parseModule ()
-            | NamespaceKeyword ->
-                consume ()
-                |> ignore
+                    parseModule ()
+                | NamespaceKeyword ->
+                    consume ()
+                    |> ignore
 
-                parseNamespaceFile ()
-            | _ ->
-                Error(
-                    prototypeDiagnostic
-                        source.Path
-                        (current ()).Range
-                        "expected 'module' or 'namespace'"
-                )
+                    parseNamespaceFile ()
+                | _ ->
+                    Error(
+                        prototypeDiagnostic
+                            source.Path
+                            (current ()).Range
+                            "expected 'module' or 'namespace'"
+                    )
+
+            let rec parseContainers containers =
+                if index >= input.Length then
+                    Ok(List.rev containers)
+                else
+                    match (current ()).Kind with
+                    | EndOfFile -> Ok(List.rev containers)
+                    | _ ->
+                        parseResult {
+                            let! parsed = parseContainer ()
+                            return! parseContainers (parsed :: containers)
+                        }
+
+            parseContainers []

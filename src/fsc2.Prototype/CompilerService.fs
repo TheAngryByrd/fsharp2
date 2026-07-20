@@ -469,7 +469,7 @@ type private CheckedSourceStruct = {
 /// values are semantic/compiler state; final SRM state never enters these maps.
 type internal CompilerService() =
     let querySchema = CompilerSchema.Query
-    let parseCache = Dictionary<string, ParsedModule>(StringComparer.Ordinal)
+    let parseCache = Dictionary<string, ParsedModule list>(StringComparer.Ordinal)
     let checkCache = Dictionary<string, TypedModule>(StringComparer.Ordinal)
     let lowerCache = Dictionary<string, SymbolicAssembly>(StringComparer.Ordinal)
     let lastSuccessfulContent = Dictionary<string, string>(StringComparer.Ordinal)
@@ -518,7 +518,12 @@ type internal CompilerService() =
                 parseCache.Add(key, parsed)
                 Ok(parsed, key)
 
-    let check (references: ReferenceTypeIndex) (sourcePath: string) (parsed: ParsedModule) =
+    let check
+        (references: ReferenceTypeIndex)
+        (sourcePath: string)
+        (documentIndex: int)
+        (parsed: ParsedModule)
+        =
         let key =
             Fingerprint.parts [
                 querySchema.ToString(CultureInfo.InvariantCulture)
@@ -536,6 +541,7 @@ type internal CompilerService() =
             Ok(
                 {
                     typed with
+                        DocumentIndex = documentIndex
                         SourceChecksum = parsed.SourceChecksum
                 },
                 key
@@ -4757,15 +4763,29 @@ type internal CompilerService() =
                                         )
                                     )
 
-                        match typedContainer with
-                        | Error error -> Error error
-                        | Ok typedContainer ->
+                        let typedBaseType =
+                            match declaration.BaseType with
+                            | None -> Ok None
+                            | Some baseType ->
+                                baseType
+                                |> resolveType (HashSet<string>(StringComparer.Ordinal))
+                                |> Result.bind (toCliType Map.empty declaration.ConstructorRange)
+                                |> Result.map Some
+
+                        match typedContainer, typedBaseType with
+                        | Error error, _
+                        | _, Error error -> Error error
+                        | Ok typedContainer, Ok typedBaseType ->
                             let exportFingerprint =
                                 match typedContainer with
                                 | OrdinaryTypedObjectType ->
                                     Fingerprint.parts [
                                         stableId
                                         "constructor:unit"
+                                        "base-type"
+                                        typedBaseType
+                                        |> Option.defaultValue CliObject
+                                        |> TypeIdentity.cliType
 
                                         yield!
                                             methods
@@ -4809,6 +4829,7 @@ type internal CompilerService() =
                                     StableId = stableId
                                     Container = typedContainer
                                     Name = declaration.Name
+                                    BaseType = typedBaseType
                                     Methods = methods
                                     ExportFingerprint = exportFingerprint
                                     ConstructorRange = declaration.ConstructorRange
@@ -5101,6 +5122,7 @@ type internal CompilerService() =
                         Namespace = parsed.Namespace
                         Name = parsed.Name
                         IsPublic = parsed.IsPublic
+                        DocumentIndex = documentIndex
                         SourceChecksum = parsed.SourceChecksum
                         ContentFingerprint = parsed.ContentFingerprint
                         Attributes = moduleAttributes
@@ -5262,14 +5284,19 @@ type internal CompilerService() =
             |> String.concat "|"
             |> Fingerprint.text
 
-        let contentFingerprint =
+        let sourceModules =
             typedModules
+            |> List.distinctBy _.DocumentIndex
+            |> List.sortBy _.DocumentIndex
+
+        let contentFingerprint =
+            sourceModules
             |> List.map _.ContentFingerprint
             |> String.concat "|"
             |> Fingerprint.text
 
         let debugFingerprint =
-            typedModules
+            sourceModules
             |> List.map (fun typed ->
                 typed.SourceChecksum
                 |> Seq.toArray
@@ -5312,13 +5339,13 @@ type internal CompilerService() =
                 + moduleName
 
             let documents =
-                typedModules
-                |> List.mapi (fun documentIndex typed -> {
+                sourceModules
+                |> List.map (fun typed -> {
                     SchemaVersion = querySchema
                     StableId =
                         moduleStableId
                         + "/document:"
-                        + documentIndex.ToString()
+                        + typed.DocumentIndex.ToString()
                     Checksum = typed.SourceChecksum
                 })
 
@@ -6628,7 +6655,9 @@ type internal CompilerService() =
 
             let moduleTypes =
                 modulesWithContentHashes
-                |> List.mapi (fun documentIndex (typed, declarationsWithContentHashes) ->
+                |> List.map (fun (typed, declarationsWithContentHashes) ->
+                    let documentIndex = typed.DocumentIndex
+
                     let typeStableId =
                         moduleStableId
                         + "/type:"
@@ -6794,7 +6823,9 @@ type internal CompilerService() =
 
             let staticTypes =
                 modulesWithContentHashes
-                |> List.mapi (fun documentIndex (typed, declarationsWithContentHashes) ->
+                |> List.map (fun (typed, declarationsWithContentHashes) ->
+                    let documentIndex = typed.DocumentIndex
+
                     declarationsWithContentHashes
                     |> List.choose (fun (declaration, typeContentHash) ->
                         match declaration with
@@ -6894,7 +6925,9 @@ type internal CompilerService() =
 
             let objectTypes =
                 modulesWithContentHashes
-                |> List.mapi (fun documentIndex (typed, declarationsWithContentHashes) ->
+                |> List.map (fun (typed, declarationsWithContentHashes) ->
+                    let documentIndex = typed.DocumentIndex
+
                     let moduleTypeStableId =
                         moduleStableId
                         + "/type:"
@@ -6978,18 +7011,46 @@ type internal CompilerService() =
                                     typeDeclaration.StableId
                                     + "/constructor:unit"
 
-                                let objectConstructor = {
-                                    DeclaringType =
+                                let baseType =
+                                    typeDeclaration.BaseType
+                                    |> Option.defaultValue CliObject
+
+                                let baseDeclaringType, baseConstructorStableId =
+                                    match baseType with
+                                    | CliObject ->
                                         CoreDeclaringType {
                                             Namespace = "System"
                                             Name = "Object"
-                                        }
+                                        },
+                                        None
+                                    | CliNamedType typeReference
+                                    | CliGenericType(typeReference, _) ->
+                                        CliDeclaringType baseType,
+                                        if String.IsNullOrEmpty(typeReference.AssemblyName) then
+                                            Some(
+                                                typeReference.DeclarationId
+                                                + "/constructor:unit"
+                                            )
+                                        else
+                                            None
+                                    | CliInt32
+                                    | CliBoolean
+                                    | CliString
+                                    | CliNativeInt
+                                    | CliVoid
+                                    | CliByRef _
+                                    | CliTypeParameter _
+                                    | CliMethodTypeParameter _ ->
+                                        invalidOp "an object type has an invalid base type"
+
+                                let objectConstructor = {
+                                    DeclaringType = baseDeclaringType
                                     Name = ".ctor"
                                     GenericArity = 0
                                     IsInstance = true
                                     ParameterTypes = []
                                     ReturnType = CliVoid
-                                    TargetStableId = None
+                                    TargetStableId = baseConstructorStableId
                                 }
 
                                 let constructor = {
@@ -7011,7 +7072,7 @@ type internal CompilerService() =
                                     ]
                                     EmitDefaultSequencePoint = true
                                     MaxStack = 1
-                                    DependencyIds = [ objectConstructor.StableId ]
+                                    DependencyIds = [ objectConstructor.DependencyId ]
                                     ContentHash =
                                         Fingerprint.parts [
                                             constructorStableId
@@ -7053,7 +7114,7 @@ type internal CompilerService() =
                                     IsPublic = true
                                     EnclosingTypeStableId =
                                         if isNested then Some moduleTypeStableId else None
-                                    Kind = ObjectContainer
+                                    Kind = ObjectContainer baseType
                                     GenericParameters = []
                                     Attributes = [
                                         compilationMappingAttribute
@@ -7077,7 +7138,9 @@ type internal CompilerService() =
 
             let objectExpressionTypes =
                 modulesWithContentHashes
-                |> List.mapi (fun documentIndex (typed, declarationsWithContentHashes) ->
+                |> List.map (fun (typed, declarationsWithContentHashes) ->
+                    let documentIndex = typed.DocumentIndex
+
                     let moduleTypeStableId =
                         moduleStableId
                         + "/type:"
@@ -7241,7 +7304,9 @@ type internal CompilerService() =
 
             let closureTypes =
                 modulesWithContentHashes
-                |> List.mapi (fun documentIndex (typed, declarationsWithContentHashes) ->
+                |> List.map (fun (typed, declarationsWithContentHashes) ->
+                    let documentIndex = typed.DocumentIndex
+
                     let moduleTypeStableId =
                         moduleStableId
                         + "/type:"
@@ -7484,7 +7549,9 @@ type internal CompilerService() =
 
             let boundMemberClosureTypes =
                 modulesWithContentHashes
-                |> List.mapi (fun documentIndex (typed, declarationsWithContentHashes) ->
+                |> List.map (fun (typed, declarationsWithContentHashes) ->
+                    let documentIndex = typed.DocumentIndex
+
                     let moduleTypeStableId =
                         moduleStableId
                         + "/type:"
@@ -7679,7 +7746,9 @@ type internal CompilerService() =
 
             let unitLambdaClosureTypes =
                 modulesWithContentHashes
-                |> List.mapi (fun documentIndex (typed, declarationsWithContentHashes) ->
+                |> List.map (fun (typed, declarationsWithContentHashes) ->
+                    let documentIndex = typed.DocumentIndex
+
                     let moduleTypeStableId =
                         moduleStableId
                         + "/type:"
@@ -8008,16 +8077,26 @@ type internal CompilerService() =
             else
                 "miss"
 
-        let rec parseAll parsed keys remaining =
+        let rec parseAll documentIndex parsed keys remaining =
             match remaining with
             | [] -> Ok(List.rev parsed, List.rev keys)
             | source :: tail ->
                 match parse defines source with
                 | Error diagnostic -> Error diagnostic
-                | Ok(parsedModule, key) ->
+                | Ok(parsedModules, key) ->
+                    let sourceModules =
+                        parsedModules
+                        |> List.map (fun parsedModule ->
+                            source, documentIndex, parsedModule
+                        )
+
                     parseAll
-                        ((source, parsedModule)
-                         :: parsed)
+                        (documentIndex + 1)
+                        ((parsed, sourceModules)
+                         ||> List.fold (fun state parsedModule ->
+                             parsedModule
+                             :: state
+                         ))
                         (key
                          :: keys)
                         tail
@@ -8025,8 +8104,8 @@ type internal CompilerService() =
         let rec checkAll typed keys remaining =
             match remaining with
             | [] -> Ok(List.rev typed, List.rev keys)
-            | (source, parsedModule) :: tail ->
-                match check references source.Path parsedModule with
+            | (source, documentIndex, parsedModule) :: tail ->
+                match check references source.Path documentIndex parsedModule with
                 | Error diagnostic -> Error diagnostic
                 | Ok(typedModule, key) ->
                     checkAll
@@ -8038,7 +8117,7 @@ type internal CompilerService() =
 
         let parseStarted = Stopwatch.GetTimestamp()
 
-        match parseAll [] [] sources with
+        match parseAll 0 [] [] sources with
         | Error error -> Error error
         | Ok(parsedModules, parseKeys) ->
             let parseElapsedMicroseconds = elapsedMicroseconds parseStarted
@@ -8055,7 +8134,10 @@ type internal CompilerService() =
                 let contentFingerprint =
                     references.Fingerprint
                     :: (parsedModules
-                        |> List.map (fun (_, parsedModule) -> parsedModule.ContentFingerprint))
+                        |> List.distinctBy (fun (_, documentIndex, _) -> documentIndex)
+                        |> List.map (fun (_, _, parsedModule) ->
+                            parsedModule.ContentFingerprint
+                        ))
                     |> combine
 
                 let invalidationReason =

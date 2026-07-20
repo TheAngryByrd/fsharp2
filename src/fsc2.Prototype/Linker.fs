@@ -1194,14 +1194,22 @@ module internal Linker =
             else
                 resolveAssemblyReference "FSharp.Core"
 
+        let coreTypeEntity typeName =
+            let handle = resolveCoreTypeReference typeName
+
+            MetadataTokens.EntityHandle(
+                TableIndex.TypeRef,
+                MetadataTokens.GetRowNumber(handle)
+            )
+
         let systemObject =
-            resolveCoreTypeReference {
+            coreTypeEntity {
                 Namespace = "System"
                 Name = "Object"
             }
 
         let systemValueType =
-            resolveCoreTypeReference {
+            coreTypeEntity {
                 Namespace = "System"
                 Name = "ValueType"
             }
@@ -1373,7 +1381,7 @@ module internal Linker =
                 | StaticMemberContainer ->
                     visibility
                     ||| enum<TypeAttributes> 0x00002000
-                | ObjectContainer ->
+                | ObjectContainer _ ->
                     visibility
                     ||| enum<TypeAttributes> 0x00002000
                 | StructContainer ->
@@ -1404,10 +1412,10 @@ module internal Linker =
             let baseType =
                 match typeFragment.Kind with
                 | StructContainer -> systemValueType
+                | ObjectContainer declaredBaseType -> resolveCliTypeEntity declaredBaseType
                 | ModuleContainer
                 | ExtensionModuleContainer
                 | StaticMemberContainer
-                | ObjectContainer
                 | ClosureContainer
                 | ObjectExpressionContainer -> systemObject
 
