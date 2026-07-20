@@ -153,6 +153,7 @@ module private TypeIdentity =
             ]
         | TypedNullLiteral -> "null"
         | TypedUnitLiteral -> "unit"
+        | TypedReceiverReference -> "receiver"
         | TypedParameterReference index ->
             Fingerprint.parts [
                 "parameter"
@@ -2622,13 +2623,16 @@ type internal CompilerService() =
                                                     remaining
 
                                 let rec typeStaticExpressionFor
+                                    (expressionReceiver: (string * CliType) option)
                                     (expressionParameters: TypedParameter list)
                                     localBindings
                                     nextLocalIndex
                                     expression
                                     =
                                     let typeStaticExpression =
-                                        typeStaticExpressionFor expressionParameters
+                                        typeStaticExpressionFor
+                                            expressionReceiver
+                                            expressionParameters
 
                                     match expression with
                                     | IntegerLiteral value ->
@@ -2669,9 +2673,19 @@ type internal CompilerService() =
                                                     nextLocalIndex
                                                 )
                                             | None ->
-                                                diagnostic
-                                                    methodDeclaration.BodyRange
-                                                    $"the value '{name}' is not a static-member parameter or local binding"
+                                                match expressionReceiver with
+                                                | Some(receiverName, receiverType) when
+                                                    receiverName = name
+                                                    ->
+                                                    Ok(
+                                                        TypedReceiverReference,
+                                                        receiverType,
+                                                        nextLocalIndex
+                                                    )
+                                                | _ ->
+                                                    diagnostic
+                                                        methodDeclaration.BodyRange
+                                                        $"the value '{name}' is not a static-member parameter, receiver, or local binding"
                                     | UnitLambdaExpression(ValueReference captureName) ->
                                         match declaredReturnType with
                                         | Some(CliGenericType(functionReference,
@@ -3688,6 +3702,10 @@ type internal CompilerService() =
 
                                                             match
                                                                 typeStaticExpressionFor
+                                                                    (Some(
+                                                                        receiverName,
+                                                                        baseCliType
+                                                                    ))
                                                                     memberParameters
                                                                     Map.empty
                                                                     0
@@ -3755,7 +3773,7 @@ type internal CompilerService() =
                                             "this static-member expression is not yet supported"
 
                                 let typeStaticExpression =
-                                    typeStaticExpressionFor parameters
+                                    typeStaticExpressionFor None parameters
 
                                 let rec inferredSubtypeConstraints =
                                     function
@@ -3826,6 +3844,7 @@ type internal CompilerService() =
                                     | TypedStringLiteral _
                                     | TypedNullLiteral
                                     | TypedUnitLiteral
+                                    | TypedReceiverReference
                                     | TypedParameterReference _
                                     | TypedLocalReference _
                                     | TypedAddressOf _
@@ -4857,6 +4876,7 @@ type internal CompilerService() =
                                     | TypedStringLiteral _
                                     | TypedNullLiteral
                                     | TypedUnitLiteral
+                                    | TypedReceiverReference
                                     | TypedParameterReference _
                                     | TypedLocalReference _
                                     | TypedLet _
@@ -6149,6 +6169,7 @@ type internal CompilerService() =
                 | TypedStringLiteral value -> [ LoadString value ], []
                 | TypedNullLiteral -> [ LoadNull ], []
                 | TypedUnitLiteral -> [], []
+                | TypedReceiverReference -> [ LoadArgument 0 ], []
                 | TypedParameterReference index ->
                     [ LoadArgument(methodArgumentIndex kind index) ], []
                 | TypedLocalReference index -> [ LoadLocal index ], []
@@ -6527,7 +6548,7 @@ type internal CompilerService() =
                         Return
                     ],
                     []
-                | (TypedStringLiteral _ | TypedNullLiteral | TypedUnitLiteral | TypedLocalReference _ | TypedLet _ | TypedLocalAssignment _ | TypedAddressOf _ | TypedStaticMethodCall _ | TypedObjectConstruction _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _ | TypedUpcast _ | TypedSequential _ | TypedBooleanNegation _ | TypedTypeTestMatch _ | TypedObjectExpression _) as expression ->
+                | (TypedStringLiteral _ | TypedNullLiteral | TypedUnitLiteral | TypedReceiverReference | TypedLocalReference _ | TypedLet _ | TypedLocalAssignment _ | TypedAddressOf _ | TypedStaticMethodCall _ | TypedObjectConstruction _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _ | TypedUpcast _ | TypedSequential _ | TypedBooleanNegation _ | TypedTypeTestMatch _ | TypedObjectExpression _) as expression ->
                     let instructions, locals =
                         valueExpressionInstructions freshLabel kind expression
 
@@ -6818,6 +6839,7 @@ type internal CompilerService() =
                         | TypedStringLiteral _
                         | TypedNullLiteral
                         | TypedUnitLiteral
+                        | TypedReceiverReference
                         | TypedParameterReference _
                         | TypedLocalReference _
                         | TypedLet _
@@ -7106,6 +7128,7 @@ type internal CompilerService() =
                 | TypedStringLiteral _
                 | TypedNullLiteral
                 | TypedUnitLiteral
+                | TypedReceiverReference
                 | TypedParameterReference _
                 | TypedLocalReference _
                 | TypedAddressOf _
@@ -7527,6 +7550,7 @@ type internal CompilerService() =
                                     | TypedStringLiteral _
                                     | TypedNullLiteral
                                     | TypedUnitLiteral
+                                    | TypedReceiverReference
                                     | TypedParameterReference _
                                     | TypedLocalReference _
                                     | TypedLet _
@@ -7913,6 +7937,7 @@ type internal CompilerService() =
                                 | TypedStringLiteral _
                                 | TypedNullLiteral
                                 | TypedUnitLiteral
+                                | TypedReceiverReference
                                 | TypedParameterReference _
                                 | TypedLocalReference _
                                 | TypedLet _
@@ -8099,6 +8124,7 @@ type internal CompilerService() =
                                 | TypedStringLiteral _
                                 | TypedNullLiteral
                                 | TypedUnitLiteral
+                                | TypedReceiverReference
                                 | TypedParameterReference _
                                 | TypedLocalReference _
                                 | TypedLet _

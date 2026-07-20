@@ -5412,7 +5412,7 @@ module CompilerTargetTests =
             testCase "emits a parameterized object-expression override"
             <| fun _ ->
                 let sourceText =
-                    "namespace IcedTasks.TaskBase\n\nopen System\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        static member inline Make() : System.Object =\n            { new System.Object() with\n                override _.Equals(value) = Object.ReferenceEquals(value, value) }\n"
+                    "namespace IcedTasks.TaskBase\n\nopen System\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        static member inline Make() : System.Object =\n            { new System.Object() with\n                override self.Equals(value) = Object.ReferenceEquals(self, value) }\n"
 
                 withObjectMemberDifferential
                     "fsharp2-parameterized-object-expression"
@@ -5435,7 +5435,7 @@ module CompilerTargetTests =
                         (equals.GetParameters()
                          |> Array.map _.ParameterType.FullName),
                         equals.ReturnType.FullName,
-                        instance.Equals(obj ())
+                        instance.Equals(instance)
 
                     let oracleShape = inspectAndInvoke oracleOutputPath
                     let fsharp2Shape = inspectAndInvoke outputPath
@@ -7622,7 +7622,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "53"
+                        "54"
                         "query cache evidence should be versioned"
 
                     Expect.equal
