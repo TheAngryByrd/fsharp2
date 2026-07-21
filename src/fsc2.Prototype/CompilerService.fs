@@ -2246,7 +2246,9 @@ type internal CompilerService() =
                         + "/type:"
                         + declaration.Name
 
-                    let typeMethod (methodDeclaration: ParsedStaticMethodDeclaration) =
+                    let typeConstrainedMethod
+                        (methodDeclaration: ParsedStaticMethodDeclaration)
+                        =
                         let explicitTypeParametersAreUnique =
                             (methodDeclaration.TypeParameters
                              |> Set.ofList
@@ -2711,6 +2713,36 @@ type internal CompilerService() =
                                 diagnostic
                                     methodDeclaration.BodyRange
                                     "static inline members require a constrained trait call"
+
+                    let typeMethod (methodDeclaration: ParsedStaticMethodDeclaration) =
+                        if List.isEmpty methodDeclaration.Constraints then
+                            let syntheticObjectType =
+                                ParsedObjectType {
+                                    Container = OrdinaryObjectType
+                                    Name = declaration.Name
+                                    BaseType = None
+                                    Methods = [ ParsedStaticObjectMethod methodDeclaration ]
+                                    ConstructorRange = declaration.Range
+                                    Range = declaration.Range
+                                }
+
+                            typeDeclaration syntheticObjectType
+                            |> Result.bind (fun typedDeclaration ->
+                                match typedDeclaration with
+                                | TypedObjectType typedObjectType ->
+                                    match typedObjectType.Methods with
+                                    | [ TypedStaticObjectMethod typedMethod ] -> Ok typedMethod
+                                    | _ ->
+                                        diagnostic
+                                            methodDeclaration.Range
+                                            "the shared static-member checker returned an invalid method set"
+                                | _ ->
+                                    diagnostic
+                                        methodDeclaration.Range
+                                        "the shared static-member checker returned an invalid declaration"
+                            )
+                        else
+                            typeConstrainedMethod methodDeclaration
 
                     match
                         declaration.Methods
@@ -3264,10 +3296,67 @@ type internal CompilerService() =
                                 methodDeclaration.Range
                                 "constraints on static object members are not yet supported"
                         else
+                            let inferredParameterTypes =
+                                inferObjectMethodParameterTypes methodDeclaration.Body
+
+                            let usedTypeParameterNames =
+                                HashSet<string>(
+                                    collectMethodTypeParameters
+                                        methodDeclaration.TypeParameters
+                                        methodDeclaration.Parameters
+                                        methodDeclaration.ReturnType,
+                                    StringComparer.Ordinal
+                                )
+
+                            let mutable inferredTypeParameterIndex = 0
+
+                            let rec nextInferredTypeParameterName () =
+                                let index = inferredTypeParameterIndex
+
+                                inferredTypeParameterIndex <-
+                                    inferredTypeParameterIndex
+                                    + 1
+
+                                let candidate =
+                                    if index < 26 then
+                                        char (
+                                            int 'a'
+                                            + index
+                                        )
+                                        |> string
+                                    else
+                                        "a"
+                                        + index.ToString(CultureInfo.InvariantCulture)
+
+                                if usedTypeParameterNames.Add(candidate) then
+                                    candidate
+                                else
+                                    nextInferredTypeParameterName ()
+
+                            let generalizedParameters =
+                                methodDeclaration.Parameters
+                                |> List.map (fun parameter ->
+                                    match parameter.Type with
+                                    | ParsedWildcardType range when
+                                        inferredParameterTypes
+                                        |> Map.containsKey parameter.Name
+                                        |> not
+                                        ->
+                                        {
+                                            parameter with
+                                                Type =
+                                                    ParsedTypeParameter(
+                                                        nextInferredTypeParameterName (),
+                                                        range
+                                                    )
+                                        }
+                                    | _ -> parameter
+                                )
+
                             let methodTypeParameters =
                                 collectMethodTypeParameters
                                     methodDeclaration.TypeParameters
-                                    methodDeclaration.Parameters
+                                    generalizedParameters
                                     methodDeclaration.ReturnType
 
                             let declaredMethodParameters =
@@ -3282,8 +3371,8 @@ type internal CompilerService() =
                                 typeObjectMethodParameters
                                     methodParameterIndex
                                     declaredMethodParameters
-                                    (inferObjectMethodParameterTypes methodDeclaration.Body)
-                                    methodDeclaration.Parameters
+                                    inferredParameterTypes
+                                    generalizedParameters
 
                             let declaredReturnType =
                                 typeObjectMethodReturnType
@@ -6501,7 +6590,7 @@ type internal CompilerService() =
                                                 |> List.distinctBy
                                                     TypeIdentity.methodConstraintIdentity
                                             ParsedAttributes = methodDeclaration.Attributes
-                                            ParsedParameters = methodDeclaration.Parameters
+                                            ParsedParameters = generalizedParameters
                                             Parameters = parameters
                                             ReturnType = returnType
                                             Body = body
