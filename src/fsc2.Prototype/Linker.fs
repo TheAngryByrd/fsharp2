@@ -479,6 +479,127 @@ module internal Linker =
             methodReference.ParameterTypes
             methodReference.ReturnType
 
+    let private requiredMaxStack (methodFragment: SymbolicMethodFragment) =
+        let body = methodFragment.Instructions |> List.toArray
+
+        if Array.isEmpty body then
+            0
+        else
+            let labels = Dictionary<int, int>()
+
+            body
+            |> Array.iteri (fun index instruction ->
+                match instruction with
+                | MarkLabel label -> labels.Add(label, index)
+                | _ -> ()
+            )
+
+            let labelIndex label =
+                match labels.TryGetValue(label) with
+                | true, index -> index
+                | false, _ -> invalidOp $"symbolic branch target '{label}' is not defined"
+
+            let depths: int option array = Array.create body.Length None
+            let pending = Queue<int * int>()
+            let mutable maximum = 0
+
+            let enqueue index depth =
+                if depth < 0 then
+                    invalidOp "symbolic IL produced a negative evaluation-stack depth"
+
+                maximum <- max maximum depth
+
+                if index < body.Length then
+                    match depths.[index] with
+                    | None ->
+                        depths.[index] <- Some depth
+                        pending.Enqueue(index, depth)
+                    | Some existing when existing = depth -> ()
+                    | Some existing ->
+                        invalidOp
+                            $"symbolic IL joins stack depths {existing} and {depth} at instruction {index}"
+
+            let callEffect (methodReference: SymbolicMethodReference) =
+                let consumed =
+                    methodReference.ParameterTypes.Length
+                    + (if methodReference.IsInstance then 1 else 0)
+
+                let produced =
+                    if methodReference.ReturnType = CliVoid then 0 else 1
+
+                consumed, produced
+
+            let stackEffect =
+                function
+                | MarkSequencePoint _
+                | MarkHiddenSequencePoint
+                | MarkLabel _
+                | Branch _
+                | Leave _
+                | DefineCatchRegion _
+                | Nop -> 0, 0
+                | BranchIfFalse _
+                | StoreLocal _
+                | InitializeObject _
+                | StoreStaticField _
+                | Pop
+                | Throw -> 1, 0
+                | Box _
+                | UnboxAny _
+                | CastClass _
+                | IsInstance _
+                | LoadField _
+                | LoadFieldAddress _ -> 1, 1
+                | CompareEqual -> 2, 1
+                | LoadInt32 _
+                | LoadString _
+                | LoadNull
+                | LoadArgument _
+                | LoadArgumentAddress _
+                | LoadLocal _
+                | LoadLocalAddress _
+                | LoadStaticField _
+                | LoadFunctionPointer _ -> 0, 1
+                | StoreField _ -> 2, 0
+                | CallMethod methodReference
+                | CallVirtualMethod methodReference
+                | CallGenericMethod(methodReference, _) -> callEffect methodReference
+                | NewObject methodReference -> methodReference.ParameterTypes.Length, 1
+                | Return ->
+                    if methodFragment.ReturnType = CliVoid then 0, 0 else 1, 0
+
+            enqueue 0 0
+
+            for instruction in body do
+                match instruction with
+                | DefineCatchRegion(_, _, handlerStart, _, _) ->
+                    enqueue (labelIndex handlerStart) 1
+                | _ -> ()
+
+            while pending.Count > 0 do
+                let index, depth = pending.Dequeue()
+                let instruction = body.[index]
+                let consumed, produced = stackEffect instruction
+
+                if depth < consumed then
+                    invalidOp
+                        $"symbolic IL consumes {consumed} stack values from depth {depth} at instruction {index}"
+
+                let nextDepth = depth - consumed + produced
+                maximum <- max maximum nextDepth
+
+                match instruction with
+                | BranchIfFalse label ->
+                    enqueue (labelIndex label) nextDepth
+                    enqueue (index + 1) nextDepth
+                | Branch label -> enqueue (labelIndex label) nextDepth
+                | Leave label -> enqueue (labelIndex label) 0
+                | Throw
+                | Return -> ()
+                | _ -> enqueue (index + 1) nextDepth
+
+            maximum
+
     let private encodeMethodBody
         (metadata: MetadataBuilder)
         (resolveDeclaringType: SymbolicDeclaringType -> EntityHandle)
@@ -489,6 +610,7 @@ module internal Linker =
         let code = BlobBuilder()
         let controlFlow = ControlFlowBuilder()
         let instructions = InstructionEncoder(code, controlFlow)
+        let maxStack = max methodFragment.MaxStack (requiredMaxStack methodFragment)
         let sequencePoints = ResizeArray<int * SourceRange option>()
         let labels = Dictionary<int, LabelHandle>()
         let catchRegions = ResizeArray<int * int * int * int * CliType>()
@@ -632,7 +754,7 @@ module internal Linker =
 
         stream.AddMethodBody(
             instructions,
-            maxStack = methodFragment.MaxStack,
+            maxStack = maxStack,
             localVariablesSignature = localSignature
         ),
         codeSize,

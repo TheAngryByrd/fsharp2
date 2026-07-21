@@ -307,10 +307,47 @@ module private TypeIdentity =
                 cliType expression.DomainType
                 cliType expression.RangeType
             ]
+        | TypedFunctionLambda expression ->
+            Fingerprint.parts [
+                "function-lambda"
+                cliType expression.FunctionType
+                cliType expression.ConverterType
+                expression.ParameterName
+                cliType expression.ParameterType
+                cliType expression.ReturnType
+
+                yield!
+                    expression.Captures
+                    |> List.map (fun capture ->
+                        Fingerprint.parts [
+                            capture.OuterParameterIndex.ToString(
+                                CultureInfo.InvariantCulture
+                            )
+                            capture.Name
+                            cliType capture.Type
+                            capture.Field.Name
+                        ]
+                    )
+
+                inlineBody expression.Body
+            ]
         | TypedDelegateLambda expression ->
             Fingerprint.parts [
                 "delegate-lambda"
                 cliType expression.DelegateType
+
+                yield!
+                    expression.Captures
+                    |> List.map (fun capture ->
+                        Fingerprint.parts [
+                            capture.OuterParameterIndex.ToString(
+                                CultureInfo.InvariantCulture
+                            )
+                            capture.Name
+                            cliType capture.Type
+                            capture.Field.Name
+                        ]
+                    )
 
                 yield!
                     (expression.LambdaParameterNames, expression.LambdaParameterTypes)
@@ -404,6 +441,12 @@ module private TypeIdentity =
                 "boolean-negation"
                 inlineBody expression
             ]
+        | TypedEquality(left, right, _) ->
+            Fingerprint.parts [
+                "equality"
+                inlineBody left
+                inlineBody right
+            ]
         | TypedTryWith(body,
                        handlerLocalIndex,
                        handlerName,
@@ -445,6 +488,7 @@ module private TypeIdentity =
                              targetType,
                              localIndex,
                              bindingName,
+                             guard,
                              ifMatched,
                              ifNotMatched,
                              _,
@@ -457,6 +501,9 @@ module private TypeIdentity =
                 cliType targetType
                 localIndex.ToString(CultureInfo.InvariantCulture)
                 bindingName
+                match guard with
+                | Some(guardExpression, _) -> inlineBody guardExpression
+                | None -> "no-guard"
                 inlineBody ifMatched
                 inlineBody ifNotMatched
             ]
@@ -588,6 +635,7 @@ type private ObjectMethodCompletion = {
     Parameters: TypedParameter list
     ReturnType: CliType
     Body: TypedExpression
+    EmitHiddenEntrySequencePoint: bool
     Range: SourceRange
 }
 
@@ -602,6 +650,357 @@ type private CheckedSourceStruct = {
     Namespace: string
     Declaration: TypedStructTypeDeclaration
 }
+
+module private InlineExpansion =
+    let private mapChildren transform =
+        function
+        | MemberCall(receiverName, memberName, arguments) ->
+            MemberCall(receiverName, memberName, arguments |> List.map transform)
+        | StaticTypeMemberCall(receiverType, memberName, arguments) ->
+            StaticTypeMemberCall(receiverType, memberName, arguments |> List.map transform)
+        | GenericMemberCall(receiverName, memberName, typeArguments, arguments) ->
+            GenericMemberCall(
+                receiverName,
+                memberName,
+                typeArguments,
+                arguments |> List.map transform
+            )
+        | MemberAssignment(rootName, memberPath, value) ->
+            MemberAssignment(rootName, memberPath, transform value)
+        | SequentialExpression expressions -> SequentialExpression(expressions |> List.map transform)
+        | FunctionApplication(functionExpression, argumentExpression) ->
+            FunctionApplication(transform functionExpression, transform argumentExpression)
+        | ExpressionMemberCall(receiver, memberName, arguments) ->
+            ExpressionMemberCall(
+                transform receiver,
+                memberName,
+                arguments |> List.map transform
+            )
+        | ExpressionMemberAccess(receiver, memberName) ->
+            ExpressionMemberAccess(transform receiver, memberName)
+        | ConditionalExpression(condition,
+                                ifTrue,
+                                ifFalse,
+                                conditionRange,
+                                ifTrueRange,
+                                ifFalseRange) ->
+            ConditionalExpression(
+                transform condition,
+                transform ifTrue,
+                transform ifFalse,
+                conditionRange,
+                ifTrueRange,
+                ifFalseRange
+            )
+        | ExplicitUpcastExpression(expression, targetType) ->
+            ExplicitUpcastExpression(transform expression, targetType)
+        | SequentialValueExpression expressions ->
+            SequentialValueExpression(
+                expressions
+                |> List.map (fun (expression, range) -> transform expression, range)
+            )
+        | LocalAssignment(name, value) -> LocalAssignment(name, transform value)
+        | BooleanNegationExpression(expression, range) ->
+            BooleanNegationExpression(transform expression, range)
+        | EqualityExpression(left, right, range) ->
+            EqualityExpression(transform left, transform right, range)
+        | TryWithExpression(body,
+                            bindingName,
+                            handler,
+                            tryRange,
+                            withRange,
+                            bodyRange,
+                            handlerRange,
+                            range) ->
+            TryWithExpression(
+                transform body,
+                bindingName,
+                transform handler,
+                tryRange,
+                withRange,
+                bodyRange,
+                handlerRange,
+                range
+            )
+        | MatchExpression(input, clauses, matchHeaderRange, range) ->
+            MatchExpression(
+                transform input,
+                clauses
+                |> List.map (fun (pattern, guard, body, bodyRange) ->
+                    let guard =
+                        guard
+                        |> Option.map (fun (expression, guardRange) ->
+                            transform expression, guardRange
+                        )
+
+                    pattern, guard, transform body, bodyRange
+                ),
+                matchHeaderRange,
+                range
+            )
+        | LetExpression(bindingName,
+                        isMutable,
+                        isInline,
+                        value,
+                        body,
+                        bindingRange,
+                        bodyRange) ->
+            LetExpression(
+                bindingName,
+                isMutable,
+                isInline,
+                transform value,
+                transform body,
+                bindingRange,
+                bodyRange
+            )
+        | LambdaExpression(parameterName, parameterType, body, range) ->
+            LambdaExpression(parameterName, parameterType, transform body, range)
+        | UnitLambdaExpression(body, range) -> UnitLambdaExpression(transform body, range)
+        | TupleExpression(elements, range) ->
+            TupleExpression(elements |> List.map transform, range)
+        | StructTupleExpression(elements, range) ->
+            StructTupleExpression(elements |> List.map transform, range)
+        | TypeConstruction(constructedType, arguments, argumentRange) ->
+            TypeConstruction(constructedType, arguments |> List.map transform, argumentRange)
+        | BindReturnFromComputation(builderName, bindings, returnKind, returnFrom, range) ->
+            BindReturnFromComputation(
+                builderName,
+                bindings
+                |> List.map (fun (name, input) -> name, transform input),
+                returnKind,
+                transform returnFrom,
+                range
+            )
+        | ObjectExpression(baseType, constructorArguments, members, range) ->
+            ObjectExpression(
+                baseType,
+                constructorArguments |> List.map transform,
+                members
+                |> List.map (fun memberDeclaration -> {
+                    memberDeclaration with
+                        Body = transform memberDeclaration.Body
+                }),
+                range
+            )
+        | IntegerLiteral _
+        | UnitLiteral
+        | BooleanLiteral _
+        | StringLiteral _
+        | NullLiteral
+        | ValueReference _
+        | AddressOfExpression _
+        | UnitApplication _
+        | BoundInstanceMember _ as expression -> expression
+
+    let rec private substitute replacements =
+        function
+        | ValueReference name as expression ->
+            replacements
+            |> Map.tryFind name
+            |> Option.defaultValue expression
+        | AddressOfExpression(rootName, memberPath) as expression ->
+            match replacements |> Map.tryFind rootName with
+            | Some(ValueReference replacement) ->
+                AddressOfExpression(replacement, memberPath)
+            | _ -> expression
+        | UnitApplication functionName as expression ->
+            match replacements |> Map.tryFind functionName with
+            | Some functionExpression ->
+                FunctionApplication(functionExpression, UnitLiteral)
+            | None -> expression
+        | MemberCall(receiverName, memberName, arguments) ->
+            let arguments = arguments |> List.map (substitute replacements)
+
+            match replacements |> Map.tryFind receiverName with
+            | Some(ValueReference replacement) ->
+                MemberCall(replacement, memberName, arguments)
+            | Some receiver ->
+                ExpressionMemberCall(substitute replacements receiver, memberName, arguments)
+            | None -> MemberCall(receiverName, memberName, arguments)
+        | GenericMemberCall(receiverName, memberName, typeArguments, arguments) ->
+            let receiverName =
+                match replacements |> Map.tryFind receiverName with
+                | Some(ValueReference replacement) -> replacement
+                | _ -> receiverName
+
+            GenericMemberCall(
+                receiverName,
+                memberName,
+                typeArguments,
+                arguments |> List.map (substitute replacements)
+            )
+        | BoundInstanceMember(receiverName, memberName) as expression ->
+            match replacements |> Map.tryFind receiverName with
+            | Some receiver -> ExpressionMemberAccess(receiver, memberName)
+            | None -> expression
+        | MemberAssignment(rootName, memberPath, value) ->
+            let rootName =
+                match replacements |> Map.tryFind rootName with
+                | Some(ValueReference replacement) -> replacement
+                | _ -> rootName
+
+            MemberAssignment(rootName, memberPath, substitute replacements value)
+        | LocalAssignment(name, value) ->
+            let name =
+                match replacements |> Map.tryFind name with
+                | Some(ValueReference replacement) -> replacement
+                | _ -> name
+
+            LocalAssignment(name, substitute replacements value)
+        | LetExpression(bindingName,
+                        isMutable,
+                        isInline,
+                        value,
+                        body,
+                        bindingRange,
+                        bodyRange) ->
+            LetExpression(
+                bindingName,
+                isMutable,
+                isInline,
+                substitute replacements value,
+                substitute (replacements |> Map.remove bindingName) body,
+                bindingRange,
+                bodyRange
+            )
+        | LambdaExpression(parameterName, parameterType, body, range) ->
+            LambdaExpression(
+                parameterName,
+                parameterType,
+                substitute (replacements |> Map.remove parameterName) body,
+                range
+            )
+        | TryWithExpression(body,
+                            bindingName,
+                            handler,
+                            tryRange,
+                            withRange,
+                            bodyRange,
+                            handlerRange,
+                            range) ->
+            TryWithExpression(
+                substitute replacements body,
+                bindingName,
+                substitute (replacements |> Map.remove bindingName) handler,
+                tryRange,
+                withRange,
+                bodyRange,
+                handlerRange,
+                range
+            )
+        | expression -> mapChildren (substitute replacements) expression
+
+    let private lambdaParameters (expression: ParsedExpression) =
+        let rec collect parameters =
+            function
+            | LambdaExpression(parameterName, _, body, _) ->
+                collect (parameterName :: parameters) body
+            | body -> List.rev parameters, body
+
+        collect [] expression
+
+    let private application (expression: ParsedExpression) : (string * ParsedExpression list) option =
+        let rec collect arguments =
+            function
+            | FunctionApplication(functionExpression, argument) ->
+                collect (argument :: arguments) functionExpression
+            | ValueReference functionName -> Some(functionName, arguments)
+            | _ -> None
+
+        collect [] expression
+
+    let rec private replaceCalls
+        functionName
+        (parameters: string list)
+        functionBody
+        expression
+        =
+        let replacement =
+            application expression
+            |> Option.bind (fun (calledName, arguments) ->
+                let arguments =
+                    arguments
+                    |> List.collect (function
+                        | TupleExpression(elements, _) -> elements
+                        | argument -> [ argument ]
+                    )
+
+                if
+                    calledName = functionName
+                    && arguments.Length = parameters.Length
+                then
+                    List.zip parameters arguments
+                    |> Map.ofList
+                    |> fun replacements -> substitute replacements functionBody
+                    |> Some
+                else
+                    None
+            )
+
+        match replacement with
+        | Some expression -> expression
+        | None ->
+            match expression with
+            | LetExpression(bindingName,
+                            isMutable,
+                            isInline,
+                            value,
+                            body,
+                            bindingRange,
+                            bodyRange) ->
+                LetExpression(
+                    bindingName,
+                    isMutable,
+                    isInline,
+                    replaceCalls functionName parameters functionBody value,
+                    (if bindingName = functionName then
+                         body
+                     else
+                         replaceCalls functionName parameters functionBody body),
+                    bindingRange,
+                    bodyRange
+                )
+            | LambdaExpression(parameterName, parameterType, body, range) ->
+                LambdaExpression(
+                    parameterName,
+                    parameterType,
+                    (if parameterName = functionName then
+                         body
+                     else
+                         replaceCalls functionName parameters functionBody body),
+                    range
+                )
+            | expression ->
+                mapChildren (replaceCalls functionName parameters functionBody) expression
+
+    let expand expression =
+        let mutable expandedLocalFunction = false
+
+        let rec expandExpression =
+            function
+            | LetExpression(bindingName,
+                            false,
+                            true,
+                            value,
+                            body,
+                            _,
+                            _) ->
+                expandedLocalFunction <- true
+
+                let parameters, functionBody = lambdaParameters value
+
+                body
+                |> replaceCalls bindingName parameters functionBody
+                |> expandExpression
+            | expression -> mapChildren expandExpression expression
+
+        expandExpression expression, expandedLocalFunction
+
+    let sourceRange defaultRange =
+        function
+        | LetExpression(_, false, true, _, _, _, bodyRange) -> bodyRange
+        | _ -> defaultRange
 
 /// A deliberately small in-memory query owner. Query identities and cached
 /// values are semantic/compiler state; final SRM state never enters these maps.
@@ -1749,6 +2148,7 @@ type internal CompilerService() =
                                 Parameters = []
                                 ReturnType = CliInt32
                                 Body = TypedIntegerLiteral value
+                                EmitHiddenEntrySequencePoint = false
                                 ExportFingerprint = exportFingerprint
                                 Range = declaration.Range
                             }
@@ -1787,6 +2187,7 @@ type internal CompilerService() =
                     | _, SequentialValueExpression _
                     | _, LocalAssignment _
                     | _, BooleanNegationExpression _
+                    | _, EqualityExpression _
                     | _, TryWithExpression _
                     | _, LetExpression _
                     | _, LambdaExpression _
@@ -2561,6 +2962,7 @@ type internal CompilerService() =
                                             Parameters = parameters
                                             ReturnType = returnType
                                             Body = TypedParameterReference parameterIndex
+                                            EmitHiddenEntrySequencePoint = false
                                             ExportFingerprint = exportFingerprint
                                             Range = methodDeclaration.Range
                                         }
@@ -2677,6 +3079,7 @@ type internal CompilerService() =
                                                         memberName,
                                                         typedArguments
                                                     )
+                                                EmitHiddenEntrySequencePoint = false
                                                 ExportFingerprint = exportFingerprint
                                                 Range = methodDeclaration.Range
                                             }
@@ -2700,6 +3103,7 @@ type internal CompilerService() =
                             | Ok _, Ok _, SequentialValueExpression _
                             | Ok _, Ok _, LocalAssignment _
                             | Ok _, Ok _, BooleanNegationExpression _
+                            | Ok _, Ok _, EqualityExpression _
                             | Ok _, Ok _, TryWithExpression _
                             | Ok _, Ok _, LetExpression _
                             | Ok _, Ok _, LambdaExpression _
@@ -2776,12 +3180,12 @@ type internal CompilerService() =
                             parsed.StableId
                             + "/augmentation:"
                             + StableIdentity.qualifiedTypeName targetTypeName
-                        | ParsedExtensionModule(moduleName, _) ->
+                        | ParsedExtensionModule(moduleName, _, targetTypeName) ->
                             parsed.StableId
                             + "/module:"
                             + moduleName
                             + "/extension:"
-                            + declaration.Name
+                            + StableIdentity.qualifiedTypeName targetTypeName
 
                     let rec collectTypeParameters collected =
                         function
@@ -2829,6 +3233,11 @@ type internal CompilerService() =
                         }
                         IsValueType = false
                     }
+
+                    let isFSharpFunctionTypeReference (typeReference: CliTypeReference) =
+                        typeReference.AssemblyName = "FSharp.Core"
+                        && typeReference.TypeName.Namespace = "Microsoft.FSharp.Core"
+                        && typeReference.TypeName.Name = "FSharpFunc`2"
 
                     let rec toCliType methodParameterIndex range =
                         function
@@ -3083,6 +3492,9 @@ type internal CompilerService() =
                             | LocalAssignment(_, value)
                             | BooleanNegationExpression(value, _)
                             | ExplicitUpcastExpression(value, _) -> collect constraints value
+                            | EqualityExpression(left, right, _) ->
+                                let constraints = collect constraints left
+                                collect constraints right
                             | SequentialExpression expressions ->
                                 (constraints, expressions)
                                 ||> List.fold collect
@@ -3108,8 +3520,16 @@ type internal CompilerService() =
                                 let constraints = collect constraints input
 
                                 (constraints, clauses)
-                                ||> List.fold (fun state (_, body, _) -> collect state body)
-                            | LetExpression(_, _, value, body, _, _) ->
+                                ||> List.fold (fun state (_, guard, body, _) ->
+                                    let state =
+                                        match guard with
+                                        | Some(guardExpression, _) ->
+                                            collect state guardExpression
+                                        | None -> state
+
+                                    collect state body
+                                )
+                            | LetExpression(_, _, _, value, body, _, _) ->
                                 let constraints = collect constraints value
                                 collect constraints body
                             | LambdaExpression(_, _, body, _)
@@ -3277,11 +3697,27 @@ type internal CompilerService() =
                                 Parameters = parameters
                                 ReturnType = completion.ReturnType
                                 Body = completion.Body
+                                EmitHiddenEntrySequencePoint =
+                                    completion.EmitHiddenEntrySequencePoint
                                 ExportFingerprint = exportFingerprint
                                 Range = completion.Range
                             }
 
                     let typeStaticMethod (methodDeclaration: ParsedStaticMethodDeclaration) =
+                        let expandedBodyRange =
+                            InlineExpansion.sourceRange
+                                methodDeclaration.BodyRange
+                                methodDeclaration.Body
+
+                        let expandedBody, emitHiddenEntrySequencePoint =
+                            InlineExpansion.expand methodDeclaration.Body
+
+                        let methodDeclaration = {
+                            methodDeclaration with
+                                Body = expandedBody
+                                BodyRange = expandedBodyRange
+                        }
+
                         let explicitTypeParametersAreUnique =
                             (methodDeclaration.TypeParameters
                              |> Set.ofList
@@ -3473,6 +3909,288 @@ type internal CompilerService() =
                                                     fieldType
                                                     remaining
 
+                                let rewriteFunctionLambdaCaptures
+                                    lambdaParameterCount
+                                    (captures: TypedFunctionLambdaCapture list)
+                                    expression
+                                    =
+                                    let rec rewrite =
+                                        function
+                                        | TypedParameterReference index when
+                                            index >= lambdaParameterCount
+                                            && index < lambdaParameterCount + captures.Length
+                                            ->
+                                            TypedInstanceFieldGet(
+                                                TypedReceiverReference,
+                                                captures.[index - lambdaParameterCount].Field
+                                            )
+                                        | TypedLet(localIndex,
+                                                   name,
+                                                   isMutable,
+                                                   localType,
+                                                   value,
+                                                   body,
+                                                   bindingRange,
+                                                   bodyRange) ->
+                                            TypedLet(
+                                                localIndex,
+                                                name,
+                                                isMutable,
+                                                localType,
+                                                rewrite value,
+                                                rewrite body,
+                                                bindingRange,
+                                                bodyRange
+                                            )
+                                        | TypedLocalAssignment(localIndex, localType, value) ->
+                                            TypedLocalAssignment(localIndex, localType, rewrite value)
+                                        | TypedInstanceFieldGet(receiver, field) ->
+                                            TypedInstanceFieldGet(rewrite receiver, field)
+                                        | TypedStaticMethodCall(target, genericArguments, arguments) ->
+                                            TypedStaticMethodCall(
+                                                target,
+                                                genericArguments,
+                                                arguments |> List.map rewrite
+                                            )
+                                        | TypedObjectConstruction(target, arguments) ->
+                                            TypedObjectConstruction(target, arguments |> List.map rewrite)
+                                        | TypedFunctionApplication(functionType,
+                                                                   domainType,
+                                                                   rangeType,
+                                                                   functionExpression,
+                                                                   argumentExpression) ->
+                                            TypedFunctionApplication(
+                                                functionType,
+                                                domainType,
+                                                rangeType,
+                                                rewrite functionExpression,
+                                                rewrite argumentExpression
+                                            )
+                                        | TypedInstanceMethodCall(target, receiver, arguments) ->
+                                            TypedInstanceMethodCall(
+                                                target,
+                                                rewrite receiver,
+                                                arguments |> List.map rewrite
+                                            )
+                                        | TypedConditional(condition,
+                                                           ifTrue,
+                                                           ifFalse,
+                                                           conditionRange,
+                                                           ifTrueRange,
+                                                           ifFalseRange) ->
+                                            TypedConditional(
+                                                rewrite condition,
+                                                rewrite ifTrue,
+                                                rewrite ifFalse,
+                                                conditionRange,
+                                                ifTrueRange,
+                                                ifFalseRange
+                                            )
+                                        | TypedUpcast(sourceType,
+                                                      targetType,
+                                                      targetResolvedType,
+                                                      value) ->
+                                            TypedUpcast(
+                                                sourceType,
+                                                targetType,
+                                                targetResolvedType,
+                                                rewrite value
+                                            )
+                                        | TypedSequential expressions ->
+                                            TypedSequential(
+                                                expressions
+                                                |> List.map (fun (value, valueType, range) ->
+                                                    rewrite value, valueType, range
+                                                )
+                                            )
+                                        | TypedBooleanNegation(value, range) ->
+                                            TypedBooleanNegation(rewrite value, range)
+                                        | TypedEquality(left, right, range) ->
+                                            TypedEquality(rewrite left, rewrite right, range)
+                                        | TypedTryWith(body,
+                                                       handlerLocalIndex,
+                                                       handlerName,
+                                                       catchType,
+                                                       handler,
+                                                       tryRange,
+                                                       withRange,
+                                                       bodyRange,
+                                                       handlerRange,
+                                                       range) ->
+                                            TypedTryWith(
+                                                rewrite body,
+                                                handlerLocalIndex,
+                                                handlerName,
+                                                catchType,
+                                                rewrite handler,
+                                                tryRange,
+                                                withRange,
+                                                bodyRange,
+                                                handlerRange,
+                                                range
+                                            )
+                                        | TypedNullMatch(input,
+                                                         inputType,
+                                                         localIndex,
+                                                         bindingName,
+                                                         ifNull,
+                                                         ifNotNull,
+                                                         matchHeaderRange,
+                                                         ifNullRange,
+                                                         ifNotNullRange,
+                                                         range) ->
+                                            TypedNullMatch(
+                                                rewrite input,
+                                                inputType,
+                                                localIndex,
+                                                bindingName,
+                                                rewrite ifNull,
+                                                rewrite ifNotNull,
+                                                matchHeaderRange,
+                                                ifNullRange,
+                                                ifNotNullRange,
+                                                range
+                                            )
+                                        | TypedTypeTestMatch(input,
+                                                             targetType,
+                                                             localIndex,
+                                                             bindingName,
+                                                             guard,
+                                                             ifMatched,
+                                                             ifNotMatched,
+                                                             matchHeaderRange,
+                                                             ifMatchedRange,
+                                                             ifNotMatchedRange,
+                                                             range) ->
+                                            TypedTypeTestMatch(
+                                                rewrite input,
+                                                targetType,
+                                                localIndex,
+                                                bindingName,
+                                                (guard
+                                                 |> Option.map (fun (value, guardRange) ->
+                                                     rewrite value, guardRange
+                                                 )),
+                                                rewrite ifMatched,
+                                                rewrite ifNotMatched,
+                                                matchHeaderRange,
+                                                ifMatchedRange,
+                                                ifNotMatchedRange,
+                                                range
+                                            )
+                                        | TypedObjectExpression(typeReference,
+                                                                baseType,
+                                                                constructorArguments,
+                                                                members,
+                                                                range) ->
+                                            TypedObjectExpression(
+                                                typeReference,
+                                                baseType,
+                                                constructorArguments |> List.map rewrite,
+                                                members
+                                                |> List.map (fun memberDeclaration -> {
+                                                    memberDeclaration with
+                                                        Body = rewrite memberDeclaration.Body
+                                                }),
+                                                range
+                                            )
+                                        | expression -> expression
+
+                                    rewrite expression
+
+                                let contextualFunctionCallCandidates receiverName memberName =
+                                    match declaredReturnType with
+                                    | None -> []
+                                    | Some expectedReturnType ->
+                                        match
+                                            references.Resolve(
+                                                parsed.Namespace,
+                                                parsed.OpenedNamespaces,
+                                                {
+                                                    Namespace = String.Empty
+                                                    Name = receiverName
+                                                },
+                                                0
+                                            )
+                                        with
+                                        | Error _ -> []
+                                        | Ok resolvedType ->
+                                            references.Methods(
+                                                resolvedType.DeclarationId,
+                                                memberName,
+                                                true
+                                            )
+                                            |> List.choose (fun methodDefinition ->
+                                                let requiredParameterCount =
+                                                    methodDefinition.ParameterTypes.Length
+                                                    - methodDefinition.OptionalParameterCount
+
+                                                if
+                                                    requiredParameterCount > 1
+                                                    || methodDefinition.ParameterTypes.Length < 1
+                                                then
+                                                    None
+                                                else
+                                                    let substitutions =
+                                                        Array.create
+                                                            methodDefinition.GenericArity
+                                                            None
+
+                                                    let returnTypeMatches =
+                                                        inferReferenceMethodTypeArgument
+                                                            []
+                                                            substitutions
+                                                            methodDefinition.ReturnType
+                                                            expectedReturnType
+
+                                                    if
+                                                        not returnTypeMatches
+                                                        || (substitutions
+                                                            |> Array.exists Option.isNone)
+                                                    then
+                                                        None
+                                                    else
+                                                        let substitute =
+                                                            substituteReferenceMethodTypeArguments
+                                                                []
+                                                                substitutions
+
+                                                        let parameterType =
+                                                            methodDefinition.ParameterTypes.Head
+                                                            |> substitute
+
+                                                        match parameterType with
+                                                        | CliGenericType(functionReference,
+                                                                         [ _; _ ]) when
+                                                            isFSharpFunctionTypeReference
+                                                                functionReference
+                                                            ->
+                                                            let target = {
+                                                                DeclaringType =
+                                                                    CliNamedType
+                                                                        methodDefinition.DeclaringType
+                                                                StableId =
+                                                                    methodDefinition.StableId
+                                                                Name = methodDefinition.Name
+                                                                GenericArity =
+                                                                    methodDefinition.GenericArity
+                                                                ParameterTypes =
+                                                                    methodDefinition.ParameterTypes
+                                                                ReturnType =
+                                                                    methodDefinition.ReturnType
+                                                            }
+
+                                                            Some(
+                                                                target,
+                                                                substitutions
+                                                                |> Array.choose id
+                                                                |> Array.toList,
+                                                                parameterType,
+                                                                substitute methodDefinition.ReturnType
+                                                            )
+                                                        | _ -> None
+                                            )
+
                                 let rec typeStaticExpressionFor
                                     (expressionReceiver: (string * CliType) option)
                                     (expressionParameters: TypedParameter list)
@@ -3591,8 +4309,8 @@ type internal CompilerService() =
                                                     = "System.Threading.Tasks"
                                                     && valueTaskTypeReference.TypeName.Name
                                                        = "ValueTask`1"
-                                                    && functionTypeReference.DeclarationId
-                                                       = fsharpFunctionType.DeclarationId
+                                                    && isFSharpFunctionTypeReference
+                                                        functionTypeReference
                                                     && binderInputType = inputType
                                                     ->
                                                     match returnKind, binderOutputType with
@@ -3834,8 +4552,8 @@ type internal CompilerService() =
                                                    = "ValueTask`1"
                                                 && inputValueTaskTypeReference.DeclarationId
                                                    = valueTaskTypeReference.DeclarationId
-                                                && functionTypeReference.DeclarationId
-                                                   = fsharpFunctionType.DeclarationId
+                                                && isFSharpFunctionTypeReference
+                                                    functionTypeReference
                                                 && applierInputType = inputType
                                                 ->
                                                 let resolveTypeReference arity namespaceName name =
@@ -4383,7 +5101,7 @@ type internal CompilerService() =
                                         match declaredReturnType with
                                         | Some(CliGenericType(functionReference,
                                                               [ domainType; rangeType ]) as functionType) when
-                                            functionReference.DeclarationId = fsharpFunctionType.DeclarationId
+                                            isFSharpFunctionTypeReference functionReference
                                             ->
                                             let unitType = CliNamedType fsharpUnitType
 
@@ -4549,6 +5267,219 @@ type internal CompilerService() =
                                                 memberName,
                                                 arguments
                                             ))
+                                    | MemberCall(
+                                        receiverName,
+                                        memberName,
+                                        [ LambdaExpression(
+                                            parameterName,
+                                            parameterAnnotation,
+                                            lambdaBody,
+                                            lambdaRange
+                                          ) ]
+                                      ) when
+                                        contextualFunctionCallCandidates receiverName memberName
+                                        |> List.isEmpty
+                                        |> not
+                                        ->
+                                        match
+                                            contextualFunctionCallCandidates receiverName memberName
+                                        with
+                                        | [ target,
+                                            genericArguments,
+                                            (CliGenericType(
+                                                functionReference,
+                                                [ parameterType; returnType ]
+                                             ) as functionType),
+                                            callReturnType ] when
+                                            isFSharpFunctionTypeReference functionReference
+                                            ->
+                                            let typedParameterType =
+                                                match parameterAnnotation with
+                                                | None -> Ok parameterType
+                                                | Some annotation ->
+                                                    annotation
+                                                    |> expandTypeAbbreviations Set.empty
+                                                    |> resolveType declaredMethodParameters
+                                                    |> Result.bind (
+                                                        toCliType
+                                                            methodParameterIndex
+                                                            annotation.Range
+                                                    )
+                                                    |> Result.bind (fun annotatedType ->
+                                                        if annotatedType = parameterType then
+                                                            Ok parameterType
+                                                        else
+                                                            diagnostic
+                                                                annotation.Range
+                                                                "the lambda parameter type does not match the contextual F# function domain"
+                                                    )
+
+                                            match typedParameterType with
+                                            | Error error -> Error error
+                                            | Ok typedParameterType ->
+                                                let closureStableId =
+                                                    stableId
+                                                    + "/method:"
+                                                    + methodDeclaration.Name
+                                                    + "/closure:function-lambda:"
+                                                    + lambdaRange.Start.Offset.ToString(
+                                                        CultureInfo.InvariantCulture
+                                                    )
+
+                                                let closureName =
+                                                    methodDeclaration.Name
+                                                    + "@"
+                                                    + lambdaRange.Start.Line.ToString(
+                                                        CultureInfo.InvariantCulture
+                                                    )
+                                                    + "-"
+                                                    + lambdaRange.Start.Column.ToString(
+                                                        CultureInfo.InvariantCulture
+                                                    )
+
+                                                let closureTypeReference = {
+                                                    DeclarationId = closureStableId
+                                                    AssemblyName = String.Empty
+                                                    TypeName = {
+                                                        Namespace = String.Empty
+                                                        Name =
+                                                            if List.isEmpty methodTypeParameters then
+                                                                closureName
+                                                            else
+                                                                closureName
+                                                                + "`"
+                                                                + methodTypeParameters.Length.ToString(
+                                                                    CultureInfo.InvariantCulture
+                                                                )
+                                                    }
+                                                    IsValueType = false
+                                                }
+
+                                                let closureType =
+                                                    match methodTypeParameters with
+                                                    | [] -> CliNamedType closureTypeReference
+                                                    | genericParameters ->
+                                                        CliGenericType(
+                                                            closureTypeReference,
+                                                            genericParameters
+                                                            |> List.mapi (fun index _ ->
+                                                                CliMethodTypeParameter index
+                                                            )
+                                                        )
+
+                                                let captures: TypedFunctionLambdaCapture list =
+                                                    expressionParameters
+                                                    |> List.mapi (fun index parameter ->
+                                                        let fieldStableId =
+                                                            closureStableId
+                                                            + "/field:"
+                                                            + parameter.Name
+
+                                                        {
+                                                            OuterParameterIndex = index
+                                                            Name = parameter.Name
+                                                            Type = parameter.Type
+                                                            Field = {
+                                                                DeclaringType = closureType
+                                                                Name = parameter.Name
+                                                                FieldType = parameter.Type
+                                                                TargetStableId = Some fieldStableId
+                                                            }
+                                                        }
+                                                    )
+
+                                                let lambdaParameter: TypedParameter = {
+                                                    Name = parameterName
+                                                    Type = typedParameterType
+                                                    Attributes = []
+                                                }
+
+                                                match
+                                                    typeStaticExpressionFor
+                                                        None
+                                                        (lambdaParameter :: expressionParameters)
+                                                        Map.empty
+                                                        0
+                                                        lambdaBody
+                                                with
+                                                | Error error -> Error error
+                                                | Ok(_, bodyType, _) when bodyType <> returnType ->
+                                                    diagnostic
+                                                        lambdaRange
+                                                        "the lambda body does not match the contextual F# function range"
+                                                | Ok(typedBody, _, _) ->
+                                                    let converterName = {
+                                                        Namespace = "System"
+                                                        Name = "Converter"
+                                                    }
+
+                                                    match
+                                                        resolveNamedType
+                                                            2
+                                                            converterName
+                                                            lambdaRange
+                                                    with
+                                                    | Error error -> Error error
+                                                    | Ok(TypedNamedType resolvedConverter) ->
+                                                        let converterReference = {
+                                                            DeclarationId =
+                                                                resolvedConverter.DeclarationId
+                                                            AssemblyName =
+                                                                resolvedConverter.AssemblyName
+                                                            TypeName = {
+                                                                Namespace =
+                                                                    resolvedConverter.TypeName.Namespace
+                                                                Name =
+                                                                    resolvedConverter.TypeName.Name
+                                                                    + "`2"
+                                                            }
+                                                            IsValueType = false
+                                                        }
+
+                                                        let typedLambda =
+                                                            TypedFunctionLambda {
+                                                                FunctionType = functionType
+                                                                ConverterType =
+                                                                    CliGenericType(
+                                                                        converterReference,
+                                                                        [
+                                                                            parameterType
+                                                                            returnType
+                                                                        ]
+                                                                    )
+                                                                ClosureType = closureType
+                                                                ClosureName = closureName
+                                                                ParameterName = parameterName
+                                                                ParameterType = parameterType
+                                                                ReturnType = returnType
+                                                                Body =
+                                                                    rewriteFunctionLambdaCaptures
+                                                                        1
+                                                                        captures
+                                                                        typedBody
+                                                                Captures = captures
+                                                                SourceLine = lambdaRange.Start.Line
+                                                                LambdaRange = lambdaRange
+                                                                ConstructionRange = lambdaRange
+                                                            }
+
+                                                        Ok(
+                                                            TypedStaticMethodCall(
+                                                                target,
+                                                                genericArguments,
+                                                                [ typedLambda ]
+                                                            ),
+                                                            callReturnType,
+                                                            nextLocalIndex
+                                                        )
+                                                    | Ok _ ->
+                                                        diagnostic
+                                                            lambdaRange
+                                                            "System.Converter did not resolve to a named CLI type"
+                                        | _ ->
+                                            diagnostic
+                                                lambdaRange
+                                                "the contextual static F# function call is ambiguous"
                                     | MemberCall(receiverName, memberName, arguments) ->
                                         let rec typeArguments
                                             typedArguments
@@ -4959,6 +5890,77 @@ type internal CompilerService() =
                                                         | LambdaExpression(_, _, _, range) -> range
                                                         | _ -> argumentRange
 
+                                                    let closureStableId =
+                                                        stableId
+                                                        + "/method:"
+                                                        + methodDeclaration.Name
+                                                        + "/closure:delegate-lambda:"
+                                                        + lambdaRange.Start.Offset.ToString(
+                                                            CultureInfo.InvariantCulture
+                                                        )
+
+                                                    let closureName =
+                                                        methodDeclaration.Name
+                                                        + "@"
+                                                        + lambdaRange.Start.Line.ToString(
+                                                            CultureInfo.InvariantCulture
+                                                        )
+                                                        + "-"
+                                                        + lambdaRange.Start.Column.ToString(
+                                                            CultureInfo.InvariantCulture
+                                                        )
+
+                                                    let closureTypeReference = {
+                                                        DeclarationId = closureStableId
+                                                        AssemblyName = String.Empty
+                                                        TypeName = {
+                                                            Namespace = String.Empty
+                                                            Name =
+                                                                if List.isEmpty methodTypeParameters then
+                                                                    closureName
+                                                                else
+                                                                    closureName
+                                                                    + "`"
+                                                                    + methodTypeParameters.Length.ToString(
+                                                                        CultureInfo.InvariantCulture
+                                                                    )
+                                                        }
+                                                        IsValueType = false
+                                                    }
+
+                                                    let closureType =
+                                                        match methodTypeParameters with
+                                                        | [] -> CliNamedType closureTypeReference
+                                                        | genericParameters ->
+                                                            CliGenericType(
+                                                                closureTypeReference,
+                                                                genericParameters
+                                                                |> List.mapi (fun index _ ->
+                                                                    CliMethodTypeParameter index
+                                                                )
+                                                            )
+
+                                                    let captures: TypedFunctionLambdaCapture list =
+                                                        expressionParameters
+                                                        |> List.mapi (fun index parameter ->
+                                                            let fieldStableId =
+                                                                closureStableId
+                                                                + "/field:"
+                                                                + parameter.Name
+
+                                                            {
+                                                                OuterParameterIndex = index
+                                                                Name = parameter.Name
+                                                                Type = parameter.Type
+                                                                Field = {
+                                                                    DeclaringType = closureType
+                                                                    Name = parameter.Name
+                                                                    FieldType = parameter.Type
+                                                                    TargetStableId = Some fieldStableId
+                                                                }
+                                                            }
+                                                        )
+
                                                     if
                                                         parsedParameters.Length
                                                         <> parameterTypes.Length
@@ -5010,7 +6012,8 @@ type internal CompilerService() =
                                                             match
                                                                 typeStaticExpressionFor
                                                                     None
-                                                                    typedParameters
+                                                                    (typedParameters
+                                                                     @ expressionParameters)
                                                                     Map.empty
                                                                     0
                                                                     lambdaBody
@@ -5021,73 +6024,22 @@ type internal CompilerService() =
                                                                  _) when
                                                                 bodyType = returnType
                                                                 ->
-                                                                let closureStableId =
-                                                                    stableId
-                                                                    + "/method:"
-                                                                    + methodDeclaration.Name
-                                                                    + "/closure:delegate-lambda:"
-                                                                    + lambdaRange.Start.Offset.ToString(
-                                                                        CultureInfo.InvariantCulture
-                                                                    )
-
-                                                                let closureName =
-                                                                    methodDeclaration.Name
-                                                                    + "@"
-                                                                    + lambdaRange.Start.Line.ToString(
-                                                                        CultureInfo.InvariantCulture
-                                                                    )
-                                                                    + "-"
-                                                                    + lambdaRange.Start.Column.ToString(
-                                                                        CultureInfo.InvariantCulture
-                                                                    )
-
-                                                                let closureTypeReference = {
-                                                                    DeclarationId = closureStableId
-                                                                    AssemblyName = String.Empty
-                                                                    TypeName = {
-                                                                        Namespace = String.Empty
-                                                                        Name =
-                                                                            if
-                                                                                List.isEmpty
-                                                                                    methodTypeParameters
-                                                                            then
-                                                                                closureName
-                                                                            else
-                                                                                closureName
-                                                                                + "`"
-                                                                                + methodTypeParameters.Length.ToString(
-                                                                                    CultureInfo.InvariantCulture
-                                                                                )
-                                                                    }
-                                                                    IsValueType = false
-                                                                }
-
-                                                                let closureType =
-                                                                    match
-                                                                        methodTypeParameters
-                                                                    with
-                                                                    | [] ->
-                                                                        CliNamedType closureTypeReference
-                                                                    | genericParameters ->
-                                                                        CliGenericType(
-                                                                            closureTypeReference,
-                                                                            genericParameters
-                                                                            |> List.mapi (fun index _ ->
-                                                                                CliMethodTypeParameter index
-                                                                            )
-                                                                        )
-
                                                                 Ok(
                                                                     TypedDelegateLambda {
                                                                         DelegateType = constructedCliType
                                                                         ClosureType = closureType
                                                                         ClosureName = closureName
+                                                                        Captures = captures
                                                                         LambdaParameterNames =
                                                                             typedParameters
                                                                             |> List.map _.Name
                                                                         LambdaParameterTypes = parameterTypes
                                                                         LambdaReturnType = returnType
-                                                                        LambdaBody = typedBody
+                                                                        LambdaBody =
+                                                                            rewriteFunctionLambdaCaptures
+                                                                                typedParameters.Length
+                                                                                captures
+                                                                                typedBody
                                                                         LambdaSourceLine =
                                                                             lambdaRange.Start.Line
                                                                         LambdaRange = lambdaRange
@@ -5334,7 +6286,7 @@ type internal CompilerService() =
                                         | Ok(typedFunction,
                                              (CliGenericType(functionType, [ domainType; rangeType ]) as cliFunctionType),
                                              nextFunctionLocalIndex) when
-                                            functionType.DeclarationId = fsharpFunctionType.DeclarationId
+                                            isFSharpFunctionTypeReference functionType
                                             ->
                                             match
                                                 typeStaticExpression
@@ -5847,6 +6799,36 @@ type internal CompilerService() =
                                             diagnostic
                                                 methodDeclaration.BodyRange
                                                 "the operand of 'not' is not bool"
+                                    | EqualityExpression(left, right, range) ->
+                                        match
+                                            typeStaticExpression
+                                                localBindings
+                                                nextLocalIndex
+                                                left
+                                        with
+                                        | Error error -> Error error
+                                        | Ok(typedLeft, leftType, nextLeftLocalIndex) ->
+                                            match
+                                                typeStaticExpression
+                                                    localBindings
+                                                    nextLeftLocalIndex
+                                                    right
+                                            with
+                                            | Error error -> Error error
+                                            | Ok(typedRight, rightType, nextRightLocalIndex) when
+                                                leftType = rightType
+                                                && (leftType = CliInt32
+                                                    || leftType = CliBoolean)
+                                                ->
+                                                Ok(
+                                                    TypedEquality(typedLeft, typedRight, range),
+                                                    CliBoolean,
+                                                    nextRightLocalIndex
+                                                )
+                                            | Ok _ ->
+                                                diagnostic
+                                                    range
+                                                    "equality currently requires operands of the same primitive type"
                                     | TryWithExpression(body,
                                                         bindingName,
                                                         handler,
@@ -6011,6 +6993,7 @@ type internal CompilerService() =
                                         typeExpressions [] nextLocalIndex expressions
                                     | LetExpression(bindingName,
                                                     isMutable,
+                                                    _,
                                                     value,
                                                     body,
                                                     bindingRange,
@@ -6054,9 +7037,11 @@ type internal CompilerService() =
                                                       range) ->
                                         match clauses with
                                         | [ (ParsedNullPattern _,
+                                             None,
                                              ifNull,
                                              ifNullRange)
                                             (ParsedNamedPattern(bindingName, _),
+                                             None,
                                              ifNotNull,
                                              ifNotNullRange) ] ->
                                             match
@@ -6132,9 +7117,11 @@ type internal CompilerService() =
                                         | [ (ParsedTypeTestPattern(targetType,
                                                                    bindingName,
                                                                    patternRange),
+                                             guard,
                                              ifMatched,
                                              ifMatchedRange)
                                             (ParsedNamedPattern("_", _),
+                                             None,
                                              ifNotMatched,
                                              ifNotMatchedRange) ] ->
                                             match
@@ -6164,52 +7151,81 @@ type internal CompilerService() =
                                                     ->
                                                     let localIndex = nextInputLocalIndex
 
-                                                    match
-                                                        typeStaticExpression
-                                                            (localBindings
-                                                             |> Map.add
-                                                                 bindingName
-                                                                 (localIndex, targetType, false))
-                                                            (localIndex
-                                                             + 1)
-                                                            ifMatched
-                                                    with
+                                                    let matchedBindings =
+                                                        localBindings
+                                                        |> Map.add
+                                                            bindingName
+                                                            (localIndex, targetType, false)
+
+                                                    let typedGuardResult =
+                                                        match guard with
+                                                        | None -> Ok(None, localIndex + 1)
+                                                        | Some(guardExpression, guardRange) ->
+                                                            match
+                                                                typeStaticExpression
+                                                                    matchedBindings
+                                                                    (localIndex + 1)
+                                                                    guardExpression
+                                                            with
+                                                            | Error error -> Error error
+                                                            | Ok(typedGuard,
+                                                                 CliBoolean,
+                                                                 nextGuardLocalIndex) ->
+                                                                Ok(
+                                                                    Some(typedGuard, guardRange),
+                                                                    nextGuardLocalIndex
+                                                                )
+                                                            | Ok _ ->
+                                                                diagnostic
+                                                                    guardRange
+                                                                    "a match guard must have type bool"
+
+                                                    match typedGuardResult with
                                                     | Error error -> Error error
-                                                    | Ok(typedIfMatched,
-                                                         ifMatchedType,
-                                                         nextMatchedLocalIndex) ->
+                                                    | Ok(typedGuard, nextGuardLocalIndex) ->
                                                         match
                                                             typeStaticExpression
-                                                                localBindings
-                                                                nextMatchedLocalIndex
-                                                                ifNotMatched
+                                                                matchedBindings
+                                                                nextGuardLocalIndex
+                                                                ifMatched
                                                         with
                                                         | Error error -> Error error
-                                                        | Ok(typedIfNotMatched,
-                                                             ifNotMatchedType,
-                                                             nextNotMatchedLocalIndex) when
-                                                            ifMatchedType = ifNotMatchedType
-                                                            ->
-                                                            Ok(
-                                                                TypedTypeTestMatch(
-                                                                    typedInput,
-                                                                    targetType,
-                                                                    localIndex,
-                                                                    bindingName,
-                                                                    typedIfMatched,
-                                                                    typedIfNotMatched,
-                                                                    matchHeaderRange,
-                                                                    ifMatchedRange,
-                                                                    ifNotMatchedRange,
+                                                        | Ok(typedIfMatched,
+                                                             ifMatchedType,
+                                                             nextMatchedLocalIndex) ->
+                                                            match
+                                                                typeStaticExpression
+                                                                    localBindings
+                                                                    nextMatchedLocalIndex
+                                                                    ifNotMatched
+                                                            with
+                                                            | Error error -> Error error
+                                                            | Ok(typedIfNotMatched,
+                                                                 ifNotMatchedType,
+                                                                 nextNotMatchedLocalIndex) when
+                                                                ifMatchedType = ifNotMatchedType
+                                                                ->
+                                                                Ok(
+                                                                    TypedTypeTestMatch(
+                                                                        typedInput,
+                                                                        targetType,
+                                                                        localIndex,
+                                                                        bindingName,
+                                                                        typedGuard,
+                                                                        typedIfMatched,
+                                                                        typedIfNotMatched,
+                                                                        matchHeaderRange,
+                                                                        ifMatchedRange,
+                                                                        ifNotMatchedRange,
+                                                                        range
+                                                                    ),
+                                                                    ifMatchedType,
+                                                                    nextNotMatchedLocalIndex
+                                                                )
+                                                            | Ok _ ->
+                                                                diagnostic
                                                                     range
-                                                                ),
-                                                                ifMatchedType,
-                                                                nextNotMatchedLocalIndex
-                                                            )
-                                                        | Ok _ ->
-                                                            diagnostic
-                                                                range
-                                                                "the type-test match arms must have the same type"
+                                                                    "the type-test match arms must have the same type"
                                                 | Ok _ ->
                                                     diagnostic
                                                         range
@@ -6474,6 +7490,9 @@ type internal CompilerService() =
                                         inferredSubtypeConstraints value
                                     | TypedBooleanNegation(expression, _) ->
                                         inferredSubtypeConstraints expression
+                                    | TypedEquality(left, right, _) ->
+                                        inferredSubtypeConstraints left
+                                        @ inferredSubtypeConstraints right
                                     | TypedTryWith(body, _, _, _, handler, _, _, _, _, _) ->
                                         inferredSubtypeConstraints body
                                         @ inferredSubtypeConstraints handler
@@ -6524,6 +7543,7 @@ type internal CompilerService() =
                                                          _,
                                                          _,
                                                          _,
+                                                         guard,
                                                          ifMatched,
                                                          ifNotMatched,
                                                          _,
@@ -6531,6 +7551,9 @@ type internal CompilerService() =
                                                          _,
                                                          _) ->
                                         inferredSubtypeConstraints input
+                                        @ (guard
+                                           |> Option.map (fst >> inferredSubtypeConstraints)
+                                           |> Option.defaultValue [])
                                         @ inferredSubtypeConstraints ifMatched
                                         @ inferredSubtypeConstraints ifNotMatched
                                     | TypedSequential expressions ->
@@ -6538,6 +7561,8 @@ type internal CompilerService() =
                                         |> List.collect (fun (expression, _, _) ->
                                             inferredSubtypeConstraints expression
                                         )
+                                    | TypedFunctionLambda expression ->
+                                        inferredSubtypeConstraints expression.Body
                                     | TypedDelegateLambda expression ->
                                         inferredSubtypeConstraints expression.LambdaBody
                                     | TypedIntegerLiteral _
@@ -6594,8 +7619,12 @@ type internal CompilerService() =
                                             Parameters = parameters
                                             ReturnType = returnType
                                             Body = body
+                                            EmitHiddenEntrySequencePoint =
+                                                emitHiddenEntrySequencePoint
                                             Range =
                                                 match body with
+                                                | TypedFunctionLambda expression ->
+                                                    expression.ConstructionRange
                                                 | TypedDelegateLambda expression ->
                                                     expression.ConstructionRange
                                                 | _ -> methodDeclaration.BodyRange
@@ -7374,7 +8403,7 @@ type internal CompilerService() =
                                             | Ok(Some(CliGenericType(functionReference,
                                                                      [ domainType; rangeType ]) as functionType)),
                                               Ok targetReturnType when
-                                                functionReference.DeclarationId = fsharpFunctionType.DeclarationId
+                                                isFSharpFunctionTypeReference functionReference
                                                 ->
                                                 let unitType = CliNamedType fsharpUnitType
 
@@ -7554,6 +8583,7 @@ type internal CompilerService() =
                                 | SequentialValueExpression _
                                 | LocalAssignment _
                                 | BooleanNegationExpression _
+                                | EqualityExpression _
                                 | TryWithExpression _
                                 | LetExpression _
                                 | LambdaExpression _
@@ -7609,6 +8639,7 @@ type internal CompilerService() =
                                     | TypedInstanceMethodCall _
                                     | TypedBoundInstanceMethod _
                                     | TypedUnitLambda _
+                                    | TypedFunctionLambda _
                                     | TypedDelegateLambda _
                                     | TypedValueTaskBind _
                                     | TypedValueTaskApply _
@@ -7619,6 +8650,7 @@ type internal CompilerService() =
                                     | TypedSequential _
                                     | TypedLocalAssignment _
                                     | TypedBooleanNegation _
+                                    | TypedEquality _
                                     | TypedTryWith _
                                     | TypedResumableTryFinally _
                                     | TypedObjectExpression _
@@ -7638,6 +8670,7 @@ type internal CompilerService() =
                                     Parameters = parameters
                                     ReturnType = returnType
                                     Body = body
+                                    EmitHiddenEntrySequencePoint = false
                                     Range = range
                                 }
 
@@ -7669,12 +8702,7 @@ type internal CompilerService() =
                                 resolveNamedType 0 targetTypeName declaration.ConstructorRange
                                 |> Result.bind (toCliType Map.empty declaration.ConstructorRange)
                                 |> Result.map TypedCurrentModuleAugmentation
-                            | ParsedExtensionModule(moduleName, attributes) ->
-                                let targetTypeName = {
-                                    Namespace = String.Empty
-                                    Name = declaration.Name
-                                }
-
+                            | ParsedExtensionModule(moduleName, attributes, targetTypeName) ->
                                 match
                                     resolveNamedType 0 targetTypeName declaration.ConstructorRange,
                                     typeCustomAttributes stableId [ AutoOpenAttribute ] attributes
@@ -8579,6 +9607,29 @@ type internal CompilerService() =
                             RangeType =
                                 methodTypeParametersToTypeParameters expression.RangeType
                     }
+                | TypedFunctionLambda expression ->
+                    TypedFunctionLambda {
+                        expression with
+                            FunctionType =
+                                methodTypeParametersToTypeParameters expression.FunctionType
+                            ConverterType =
+                                methodTypeParametersToTypeParameters expression.ConverterType
+                            ClosureType =
+                                methodTypeParametersToTypeParameters expression.ClosureType
+                            ParameterType =
+                                methodTypeParametersToTypeParameters expression.ParameterType
+                            ReturnType =
+                                methodTypeParametersToTypeParameters expression.ReturnType
+                            Body = methodExpressionTypesToTypeParameters expression.Body
+                            Captures =
+                                expression.Captures
+                                |> List.map (fun capture -> {
+                                    capture with
+                                        Type =
+                                            methodTypeParametersToTypeParameters capture.Type
+                                        Field = mapTypedFieldAddress capture.Field
+                                })
+                    }
                 | TypedDelegateLambda expression ->
                     TypedDelegateLambda {
                         expression with
@@ -8586,6 +9637,14 @@ type internal CompilerService() =
                                 methodTypeParametersToTypeParameters expression.DelegateType
                             ClosureType =
                                 methodTypeParametersToTypeParameters expression.ClosureType
+                            Captures =
+                                expression.Captures
+                                |> List.map (fun capture -> {
+                                    capture with
+                                        Type =
+                                            methodTypeParametersToTypeParameters capture.Type
+                                        Field = mapTypedFieldAddress capture.Field
+                                })
                             LambdaParameterTypes =
                                 expression.LambdaParameterTypes
                                 |> List.map methodTypeParametersToTypeParameters
@@ -8750,6 +9809,12 @@ type internal CompilerService() =
                         methodExpressionTypesToTypeParameters expression,
                         range
                     )
+                | TypedEquality(left, right, range) ->
+                    TypedEquality(
+                        methodExpressionTypesToTypeParameters left,
+                        methodExpressionTypesToTypeParameters right,
+                        range
+                    )
                 | TypedTryWith(body,
                                handlerLocalIndex,
                                handlerName,
@@ -8798,6 +9863,7 @@ type internal CompilerService() =
                                      targetType,
                                      localIndex,
                                      bindingName,
+                                     guard,
                                      ifMatched,
                                      ifNotMatched,
                                      matchHeaderRange,
@@ -8809,6 +9875,11 @@ type internal CompilerService() =
                         methodTypeParametersToTypeParameters targetType,
                         localIndex,
                         bindingName,
+                        (guard
+                         |> Option.map (fun (guardExpression, guardRange) ->
+                             methodExpressionTypesToTypeParameters guardExpression,
+                             guardRange
+                         )),
                         methodExpressionTypesToTypeParameters ifMatched,
                         methodExpressionTypesToTypeParameters ifNotMatched,
                         matchHeaderRange,
@@ -9612,7 +10683,96 @@ type internal CompilerService() =
                     CallMethod fromConverter
                 ]
 
+            let functionLambdaConstructionInstructions
+                kind
+                (expression: TypedFunctionLambdaExpression)
+                =
+                let closureStableId =
+                    match expression.ClosureType with
+                    | CliNamedType typeReference
+                    | CliGenericType(typeReference, _) -> typeReference.DeclarationId
+                    | _ -> invalidOp "an F# function lambda closure must be a named CLI type"
+
+                let constructor = {
+                    DeclaringType = CliDeclaringType expression.ClosureType
+                    Name = ".ctor"
+                    GenericArity = 0
+                    IsInstance = true
+                    ParameterTypes = expression.Captures |> List.map _.Type
+                    ReturnType = CliVoid
+                    TargetStableId = Some(closureStableId + "/constructor")
+                }
+
+                let invoke = {
+                    DeclaringType = CliDeclaringType expression.ClosureType
+                    Name = "Invoke"
+                    GenericArity = 0
+                    IsInstance = true
+                    ParameterTypes = [ expression.ParameterType ]
+                    ReturnType = expression.ReturnType
+                    TargetStableId = Some(closureStableId + "/method:Invoke")
+                }
+
+                let delegateConstructor = {
+                    DeclaringType = CliDeclaringType expression.ConverterType
+                    Name = ".ctor"
+                    GenericArity = 0
+                    IsInstance = true
+                    ParameterTypes = [
+                        CliObject
+                        CliNativeInt
+                    ]
+                    ReturnType = CliVoid
+                    TargetStableId = None
+                }
+
+                let fromConverter =
+                    match expression.FunctionType, expression.ConverterType with
+                    | CliGenericType(functionReference, _), CliGenericType(converterReference, _) -> {
+                        DeclaringType = CliDeclaringType expression.FunctionType
+                        Name = "FromConverter"
+                        GenericArity = 0
+                        IsInstance = false
+                        ParameterTypes = [
+                            CliGenericType(
+                                converterReference,
+                                [
+                                    CliTypeParameter 0
+                                    CliTypeParameter 1
+                                ]
+                            )
+                        ]
+                        ReturnType =
+                            CliGenericType(
+                                functionReference,
+                                [
+                                    CliTypeParameter 0
+                                    CliTypeParameter 1
+                                ]
+                            )
+                        TargetStableId = None
+                      }
+                    | _ ->
+                        invalidOp
+                            "function lambda conversion requires generic F# function and converter types"
+
+                [
+                    yield!
+                        expression.Captures
+                        |> List.map (fun capture ->
+                            LoadArgument(
+                                methodArgumentIndex kind capture.OuterParameterIndex
+                            )
+                        )
+
+                    NewObject constructor
+                    LoadFunctionPointer invoke
+                    NewObject delegateConstructor
+                    CallMethod fromConverter
+                ]
+
             let delegateLambdaConstructionInstructions
+                kind
                 (expression: TypedDelegateLambdaExpression)
                 =
                 let closureStableId =
@@ -9626,7 +10786,7 @@ type internal CompilerService() =
                     Name = ".ctor"
                     GenericArity = 0
                     IsInstance = true
-                    ParameterTypes = []
+                    ParameterTypes = expression.Captures |> List.map _.Type
                     ReturnType = CliVoid
                     TargetStableId = Some(closureStableId + "/constructor")
                 }
@@ -9655,6 +10815,14 @@ type internal CompilerService() =
                 }
 
                 [
+                    yield!
+                        expression.Captures
+                        |> List.map (fun capture ->
+                            LoadArgument(
+                                methodArgumentIndex kind capture.OuterParameterIndex
+                            )
+                        )
+
                     NewObject constructor
                     LoadFunctionPointer invoke
                     NewObject delegateConstructor
@@ -9909,6 +11077,17 @@ type internal CompilerService() =
                         MarkHiddenSequencePoint
                     ],
                     expressionLocals
+                | TypedEquality(left, right, _) ->
+                    let leftInstructions, leftLocals =
+                        valueExpressionInstructions freshLabel kind left
+
+                    let rightInstructions, rightLocals =
+                        valueExpressionInstructions freshLabel kind right
+
+                    leftInstructions
+                    @ rightInstructions
+                    @ [ CompareEqual ],
+                    leftLocals @ rightLocals
                 | TypedTryWith(body,
                                handlerLocalIndex,
                                handlerName,
@@ -9954,9 +11133,13 @@ type internal CompilerService() =
                         MarkLabel tryEnd
                         MarkLabel handlerStart
                         StoreLocal handlerLocalIndex
-                        MarkSequencePoint withRange
-                        Nop
                     ]
+                    @ (match handler with
+                       | TypedTypeTestMatch _ -> []
+                       | _ -> [
+                           MarkSequencePoint withRange
+                           Nop
+                       ])
                     @ initialSequencePoint handler handlerRange
                     @ handlerInstructions
                     @ [
@@ -10410,6 +11593,7 @@ type internal CompilerService() =
                                      targetType,
                                      localIndex,
                                      bindingName,
+                                     guard,
                                      ifMatched,
                                      ifNotMatched,
                                      matchHeaderRange,
@@ -10421,6 +11605,33 @@ type internal CompilerService() =
 
                     let inputInstructions, inputLocals =
                         valueExpressionInstructions freshLabel kind input
+
+                    let initialSequencePoint expression range =
+                        match expression with
+                        | TypedLet _
+                        | TypedSequential _
+                        | TypedConditional _
+                        | TypedBooleanNegation _
+                        | TypedTryWith _
+                        | TypedNullMatch _
+                        | TypedTypeTestMatch _ -> []
+                        | _ -> [ MarkSequencePoint range ]
+
+                    let guardInstructions, guardLocals =
+                        match guard with
+                        | Some(guardExpression, guardRange) ->
+                            let instructions, locals =
+                                valueExpressionInstructions freshLabel kind guardExpression
+
+                            initialSequencePoint guardExpression guardRange
+                            @ instructions
+                            @ [
+                                BranchIfFalse fallbackLabel
+                                MarkHiddenSequencePoint
+                                Nop
+                            ],
+                            locals
+                        | None -> [], []
 
                     let matchedInstructions, matchedLocals =
                         valueExpressionInstructions freshLabel kind ifMatched
@@ -10441,14 +11652,15 @@ type internal CompilerService() =
                         BranchIfFalse fallbackLabel
                         MarkHiddenSequencePoint
                         Nop
-                        MarkSequencePoint ifMatchedRange
                     ]
+                    @ guardInstructions
+                    @ initialSequencePoint ifMatched ifMatchedRange
                     @ matchedInstructions
                     @ [
                         Branch endLabel
                         MarkLabel fallbackLabel
-                        MarkSequencePoint ifNotMatchedRange
                     ]
+                    @ initialSequencePoint ifNotMatched ifNotMatchedRange
                     @ notMatchedInstructions
                     @ [ MarkLabel endLabel ],
                     inputLocals
@@ -10459,6 +11671,7 @@ type internal CompilerService() =
                             Type = targetType
                         }
                     ]
+                    @ guardLocals
                     @ matchedLocals
                     @ notMatchedLocals
                 | TypedObjectExpression(typeReference,
@@ -10471,8 +11684,10 @@ type internal CompilerService() =
                             "object-expression constructor arguments reached an unsupported lowering path"
 
                     [ NewObject(objectExpressionConstructorReference typeReference) ], []
+                | TypedFunctionLambda expression ->
+                    functionLambdaConstructionInstructions kind expression, []
                 | TypedDelegateLambda expression ->
-                    delegateLambdaConstructionInstructions expression, []
+                    delegateLambdaConstructionInstructions kind expression, []
                 | TypedBoundInstanceMethod _
                 | TypedUnitLambda _
                 | TypedValueTaskBind _
@@ -11234,7 +12449,7 @@ type internal CompilerService() =
                         Return
                     ],
                     []
-                | (TypedStringLiteral _ | TypedNullLiteral | TypedUnitLiteral | TypedReceiverReference | TypedLocalReference _ | TypedLet _ | TypedLocalAssignment _ | TypedAddressOf _ | TypedInstanceFieldGet _ | TypedStaticMethodCall _ | TypedObjectConstruction _ | TypedDefaultValue _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedDelegateLambda _ | TypedConditional _ | TypedUpcast _ | TypedSequential _ | TypedBooleanNegation _ | TypedTryWith _ | TypedNullMatch _ | TypedTypeTestMatch _ | TypedObjectExpression _) as expression ->
+                | (TypedStringLiteral _ | TypedNullLiteral | TypedUnitLiteral | TypedReceiverReference | TypedLocalReference _ | TypedLet _ | TypedLocalAssignment _ | TypedAddressOf _ | TypedInstanceFieldGet _ | TypedStaticMethodCall _ | TypedObjectConstruction _ | TypedDefaultValue _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedFunctionLambda _ | TypedDelegateLambda _ | TypedConditional _ | TypedUpcast _ | TypedSequential _ | TypedBooleanNegation _ | TypedEquality _ | TypedTryWith _ | TypedNullMatch _ | TypedTypeTestMatch _ | TypedObjectExpression _) as expression ->
                     let instructions, locals =
                         valueExpressionInstructions
                             methodDeclaration
@@ -11507,8 +12722,29 @@ type internal CompilerService() =
                 let instructions, locals = methodInstructions kind methodDeclaration
 
                 let instructions =
-                    match methodDeclaration.Body with
-                    | TypedStaticMethodCall(target, _, _) when
+                    match
+                        methodDeclaration.EmitHiddenEntrySequencePoint,
+                        methodDeclaration.Body
+                    with
+                    | true, _ ->
+                        let visibleBodyPoint =
+                            if
+                                instructions
+                                |> List.exists (function
+                                    | MarkSequencePoint _ -> true
+                                    | _ -> false)
+                            then
+                                []
+                            else
+                                [ MarkSequencePoint methodDeclaration.Range ]
+
+                        [
+                            MarkHiddenSequencePoint
+                            Nop
+                        ]
+                        @ visibleBodyPoint
+                        @ instructions
+                    | false, TypedStaticMethodCall(target, _, _) when
                         target.StableId.EndsWith(
                             "|intrinsic|isNull",
                             StringComparison.Ordinal
@@ -11546,6 +12782,7 @@ type internal CompilerService() =
                         | TypedResumableCode _
                         | TypedBoundInstanceMethod _
                         | TypedUnitLambda _
+                        | TypedFunctionLambda _
                         | TypedDelegateLambda _
                         | TypedValueTaskBind _
                         | TypedValueTaskApply _
@@ -11574,6 +12811,7 @@ type internal CompilerService() =
                         | TypedSequential _
                         | TypedLocalAssignment _
                         | TypedBooleanNegation _
+                        | TypedEquality _
                         | TypedTryWith _
                         | TypedNullMatch _
                         | TypedTypeTestMatch _ -> 8
@@ -11771,7 +13009,7 @@ type internal CompilerService() =
                     |> List.collect (fun childModule ->
                         flattenNestedModule
                             typed
-                            moduleDeclaration.StableId
+                            (Some moduleDeclaration.StableId)
                             (nestedModuleContentHash childModule)
                             childModule
                     ))
@@ -11780,9 +13018,14 @@ type internal CompilerService() =
                 modulesWithContentHashes
                 |> List.collect (fun (typed, declarationsWithContentHashes) ->
                     let parentTypeStableId =
-                        moduleStableId
-                        + "/type:"
-                        + typed.StableId
+                        if typed.ContainerKind = ModuleSource then
+                            Some(
+                                moduleStableId
+                                + "/type:"
+                                + typed.StableId
+                            )
+                        else
+                            None
 
                     declarationsWithContentHashes
                     |> List.collect (fun (declaration, typeContentHash) ->
@@ -12001,10 +13244,14 @@ type internal CompilerService() =
                             {
                                 SchemaVersion = querySchema
                                 StableId = moduleDeclaration.StableId
-                                Namespace = String.Empty
+                                Namespace =
+                                    if parentTypeStableId.IsNone then
+                                        typed.Namespace
+                                    else
+                                        String.Empty
                                 Name = moduleDeclaration.CompiledName
                                 IsPublic = true
-                                EnclosingTypeStableId = Some parentTypeStableId
+                                EnclosingTypeStableId = parentTypeStableId
                                 Kind = ModuleContainer
                                 GenericParameters = []
                                 Attributes = [
@@ -14195,6 +15442,9 @@ type internal CompilerService() =
                 | TypedLocalAssignment(_, _, value)
                 | TypedBooleanNegation(value, _)
                 | TypedUpcast(_, _, _, value) -> valueTaskOfUnitExpressions value
+                | TypedEquality(left, right, _) ->
+                    valueTaskOfUnitExpressions left
+                    @ valueTaskOfUnitExpressions right
                 | TypedStaticMethodCall(_, _, arguments)
                 | TypedObjectConstruction(_, arguments) ->
                     arguments
@@ -14219,8 +15469,11 @@ type internal CompilerService() =
                     valueTaskOfUnitExpressions input
                     @ valueTaskOfUnitExpressions ifNull
                     @ valueTaskOfUnitExpressions ifNotNull
-                | TypedTypeTestMatch(input, _, _, _, ifMatched, ifNotMatched, _, _, _, _) ->
+                | TypedTypeTestMatch(input, _, _, _, guard, ifMatched, ifNotMatched, _, _, _, _) ->
                     valueTaskOfUnitExpressions input
+                    @ (guard
+                       |> Option.map (fst >> valueTaskOfUnitExpressions)
+                       |> Option.defaultValue [])
                     @ valueTaskOfUnitExpressions ifMatched
                     @ valueTaskOfUnitExpressions ifNotMatched
                 | TypedSequential expressions ->
@@ -14228,6 +15481,8 @@ type internal CompilerService() =
                     |> List.collect (fun (expression, _, _) ->
                         valueTaskOfUnitExpressions expression
                     )
+                | TypedFunctionLambda expression ->
+                    valueTaskOfUnitExpressions expression.Body
                 | TypedDelegateLambda expression ->
                     valueTaskOfUnitExpressions expression.LambdaBody
                 | TypedObjectExpression(_, _, constructorArguments, members, _) ->
@@ -14591,6 +15846,9 @@ type internal CompilerService() =
                 | TypedLocalAssignment(_, _, value)
                 | TypedBooleanNegation(value, _)
                 | TypedUpcast(_, _, _, value) -> objectExpressions value
+                | TypedEquality(left, right, _) ->
+                    objectExpressions left
+                    @ objectExpressions right
                 | TypedStaticMethodCall(_, _, arguments) ->
                     arguments
                     |> List.collect objectExpressions
@@ -14616,15 +15874,96 @@ type internal CompilerService() =
                     objectExpressions input
                     @ objectExpressions ifNull
                     @ objectExpressions ifNotNull
-                | TypedTypeTestMatch(input, _, _, _, ifMatched, ifNotMatched, _, _, _, _) ->
+                | TypedTypeTestMatch(input, _, _, _, guard, ifMatched, ifNotMatched, _, _, _, _) ->
                     objectExpressions input
+                    @ (guard
+                       |> Option.map (fst >> objectExpressions)
+                       |> Option.defaultValue [])
                     @ objectExpressions ifMatched
                     @ objectExpressions ifNotMatched
                 | TypedSequential expressions ->
                     expressions
                     |> List.collect (fun (expression, _, _) -> objectExpressions expression)
+                | TypedFunctionLambda expression -> objectExpressions expression.Body
                 | TypedDelegateLambda expression ->
                     objectExpressions expression.LambdaBody
+                | TypedIntegerLiteral _
+                | TypedStringLiteral _
+                | TypedNullLiteral
+                | TypedUnitLiteral
+                | TypedReceiverReference
+                | TypedParameterReference _
+                | TypedLocalReference _
+                | TypedAddressOf _
+                | TypedDefaultValue _
+                | TypedBoundInstanceMethod _
+                | TypedUnitLambda _
+                | TypedValueTaskBind _
+                | TypedValueTaskApply _
+                | TypedValueTaskZip _
+                | TypedValueTaskOfUnit _
+                | TypedResumableCode _
+                | TypedResumableTryFinally _
+                | TypedTraitCall _ -> []
+
+            let rec functionLambdaExpressions =
+                function
+                | TypedFunctionLambda expression ->
+                    expression
+                    :: functionLambdaExpressions expression.Body
+                | TypedDelegateLambda expression ->
+                    functionLambdaExpressions expression.LambdaBody
+                | TypedLet(_, _, _, _, value, body, _, _) ->
+                    functionLambdaExpressions value
+                    @ functionLambdaExpressions body
+                | TypedLocalAssignment(_, _, value)
+                | TypedBooleanNegation(value, _)
+                | TypedUpcast(_, _, _, value) -> functionLambdaExpressions value
+                | TypedEquality(left, right, _) ->
+                    functionLambdaExpressions left
+                    @ functionLambdaExpressions right
+                | TypedStaticMethodCall(_, _, arguments)
+                | TypedObjectConstruction(_, arguments) ->
+                    arguments
+                    |> List.collect functionLambdaExpressions
+                | TypedFunctionApplication(_, _, _, functionExpression, argumentExpression) ->
+                    functionLambdaExpressions functionExpression
+                    @ functionLambdaExpressions argumentExpression
+                | TypedInstanceFieldGet(receiver, _) -> functionLambdaExpressions receiver
+                | TypedInstanceMethodCall(_, receiver, arguments) ->
+                    functionLambdaExpressions receiver
+                    @ (arguments
+                       |> List.collect functionLambdaExpressions)
+                | TypedConditional(condition, ifTrue, ifFalse, _, _, _) ->
+                    functionLambdaExpressions condition
+                    @ functionLambdaExpressions ifTrue
+                    @ functionLambdaExpressions ifFalse
+                | TypedTryWith(body, _, _, _, handler, _, _, _, _, _) ->
+                    functionLambdaExpressions body
+                    @ functionLambdaExpressions handler
+                | TypedNullMatch(input, _, _, _, ifNull, ifNotNull, _, _, _, _) ->
+                    functionLambdaExpressions input
+                    @ functionLambdaExpressions ifNull
+                    @ functionLambdaExpressions ifNotNull
+                | TypedTypeTestMatch(input, _, _, _, guard, ifMatched, ifNotMatched, _, _, _, _) ->
+                    functionLambdaExpressions input
+                    @ (guard
+                       |> Option.map (fst >> functionLambdaExpressions)
+                       |> Option.defaultValue [])
+                    @ functionLambdaExpressions ifMatched
+                    @ functionLambdaExpressions ifNotMatched
+                | TypedSequential expressions ->
+                    expressions
+                    |> List.collect (fun (expression, _, _) ->
+                        functionLambdaExpressions expression
+                    )
+                | TypedObjectExpression(_, _, constructorArguments, members, _) ->
+                    (constructorArguments
+                     |> List.collect functionLambdaExpressions)
+                    @ (members
+                       |> List.collect (fun memberDeclaration ->
+                           functionLambdaExpressions memberDeclaration.Body
+                       ))
                 | TypedIntegerLiteral _
                 | TypedStringLiteral _
                 | TypedNullLiteral
@@ -14649,12 +15988,17 @@ type internal CompilerService() =
                 | TypedDelegateLambda expression ->
                     expression
                     :: delegateLambdaExpressions expression.LambdaBody
+                | TypedFunctionLambda expression ->
+                    delegateLambdaExpressions expression.Body
                 | TypedLet(_, _, _, _, value, body, _, _) ->
                     delegateLambdaExpressions value
                     @ delegateLambdaExpressions body
                 | TypedLocalAssignment(_, _, value)
                 | TypedBooleanNegation(value, _)
                 | TypedUpcast(_, _, _, value) -> delegateLambdaExpressions value
+                | TypedEquality(left, right, _) ->
+                    delegateLambdaExpressions left
+                    @ delegateLambdaExpressions right
                 | TypedStaticMethodCall(_, _, arguments)
                 | TypedObjectConstruction(_, arguments) ->
                     arguments
@@ -14678,8 +16022,11 @@ type internal CompilerService() =
                     delegateLambdaExpressions input
                     @ delegateLambdaExpressions ifNull
                     @ delegateLambdaExpressions ifNotNull
-                | TypedTypeTestMatch(input, _, _, _, ifMatched, ifNotMatched, _, _, _, _) ->
+                | TypedTypeTestMatch(input, _, _, _, guard, ifMatched, ifNotMatched, _, _, _, _) ->
                     delegateLambdaExpressions input
+                    @ (guard
+                       |> Option.map (fst >> delegateLambdaExpressions)
+                       |> Option.defaultValue [])
                     @ delegateLambdaExpressions ifMatched
                     @ delegateLambdaExpressions ifNotMatched
                 | TypedSequential expressions ->
@@ -14771,16 +16118,51 @@ type internal CompilerService() =
                                                 ])
                                                 extensionMethod
                                             |> Some
-                                        | TypedStaticObjectMethod _ -> None
+                                        | TypedStaticObjectMethod methodDeclaration ->
+                                            let extensionMethod = {
+                                                methodDeclaration with
+                                                    Name =
+                                                        typeDeclaration.Name
+                                                        + "."
+                                                        + methodDeclaration.Name
+                                                        + ".Static"
+                                                    ExportFingerprint =
+                                                        Fingerprint.parts [
+                                                            methodDeclaration.ExportFingerprint
+                                                            "static-type-extension"
+                                                            TypeIdentity.cliType extendedType
+                                                        ]
+                                            }
+
+                                            methodFragment
+                                                StaticTypeExtensionMember
+                                                documentIndex
+                                                typed.SourceChecksum
+                                                methodDeclaration.StableId
+                                                (Fingerprint.parts [
+                                                    typeContentHash
+                                                    extensionMethod.ExportFingerprint
+                                                    methodImplementationHash methodDeclaration
+                                                ])
+                                                extensionMethod
+                                            |> Some
                                     )
 
                                 Some {
                                     SchemaVersion = querySchema
                                     StableId = typeDeclaration.StableId
-                                    Namespace = String.Empty
+                                    Namespace =
+                                        if isNested then
+                                            String.Empty
+                                        else
+                                            typed.Namespace
                                     Name = moduleName
                                     IsPublic = true
-                                    EnclosingTypeStableId = Some moduleTypeStableId
+                                    EnclosingTypeStableId =
+                                        if isNested then
+                                            Some moduleTypeStableId
+                                        else
+                                            None
                                     Kind = ExtensionModuleContainer
                                     GenericParameters = []
                                     Attributes = [
@@ -15053,6 +16435,7 @@ type internal CompilerService() =
                                             Parameters = memberDeclaration.Parameters
                                             ReturnType = memberDeclaration.ReturnType
                                             Body = memberDeclaration.Body
+                                            EmitHiddenEntrySequencePoint = false
                                             ExportFingerprint =
                                                 Fingerprint.parts [
                                                     overrideStableId
@@ -15143,6 +16526,7 @@ type internal CompilerService() =
                                     | TypedInstanceMethodCall _
                                     | TypedBoundInstanceMethod _
                                     | TypedUnitLambda _
+                                    | TypedFunctionLambda _
                                     | TypedDelegateLambda _
                                     | TypedValueTaskBind _
                                     | TypedValueTaskApply _
@@ -15153,6 +16537,7 @@ type internal CompilerService() =
                                     | TypedSequential _
                                     | TypedLocalAssignment _
                                     | TypedBooleanNegation _
+                                    | TypedEquality _
                                     | TypedTryWith _
                                     | TypedNullMatch _
                                     | TypedTypeTestMatch _
@@ -15544,6 +16929,7 @@ type internal CompilerService() =
                                 | TypedFunctionApplication _
                                 | TypedInstanceMethodCall _
                                 | TypedUnitLambda _
+                                | TypedFunctionLambda _
                                 | TypedDelegateLambda _
                                 | TypedValueTaskBind _
                                 | TypedValueTaskApply _
@@ -15553,6 +16939,7 @@ type internal CompilerService() =
                                 | TypedUpcast _
                                 | TypedSequential _
                                 | TypedBooleanNegation _
+                                | TypedEquality _
                                 | TypedTryWith _
                                 | TypedNullMatch _
                                 | TypedTypeTestMatch _
@@ -15743,6 +17130,7 @@ type internal CompilerService() =
                                 | TypedFunctionApplication _
                                 | TypedInstanceMethodCall _
                                 | TypedBoundInstanceMethod _
+                                | TypedFunctionLambda _
                                 | TypedDelegateLambda _
                                 | TypedValueTaskBind _
                                 | TypedValueTaskApply _
@@ -15752,6 +17140,7 @@ type internal CompilerService() =
                                 | TypedUpcast _
                                 | TypedSequential _
                                 | TypedBooleanNegation _
+                                | TypedEquality _
                                 | TypedTryWith _
                                 | TypedNullMatch _
                                 | TypedTypeTestMatch _
@@ -15769,6 +17158,233 @@ type internal CompilerService() =
                     )
                 )
                 |> List.collect id
+
+            let functionLambdaClosureTypes =
+                modulesWithContentHashes
+                |> List.collect (fun (typed, declarationsWithContentHashes) ->
+                    let documentIndex = typed.DocumentIndex
+
+                    let moduleTypeStableId =
+                        moduleStableId
+                        + "/type:"
+                        + typed.StableId
+
+                    let isNested = typed.ContainerKind = ModuleSource
+
+                    let declarationMethods =
+                        function
+                        | TypedMethod methodDeclaration -> [ methodDeclaration ]
+                        | TypedStaticType typeDeclaration -> typeDeclaration.Methods
+                        | TypedObjectType typeDeclaration ->
+                            typeDeclaration.Methods
+                            |> List.map _.Method
+                        | TypedLiteralField _
+                        | TypedNestedModule _
+                        | TypedTypeAbbreviation _
+                        | TypedStructType _ -> []
+
+                    declarationsWithContentHashes
+                    |> List.collect (fun (declaration, _) ->
+                        declaration
+                        |> declarationMethods
+                        |> List.collect (fun methodDeclaration ->
+                            methodDeclaration.Body
+                            |> functionLambdaExpressions
+                            |> List.map (fun expression ->
+                                let closureStableId =
+                                    match expression.ClosureType with
+                                    | CliNamedType typeReference
+                                    | CliGenericType(typeReference, _) ->
+                                        typeReference.DeclarationId
+                                    | _ ->
+                                        invalidOp
+                                            "an F# function lambda closure must be a named CLI type"
+
+                                let constructorStableId =
+                                    closureStableId
+                                    + "/constructor"
+
+                                let invokeStableId =
+                                    closureStableId
+                                    + "/method:Invoke"
+
+                                let captures: TypedFunctionLambdaCapture list =
+                                    expression.Captures
+                                    |> List.map (fun capture -> {
+                                        capture with
+                                            Type =
+                                                methodTypeParametersToTypeParameters capture.Type
+                                            Field = mapTypedFieldAddress capture.Field
+                                    })
+
+                                let objectConstructor = {
+                                    DeclaringType =
+                                        CoreDeclaringType {
+                                            Namespace = "System"
+                                            Name = "Object"
+                                        }
+                                    Name = ".ctor"
+                                    GenericArity = 0
+                                    IsInstance = true
+                                    ParameterTypes = []
+                                    ReturnType = CliVoid
+                                    TargetStableId = None
+                                }
+
+                                let captureFieldReference capture = {
+                                    DeclaringType =
+                                        CliDeclaringType capture.Field.DeclaringType
+                                    Name = capture.Field.Name
+                                    FieldType = capture.Field.FieldType
+                                    TargetStableId = capture.Field.TargetStableId
+                                }
+
+                                let constructorInstructions = [
+                                    LoadArgument 0
+                                    CallMethod objectConstructor
+
+                                    for index, capture in captures |> List.indexed do
+                                        LoadArgument 0
+                                        LoadArgument(index + 1)
+                                        StoreField(captureFieldReference capture)
+
+                                    Return
+                                ]
+
+                                let constructor = {
+                                    SchemaVersion = querySchema
+                                    StableId = constructorStableId
+                                    Name = ".ctor"
+                                    Kind = ClosureConstructor
+                                    GenericParameters = []
+                                    Constraints = []
+                                    GenericParameterConstraints = []
+                                    Attributes = []
+                                    Parameters =
+                                        captures
+                                        |> List.map (fun capture -> {
+                                            Name = capture.Name
+                                            Type = capture.Type
+                                            Attributes = []
+                                        })
+                                    Locals = []
+                                    ReturnType = CliVoid
+                                    Instructions = constructorInstructions
+                                    EmitDefaultSequencePoint = true
+                                    MaxStack = 8
+                                    DependencyIds =
+                                        objectConstructor.DependencyId
+                                        :: (captures
+                                            |> List.map (
+                                                captureFieldReference
+                                                >> _.DependencyId
+                                            ))
+                                    ContentHash =
+                                        Fingerprint.parts [
+                                            constructorStableId
+                                            objectConstructor.StableId
+
+                                            yield!
+                                                captures
+                                                |> List.map (fun capture ->
+                                                    Fingerprint.parts [
+                                                        capture.Name
+                                                        TypeIdentity.cliType capture.Type
+                                                        capture.Field.Name
+                                                    ]
+                                                )
+                                        ]
+                                    DocumentIndex = documentIndex
+                                    DocumentChecksum = typed.SourceChecksum
+                                    Range = expression.LambdaRange
+                                }
+
+                                let invokeBody =
+                                    expression.Body
+                                    |> methodExpressionTypesToTypeParameters
+
+                                let invokeDeclaration: TypedMethodDeclaration = {
+                                    StableId = invokeStableId
+                                    Name = "Invoke"
+                                    IsPublic = false
+                                    GenericParameters = []
+                                    Constraints = []
+                                    Attributes = []
+                                    Parameters = [
+                                        {
+                                            Name = expression.ParameterName
+                                            Type =
+                                                methodTypeParametersToTypeParameters
+                                                    expression.ParameterType
+                                            Attributes = []
+                                        }
+                                    ]
+                                    ReturnType =
+                                        methodTypeParametersToTypeParameters
+                                            expression.ReturnType
+                                    Body = invokeBody
+                                    EmitHiddenEntrySequencePoint = false
+                                    ExportFingerprint =
+                                        Fingerprint.parts [
+                                            invokeStableId
+                                            TypeIdentity.inlineBody invokeBody
+                                        ]
+                                    Range = expression.LambdaRange
+                                }
+
+                                let invoke =
+                                    methodFragment
+                                        ClosureInvoke
+                                        documentIndex
+                                        typed.SourceChecksum
+                                        invokeStableId
+                                        (methodImplementationHash invokeDeclaration)
+                                        invokeDeclaration
+
+                                {
+                                    SchemaVersion = querySchema
+                                    StableId = closureStableId
+                                    Namespace =
+                                        if isNested then String.Empty else typed.Namespace
+                                    Name = expression.ClosureName
+                                    IsPublic = false
+                                    EnclosingTypeStableId =
+                                        if isNested then Some moduleTypeStableId else None
+                                    Kind = ClosureContainer
+                                    GenericParameters = methodDeclaration.GenericParameters
+                                    Attributes = []
+                                    LiteralFields = []
+                                    InstanceFields =
+                                        captures
+                                        |> List.map (fun capture -> {
+                                            SchemaVersion = querySchema
+                                            StableId =
+                                                capture.Field.TargetStableId
+                                                |> Option.defaultWith (fun () ->
+                                                    closureStableId
+                                                    + "/field:"
+                                                    + capture.Name
+                                                )
+                                            Name = capture.Field.Name
+                                            Type = capture.Type
+                                            Attributes = []
+                                            ContentHash =
+                                                Fingerprint.parts [
+                                                    capture.Name
+                                                    TypeIdentity.cliType capture.Type
+                                                ]
+                                        })
+                                    StaticFields = []
+                                    Properties = []
+                                    Methods = [
+                                        constructor
+                                        invoke
+                                    ]
+                                }
+                            )
+                        )
+                    )
+                )
 
             let delegateLambdaClosureTypes =
                 modulesWithContentHashes
@@ -15819,6 +17435,15 @@ type internal CompilerService() =
                                     closureStableId
                                     + "/method:Invoke"
 
+                                let captures: TypedFunctionLambdaCapture list =
+                                    expression.Captures
+                                    |> List.map (fun capture -> {
+                                        capture with
+                                            Type =
+                                                methodTypeParametersToTypeParameters capture.Type
+                                            Field = mapTypedFieldAddress capture.Field
+                                    })
+
                                 let objectConstructor = {
                                     DeclaringType =
                                         CoreDeclaringType {
@@ -15833,6 +17458,26 @@ type internal CompilerService() =
                                     TargetStableId = None
                                 }
 
+                                let captureFieldReference capture = {
+                                    DeclaringType =
+                                        CliDeclaringType capture.Field.DeclaringType
+                                    Name = capture.Field.Name
+                                    FieldType = capture.Field.FieldType
+                                    TargetStableId = capture.Field.TargetStableId
+                                }
+
+                                let constructorInstructions = [
+                                    LoadArgument 0
+                                    CallMethod objectConstructor
+
+                                    for index, capture in captures |> List.indexed do
+                                        LoadArgument 0
+                                        LoadArgument(index + 1)
+                                        StoreField(captureFieldReference capture)
+
+                                    Return
+                                ]
+
                                 let constructor = {
                                     SchemaVersion = querySchema
                                     StableId = constructorStableId
@@ -15842,21 +17487,39 @@ type internal CompilerService() =
                                     Constraints = []
                                     GenericParameterConstraints = []
                                     Attributes = []
-                                    Parameters = []
+                                    Parameters =
+                                        captures
+                                        |> List.map (fun capture -> {
+                                            Name = capture.Name
+                                            Type = capture.Type
+                                            Attributes = []
+                                        })
                                     Locals = []
                                     ReturnType = CliVoid
-                                    Instructions = [
-                                        LoadArgument 0
-                                        CallMethod objectConstructor
-                                        Return
-                                    ]
+                                    Instructions = constructorInstructions
                                     EmitDefaultSequencePoint = true
                                     MaxStack = 8
-                                    DependencyIds = [ objectConstructor.DependencyId ]
+                                    DependencyIds =
+                                        objectConstructor.DependencyId
+                                        :: (captures
+                                            |> List.map (
+                                                captureFieldReference
+                                                >> _.DependencyId
+                                            ))
                                     ContentHash =
                                         Fingerprint.parts [
                                             constructorStableId
                                             objectConstructor.StableId
+
+                                            yield!
+                                                captures
+                                                |> List.map (fun capture ->
+                                                    Fingerprint.parts [
+                                                        capture.Name
+                                                        TypeIdentity.cliType capture.Type
+                                                        capture.Field.Name
+                                                    ]
+                                                )
                                         ]
                                     DocumentIndex = documentIndex
                                     DocumentChecksum = typed.SourceChecksum
@@ -15890,6 +17553,7 @@ type internal CompilerService() =
                                         methodTypeParametersToTypeParameters
                                             expression.LambdaReturnType
                                     Body = invokeBody
+                                    EmitHiddenEntrySequencePoint = false
                                     ExportFingerprint =
                                         Fingerprint.parts [
                                             invokeStableId
@@ -15920,7 +17584,26 @@ type internal CompilerService() =
                                     GenericParameters = methodDeclaration.GenericParameters
                                     Attributes = []
                                     LiteralFields = []
-                                    InstanceFields = []
+                                    InstanceFields =
+                                        captures
+                                        |> List.map (fun capture -> {
+                                            SchemaVersion = querySchema
+                                            StableId =
+                                                capture.Field.TargetStableId
+                                                |> Option.defaultWith (fun () ->
+                                                    closureStableId
+                                                    + "/field:"
+                                                    + capture.Name
+                                                )
+                                            Name = capture.Field.Name
+                                            Type = capture.Type
+                                            Attributes = []
+                                            ContentHash =
+                                                Fingerprint.parts [
+                                                    capture.Name
+                                                    TypeIdentity.cliType capture.Type
+                                                ]
+                                        })
                                     StaticFields = []
                                     Properties = []
                                     Methods = [
@@ -16007,6 +17690,7 @@ type internal CompilerService() =
                 @ closureTypes
                 @ boundMemberClosureTypes
                 @ unitLambdaClosureTypes
+                @ functionLambdaClosureTypes
                 @ delegateLambdaClosureTypes
 
             let symbolic: SymbolicAssembly = {

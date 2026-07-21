@@ -555,6 +555,8 @@ module CompilerTargetTests =
         startInfo.ArgumentList.Add("--reference")
 
         startInfo.ArgumentList.Add(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), "*.dll"))
+        startInfo.ArgumentList.Add("--reference")
+        startInfo.ArgumentList.Add(typeof<Microsoft.FSharp.Core.Unit>.Assembly.Location)
 
         startInfo.WorkingDirectory <- repositoryRoot
         invokeProcessStartInfo 30_000 "ILVerify did not exit within 30 seconds" startInfo
@@ -1056,6 +1058,14 @@ module CompilerTargetTests =
                 compileForExportFingerprint root responsePath sourcePath "TaskBuilderBase-fsharp2" []
 
             let pdbPath = Path.ChangeExtension(outputPath, ".pdb")
+
+            let verification = invokeIlVerify outputPath
+
+            Expect.equal
+                verification.ExitCode
+                0
+                (verification.StandardOutput
+                 + verification.StandardError)
 
             Expect.equal
                 (objectTypeMetadataShape outputPath pdbPath memberName)
@@ -4216,6 +4226,78 @@ module CompilerTargetTests =
 
                     Expect.equal fsharp2Behavior 42 "the member should return its second argument"
 
+            testCase "emits an explicit return type on a static-only type member"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.AsyncEx\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\ntype AsyncEx =\n    static member AwaitTask(computation: Async<unit>) : Async<unit> = computation\n"
+
+                withObjectMemberDifferential "fsharp2-static-only-explicit-return" sourceText "Zero"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeAwaitTask assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+                        let computation = async.Return()
+
+                        emittedAssembly
+                            .GetType("IcedTasks.AsyncEx.AsyncEx", throwOnError = true)
+                            .GetMethod("AwaitTask")
+                            .Invoke(null, [| box computation |])
+                        :?> Async<unit>
+                        |> Async.RunSynchronously
+
+                    let oracleBehavior = invokeAwaitTask oracleOutputPath
+                    let fsharp2Behavior = invokeAwaitTask outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the explicitly typed static member should match the Compatibility Oracle"
+
+            testCase "continues with an attributed module after a static-only type"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.AsyncEx\n\ntype TaskBuilderBase() =\n    member inline _.Zero() = 0\n\ntype AsyncEx =\n    static member AwaitTask(computation: Async<unit>) : Async<unit> = computation\n\n[<AutoOpen>]\nmodule AsyncExtensions =\n    let marker = TaskBuilderBase()\n"
+
+                withObjectMemberDifferential
+                    "fsharp2-static-type-followed-by-module"
+                    sourceText
+                    "Zero"
+                <| fun _ _ -> ()
+
+            testCase "emits a qualified static augmentation in an extension module"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.AsyncEx\n\ntype TaskBuilderBase() =\n    member inline _.Zero() = 0\n\ntype AsyncEx =\n    static member AwaitTask(computation: Async<unit>) : Async<unit> = computation\n\n[<AutoOpen>]\nmodule AsyncExtensions =\n    type Microsoft.FSharp.Control.Async with\n        static member Echo(computation: Async<unit>) : Async<unit> = computation\n"
+
+                withObjectMemberDifferential
+                    "fsharp2-qualified-static-extension-module"
+                    sourceText
+                    "Zero"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeEcho assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let echoMethod =
+                            emittedAssembly
+                                .GetType("IcedTasks.AsyncEx.AsyncExtensions", throwOnError = true)
+                                .GetMethods(
+                                    BindingFlags.Public
+                                    ||| BindingFlags.Static
+                                )
+                            |> Array.find (fun methodInfo ->
+                                methodInfo.Name.Contains(".Echo", StringComparison.Ordinal)
+                            )
+
+                        echoMethod.Invoke(null, [| box (async.Return()) |]) :?> Async<unit>
+                        |> Async.RunSynchronously
+
+                    let oracleBehavior = invokeEcho oracleOutputPath
+                    let fsharp2Behavior = invokeEcho outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the qualified static augmentation should match the Compatibility Oracle"
+
             testCase "executes a static object member with a parenthesized function type"
             <| fun _ ->
                 let sourceText =
@@ -4285,6 +4367,104 @@ module CompilerTargetTests =
                         "the emitted static member should preserve the locally bound value"
 
                     Expect.equal fsharp2Behavior 42 "Alias should return its local binding"
+
+            testCase "executes a typed local inline function"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Apply(value: int) : int =\n            let inline identity (input: int) = input\n            identity value\n"
+
+                withObjectMemberDifferential "fsharp2-local-inline-function" sourceText "Apply"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeApply assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        emittedAssembly
+                            .GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+                            .GetMethod(
+                                "Apply",
+                                BindingFlags.Public
+                                ||| BindingFlags.Static
+                            )
+                            .Invoke(null, [| box 42 |])
+                        :?> int
+
+                    let oracleBehavior = invokeApply oracleOutputPath
+                    let fsharp2Behavior = invokeApply outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the local inline function should behave like the Compatibility Oracle"
+
+                    Expect.equal fsharp2Behavior 42 "Apply should invoke the local inline function"
+
+            testCase "executes a tuple-argument local inline function"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.AsyncEx\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule AsyncEx =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Apply(value: int) : int =\n            let inline select (selected: int, _ignored: int, _alsoIgnored: int) =\n                selected\n            select (value, 0, 0)\n"
+
+                withObjectMemberDifferential
+                    "fsharp2-local-inline-tuple-argument"
+                    sourceText
+                    "Apply"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeApply assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        emittedAssembly
+                            .GetType(
+                                "IcedTasks.AsyncEx.AsyncEx+TaskBuilderBase",
+                                throwOnError = true
+                            )
+                            .GetMethod(
+                                "Apply",
+                                BindingFlags.Public
+                                ||| BindingFlags.Static
+                            )
+                            .Invoke(null, [| box 42 |])
+                        :?> int
+
+                    let oracleBehavior = invokeApply oracleOutputPath
+                    let fsharp2Behavior = invokeApply outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the tuple-argument inline function should match the Compatibility Oracle"
+
+                    Expect.equal fsharp2Behavior 42 "Apply should bind the tupled inline parameters"
+
+            testCase "executes a local function with two tupled argument groups"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.AsyncEx\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule AsyncEx =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Apply(value: int) : int =\n            let select (selected: int, _ignored: int) (_next: int, _alsoIgnored: int) =\n                selected\n            select (value, 0) (0, 0)\n"
+
+                withObjectMemberDifferential "fsharp2-local-two-tuple-groups" sourceText "Apply"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeApply assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        emittedAssembly
+                            .GetType(
+                                "IcedTasks.AsyncEx.AsyncEx+TaskBuilderBase",
+                                throwOnError = true
+                            )
+                            .GetMethod("Apply")
+                            .Invoke(null, [| box 42 |])
+                        :?> int
+
+                    let oracleBehavior = invokeApply oracleOutputPath
+                    let fsharp2Behavior = invokeApply outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the local function should match the Compatibility Oracle"
+
+                    Expect.equal fsharp2Behavior 42 "Apply should bind both tupled argument groups"
 
             testCase "executes assignment to a mutable local binding"
             <| fun _ ->
@@ -4791,6 +4971,109 @@ module CompilerTargetTests =
                         (true, true)
                         "Run should distinguish ordinary completion from a caught exception"
 
+            testCase "executes guarded type-test exception clauses"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.AsyncEx\n\nopen System\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule AsyncEx =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Run(callback: Func<int>, aggregateResult: int, fallbackResult: int) : int =\n            let mutable result = fallbackResult\n            try\n                result <- callback.Invoke()\n            with\n            | :? AggregateException as aggregate when aggregate.InnerExceptions.Count = 1 ->\n                result <- aggregateResult\n            | _ ->\n                result <- fallbackResult\n            result\n"
+
+                withObjectMemberDifferential
+                    "fsharp2-guarded-type-test-exception-clauses"
+                    sourceText
+                    "Run"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeRun assemblyPath caseName callback =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        try
+                            emittedAssembly
+                                .GetType(
+                                    "IcedTasks.AsyncEx.AsyncEx+TaskBuilderBase",
+                                    throwOnError = true
+                                )
+                                .GetMethod("Run")
+                                .Invoke(
+                                    null,
+                                    [|
+                                        box callback
+                                        box 10
+                                        box 20
+                                    |]
+                                )
+                            :?> int
+                        with :? TargetInvocationException as error ->
+                            failtestf "%s invocation failed: %O" caseName error.InnerException
+
+                    let oneInner = AggregateException(Exception("inner"))
+
+                    let twoInner = AggregateException(Exception("one"), Exception("two"))
+
+                    let behavior assemblyPath = [|
+                        invokeRun assemblyPath "success" (Func<int>(fun () -> 42))
+                        invokeRun
+                            assemblyPath
+                            "one-inner aggregate"
+                            (Func<int>(fun () -> raise oneInner))
+                        invokeRun
+                            assemblyPath
+                            "two-inner aggregate"
+                            (Func<int>(fun () -> raise twoInner))
+                        invokeRun
+                            assemblyPath
+                            "ordinary exception"
+                            (Func<int>(fun () -> raise (InvalidOperationException("ordinary"))))
+                    |]
+
+                    let oracleBehavior = behavior oracleOutputPath
+                    let fsharp2Behavior = behavior outputPath
+
+                    Expect.sequenceEqual
+                        fsharp2Behavior
+                        oracleBehavior
+                        "guarded catch selection should match the Compatibility Oracle"
+
+                    Expect.sequenceEqual
+                        fsharp2Behavior
+                        [|
+                            42
+                            10
+                            20
+                            20
+                        |]
+                        "Run should select the guarded clause only for one inner exception"
+
+            testCase "executes a tuple-pattern continuation lambda"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.AsyncEx\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule AsyncEx =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Run(value: int) : Async<int> =\n            Async.FromContinuations(fun (onNext, _onError, _onCancel) ->\n                onNext value\n            )\n"
+
+                withObjectMemberDifferential
+                    "fsharp2-tuple-pattern-continuation-lambda"
+                    sourceText
+                    "Run"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeRun assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        emittedAssembly
+                            .GetType(
+                                "IcedTasks.AsyncEx.AsyncEx+TaskBuilderBase",
+                                throwOnError = true
+                            )
+                            .GetMethod("Run")
+                            .Invoke(null, [| box 42 |])
+                        :?> Async<int>
+                        |> Async.RunSynchronously
+
+                    let oracleBehavior = invokeRun oracleOutputPath
+                    let fsharp2Behavior = invokeRun outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "tuple-pattern continuation binding should match the Compatibility Oracle"
+
+                    Expect.equal fsharp2Behavior 42 "Run should invoke the success continuation"
+
             testCase "executes a null-pattern match"
             <| fun _ ->
                 let sourceText =
@@ -5277,6 +5560,62 @@ module CompilerTargetTests =
                         "the two-parameter delegate should behave like the Compatibility Oracle"
 
                     Expect.isTrue fsharp2Behavior "the delegate should return unit"
+
+            testCase "emits and executes a captured FSharp delegate lambda"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Make(captured: bool) : ResumptionFunc<int> =\n            ResumptionFunc<int>(fun _sm ->\n                let result = captured\n                result\n            )\n"
+
+                withObjectMemberDifferential "fsharp2-captured-delegate-lambda" sourceText "Make"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeMake assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let callback =
+                            emittedAssembly
+                                .GetType(
+                                    "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                    throwOnError = true
+                                )
+                                .GetMethod("Make")
+                                .Invoke(null, [| box true |])
+
+                        callback
+                            .GetType()
+                            .GetMethod("Invoke")
+                            .Invoke(
+                                callback,
+                                [|
+                                    box
+                                        Unchecked.defaultof<
+                                            Microsoft.FSharp.Core.CompilerServices.ResumableStateMachine<
+                                                int
+                                             >
+                                         >
+                                |]
+                            )
+                        :?> bool
+
+                    let oracleBehavior = invokeMake oracleOutputPath
+                    let fsharp2Behavior = invokeMake outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the captured delegate should behave like the Compatibility Oracle"
+
+                    Expect.isTrue fsharp2Behavior "the delegate should return its captured value"
+
+            testCase "emits a captured continuation binding inside a resumption delegate"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type Awaiter() =\n        static member inline GetResult(value: int) : int = value\n\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Make(awaiter: int, continuation: int -> ResumableCode<int, int>) : ResumptionFunc<int> =\n            let callback =\n                ResumptionFunc<int>(fun sm ->\n                    let result = Awaiter.GetResult awaiter\n                    (continuation result).Invoke(&sm)\n                )\n            callback\n"
+
+                withObjectMemberDifferential
+                    "fsharp2-captured-resumption-continuation"
+                    sourceText
+                    "Make"
+                <| fun _ _ -> ()
 
             testCase "emits and executes a struct tuple expression"
             <| fun _ ->
@@ -8597,6 +8936,7 @@ module CompilerTargetTests =
                         responsePath,
                         [|
                             $"-o:{outputPath}"
+                            "-g"
                             "--debug:portable"
                             $"--embed:{firstSourcePath}"
                             $"--sourcelink:{sourceLinkPath}"
@@ -8606,6 +8946,7 @@ module CompilerTargetTests =
                             "--define:RELEASE"
                             $"--doc:{documentationPath}"
                             "--optimize+"
+                            "--tailcalls-"
                             "--checknulls+"
                             "--define:NULLABLE"
                             $"-r:{systemRuntime}"

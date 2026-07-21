@@ -236,6 +236,10 @@ type internal ParsedExpression =
     | SequentialValueExpression of (ParsedExpression * SourceRange) list
     | LocalAssignment of name: string * value: ParsedExpression
     | BooleanNegationExpression of expression: ParsedExpression * range: SourceRange
+    | EqualityExpression of
+        left: ParsedExpression *
+        right: ParsedExpression *
+        range: SourceRange
     | TryWithExpression of
         body: ParsedExpression *
         bindingName: string *
@@ -247,12 +251,13 @@ type internal ParsedExpression =
         range: SourceRange
     | MatchExpression of
         input: ParsedExpression *
-        clauses: (ParsedMatchPattern * ParsedExpression * SourceRange) list *
+        clauses: (ParsedMatchPattern * (ParsedExpression * SourceRange) option * ParsedExpression * SourceRange) list *
         matchHeaderRange: SourceRange *
         range: SourceRange
     | LetExpression of
         bindingName: string *
         isMutable: bool *
+        isInline: bool *
         value: ParsedExpression *
         body: ParsedExpression *
         bindingRange: SourceRange *
@@ -427,7 +432,10 @@ type internal ParsedObjectMethodDeclaration =
 type internal ParsedObjectTypeContainer =
     | OrdinaryObjectType
     | ParsedCurrentModuleAugmentation of targetTypeName: QualifiedTypeName
-    | ParsedExtensionModule of name: string * attributes: ParsedAttribute list
+    | ParsedExtensionModule of
+        name: string *
+        attributes: ParsedAttribute list *
+        targetTypeName: QualifiedTypeName
 
     override _.ToString() = "ParsedObjectTypeContainer"
 
@@ -911,6 +919,7 @@ type internal TypedExpression =
         arguments: TypedExpression list
     | TypedBoundInstanceMethod of TypedBoundInstanceMethodExpression
     | TypedUnitLambda of TypedUnitLambdaExpression
+    | TypedFunctionLambda of TypedFunctionLambdaExpression
     | TypedDelegateLambda of TypedDelegateLambdaExpression
     | TypedValueTaskBind of TypedValueTaskBindExpression
     | TypedValueTaskApply of TypedValueTaskApplyExpression
@@ -930,6 +939,7 @@ type internal TypedExpression =
         expression: TypedExpression
     | TypedSequential of (TypedExpression * CliType * SourceRange) list
     | TypedBooleanNegation of expression: TypedExpression * range: SourceRange
+    | TypedEquality of left: TypedExpression * right: TypedExpression * range: SourceRange
     | TypedTryWith of
         body: TypedExpression *
         handlerLocalIndex: int *
@@ -957,6 +967,7 @@ type internal TypedExpression =
         targetType: CliType *
         localIndex: int *
         bindingName: string *
+        guard: (TypedExpression * SourceRange) option *
         ifMatched: TypedExpression *
         ifNotMatched: TypedExpression *
         matchHeaderRange: SourceRange *
@@ -978,10 +989,37 @@ type internal TypedExpression =
 
     override _.ToString() = "TypedExpression"
 
+and internal TypedFunctionLambdaExpression = {
+    FunctionType: CliType
+    ConverterType: CliType
+    ClosureType: CliType
+    ClosureName: string
+    ParameterName: string
+    ParameterType: CliType
+    ReturnType: CliType
+    Body: TypedExpression
+    Captures: TypedFunctionLambdaCapture list
+    SourceLine: int
+    LambdaRange: SourceRange
+    ConstructionRange: SourceRange
+} with
+
+    override _.ToString() = "TypedFunctionLambdaExpression"
+
+and internal TypedFunctionLambdaCapture = {
+    OuterParameterIndex: int
+    Name: string
+    Type: CliType
+    Field: TypedFieldAddress
+} with
+
+    override _.ToString() = "TypedFunctionLambdaCapture"
+
 and internal TypedDelegateLambdaExpression = {
     DelegateType: CliType
     ClosureType: CliType
     ClosureName: string
+    Captures: TypedFunctionLambdaCapture list
     LambdaParameterNames: string list
     LambdaParameterTypes: CliType list
     LambdaReturnType: CliType
@@ -1143,6 +1181,7 @@ type internal TypedMethodDeclaration = {
     Parameters: TypedParameter list
     ReturnType: CliType
     Body: TypedExpression
+    EmitHiddenEntrySequencePoint: bool
     ExportFingerprint: string
     Range: SourceRange
 } with
