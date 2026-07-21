@@ -204,6 +204,58 @@ type internal ReferenceTypeIndex
     ) =
     let methodCache = Dictionary<string, ReferenceMethodDefinition list>()
     let fieldCache = Dictionary<string, ReferenceFieldDefinition list>()
+    let baseTypeCache = Dictionary<string, CliType option>()
+
+    let loadBaseType declarationId =
+        let signatureProvider = ReferenceSignatureTypeProvider(types)
+
+        let provider =
+            signatureProvider
+            :> ISignatureTypeProvider<CliType option, unit>
+
+        let locations =
+            match typeLocations.TryGetValue(declarationId) with
+            | true, candidates -> candidates
+            | false, _ -> []
+
+        locations
+        |> List.tryPick (fun location ->
+            use metadataStream = File.OpenRead(location.ReferencePath)
+            use pe = new PEReader(metadataStream)
+            let metadata = pe.GetMetadataReader()
+
+            let typeDefinition =
+                location.TypeRow
+                |> MetadataTokens.TypeDefinitionHandle
+                |> metadata.GetTypeDefinition
+
+            let handle = typeDefinition.BaseType
+
+            if handle.IsNil then
+                None
+            else
+                match handle.Kind with
+                | HandleKind.TypeDefinition ->
+                    provider.GetTypeFromDefinition(
+                        metadata,
+                        TypeDefinitionHandle.op_Explicit handle,
+                        0uy
+                    )
+                | HandleKind.TypeReference ->
+                    provider.GetTypeFromReference(
+                        metadata,
+                        TypeReferenceHandle.op_Explicit handle,
+                        0uy
+                    )
+                | HandleKind.TypeSpecification ->
+                    provider.GetTypeFromSpecification(
+                        metadata,
+                        (),
+                        TypeSpecificationHandle.op_Explicit handle,
+                        0uy
+                    )
+                | _ -> None
+        )
 
     let loadMethods declarationId name isStatic =
         let signatureProvider = ReferenceSignatureTypeProvider(types)
@@ -454,6 +506,16 @@ type internal ReferenceTypeIndex
                 candidates
         )
 
+    member _.BaseType(declarationId: string) =
+        lock baseTypeCache (fun () ->
+            match baseTypeCache.TryGetValue(declarationId) with
+            | true, baseType -> baseType
+            | false, _ ->
+                let baseType = loadBaseType declarationId
+                baseTypeCache.Add(declarationId, baseType)
+                baseType
+        )
+
     member _.Resolve
         (
             currentNamespace: string,
@@ -561,6 +623,29 @@ type internal ReferenceTypeIndex
         let typeLocations = Dictionary<string, ResizeArray<ReferenceTypeLocation>>()
 
         let referenceIdentities = ResizeArray<string>()
+        let referenceContentHashes = Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+
+        let addReferenceIdentity path =
+            let normalizedPath = Path.GetFullPath(path)
+
+            match referenceContentHashes.TryGetValue(normalizedPath) with
+            | true, contentHash -> contentHash
+            | false, _ ->
+                use fingerprintStream = File.OpenRead(normalizedPath)
+
+                let contentHash =
+                    SHA256.HashData(fingerprintStream)
+                    |> Convert.ToHexString
+                    |> fun value -> value.ToLowerInvariant()
+
+                referenceContentHashes.Add(normalizedPath, contentHash)
+                referenceIdentities.Add(
+                    normalizedPath
+                    + "="
+                    + contentHash
+                )
+
+                contentHash
 
         let addType
             declarationOwner
@@ -610,20 +695,167 @@ type internal ReferenceTypeIndex
                         candidates.Add(resolved)
                         bySimpleName.Add(key, candidates)
 
+        let forwardedAssemblyTypes =
+            Dictionary<string, Dictionary<string * string, int * bool>>(
+                StringComparer.OrdinalIgnoreCase
+            )
+
+        let forwardedTypesFor implementationPath =
+            match forwardedAssemblyTypes.TryGetValue(implementationPath) with
+            | true, forwardedTypes -> forwardedTypes
+            | false, _ ->
+                addReferenceIdentity implementationPath
+                |> ignore
+
+                let forwardedTypes = Dictionary<string * string, int * bool>()
+                use implementationStream = File.OpenRead(implementationPath)
+                use implementationPe = new PEReader(implementationStream)
+
+                if implementationPe.HasMetadata then
+                    let implementationMetadata = implementationPe.GetMetadataReader()
+
+                    let implementationTypeName (handle: EntityHandle) =
+                        if handle.IsNil then
+                            None
+                        else
+                            match handle.Kind with
+                            | HandleKind.TypeReference ->
+                                let reference =
+                                    implementationMetadata.GetTypeReference(
+                                        handle
+                                        |> MetadataTokens.GetRowNumber
+                                        |> MetadataTokens.TypeReferenceHandle
+                                    )
+
+                                Some(
+                                    implementationMetadata.GetString(reference.Namespace),
+                                    implementationMetadata.GetString(reference.Name)
+                                )
+                            | HandleKind.TypeDefinition ->
+                                let definition =
+                                    implementationMetadata.GetTypeDefinition(
+                                        handle
+                                        |> MetadataTokens.GetRowNumber
+                                        |> MetadataTokens.TypeDefinitionHandle
+                                    )
+
+                                Some(
+                                    implementationMetadata.GetString(definition.Namespace),
+                                    implementationMetadata.GetString(definition.Name)
+                                )
+                            | _ -> None
+
+                    for handle in implementationMetadata.TypeDefinitions do
+                        let definition = implementationMetadata.GetTypeDefinition(handle)
+
+                        if not definition.IsNested then
+                            let namespaceName =
+                                implementationMetadata.GetString(definition.Namespace)
+
+                            let metadataName = implementationMetadata.GetString(definition.Name)
+
+                            let isValueType =
+                                implementationTypeName definition.BaseType
+                                |> Option.exists (fun (namespaceName, typeName) ->
+                                    namespaceName = "System"
+                                    && (typeName = "ValueType" || typeName = "Enum")
+                                )
+
+                            forwardedTypes.TryAdd(
+                                (namespaceName, metadataName),
+                                (MetadataTokens.GetRowNumber(handle), isValueType)
+                            )
+                            |> ignore
+
+                forwardedAssemblyTypes.Add(implementationPath, forwardedTypes)
+                forwardedTypes
+
+        let addForwardedTypeLocation
+            (facadePath: string)
+            (facadeMetadata: MetadataReader)
+            (exportedType: ExportedType)
+            =
+            if exportedType.Implementation.Kind <> HandleKind.AssemblyReference then
+                ()
+            else
+                let assemblyReference =
+                    exportedType.Implementation
+                    |> AssemblyReferenceHandle.op_Explicit
+                    |> facadeMetadata.GetAssemblyReference
+
+                let implementationAssemblyName =
+                    facadeMetadata.GetString(assemblyReference.Name)
+
+                let implementationPath =
+                    Path.Combine(
+                        Path.GetDirectoryName(facadePath),
+                        implementationAssemblyName
+                        + ".dll"
+                    )
+
+                if File.Exists(implementationPath) then
+                    let namespaceName = facadeMetadata.GetString(exportedType.Namespace)
+                    let metadataName = facadeMetadata.GetString(exportedType.Name)
+                    let forwardedTypes = forwardedTypesFor implementationPath
+
+                    match forwardedTypes.TryGetValue((namespaceName, metadataName)) with
+                    | false, _ -> ()
+                    | true, (typeRow, isValueType) ->
+                        let name, genericArity =
+                            ReferenceTypeName.parseMetadataName metadataName
+
+                        let typeKey =
+                            ReferenceTypeName.typeKey
+                                {
+                                    Namespace = namespaceName
+                                    Name = name
+                                }
+                                genericArity
+
+                        match types.TryGetValue(typeKey) with
+                        | false, _ -> ()
+                        | true, resolved ->
+                            let resolved = {
+                                resolved with
+                                    IsValueType = isValueType
+                            }
+
+                            types.[typeKey] <- resolved
+
+                            let simpleKey =
+                                ReferenceTypeName.simpleKey name genericArity
+
+                            match bySimpleName.TryGetValue(simpleKey) with
+                            | true, candidates ->
+                                for index = 0 to candidates.Count - 1 do
+                                    if
+                                        candidates.[index].DeclarationId
+                                        = resolved.DeclarationId
+                                    then
+                                        candidates.[index] <- resolved
+                            | false, _ -> ()
+
+                            let location = {
+                                ReferencePath = implementationPath
+                                TypeRow = typeRow
+                                DeclaringType = {
+                                    DeclarationId = resolved.DeclarationId
+                                    AssemblyName = resolved.AssemblyName
+                                    TypeName = resolved.TypeName
+                                    IsValueType = resolved.IsValueType
+                                }
+                            }
+
+                            match typeLocations.TryGetValue(resolved.DeclarationId) with
+                            | true, locations -> locations.Add(location)
+                            | false, _ ->
+                                let locations = ResizeArray<ReferenceTypeLocation>()
+                                locations.Add(location)
+                                typeLocations.Add(resolved.DeclarationId, locations)
+
         try
             for path in normalizedReferencePaths do
-                use fingerprintStream = File.OpenRead(path)
-
-                let contentHash =
-                    SHA256.HashData(fingerprintStream)
-                    |> Convert.ToHexString
-                    |> fun value -> value.ToLowerInvariant()
-
-                referenceIdentities.Add(
-                    path
-                    + "="
-                    + contentHash
-                )
+                let contentHash = addReferenceIdentity path
 
                 use metadataStream = File.OpenRead(path)
                 use pe = new PEReader(metadataStream)
@@ -813,6 +1045,8 @@ type internal ReferenceTypeIndex
                         false
                         (metadata.GetString(exportedType.Namespace))
                         (metadata.GetString(exportedType.Name))
+
+                    addForwardedTypeLocation path metadata exportedType
 
             let fingerprint =
                 referenceIdentities

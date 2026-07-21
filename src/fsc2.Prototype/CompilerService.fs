@@ -224,6 +224,7 @@ module private TypeIdentity =
             Fingerprint.parts [
                 "static-call"
                 target.StableId
+                cliType target.DeclaringType
 
                 yield!
                     genericArguments
@@ -246,6 +247,12 @@ module private TypeIdentity =
                 yield!
                     arguments
                     |> List.map inlineBody
+            ]
+        | TypedDefaultValue(valueType, localIndex) ->
+            Fingerprint.parts [
+                "default-value"
+                cliType valueType
+                localIndex.ToString(CultureInfo.InvariantCulture)
             ]
         | TypedFunctionApplication(functionType,
                                    domainType,
@@ -300,6 +307,73 @@ module private TypeIdentity =
                 cliType expression.DomainType
                 cliType expression.RangeType
             ]
+        | TypedDelegateLambda expression ->
+            Fingerprint.parts [
+                "delegate-lambda"
+                cliType expression.DelegateType
+
+                yield!
+                    (expression.LambdaParameterNames, expression.LambdaParameterTypes)
+                    ||> List.map2 (fun name parameterType ->
+                        Fingerprint.parts [
+                            name
+                            cliType parameterType
+                        ]
+                    )
+
+                cliType expression.LambdaReturnType
+                inlineBody expression.LambdaBody
+            ]
+        | TypedValueTaskBind expression ->
+            Fingerprint.parts [
+                "value-task-bind"
+                expression.BuilderName
+                (match expression.ReturnKind with
+                 | ComputationReturn -> "return"
+                 | ComputationReturnFrom -> "return-from")
+                expression.BinderParameterIndex.ToString(CultureInfo.InvariantCulture)
+                expression.SourceParameterIndex.ToString(CultureInfo.InvariantCulture)
+                cliType expression.InputType
+                cliType expression.OutputType
+                cliType expression.BinderType
+                cliType expression.InputValueTaskType
+                cliType expression.OutputValueTaskType
+            ]
+        | TypedValueTaskApply expression ->
+            Fingerprint.parts [
+                "value-task-apply"
+                expression.BuilderName
+                expression.ApplicableParameterIndex.ToString(CultureInfo.InvariantCulture)
+                expression.InputParameterIndex.ToString(CultureInfo.InvariantCulture)
+                cliType expression.InputType
+                cliType expression.OutputType
+                cliType expression.ApplierType
+                cliType expression.ApplicableValueTaskType
+                cliType expression.InputValueTaskType
+                cliType expression.OutputValueTaskType
+            ]
+        | TypedValueTaskZip expression ->
+            Fingerprint.parts [
+                "value-task-zip"
+                expression.BuilderName
+                expression.LeftParameterIndex.ToString(CultureInfo.InvariantCulture)
+                expression.RightParameterIndex.ToString(CultureInfo.InvariantCulture)
+                cliType expression.LeftType
+                cliType expression.RightType
+                cliType expression.TupleType
+                cliType expression.LeftValueTaskType
+                cliType expression.RightValueTaskType
+                cliType expression.OutputValueTaskType
+            ]
+        | TypedValueTaskOfUnit expression ->
+            Fingerprint.parts [
+                "value-task-of-unit"
+                expression.BuilderName
+                expression.SourceParameterIndex.ToString(CultureInfo.InvariantCulture)
+                cliType expression.SourceValueTaskType
+                cliType expression.UnitType
+                cliType expression.OutputValueTaskType
+            ]
         | TypedConditional(condition, ifTrue, ifFalse, _, _, _) ->
             Fingerprint.parts [
                 "conditional"
@@ -329,6 +403,43 @@ module private TypeIdentity =
             Fingerprint.parts [
                 "boolean-negation"
                 inlineBody expression
+            ]
+        | TypedTryWith(body,
+                       handlerLocalIndex,
+                       handlerName,
+                       catchType,
+                       handler,
+                       _,
+                       _,
+                       _,
+                       _,
+                       _) ->
+            Fingerprint.parts [
+                "try-with"
+                inlineBody body
+                handlerLocalIndex.ToString(CultureInfo.InvariantCulture)
+                handlerName
+                cliType catchType
+                inlineBody handler
+            ]
+        | TypedNullMatch(input,
+                         inputType,
+                         localIndex,
+                         bindingName,
+                         ifNull,
+                         ifNotNull,
+                         _,
+                         _,
+                         _,
+                         _) ->
+            Fingerprint.parts [
+                "null-match"
+                inlineBody input
+                cliType inputType
+                localIndex.ToString(CultureInfo.InvariantCulture)
+                bindingName
+                inlineBody ifNull
+                inlineBody ifNotNull
             ]
         | TypedTypeTestMatch(input,
                              targetType,
@@ -364,38 +475,40 @@ module private TypeIdentity =
         | TypedObjectExpression(typeReference,
                                 baseType,
                                 constructorArguments,
-                                isOverride,
-                                receiverName,
-                                memberName,
-                                memberParameters,
-                                memberReturnType,
-                                memberBody,
+                                members,
                                 _) ->
             Fingerprint.parts [
                 "object-expression"
                 typeReference.DeclarationId
                 cliType baseType
-                if isOverride then "override" else "member"
-                receiverName
-                memberName
-                cliType memberReturnType
+
+                yield! constructorArguments |> List.map inlineBody
 
                 yield!
-                    memberParameters
-                    |> List.map (fun parameter ->
+                    members
+                    |> List.map (fun memberDeclaration ->
                         Fingerprint.parts [
-                            parameter.Name
-                            cliType parameter.Type
-                            "attributes"
-                            yield! parameter.Attributes |> List.map _.ExportFingerprint
+                            if memberDeclaration.IsOverride then "override" else "member"
+                            memberDeclaration.ReceiverName
+                            memberDeclaration.Name
+                            cliType memberDeclaration.ReturnType
+
+                            yield!
+                                memberDeclaration.Parameters
+                                |> List.map (fun parameter ->
+                                    Fingerprint.parts [
+                                        parameter.Name
+                                        cliType parameter.Type
+                                        "attributes"
+                                        yield!
+                                            parameter.Attributes
+                                            |> List.map _.ExportFingerprint
+                                    ]
+                                )
+
+                            inlineBody memberDeclaration.Body
                         ]
                     )
-
-                yield!
-                    constructorArguments
-                    |> List.map inlineBody
-
-                inlineBody memberBody
             ]
         | TypedTraitCall(receiverName, memberName, arguments) ->
             Fingerprint.parts [
@@ -410,6 +523,7 @@ module private TypeIdentity =
     let attributeKind =
         function
         | AutoOpenAttribute -> "auto-open"
+        | RequireQualifiedAccessAttribute -> "require-qualified-access"
         | StructAttribute -> "struct"
         | NoComparisonAttribute -> "no-comparison"
         | NoEqualityAttribute -> "no-equality"
@@ -617,6 +731,7 @@ type internal CompilerService() =
                     }
                 | TypedMethod _
                 | TypedLiteralField _
+                | TypedNestedModule _
                 | TypedTypeAbbreviation _ -> ()
 
             let typeAbbreviations =
@@ -626,6 +741,7 @@ type internal CompilerService() =
                     | ParsedTypeAbbreviation declaration -> Some(declaration.Name, declaration)
                     | ParsedMethod _
                     | ParsedLiteralField _
+                    | ParsedNestedModule _
                     | ParsedStaticType _
                     | ParsedObjectType _
                     | ParsedStructType _ -> None
@@ -642,6 +758,7 @@ type internal CompilerService() =
                         | ParsedStructType _ -> true
                         | ParsedMethod _
                         | ParsedLiteralField _
+                        | ParsedNestedModule _
                         | ParsedTypeAbbreviation _
                         | ParsedStaticType _
                         | ParsedObjectType _ -> false
@@ -876,6 +993,8 @@ type internal CompilerService() =
                 match name with
                 | "AutoOpen"
                 | "AutoOpenAttribute" -> Some AutoOpenAttribute
+                | "RequireQualifiedAccess"
+                | "RequireQualifiedAccessAttribute" -> Some RequireQualifiedAccessAttribute
                 | "Struct"
                 | "StructAttribute" -> Some StructAttribute
                 | "NoComparison"
@@ -1093,15 +1212,16 @@ type internal CompilerService() =
 
                         Some(
                             {
-                                DeclaringType = {
-                                    DeclarationId = sourceType.StableId
-                                    AssemblyName = String.Empty
-                                    TypeName = {
-                                        Namespace = sourceType.Namespace
-                                        Name = sourceType.Name
+                                DeclaringType =
+                                    CliNamedType {
+                                        DeclarationId = sourceType.StableId
+                                        AssemblyName = String.Empty
+                                        TypeName = {
+                                            Namespace = sourceType.Namespace
+                                            Name = sourceType.Name
+                                        }
+                                        IsValueType = false
                                     }
-                                    IsValueType = false
-                                }
                                 StableId = methodDeclaration.StableId
                                 Name = methodDeclaration.Name
                                 GenericArity = methodDeclaration.GenericParameters.Length
@@ -1116,7 +1236,90 @@ type internal CompilerService() =
                     else
                         None
 
+            let rec inferReferenceMethodTypeArgument
+                (declaringTypeArguments: CliType list)
+                (methodSubstitutions: CliType option array)
+                templateType
+                actualType
+                =
+                match templateType with
+                | CliTypeParameter index ->
+                    index >= 0
+                    && index < declaringTypeArguments.Length
+                    && declaringTypeArguments.[index] = actualType
+                | CliMethodTypeParameter index ->
+                    if index < 0 || index >= methodSubstitutions.Length then
+                        false
+                    else
+                        match methodSubstitutions.[index] with
+                        | None ->
+                            methodSubstitutions.[index] <- Some actualType
+                            true
+                        | Some inferredType -> inferredType = actualType
+                | CliGenericType(templateReference, templateArguments) ->
+                    match actualType with
+                    | CliGenericType(actualReference, actualArguments) when
+                        templateReference = actualReference
+                        && templateArguments.Length = actualArguments.Length
+                        ->
+                        (templateArguments, actualArguments)
+                        ||> List.forall2 (
+                            inferReferenceMethodTypeArgument
+                                declaringTypeArguments
+                                methodSubstitutions
+                        )
+                    | _ -> false
+                | CliByRef templateElementType ->
+                    match actualType with
+                    | CliByRef actualElementType ->
+                        inferReferenceMethodTypeArgument
+                            declaringTypeArguments
+                            methodSubstitutions
+                            templateElementType
+                            actualElementType
+                    | _ -> false
+                | _ -> templateType = actualType
+
+            let rec substituteReferenceMethodTypeArguments
+                (declaringTypeArguments: CliType list)
+                (methodSubstitutions: CliType option array)
+                =
+                function
+                | CliTypeParameter index ->
+                    if index < 0 || index >= declaringTypeArguments.Length then
+                        invalidOp "a static-call declaring-type parameter was not supplied"
+                    else
+                        declaringTypeArguments.[index]
+                | CliMethodTypeParameter index ->
+                    if index < 0 || index >= methodSubstitutions.Length then
+                        invalidOp "a static-call method type parameter was out of range"
+                    else
+                        methodSubstitutions.[index]
+                        |> Option.defaultWith (fun () ->
+                            invalidOp "a static-call method type parameter was not inferred"
+                        )
+                | CliGenericType(typeReference, arguments) ->
+                    CliGenericType(
+                        typeReference,
+                        arguments
+                        |> List.map (
+                            substituteReferenceMethodTypeArguments
+                                declaringTypeArguments
+                                methodSubstitutions
+                        )
+                    )
+                | CliByRef elementType ->
+                    CliByRef(
+                        substituteReferenceMethodTypeArguments
+                            declaringTypeArguments
+                            methodSubstitutions
+                            elementType
+                    )
+                | cliType -> cliType
+
             let tryInferReferenceStaticMethod
+                declaringType
+                declaringTypeArguments
                 (methodDefinition: ReferenceMethodDefinition)
                 (argumentTypes: CliType list)
                 =
@@ -1130,7 +1333,8 @@ type internal CompilerService() =
                 then
                     None
                 else
-                    let substitutions = Array.create methodDefinition.GenericArity None
+                    let methodSubstitutions =
+                        Array.create methodDefinition.GenericArity None
 
                     let providedParameterTypes =
                         methodDefinition.ParameterTypes
@@ -1138,24 +1342,31 @@ type internal CompilerService() =
 
                     let parametersMatch =
                         (providedParameterTypes, argumentTypes)
-                        ||> List.forall2 (inferMethodTypeArgument substitutions)
+                        ||> List.forall2 (
+                            inferReferenceMethodTypeArgument
+                                declaringTypeArguments
+                                methodSubstitutions
+                        )
 
                     if
                         parametersMatch
-                        && (substitutions
+                        && (methodSubstitutions
                             |> Array.forall Option.isSome)
                     then
                         let genericArguments =
-                            substitutions
+                            methodSubstitutions
                             |> Array.choose id
                             |> Array.toList
 
                         let returnType =
-                            substituteMethodTypeArguments substitutions methodDefinition.ReturnType
+                            substituteReferenceMethodTypeArguments
+                                declaringTypeArguments
+                                methodSubstitutions
+                                methodDefinition.ReturnType
 
                         Some(
                             {
-                                DeclaringType = methodDefinition.DeclaringType
+                                DeclaringType = declaringType
                                 StableId = methodDefinition.StableId
                                 Name = methodDefinition.Name
                                 GenericArity = methodDefinition.GenericArity
@@ -1219,15 +1430,16 @@ type internal CompilerService() =
                     argumentTypes
                 |> Option.map (fun returnType ->
                     {
-                        DeclaringType = {
-                            DeclarationId = sourceType.StableId
-                            AssemblyName = String.Empty
-                            TypeName = {
-                                Namespace = sourceType.Namespace
-                                Name = sourceType.Name
+                        DeclaringType =
+                            CliNamedType {
+                                DeclarationId = sourceType.StableId
+                                AssemblyName = String.Empty
+                                TypeName = {
+                                    Namespace = sourceType.Namespace
+                                    Name = sourceType.Name
+                                }
+                                IsValueType = false
                             }
-                            IsValueType = false
-                        }
                         StableId = methodDeclaration.StableId
                         Name = methodDeclaration.Name
                         GenericArity = methodDeclaration.GenericParameters.Length
@@ -1239,6 +1451,7 @@ type internal CompilerService() =
                 )
 
             let tryApplyExplicitReferenceStaticMethod
+                declaringType
                 (methodDefinition: ReferenceMethodDefinition)
                 genericArguments
                 argumentTypes
@@ -1252,7 +1465,7 @@ type internal CompilerService() =
                     argumentTypes
                 |> Option.map (fun returnType ->
                     {
-                        DeclaringType = methodDefinition.DeclaringType
+                        DeclaringType = declaringType
                         StableId = methodDefinition.StableId
                         Name = methodDefinition.Name
                         GenericArity = methodDefinition.GenericArity
@@ -1315,6 +1528,8 @@ type internal CompilerService() =
                                 )
                                 |> List.choose (fun methodDefinition ->
                                     tryInferReferenceStaticMethod
+                                        (CliNamedType methodDefinition.DeclaringType)
+                                        []
                                         methodDefinition
                                         argumentTypes
                                 )
@@ -1326,18 +1541,24 @@ type internal CompilerService() =
                                     memberName,
                                     argumentTypes
                                 with
-                                | "System", "Object", "ReferenceEquals", [ CliObject; CliObject ] ->
+                                | "System", "Object", "ReferenceEquals", [ CliObject; CliObject ]
+                                | "System", "Object", "__fsharp2_isNull", [ CliObject; CliObject ] ->
                                     [
                                         {
-                                            DeclaringType = {
-                                                DeclarationId = resolvedType.DeclarationId
-                                                AssemblyName = resolvedType.AssemblyName
-                                                TypeName = resolvedType.TypeName
-                                                IsValueType = resolvedType.IsValueType
-                                            }
+                                            DeclaringType =
+                                                CliNamedType {
+                                                    DeclarationId = resolvedType.DeclarationId
+                                                    AssemblyName = resolvedType.AssemblyName
+                                                    TypeName = resolvedType.TypeName
+                                                    IsValueType = resolvedType.IsValueType
+                                                }
                                             StableId =
                                                 resolvedType.DeclarationId
                                                 + "|method|ReferenceEquals|generic|0|object|object|return|bool"
+                                                + (if memberName = "__fsharp2_isNull" then
+                                                       "|intrinsic|isNull"
+                                                   else
+                                                       String.Empty)
                                             Name = "ReferenceEquals"
                                             GenericArity = 0
                                             ParameterTypes = [ CliObject; CliObject ]
@@ -1350,6 +1571,11 @@ type internal CompilerService() =
 
                             intrinsicCandidates
                             @ referenceCandidates
+                            |> List.distinctBy (fun (methodReference, genericArguments, returnType) ->
+                                methodReference.StableId,
+                                genericArguments,
+                                returnType
+                            )
                     else
                         sourceCandidates
 
@@ -1363,6 +1589,44 @@ type internal CompilerService() =
                     diagnostic
                         range
                         $"the static member call '{receiverName}.{memberName}' is ambiguous"
+
+            let resolveStaticMethodOnType declaringType memberName argumentTypes range =
+                let typeOwner =
+                    match declaringType with
+                    | CliNamedType typeReference -> Some(typeReference, [])
+                    | CliGenericType(typeReference, typeArguments) ->
+                        Some(typeReference, typeArguments)
+                    | _ -> None
+
+                match typeOwner with
+                | None ->
+                    diagnostic
+                        range
+                        $"the static member receiver '{TypeIdentity.cliType declaringType}' is not a named type"
+                | Some(typeReference, typeArguments) ->
+                    let indexedMethods =
+                        references.Methods(typeReference.DeclarationId, memberName, true)
+
+                    let candidates =
+                        indexedMethods
+                        |> List.choose (fun methodDefinition ->
+                            tryInferReferenceStaticMethod
+                                declaringType
+                                typeArguments
+                                methodDefinition
+                                argumentTypes
+                        )
+
+                    match candidates with
+                    | [ candidate ] -> Ok candidate
+                    | [] ->
+                        diagnostic
+                            range
+                            $"no static member '{TypeIdentity.cliType declaringType}.{memberName}' matches the argument types"
+                    | _ ->
+                        diagnostic
+                            range
+                            $"the static member call '{TypeIdentity.cliType declaringType}.{memberName}' is ambiguous"
 
             let resolveExplicitStaticMethod
                 receiverName
@@ -1425,6 +1689,7 @@ type internal CompilerService() =
                             )
                             |> List.choose (fun methodDefinition ->
                                 tryApplyExplicitReferenceStaticMethod
+                                    (CliNamedType methodDefinition.DeclaringType)
                                     methodDefinition
                                     genericArguments
                                     argumentTypes
@@ -1443,7 +1708,7 @@ type internal CompilerService() =
                         range
                         $"the static member call '{receiverName}.{memberName}' is ambiguous"
 
-            let typeDeclaration =
+            let rec typeDeclaration =
                 function
                 | ParsedMethod declaration ->
                     match declaration.DeclaredType, declaration.Body with
@@ -1510,6 +1775,7 @@ type internal CompilerService() =
                     | _, BooleanLiteral _
                     | _, NullLiteral
                     | _, GenericMemberCall _
+                    | _, StaticTypeMemberCall _
                     | _, BoundInstanceMember _
                     | _, MemberAssignment _
                     | _, SequentialExpression _
@@ -1521,10 +1787,14 @@ type internal CompilerService() =
                     | _, SequentialValueExpression _
                     | _, LocalAssignment _
                     | _, BooleanNegationExpression _
+                    | _, TryWithExpression _
                     | _, LetExpression _
                     | _, LambdaExpression _
                     | _, UnitLambdaExpression _
+                    | _, TupleExpression _
+                    | _, StructTupleExpression _
                     | _, TypeConstruction _
+                    | _, BindReturnFromComputation _
                     | _, ObjectExpression _
                     | _, MatchExpression _ ->
                         diagnostic
@@ -1547,8 +1817,341 @@ type internal CompilerService() =
                                     + "="
                                     + declaration.Value
                                 )
-                        }
-                    )
+                            }
+                        )
+                | ParsedNestedModule declaration ->
+                    let stableId =
+                        (parsed.StableId, declaration.ModulePath)
+                        ||> List.fold (fun parentStableId moduleName ->
+                            parentStableId
+                            + "/nested-module:"
+                            + moduleName
+                        )
+
+                    let compiledName =
+                        let key = ReferenceTypeName.simpleKey declaration.Name 0
+
+                        if localTypes.ContainsKey(key) then
+                            declaration.Name
+                            + "Module"
+                        else
+                            declaration.Name
+
+                    let rec toClosedCliType range =
+                        function
+                        | TypedNamedType resolvedType when
+                            resolvedType.TypeName.Namespace = "System"
+                            && resolvedType.TypeName.Name = "Int32"
+                            ->
+                            Ok CliInt32
+                        | TypedNamedType resolvedType when
+                            resolvedType.TypeName.Namespace = "System"
+                            && resolvedType.TypeName.Name = "Boolean"
+                            ->
+                            Ok CliBoolean
+                        | TypedNamedType resolvedType when
+                            resolvedType.TypeName.Namespace = "System"
+                            && resolvedType.TypeName.Name = "String"
+                            ->
+                            Ok CliString
+                        | TypedNamedType resolvedType when
+                            resolvedType.TypeName.Namespace = "System"
+                            && resolvedType.TypeName.Name = "Object"
+                            ->
+                            Ok CliObject
+                        | TypedNamedType resolvedType ->
+                            Ok(
+                                CliNamedType {
+                                    DeclarationId = resolvedType.DeclarationId
+                                    AssemblyName = resolvedType.AssemblyName
+                                    TypeName = resolvedType.TypeName
+                                    IsValueType = resolvedType.IsValueType
+                                }
+                            )
+                        | TypedGenericTypeApplication(TypedNamedType resolvedType, arguments) ->
+                            arguments
+                            |> List.map (toClosedCliType range)
+                            |> collectResults []
+                            |> Result.map (fun argumentTypes ->
+                                CliGenericType(
+                                    {
+                                        DeclarationId = resolvedType.DeclarationId
+                                        AssemblyName = resolvedType.AssemblyName
+                                        TypeName = {
+                                            Namespace = resolvedType.TypeName.Namespace
+                                            Name =
+                                                resolvedType.TypeName.Name
+                                                + "`"
+                                                + arguments.Length.ToString(
+                                                    CultureInfo.InvariantCulture
+                                                )
+                                        }
+                                        IsValueType = resolvedType.IsValueType
+                                    },
+                                    argumentTypes
+                                )
+                            )
+                        | typedType ->
+                            diagnostic
+                                range
+                                $"the nested-module value type '{TypeIdentity.expression typedType}' is not yet supported"
+
+                    let typeConstruction constructedType range =
+                        let resolvedType =
+                            constructedType
+                            |> expandTypeAbbreviations Set.empty
+                            |> resolveType (HashSet<string>(StringComparer.Ordinal))
+                            |> Result.bind (toClosedCliType range)
+
+                        resolvedType
+                        |> Result.bind (fun constructedCliType ->
+                            let declaringType, declaringTypeArguments =
+                                match constructedCliType with
+                                | CliNamedType typeReference -> Some typeReference, []
+                                | CliGenericType(typeReference, arguments) ->
+                                    Some typeReference, arguments
+                                | _ -> None, []
+
+                            let localCandidate =
+                                declaringType
+                                |> Option.bind (fun typeReference ->
+                                    if
+                                        List.isEmpty declaringTypeArguments
+                                        && (checkedSourceTypes
+                                            |> Seq.exists (fun sourceType ->
+                                                sourceType.StableId = typeReference.DeclarationId
+                                            ))
+                                    then
+                                        Some {
+                                            DeclaringType = constructedCliType
+                                            StableId =
+                                                typeReference.DeclarationId
+                                                + "/constructor:unit"
+                                            ParameterTypes = []
+                                        }
+                                    else
+                                        None
+                                )
+
+                            let referenceCandidates =
+                                declaringType
+                                |> Option.map (fun typeReference ->
+                                    references.Methods(typeReference.DeclarationId, ".ctor", false)
+                                    |> List.choose (fun constructor ->
+                                        if
+                                            constructor.GenericArity = 0
+                                            && List.isEmpty constructor.ParameterTypes
+                                        then
+                                            Some {
+                                                DeclaringType = constructedCliType
+                                                StableId = constructor.StableId
+                                                ParameterTypes = []
+                                            }
+                                        else
+                                            None
+                                    )
+                                )
+                                |> Option.defaultValue []
+
+                            match localCandidate, referenceCandidates with
+                            | Some target, [] -> Ok(target, constructedCliType)
+                            | None, [ target ] -> Ok(target, constructedCliType)
+                            | None, [] ->
+                                diagnostic
+                                    range
+                                    "no visible parameterless constructor matches the nested-module value"
+                            | _ ->
+                                diagnostic
+                                    range
+                                    "the nested-module value constructor is ambiguous"
+                        )
+
+                    let rec typeValues
+                        (bindings: Map<string, TypedModuleValueDeclaration>)
+                        (completed: TypedModuleValueDeclaration list)
+                        (remainingValues: ParsedModuleValueDeclaration list)
+                        =
+                        match remainingValues with
+                        | [] -> Ok(List.rev completed)
+                        | value :: remaining when bindings |> Map.containsKey value.Name ->
+                            diagnostic value.Range $"the module value '{value.Name}' is duplicated"
+                        | value :: remaining ->
+                            let valueStableId =
+                                stableId
+                                + "/value:"
+                                + value.Name
+
+                            let typedValue =
+                                match value.Body with
+                                | TypeConstruction(constructedType, [], argumentRange) ->
+                                    typeConstruction constructedType argumentRange
+                                    |> Result.map (fun (target, valueType) ->
+                                        valueType,
+                                        TypedModuleValueConstruction target
+                                    )
+                                | UnitApplication constructedTypeName ->
+                                    typeConstruction
+                                        (ParsedNamedType(
+                                            {
+                                                Namespace = String.Empty
+                                                Name = constructedTypeName
+                                            },
+                                            value.BodyRange
+                                        ))
+                                        value.BodyRange
+                                    |> Result.map (fun (target, valueType) ->
+                                        valueType,
+                                        TypedModuleValueConstruction target
+                                    )
+                                | ValueReference targetName ->
+                                    match bindings |> Map.tryFind targetName with
+                                    | Some target ->
+                                        Ok(
+                                            target.Type,
+                                            TypedModuleValueAlias target.StableId
+                                        )
+                                    | None ->
+                                        diagnostic
+                                            value.BodyRange
+                                            $"the module value '{targetName}' is not defined before this binding"
+                                | _ ->
+                                    diagnostic
+                                        value.BodyRange
+                                        "nested-module values currently require a parameterless construction or an earlier value alias"
+
+                            match typedValue with
+                            | Error error -> Error error
+                            | Ok(valueType, initializer) ->
+                                let typed: TypedModuleValueDeclaration = {
+                                    StableId = valueStableId
+                                    Name = value.Name
+                                    Type = valueType
+                                    Initializer = initializer
+                                    ExportFingerprint =
+                                        Fingerprint.parts [
+                                            valueStableId
+                                            "type"
+                                            TypeIdentity.cliType valueType
+                                        ]
+                                    Range = value.Range
+                                }
+
+                                typeValues
+                                    (bindings |> Map.add value.Name typed)
+                                    (typed :: completed)
+                                    remaining
+
+                    let typeMethods () =
+                        match declaration.Methods with
+                        | [] -> Ok []
+                        | methods ->
+                            let syntheticObjectType =
+                                ParsedObjectType {
+                                    Container = OrdinaryObjectType
+                                    Name =
+                                        declaration.Name
+                                        + "ModuleFunctions"
+                                    BaseType = None
+                                    Methods =
+                                        methods
+                                        |> List.map ParsedStaticObjectMethod
+                                    ConstructorRange = declaration.Range
+                                    Range = declaration.Range
+                                }
+
+                            typeDeclaration syntheticObjectType
+                            |> Result.bind (fun typedDeclaration ->
+                                match typedDeclaration with
+                                | TypedObjectType typedObjectType ->
+                                    typedObjectType.Methods
+                                    |> List.map (fun methodDeclaration ->
+                                        match methodDeclaration with
+                                        | TypedStaticObjectMethod typedMethod -> Ok typedMethod
+                                        | TypedInstanceObjectMethod _ ->
+                                            diagnostic
+                                                declaration.Range
+                                                "a nested-module function was typed as an instance member"
+                                    )
+                                    |> collectResults []
+                                | _ ->
+                                    diagnostic
+                                        declaration.Range
+                                        "a nested-module function did not produce a method container"
+                            )
+
+                    let typeModules () =
+                        declaration.Modules
+                        |> List.map (fun nestedModule ->
+                            typeDeclaration (ParsedNestedModule nestedModule)
+                            |> Result.bind (fun typedDeclaration ->
+                                match typedDeclaration with
+                                | TypedNestedModule typedModule -> Ok typedModule
+                                | _ ->
+                                    diagnostic
+                                        nestedModule.Range
+                                        "a recursive nested module did not produce a module declaration"
+                            )
+                        )
+                        |> collectResults []
+
+                    match
+                        typeCustomAttributes
+                            stableId
+                            [
+                                AutoOpenAttribute
+                                RequireQualifiedAccessAttribute
+                            ]
+                            declaration.Attributes,
+                        typeValues Map.empty [] declaration.Values,
+                        typeMethods (),
+                        typeModules ()
+                    with
+                    | Error error, _, _, _
+                    | _, Error error, _, _
+                    | _, _, Error error, _
+                    | _, _, _, Error error -> Error error
+                    | Ok attributes, Ok values, Ok methods, Ok modules ->
+                        Ok(
+                            TypedNestedModule {
+                                StableId = stableId
+                                Name = declaration.Name
+                                CompiledName = compiledName
+                                Attributes = attributes
+                                Values = values
+                                Methods = methods
+                                Modules = modules
+                                ExportFingerprint =
+                                    Fingerprint.parts [
+                                        stableId
+                                        "compiled-name"
+                                        compiledName
+                                        "attributes"
+
+                                        yield!
+                                            attributes
+                                            |> List.map _.ExportFingerprint
+
+                                        "values"
+
+                                        yield!
+                                            values
+                                            |> List.map _.ExportFingerprint
+
+                                        "methods"
+
+                                        yield!
+                                            methods
+                                            |> List.map _.ExportFingerprint
+
+                                        "modules"
+
+                                        yield!
+                                            modules
+                                            |> List.map _.ExportFingerprint
+                                    ]
+                                Range = declaration.Range
+                            }
+                        )
                 | ParsedTypeAbbreviation declaration ->
                     let stableId =
                         parsed.StableId
@@ -1644,14 +2247,73 @@ type internal CompilerService() =
                         + declaration.Name
 
                     let typeMethod (methodDeclaration: ParsedStaticMethodDeclaration) =
-                        let methodParameters =
+                        let explicitTypeParametersAreUnique =
+                            (methodDeclaration.TypeParameters
+                             |> Set.ofList
+                             |> Set.count) = methodDeclaration.TypeParameters.Length
+
+                        let usedTypeParameterNames =
                             HashSet<string>(
                                 methodDeclaration.TypeParameters,
                                 StringComparer.Ordinal
                             )
 
-                        let methodParameterIndex =
+                        let mutable inferredTypeParameterIndex = 0
+
+                        let rec nextInferredTypeParameterName () =
+                            let index = inferredTypeParameterIndex
+
+                            inferredTypeParameterIndex <-
+                                inferredTypeParameterIndex
+                                + 1
+
+                            let candidate =
+                                if index < 26 then
+                                    char (
+                                        int 'a'
+                                        + index
+                                    )
+                                    |> string
+                                else
+                                    "a"
+                                    + index.ToString(CultureInfo.InvariantCulture)
+
+                            if usedTypeParameterNames.Add(candidate) then
+                                candidate
+                            else
+                                nextInferredTypeParameterName ()
+
+                        let generalizedParameters, inferredTypeParameters =
+                            (([], []), methodDeclaration.Parameters)
+                            ||> List.fold (fun (parameters, inferred) parameter ->
+                                match parameter.Type with
+                                | ParsedWildcardType range ->
+                                    let name = nextInferredTypeParameterName ()
+
+                                    ({
+                                        parameter with
+                                            Type = ParsedTypeParameter(name, range)
+                                     }
+                                     :: parameters,
+                                     name
+                                     :: inferred)
+                                | _ -> parameter :: parameters, inferred
+                            )
+                            |> fun (parameters, inferred) ->
+                                List.rev parameters, List.rev inferred
+
+                        let methodTypeParameters =
                             methodDeclaration.TypeParameters
+                            @ inferredTypeParameters
+
+                        let methodParameters =
+                            HashSet<string>(
+                                methodTypeParameters,
+                                StringComparer.Ordinal
+                            )
+
+                        let methodParameterIndex =
+                            methodTypeParameters
                             |> List.mapi (fun index name -> name, index)
                             |> Map.ofList
 
@@ -1824,21 +2486,82 @@ type internal CompilerService() =
                                     methodDeclaration.BodyRange
                                     $"no method constraint supplies '{memberName}'"
 
-                        if
-                            methodParameters.Count
-                            <> methodDeclaration.TypeParameters.Length
-                        then
+                        if not explicitTypeParametersAreUnique then
                             diagnostic
                                 methodDeclaration.Range
                                 "method type parameters must be unique"
                         else
                             match
                                 resolveMethodConstraints [] methodDeclaration.Constraints,
-                                typeParameters [] methodDeclaration.Parameters,
+                                typeParameters [] generalizedParameters,
                                 methodDeclaration.Body
                             with
                             | Error error, _, _
                             | _, Error error, _ -> Error error
+                            | Ok constraints, Ok parameters, ValueReference name ->
+                                match
+                                    parameters
+                                    |> List.tryFindIndex (fun parameter ->
+                                        parameter.Name = name
+                                    )
+                                with
+                                | None ->
+                                    diagnostic
+                                        methodDeclaration.BodyRange
+                                        $"the value '{name}' is not a static-member parameter"
+                                | Some parameterIndex ->
+                                    let returnType = parameters.[parameterIndex].Type
+
+                                    let methodStableId =
+                                        stableId
+                                        + "/method:"
+                                        + methodDeclaration.Name
+
+                                    match
+                                        attachTypedParameterAttributes
+                                            methodStableId
+                                            methodDeclaration.Parameters
+                                            parameters
+                                    with
+                                    | Error error -> Error error
+                                    | Ok parameters ->
+                                        let exportFingerprint =
+                                            Fingerprint.parts [
+                                                methodStableId
+                                                if methodDeclaration.IsInline then
+                                                    "inline"
+                                                else
+                                                    "non-inline"
+                                                "generic-parameters"
+                                                yield! methodTypeParameters
+                                                "constraints"
+
+                                                yield!
+                                                    constraints
+                                                    |> List.map
+                                                        TypeIdentity.methodConstraintIdentity
+
+                                                "parameters"
+                                                yield! parameters |> List.map TypeIdentity.parameter
+                                                "return"
+                                                TypeIdentity.cliType returnType
+                                                "parameter-reference"
+                                                name
+                                            ]
+
+                                        Ok {
+                                            StableId = methodStableId
+                                            Name = methodDeclaration.Name
+                                            IsPublic = true
+                                            GenericParameters = methodTypeParameters
+                                            Constraints = constraints
+                                            Attributes = []
+                                            Parameters = parameters
+                                            ReturnType = returnType
+                                            Body = TypedParameterReference parameterIndex
+                                            ExportFingerprint = exportFingerprint
+                                            Range = methodDeclaration.Range
+                                        }
                             | Ok constraints,
                               Ok parameters,
                               MemberCall(receiverName, memberName, arguments) ->
@@ -1912,7 +2635,7 @@ type internal CompilerService() =
                                                     else
                                                         "non-inline"
                                                     "generic-parameters"
-                                                    yield! methodDeclaration.TypeParameters
+                                                    yield! methodTypeParameters
                                                     "constraints"
 
                                                     yield!
@@ -1941,7 +2664,7 @@ type internal CompilerService() =
                                                 StableId = methodStableId
                                                 Name = methodDeclaration.Name
                                                 IsPublic = true
-                                                GenericParameters = methodDeclaration.TypeParameters
+                                                GenericParameters = methodTypeParameters
                                                 Constraints = constraints
                                                 Attributes = []
                                                 Parameters = parameters
@@ -1961,7 +2684,7 @@ type internal CompilerService() =
                             | Ok _, Ok _, StringLiteral _
                             | Ok _, Ok _, NullLiteral
                             | Ok _, Ok _, GenericMemberCall _
-                            | Ok _, Ok _, ValueReference _
+                            | Ok _, Ok _, StaticTypeMemberCall _
                             | Ok _, Ok _, AddressOfExpression _
                             | Ok _, Ok _, UnitApplication _
                             | Ok _, Ok _, BoundInstanceMember _
@@ -1975,10 +2698,14 @@ type internal CompilerService() =
                             | Ok _, Ok _, SequentialValueExpression _
                             | Ok _, Ok _, LocalAssignment _
                             | Ok _, Ok _, BooleanNegationExpression _
+                            | Ok _, Ok _, TryWithExpression _
                             | Ok _, Ok _, LetExpression _
                             | Ok _, Ok _, LambdaExpression _
                             | Ok _, Ok _, UnitLambdaExpression _
+                            | Ok _, Ok _, TupleExpression _
+                            | Ok _, Ok _, StructTupleExpression _
                             | Ok _, Ok _, TypeConstruction _
+                            | Ok _, Ok _, BindReturnFromComputation _
                             | Ok _, Ok _, ObjectExpression _
                             | Ok _, Ok _, MatchExpression _ ->
                                 diagnostic
@@ -1995,12 +2722,14 @@ type internal CompilerService() =
                         Ok(
                             TypedStaticType {
                                 StableId = stableId
+                                IsPublic = declaration.IsPublic
                                 Name = declaration.Name
                                 Methods = methods
                                 ExportFingerprint =
-                                    methods
-                                    |> List.map _.ExportFingerprint
-                                    |> Fingerprint.parts
+                                    Fingerprint.parts [
+                                        if declaration.IsPublic then "public" else "internal"
+                                        yield! methods |> List.map _.ExportFingerprint
+                                    ]
                                 Range = declaration.Range
                             }
                         )
@@ -2292,6 +3021,9 @@ type internal CompilerService() =
 
                                 (constraints, arguments)
                                 ||> List.fold collect
+                            | StaticTypeMemberCall(_, _, arguments) ->
+                                (constraints, arguments)
+                                ||> List.fold collect
                             | GenericMemberCall(receiverName,
                                                 memberName,
                                                 typeArguments,
@@ -2309,6 +3041,12 @@ type internal CompilerService() =
                             | TypeConstruction(_, arguments, _) ->
                                 (constraints, arguments)
                                 ||> List.fold collect
+                            | BindReturnFromComputation(_, bindings, _, returnFrom, _) ->
+                                let constraints =
+                                    (constraints, bindings)
+                                    ||> List.fold (fun state (_, input) -> collect state input)
+
+                                collect constraints returnFrom
                             | MemberAssignment(_, _, value)
                             | LocalAssignment(_, value)
                             | BooleanNegationExpression(value, _)
@@ -2331,6 +3069,9 @@ type internal CompilerService() =
                                 let constraints = collect constraints condition
                                 let constraints = collect constraints ifTrue
                                 collect constraints ifFalse
+                            | TryWithExpression(body, _, handler, _, _, _, _, _) ->
+                                let constraints = collect constraints body
+                                collect constraints handler
                             | MatchExpression(input, clauses, _, _) ->
                                 let constraints = collect constraints input
 
@@ -2339,14 +3080,21 @@ type internal CompilerService() =
                             | LetExpression(_, _, value, body, _, _) ->
                                 let constraints = collect constraints value
                                 collect constraints body
-                            | LambdaExpression(_, _, body)
-                            | UnitLambdaExpression body -> collect constraints body
-                            | ObjectExpression(_, arguments, _, _, _, _, body, _) ->
+                            | LambdaExpression(_, _, body, _)
+                            | UnitLambdaExpression(body, _) -> collect constraints body
+                            | TupleExpression(elements, _)
+                            | StructTupleExpression(elements, _) ->
+                                (constraints, elements)
+                                ||> List.fold collect
+                            | ObjectExpression(_, arguments, members, _) ->
                                 let constraints =
                                     (constraints, arguments)
                                     ||> List.fold collect
 
-                                collect constraints body
+                                (constraints, members)
+                                ||> List.fold (fun state memberDeclaration ->
+                                    collect state memberDeclaration.Body
+                                )
                             | IntegerLiteral _
                             | UnitLiteral
                             | BooleanLiteral _
@@ -2700,7 +3448,849 @@ type internal CompilerService() =
                                                     diagnostic
                                                         methodDeclaration.BodyRange
                                                         $"the value '{name}' is not a static-member parameter, receiver, or local binding"
-                                    | UnitLambdaExpression(ValueReference captureName) ->
+                                    | BindReturnFromComputation(
+                                        "valueTask",
+                                        [ bindingName, ValueReference sourceName ],
+                                        returnKind,
+                                        FunctionApplication(
+                                            ValueReference binderName,
+                                            ValueReference returnedName
+                                        ),
+                                        range
+                                      ) when returnedName = bindingName ->
+                                        let sourceParameterIndex =
+                                            expressionParameters
+                                            |> List.tryFindIndex (fun parameter ->
+                                                parameter.Name = sourceName
+                                            )
+
+                                        let binderParameterIndex =
+                                            expressionParameters
+                                            |> List.tryFindIndex (fun parameter ->
+                                                parameter.Name = binderName
+                                            )
+
+                                        match sourceParameterIndex, binderParameterIndex with
+                                        | None, _ ->
+                                            diagnostic
+                                                range
+                                                $"the computation source '{sourceName}' is not a method parameter"
+                                        | _, None ->
+                                            diagnostic
+                                                range
+                                                $"the computation binder '{binderName}' is not a method parameter"
+                                        | Some sourceParameterIndex,
+                                          Some binderParameterIndex ->
+                                            let sourceType =
+                                                expressionParameters.[sourceParameterIndex].Type
+
+                                            let binderType =
+                                                expressionParameters.[binderParameterIndex].Type
+
+                                            let (|ValueTaskComputationTypes|_|) =
+                                                function
+                                                | CliGenericType(
+                                                      valueTaskTypeReference,
+                                                      [ inputType ]
+                                                  ),
+                                                  CliGenericType(
+                                                      functionTypeReference,
+                                                      [ binderInputType; binderOutputType ]
+                                                  ),
+                                                  returnKind when
+                                                    valueTaskTypeReference.TypeName.Namespace
+                                                    = "System.Threading.Tasks"
+                                                    && valueTaskTypeReference.TypeName.Name
+                                                       = "ValueTask`1"
+                                                    && functionTypeReference.DeclarationId
+                                                       = fsharpFunctionType.DeclarationId
+                                                    && binderInputType = inputType
+                                                    ->
+                                                    match returnKind, binderOutputType with
+                                                    | ComputationReturnFrom,
+                                                      (CliGenericType(
+                                                          outputValueTaskTypeReference,
+                                                          [ outputType ]
+                                                       ) as outputValueTaskType) when
+                                                        outputValueTaskTypeReference.DeclarationId
+                                                        = valueTaskTypeReference.DeclarationId
+                                                        ->
+                                                        Some(
+                                                            valueTaskTypeReference,
+                                                            inputType,
+                                                            outputType,
+                                                            outputValueTaskType
+                                                        )
+                                                    | ComputationReturn, outputType ->
+                                                        Some(
+                                                            valueTaskTypeReference,
+                                                            inputType,
+                                                            outputType,
+                                                            CliGenericType(
+                                                                valueTaskTypeReference,
+                                                                [ outputType ]
+                                                            )
+                                                        )
+                                                    | _ -> None
+                                                | _ -> None
+
+                                            match sourceType, binderType, returnKind with
+                                            | ValueTaskComputationTypes(
+                                                _,
+                                                inputType,
+                                                outputType,
+                                                outputValueTaskType
+                                              ) ->
+                                                let resolveTypeReference arity namespaceName name =
+                                                    resolveNamedType
+                                                        arity
+                                                        {
+                                                            Namespace = namespaceName
+                                                            Name = name
+                                                        }
+                                                        range
+                                                    |> Result.bind (fun typedType ->
+                                                        match typedType with
+                                                        | TypedNamedType resolvedType ->
+                                                            Ok {
+                                                                DeclarationId =
+                                                                    resolvedType.DeclarationId
+                                                                AssemblyName =
+                                                                    resolvedType.AssemblyName
+                                                                TypeName = {
+                                                                    Namespace =
+                                                                        resolvedType.TypeName.Namespace
+                                                                    Name =
+                                                                        if arity = 0 then
+                                                                            resolvedType.TypeName.Name
+                                                                        else
+                                                                            resolvedType.TypeName.Name
+                                                                            + "`"
+                                                                            + arity.ToString(
+                                                                                CultureInfo.InvariantCulture
+                                                                            )
+                                                                }
+                                                                IsValueType =
+                                                                    resolvedType.IsValueType
+                                                            }
+                                                        | _ ->
+                                                            diagnostic
+                                                                range
+                                                                $"the required type '{namespaceName}.{name}' did not resolve to a named type"
+                                                    )
+
+                                                [
+                                                    resolveTypeReference
+                                                        1
+                                                        "System.Threading.Tasks"
+                                                        "Task"
+                                                    resolveTypeReference
+                                                        1
+                                                        "System.Runtime.CompilerServices"
+                                                        "TaskAwaiter"
+                                                    resolveTypeReference 3 "System" "Func"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System.Threading"
+                                                        "CancellationToken"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System.Threading.Tasks"
+                                                        "TaskContinuationOptions"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System.Threading.Tasks"
+                                                        "TaskScheduler"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System.Threading.Tasks"
+                                                        "TaskExtensions"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System.Threading.Tasks"
+                                                        "Task"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System"
+                                                        "OperationCanceledException"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System"
+                                                        "Exception"
+                                                ]
+                                                |> collectResults []
+                                                |> Result.map (fun requiredTypes ->
+                                                    match requiredTypes with
+                                                    | [ taskTypeReference
+                                                        taskAwaiterTypeReference
+                                                        funcTypeReference
+                                                        cancellationTokenTypeReference
+                                                        taskContinuationOptionsTypeReference
+                                                        taskSchedulerTypeReference
+                                                        taskExtensionsTypeReference
+                                                        nonGenericTaskTypeReference
+                                                        operationCanceledExceptionTypeReference
+                                                        exceptionTypeReference ] ->
+                                                        TypedValueTaskBind {
+                                                            BuilderName = "valueTask"
+                                                            ReturnKind = returnKind
+                                                            BinderParameterIndex =
+                                                                binderParameterIndex
+                                                            SourceParameterIndex =
+                                                                sourceParameterIndex
+                                                            InputType = inputType
+                                                            OutputType = outputType
+                                                            BinderType = binderType
+                                                            InputValueTaskType = sourceType
+                                                            OutputValueTaskType =
+                                                                outputValueTaskType
+                                                            TaskTypeReference =
+                                                                taskTypeReference
+                                                            TaskAwaiterTypeReference =
+                                                                taskAwaiterTypeReference
+                                                            FuncTypeReference =
+                                                                funcTypeReference
+                                                            CancellationTokenType =
+                                                                CliNamedType
+                                                                    cancellationTokenTypeReference
+                                                            TaskContinuationOptionsType =
+                                                                CliNamedType
+                                                                    taskContinuationOptionsTypeReference
+                                                            TaskSchedulerType =
+                                                                CliNamedType
+                                                                    taskSchedulerTypeReference
+                                                            TaskExtensionsTypeReference =
+                                                                taskExtensionsTypeReference
+                                                            NonGenericTaskTypeReference =
+                                                                nonGenericTaskTypeReference
+                                                            OperationCanceledExceptionType =
+                                                                CliNamedType
+                                                                    operationCanceledExceptionTypeReference
+                                                            ExceptionType =
+                                                                CliNamedType exceptionTypeReference
+                                                            Range = range
+                                                        },
+                                                        outputValueTaskType,
+                                                        nextLocalIndex
+                                                    | _ ->
+                                                        invalidOp
+                                                            "the value-task computation type set is incomplete"
+                                                )
+                                            | _ ->
+                                                diagnostic
+                                                    range
+                                                    (match returnKind with
+                                                     | ComputationReturn ->
+                                                         "valueTask map requires an F# function from the source ValueTask result to the returned value"
+                                                     | ComputationReturnFrom ->
+                                                         "valueTask bind requires an F# function from the source ValueTask result to another ValueTask")
+                                    | BindReturnFromComputation(
+                                        "valueTask",
+                                        [ applierBindingName, ValueReference applicableName
+                                          inputBindingName, ValueReference inputName ],
+                                        ComputationReturn,
+                                        FunctionApplication(
+                                            ValueReference returnedApplierName,
+                                            ValueReference returnedInputName
+                                        ),
+                                        range
+                                      ) when
+                                        returnedApplierName = applierBindingName
+                                        && returnedInputName = inputBindingName
+                                        ->
+                                        let applicableParameterIndex =
+                                            expressionParameters
+                                            |> List.tryFindIndex (fun parameter ->
+                                                parameter.Name = applicableName
+                                            )
+
+                                        let inputParameterIndex =
+                                            expressionParameters
+                                            |> List.tryFindIndex (fun parameter ->
+                                                parameter.Name = inputName
+                                            )
+
+                                        match applicableParameterIndex, inputParameterIndex with
+                                        | None, _ ->
+                                            diagnostic
+                                                range
+                                                $"the computation source '{applicableName}' is not a method parameter"
+                                        | _, None ->
+                                            diagnostic
+                                                range
+                                                $"the computation source '{inputName}' is not a method parameter"
+                                        | Some applicableParameterIndex,
+                                          Some inputParameterIndex ->
+                                            let applicableValueTaskType =
+                                                expressionParameters.[applicableParameterIndex].Type
+
+                                            let inputValueTaskType =
+                                                expressionParameters.[inputParameterIndex].Type
+
+                                            match applicableValueTaskType, inputValueTaskType with
+                                            | (CliGenericType(
+                                                valueTaskTypeReference,
+                                                [ (CliGenericType(
+                                                    functionTypeReference,
+                                                    [ applierInputType; outputType ]
+                                                   ) as applierType) ]
+                                               ) as applicableValueTaskType),
+                                              (CliGenericType(
+                                                  inputValueTaskTypeReference,
+                                                  [ inputType ]
+                                               ) as inputValueTaskType) when
+                                                valueTaskTypeReference.TypeName.Namespace
+                                                = "System.Threading.Tasks"
+                                                && valueTaskTypeReference.TypeName.Name
+                                                   = "ValueTask`1"
+                                                && inputValueTaskTypeReference.DeclarationId
+                                                   = valueTaskTypeReference.DeclarationId
+                                                && functionTypeReference.DeclarationId
+                                                   = fsharpFunctionType.DeclarationId
+                                                && applierInputType = inputType
+                                                ->
+                                                let resolveTypeReference arity namespaceName name =
+                                                    resolveNamedType
+                                                        arity
+                                                        {
+                                                            Namespace = namespaceName
+                                                            Name = name
+                                                        }
+                                                        range
+                                                    |> Result.bind (fun typedType ->
+                                                        match typedType with
+                                                        | TypedNamedType resolvedType ->
+                                                            Ok {
+                                                                DeclarationId =
+                                                                    resolvedType.DeclarationId
+                                                                AssemblyName =
+                                                                    resolvedType.AssemblyName
+                                                                TypeName = {
+                                                                    Namespace =
+                                                                        resolvedType.TypeName.Namespace
+                                                                    Name =
+                                                                        if arity = 0 then
+                                                                            resolvedType.TypeName.Name
+                                                                        else
+                                                                            resolvedType.TypeName.Name
+                                                                            + "`"
+                                                                            + arity.ToString(
+                                                                                CultureInfo.InvariantCulture
+                                                                            )
+                                                                }
+                                                                IsValueType =
+                                                                    resolvedType.IsValueType
+                                                            }
+                                                        | _ ->
+                                                            diagnostic
+                                                                range
+                                                                $"the required type '{namespaceName}.{name}' did not resolve to a named type"
+                                                    )
+
+                                                [
+                                                    resolveTypeReference
+                                                        1
+                                                        "System.Threading.Tasks"
+                                                        "Task"
+                                                    resolveTypeReference
+                                                        1
+                                                        "System.Runtime.CompilerServices"
+                                                        "TaskAwaiter"
+                                                    resolveTypeReference 3 "System" "Func"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System.Threading"
+                                                        "CancellationToken"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System.Threading.Tasks"
+                                                        "TaskContinuationOptions"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System.Threading.Tasks"
+                                                        "TaskScheduler"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System.Threading.Tasks"
+                                                        "TaskExtensions"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System.Threading.Tasks"
+                                                        "Task"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System"
+                                                        "OperationCanceledException"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System"
+                                                        "Exception"
+                                                ]
+                                                |> collectResults []
+                                                |> Result.map (fun requiredTypes ->
+                                                    match requiredTypes with
+                                                    | [ taskTypeReference
+                                                        taskAwaiterTypeReference
+                                                        funcTypeReference
+                                                        cancellationTokenTypeReference
+                                                        taskContinuationOptionsTypeReference
+                                                        taskSchedulerTypeReference
+                                                        taskExtensionsTypeReference
+                                                        nonGenericTaskTypeReference
+                                                        operationCanceledExceptionTypeReference
+                                                        exceptionTypeReference ] ->
+                                                        let outputValueTaskType =
+                                                            CliGenericType(
+                                                                valueTaskTypeReference,
+                                                                [ outputType ]
+                                                            )
+
+                                                        TypedValueTaskApply {
+                                                            BuilderName = "valueTask"
+                                                            ApplicableParameterIndex =
+                                                                applicableParameterIndex
+                                                            InputParameterIndex =
+                                                                inputParameterIndex
+                                                            InputType = inputType
+                                                            OutputType = outputType
+                                                            ApplierType = applierType
+                                                            ApplicableValueTaskType =
+                                                                applicableValueTaskType
+                                                            InputValueTaskType =
+                                                                inputValueTaskType
+                                                            OutputValueTaskType =
+                                                                outputValueTaskType
+                                                            TaskTypeReference =
+                                                                taskTypeReference
+                                                            TaskAwaiterTypeReference =
+                                                                taskAwaiterTypeReference
+                                                            FuncTypeReference =
+                                                                funcTypeReference
+                                                            CancellationTokenType =
+                                                                CliNamedType
+                                                                    cancellationTokenTypeReference
+                                                            TaskContinuationOptionsType =
+                                                                CliNamedType
+                                                                    taskContinuationOptionsTypeReference
+                                                            TaskSchedulerType =
+                                                                CliNamedType
+                                                                    taskSchedulerTypeReference
+                                                            TaskExtensionsTypeReference =
+                                                                taskExtensionsTypeReference
+                                                            NonGenericTaskTypeReference =
+                                                                nonGenericTaskTypeReference
+                                                            OperationCanceledExceptionType =
+                                                                CliNamedType
+                                                                    operationCanceledExceptionTypeReference
+                                                            ExceptionType =
+                                                                CliNamedType exceptionTypeReference
+                                                            Range = range
+                                                        },
+                                                        outputValueTaskType,
+                                                        nextLocalIndex
+                                                    | _ ->
+                                                        invalidOp
+                                                            "the value-task computation type set is incomplete"
+                                                )
+                                            | _ ->
+                                                diagnostic
+                                                    range
+                                                    "valueTask apply requires ValueTask sources containing a compatible F# function and argument"
+                                    | BindReturnFromComputation(
+                                        "valueTask",
+                                        [ leftBindingName, ValueReference leftName
+                                          rightBindingName, ValueReference rightName ],
+                                        ComputationReturn,
+                                        TupleExpression(
+                                            [ ValueReference returnedLeftName
+                                              ValueReference returnedRightName ],
+                                            _
+                                        ),
+                                        range
+                                      ) when
+                                        returnedLeftName = leftBindingName
+                                        && returnedRightName = rightBindingName
+                                        ->
+                                        let leftParameterIndex =
+                                            expressionParameters
+                                            |> List.tryFindIndex (fun parameter ->
+                                                parameter.Name = leftName
+                                            )
+
+                                        let rightParameterIndex =
+                                            expressionParameters
+                                            |> List.tryFindIndex (fun parameter ->
+                                                parameter.Name = rightName
+                                            )
+
+                                        match leftParameterIndex, rightParameterIndex with
+                                        | None, _ ->
+                                            diagnostic
+                                                range
+                                                $"the computation source '{leftName}' is not a method parameter"
+                                        | _, None ->
+                                            diagnostic
+                                                range
+                                                $"the computation source '{rightName}' is not a method parameter"
+                                        | Some leftParameterIndex, Some rightParameterIndex ->
+                                            let leftValueTaskType =
+                                                expressionParameters.[leftParameterIndex].Type
+
+                                            let rightValueTaskType =
+                                                expressionParameters.[rightParameterIndex].Type
+
+                                            match leftValueTaskType, rightValueTaskType with
+                                            | (CliGenericType(
+                                                valueTaskTypeReference,
+                                                [ leftType ]
+                                               ) as leftValueTaskType),
+                                              (CliGenericType(
+                                                  rightValueTaskTypeReference,
+                                                  [ rightType ]
+                                               ) as rightValueTaskType) when
+                                                valueTaskTypeReference.TypeName.Namespace
+                                                = "System.Threading.Tasks"
+                                                && valueTaskTypeReference.TypeName.Name
+                                                   = "ValueTask`1"
+                                                && rightValueTaskTypeReference.DeclarationId
+                                                   = valueTaskTypeReference.DeclarationId
+                                                ->
+                                                let resolveTypeReference arity namespaceName name =
+                                                    resolveNamedType
+                                                        arity
+                                                        {
+                                                            Namespace = namespaceName
+                                                            Name = name
+                                                        }
+                                                        range
+                                                    |> Result.bind (fun typedType ->
+                                                        match typedType with
+                                                        | TypedNamedType resolvedType ->
+                                                            Ok {
+                                                                DeclarationId =
+                                                                    resolvedType.DeclarationId
+                                                                AssemblyName =
+                                                                    resolvedType.AssemblyName
+                                                                TypeName = {
+                                                                    Namespace =
+                                                                        resolvedType.TypeName.Namespace
+                                                                    Name =
+                                                                        if arity = 0 then
+                                                                            resolvedType.TypeName.Name
+                                                                        else
+                                                                            resolvedType.TypeName.Name
+                                                                            + "`"
+                                                                            + arity.ToString(
+                                                                                CultureInfo.InvariantCulture
+                                                                            )
+                                                                }
+                                                                IsValueType =
+                                                                    resolvedType.IsValueType
+                                                            }
+                                                        | _ ->
+                                                            diagnostic
+                                                                range
+                                                                $"the required type '{namespaceName}.{name}' did not resolve to a named type"
+                                                    )
+
+                                                [
+                                                    resolveTypeReference
+                                                        1
+                                                        "System.Threading.Tasks"
+                                                        "Task"
+                                                    resolveTypeReference
+                                                        1
+                                                        "System.Runtime.CompilerServices"
+                                                        "TaskAwaiter"
+                                                    resolveTypeReference 3 "System" "Func"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System.Threading"
+                                                        "CancellationToken"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System.Threading.Tasks"
+                                                        "TaskContinuationOptions"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System.Threading.Tasks"
+                                                        "TaskScheduler"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System.Threading.Tasks"
+                                                        "TaskExtensions"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System.Threading.Tasks"
+                                                        "Task"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System"
+                                                        "OperationCanceledException"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System"
+                                                        "Exception"
+                                                    resolveTypeReference 2 "System" "Tuple"
+                                                ]
+                                                |> collectResults []
+                                                |> Result.map (fun requiredTypes ->
+                                                    match requiredTypes with
+                                                    | [ taskTypeReference
+                                                        taskAwaiterTypeReference
+                                                        funcTypeReference
+                                                        cancellationTokenTypeReference
+                                                        taskContinuationOptionsTypeReference
+                                                        taskSchedulerTypeReference
+                                                        taskExtensionsTypeReference
+                                                        nonGenericTaskTypeReference
+                                                        operationCanceledExceptionTypeReference
+                                                        exceptionTypeReference
+                                                        tupleTypeReference ] ->
+                                                        let tupleType =
+                                                            CliGenericType(
+                                                                tupleTypeReference,
+                                                                [ leftType; rightType ]
+                                                            )
+
+                                                        let outputValueTaskType =
+                                                            CliGenericType(
+                                                                valueTaskTypeReference,
+                                                                [ tupleType ]
+                                                            )
+
+                                                        TypedValueTaskZip {
+                                                            BuilderName = "valueTask"
+                                                            LeftParameterIndex =
+                                                                leftParameterIndex
+                                                            RightParameterIndex =
+                                                                rightParameterIndex
+                                                            LeftType = leftType
+                                                            RightType = rightType
+                                                            TupleType = tupleType
+                                                            LeftValueTaskType =
+                                                                leftValueTaskType
+                                                            RightValueTaskType =
+                                                                rightValueTaskType
+                                                            OutputValueTaskType =
+                                                                outputValueTaskType
+                                                            TupleTypeReference =
+                                                                tupleTypeReference
+                                                            TaskTypeReference =
+                                                                taskTypeReference
+                                                            TaskAwaiterTypeReference =
+                                                                taskAwaiterTypeReference
+                                                            FuncTypeReference =
+                                                                funcTypeReference
+                                                            CancellationTokenType =
+                                                                CliNamedType
+                                                                    cancellationTokenTypeReference
+                                                            TaskContinuationOptionsType =
+                                                                CliNamedType
+                                                                    taskContinuationOptionsTypeReference
+                                                            TaskSchedulerType =
+                                                                CliNamedType
+                                                                    taskSchedulerTypeReference
+                                                            TaskExtensionsTypeReference =
+                                                                taskExtensionsTypeReference
+                                                            NonGenericTaskTypeReference =
+                                                                nonGenericTaskTypeReference
+                                                            OperationCanceledExceptionType =
+                                                                CliNamedType
+                                                                    operationCanceledExceptionTypeReference
+                                                            ExceptionType =
+                                                                CliNamedType exceptionTypeReference
+                                                            Range = range
+                                                        },
+                                                        outputValueTaskType,
+                                                        nextLocalIndex
+                                                    | _ ->
+                                                        invalidOp
+                                                            "the value-task zip type set is incomplete"
+                                                )
+                                            | _ ->
+                                                diagnostic
+                                                    range
+                                                    "valueTask zip requires two generic ValueTask sources"
+                                    | BindReturnFromComputation(
+                                        "valueTask",
+                                        [],
+                                        ComputationReturnFrom,
+                                        ValueReference sourceName,
+                                        range
+                                      ) ->
+                                        match
+                                            expressionParameters
+                                            |> List.tryFindIndex (fun parameter ->
+                                                parameter.Name = sourceName
+                                            )
+                                        with
+                                        | None ->
+                                            diagnostic
+                                                range
+                                                $"the computation source '{sourceName}' is not a method parameter"
+                                        | Some sourceParameterIndex ->
+                                            let sourceValueTaskType =
+                                                expressionParameters.[sourceParameterIndex].Type
+
+                                            match sourceValueTaskType with
+                                            | CliNamedType sourceValueTaskTypeReference when
+                                                sourceValueTaskTypeReference.TypeName.Namespace
+                                                = "System.Threading.Tasks"
+                                                && sourceValueTaskTypeReference.TypeName.Name
+                                                   = "ValueTask"
+                                                ->
+                                                let resolveTypeReference arity namespaceName name =
+                                                    resolveNamedType
+                                                        arity
+                                                        {
+                                                            Namespace = namespaceName
+                                                            Name = name
+                                                        }
+                                                        range
+                                                    |> Result.bind (fun typedType ->
+                                                        match typedType with
+                                                        | TypedNamedType resolvedType ->
+                                                            Ok {
+                                                                DeclarationId =
+                                                                    resolvedType.DeclarationId
+                                                                AssemblyName =
+                                                                    resolvedType.AssemblyName
+                                                                TypeName = {
+                                                                    Namespace =
+                                                                        resolvedType.TypeName.Namespace
+                                                                    Name =
+                                                                        if arity = 0 then
+                                                                            resolvedType.TypeName.Name
+                                                                        else
+                                                                            resolvedType.TypeName.Name
+                                                                            + "`"
+                                                                            + arity.ToString(
+                                                                                CultureInfo.InvariantCulture
+                                                                            )
+                                                                }
+                                                                IsValueType =
+                                                                    resolvedType.IsValueType
+                                                            }
+                                                        | _ ->
+                                                            diagnostic
+                                                                range
+                                                                $"the required type '{namespaceName}.{name}' did not resolve to a named type"
+                                                    )
+
+                                                [
+                                                    resolveTypeReference
+                                                        1
+                                                        "System.Threading.Tasks"
+                                                        "ValueTask"
+                                                    resolveTypeReference
+                                                        1
+                                                        "System.Threading.Tasks"
+                                                        "Task"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System.Threading.Tasks"
+                                                        "Task"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System.Runtime.CompilerServices"
+                                                        "TaskAwaiter"
+                                                    resolveTypeReference 3 "System" "Func"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System.Threading"
+                                                        "CancellationToken"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System.Threading.Tasks"
+                                                        "TaskContinuationOptions"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System.Threading.Tasks"
+                                                        "TaskScheduler"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System.Threading.Tasks"
+                                                        "TaskExtensions"
+                                                    resolveTypeReference
+                                                        0
+                                                        "System"
+                                                        "OperationCanceledException"
+                                                    resolveTypeReference 0 "System" "Exception"
+                                                ]
+                                                |> collectResults []
+                                                |> Result.map (fun requiredTypes ->
+                                                    match requiredTypes with
+                                                    | [ outputValueTaskTypeReference
+                                                        taskTypeReference
+                                                        nonGenericTaskTypeReference
+                                                        nonGenericTaskAwaiterTypeReference
+                                                        funcTypeReference
+                                                        cancellationTokenTypeReference
+                                                        taskContinuationOptionsTypeReference
+                                                        taskSchedulerTypeReference
+                                                        taskExtensionsTypeReference
+                                                        operationCanceledExceptionTypeReference
+                                                        exceptionTypeReference ] ->
+                                                        let unitType =
+                                                            CliNamedType fsharpUnitType
+
+                                                        let outputValueTaskType =
+                                                            CliGenericType(
+                                                                outputValueTaskTypeReference,
+                                                                [ unitType ]
+                                                            )
+
+                                                        TypedValueTaskOfUnit {
+                                                            BuilderName = "valueTask"
+                                                            SourceParameterIndex =
+                                                                sourceParameterIndex
+                                                            SourceValueTaskType =
+                                                                sourceValueTaskType
+                                                            UnitType = unitType
+                                                            OutputValueTaskType =
+                                                                outputValueTaskType
+                                                            TaskTypeReference =
+                                                                taskTypeReference
+                                                            NonGenericTaskTypeReference =
+                                                                nonGenericTaskTypeReference
+                                                            NonGenericTaskAwaiterTypeReference =
+                                                                nonGenericTaskAwaiterTypeReference
+                                                            FuncTypeReference =
+                                                                funcTypeReference
+                                                            CancellationTokenType =
+                                                                CliNamedType
+                                                                    cancellationTokenTypeReference
+                                                            TaskContinuationOptionsType =
+                                                                CliNamedType
+                                                                    taskContinuationOptionsTypeReference
+                                                            TaskSchedulerType =
+                                                                CliNamedType
+                                                                    taskSchedulerTypeReference
+                                                            TaskExtensionsTypeReference =
+                                                                taskExtensionsTypeReference
+                                                            OperationCanceledExceptionType =
+                                                                CliNamedType
+                                                                    operationCanceledExceptionTypeReference
+                                                            ExceptionType =
+                                                                CliNamedType exceptionTypeReference
+                                                            Range = range
+                                                        },
+                                                        outputValueTaskType,
+                                                        nextLocalIndex
+                                                    | _ ->
+                                                        invalidOp
+                                                            "the value-task unit conversion type set is incomplete"
+                                                )
+                                            | _ ->
+                                                diagnostic
+                                                    range
+                                                    "valueTask unit conversion requires a non-generic ValueTask source"
+                                    | BindReturnFromComputation(_, _, _, _, range) ->
+                                        diagnostic
+                                            range
+                                            "this computation expression shape is not yet supported"
+                                    | UnitLambdaExpression(ValueReference captureName, lambdaRange) ->
                                         match declaredReturnType with
                                         | Some(CliGenericType(functionReference,
                                                               [ domainType; rangeType ]) as functionType) when
@@ -2779,8 +4369,8 @@ type internal CompilerService() =
                                                             DomainType = domainType
                                                             RangeType = rangeType
                                                             SourceLine =
-                                                                methodDeclaration.BodyRange.Start.Line
-                                                            Range = methodDeclaration.BodyRange
+                                                                lambdaRange.Start.Line
+                                                            Range = lambdaRange
                                                         },
                                                         functionType,
                                                         nextLocalIndex
@@ -2852,6 +4442,24 @@ type internal CompilerService() =
                                                     addressedType,
                                                     nextLocalIndex
                                                 )
+                                    | MemberCall(receiverName, memberName, arguments) when
+                                        (localBindings |> Map.containsKey receiverName)
+                                        || (expressionParameters
+                                            |> List.exists (fun parameter ->
+                                                parameter.Name = receiverName
+                                            ))
+                                        || (match expressionReceiver with
+                                            | Some(name, _) -> name = receiverName
+                                            | None -> false)
+                                        ->
+                                        typeStaticExpression
+                                            localBindings
+                                            nextLocalIndex
+                                            (ExpressionMemberCall(
+                                                ValueReference receiverName,
+                                                memberName,
+                                                arguments
+                                            ))
                                     | MemberCall(receiverName, memberName, arguments) ->
                                         let rec typeArguments
                                             typedArguments
@@ -2890,6 +4498,76 @@ type internal CompilerService() =
                                             match
                                                 resolveStaticMethod
                                                     receiverName
+                                                    memberName
+                                                    argumentTypes
+                                                    methodDeclaration.BodyRange
+                                            with
+                                            | Error error -> Error error
+                                            | Ok(target, genericArguments, returnType) ->
+                                                Ok(
+                                                    TypedStaticMethodCall(
+                                                        target,
+                                                        genericArguments,
+                                                        typedArguments
+                                                    ),
+                                                    returnType,
+                                                    nextArgumentLocalIndex
+                                                )
+                                    | StaticTypeMemberCall(receiverType,
+                                                           memberName,
+                                                           arguments) ->
+                                        let rec typeCallArguments
+                                            typedArguments
+                                            argumentTypes
+                                            argumentLocalIndex
+                                            =
+                                            function
+                                            | [] ->
+                                                Ok(
+                                                    List.rev typedArguments,
+                                                    List.rev argumentTypes,
+                                                    argumentLocalIndex
+                                                )
+                                            | argument :: remaining ->
+                                                match
+                                                    typeStaticExpression
+                                                        localBindings
+                                                        argumentLocalIndex
+                                                        argument
+                                                with
+                                                | Error error -> Error error
+                                                | Ok(typedArgument,
+                                                     argumentType,
+                                                     nextArgumentLocalIndex) ->
+                                                    typeCallArguments
+                                                        (typedArgument :: typedArguments)
+                                                        (argumentType :: argumentTypes)
+                                                        nextArgumentLocalIndex
+                                                        remaining
+
+                                        let typedReceiverType =
+                                            receiverType
+                                            |> expandTypeAbbreviations Set.empty
+                                            |> resolveType declaredMethodParameters
+                                            |> Result.bind (
+                                                toCliType
+                                                    methodParameterIndex
+                                                    methodDeclaration.BodyRange
+                                            )
+
+                                        match
+                                            typedReceiverType,
+                                            typeCallArguments [] [] nextLocalIndex arguments
+                                        with
+                                        | Error error, _
+                                        | _, Error error -> Error error
+                                        | Ok declaringType,
+                                          Ok(typedArguments,
+                                             argumentTypes,
+                                             nextArgumentLocalIndex) ->
+                                            match
+                                                resolveStaticMethodOnType
+                                                    declaringType
                                                     memberName
                                                     argumentTypes
                                                     methodDeclaration.BodyRange
@@ -2981,6 +4659,371 @@ type internal CompilerService() =
                                                     returnType,
                                                     nextArgumentLocalIndex
                                                 )
+                                    | StructTupleExpression(elements, range) ->
+                                        let rec typeElements
+                                            typedElements
+                                            elementTypes
+                                            elementLocalIndex
+                                            =
+                                            function
+                                            | [] ->
+                                                Ok(
+                                                    List.rev typedElements,
+                                                    List.rev elementTypes,
+                                                    elementLocalIndex
+                                                )
+                                            | element :: remaining ->
+                                                match
+                                                    typeStaticExpression
+                                                        localBindings
+                                                        elementLocalIndex
+                                                        element
+                                                with
+                                                | Error error -> Error error
+                                                | Ok(typedElement,
+                                                     elementType,
+                                                     nextElementLocalIndex) ->
+                                                    typeElements
+                                                        (typedElement :: typedElements)
+                                                        (elementType :: elementTypes)
+                                                        nextElementLocalIndex
+                                                        remaining
+
+                                        match typeElements [] [] nextLocalIndex elements with
+                                        | Error error -> Error error
+                                        | Ok(typedElements, elementTypes, nextElementLocalIndex) ->
+                                            let tupleTypeName = {
+                                                Namespace = "System"
+                                                Name = "ValueTuple"
+                                            }
+
+                                            match
+                                                resolveNamedType
+                                                    elementTypes.Length
+                                                    tupleTypeName
+                                                    range
+                                            with
+                                            | Error error -> Error error
+                                            | Ok(TypedNamedType resolvedTupleType) ->
+                                                let tupleTypeReference = {
+                                                    DeclarationId =
+                                                        resolvedTupleType.DeclarationId
+                                                    AssemblyName = resolvedTupleType.AssemblyName
+                                                    TypeName = {
+                                                        Namespace =
+                                                            resolvedTupleType.TypeName.Namespace
+                                                        Name =
+                                                            resolvedTupleType.TypeName.Name
+                                                            + "`"
+                                                            + elementTypes.Length.ToString(
+                                                                CultureInfo.InvariantCulture
+                                                            )
+                                                    }
+                                                    IsValueType = true
+                                                }
+
+                                                let tupleType =
+                                                    CliGenericType(
+                                                        tupleTypeReference,
+                                                        elementTypes
+                                                    )
+
+                                                let rec substituteTupleTypes =
+                                                    function
+                                                    | CliTypeParameter index when
+                                                        index < elementTypes.Length
+                                                        ->
+                                                        elementTypes.[index]
+                                                    | CliGenericType(typeReference,
+                                                                     arguments) ->
+                                                        CliGenericType(
+                                                            typeReference,
+                                                            arguments
+                                                            |> List.map substituteTupleTypes
+                                                        )
+                                                    | CliByRef elementType ->
+                                                        CliByRef(
+                                                            substituteTupleTypes elementType
+                                                        )
+                                                    | cliType -> cliType
+
+                                                let constructors =
+                                                    references.Methods(
+                                                        tupleTypeReference.DeclarationId,
+                                                        ".ctor",
+                                                        false
+                                                    )
+                                                    |> List.filter (fun constructor ->
+                                                        constructor.GenericArity = 0
+                                                        && (constructor.ParameterTypes
+                                                            |> List.map substituteTupleTypes)
+                                                           = elementTypes
+                                                    )
+
+                                                match constructors with
+                                                | [ constructor ] ->
+                                                    Ok(
+                                                        TypedObjectConstruction(
+                                                            {
+                                                                DeclaringType = tupleType
+                                                                StableId = constructor.StableId
+                                                                ParameterTypes =
+                                                                    constructor.ParameterTypes
+                                                            },
+                                                            typedElements
+                                                        ),
+                                                        tupleType,
+                                                        nextElementLocalIndex
+                                                    )
+                                                | [] ->
+                                                    diagnostic
+                                                        range
+                                                        "no visible struct tuple constructor matches the element types"
+                                                | _ ->
+                                                    diagnostic
+                                                        range
+                                                        "the struct tuple constructor is ambiguous"
+                                            | Ok _ ->
+                                                diagnostic
+                                                    range
+                                                    "System.ValueTuple did not resolve to a named CLI type"
+                                    | TypeConstruction(constructedType,
+                                                       [ (LambdaExpression _ as lambda) ],
+                                                       argumentRange) ->
+                                        let rec collectLambdaParameters parameters expression =
+                                            match expression with
+                                            | LambdaExpression(name, parameterType, body, _) ->
+                                                collectLambdaParameters
+                                                    ((name, parameterType) :: parameters)
+                                                    body
+                                            | body -> List.rev parameters, body
+
+                                        let resolvedConstructedType =
+                                            constructedType
+                                            |> expandTypeAbbreviations Set.empty
+                                            |> resolveType declaredMethodParameters
+                                            |> Result.bind (
+                                                toCliType
+                                                    methodParameterIndex
+                                                    argumentRange
+                                            )
+
+                                        match resolvedConstructedType with
+                                        | Error error -> Error error
+                                        | Ok constructedCliType ->
+                                            let declaringType, declaringTypeArguments =
+                                                match constructedCliType with
+                                                | CliNamedType typeReference ->
+                                                    Some typeReference, []
+                                                | CliGenericType(typeReference, typeArguments) ->
+                                                    Some typeReference, typeArguments
+                                                | _ -> None, []
+
+                                            let rec substituteTypeArguments =
+                                                function
+                                                | CliTypeParameter index when
+                                                    index
+                                                    < declaringTypeArguments.Length
+                                                    ->
+                                                    declaringTypeArguments.[index]
+                                                | CliGenericType(typeReference, typeArguments) ->
+                                                    CliGenericType(
+                                                        typeReference,
+                                                        typeArguments
+                                                        |> List.map substituteTypeArguments
+                                                    )
+                                                | CliByRef elementType ->
+                                                    CliByRef(substituteTypeArguments elementType)
+                                                | cliType -> cliType
+
+                                            match declaringType with
+                                            | Some typeReference when
+                                                references.IsFSharpDelegate(
+                                                    typeReference.DeclarationId
+                                                )
+                                                ->
+                                                let invokeCandidates =
+                                                    references.Methods(
+                                                        typeReference.DeclarationId,
+                                                        "Invoke",
+                                                        false
+                                                    )
+                                                    |> List.filter (fun methodDefinition ->
+                                                        methodDefinition.GenericArity = 0
+                                                    )
+
+                                                match invokeCandidates with
+                                                | [ invokeMethod ] ->
+                                                    let parameterTypes =
+                                                        invokeMethod.ParameterTypes
+                                                        |> List.map substituteTypeArguments
+
+                                                    let returnType =
+                                                        invokeMethod.ReturnType
+                                                        |> substituteTypeArguments
+
+                                                    let parsedParameters, lambdaBody =
+                                                        collectLambdaParameters [] lambda
+
+                                                    let lambdaRange =
+                                                        match lambda with
+                                                        | LambdaExpression(_, _, _, range) -> range
+                                                        | _ -> argumentRange
+
+                                                    if
+                                                        parsedParameters.Length
+                                                        <> parameterTypes.Length
+                                                    then
+                                                        diagnostic
+                                                            argumentRange
+                                                            "the F# delegate lambda parameter count does not match Invoke"
+                                                    else
+                                                        let typedParameters =
+                                                            (parsedParameters, parameterTypes)
+                                                            ||> List.map2 (fun (name, annotation) parameterType ->
+                                                                match annotation with
+                                                                | None ->
+                                                                    Ok({
+                                                                        Name = name
+                                                                        Type = parameterType
+                                                                        Attributes = []
+                                                                    }: TypedParameter)
+                                                                | Some annotation ->
+                                                                    annotation
+                                                                    |> expandTypeAbbreviations Set.empty
+                                                                    |> resolveType declaredMethodParameters
+                                                                    |> Result.bind (
+                                                                        toCliType
+                                                                            methodParameterIndex
+                                                                            annotation.Range
+                                                                    )
+                                                                    |> Result.bind (fun annotatedType ->
+                                                                        if
+                                                                            annotatedType
+                                                                            = parameterType
+                                                                        then
+                                                                            Ok({
+                                                                                Name = name
+                                                                                Type = parameterType
+                                                                                Attributes = []
+                                                                            }: TypedParameter)
+                                                                        else
+                                                                            diagnostic
+                                                                                annotation.Range
+                                                                                "the lambda parameter type does not match the F# delegate Invoke parameter"
+                                                                    )
+                                                            )
+                                                            |> collectResults []
+
+                                                        match typedParameters with
+                                                        | Error error -> Error error
+                                                        | Ok typedParameters ->
+                                                            match
+                                                                typeStaticExpressionFor
+                                                                    None
+                                                                    typedParameters
+                                                                    Map.empty
+                                                                    0
+                                                                    lambdaBody
+                                                            with
+                                                            | Error error -> Error error
+                                                            | Ok(typedBody,
+                                                                 bodyType,
+                                                                 _) when
+                                                                bodyType = returnType
+                                                                ->
+                                                                let closureStableId =
+                                                                    stableId
+                                                                    + "/method:"
+                                                                    + methodDeclaration.Name
+                                                                    + "/closure:delegate-lambda:"
+                                                                    + lambdaRange.Start.Offset.ToString(
+                                                                        CultureInfo.InvariantCulture
+                                                                    )
+
+                                                                let closureName =
+                                                                    methodDeclaration.Name
+                                                                    + "@"
+                                                                    + lambdaRange.Start.Line.ToString(
+                                                                        CultureInfo.InvariantCulture
+                                                                    )
+                                                                    + "-"
+                                                                    + lambdaRange.Start.Column.ToString(
+                                                                        CultureInfo.InvariantCulture
+                                                                    )
+
+                                                                let closureTypeReference = {
+                                                                    DeclarationId = closureStableId
+                                                                    AssemblyName = String.Empty
+                                                                    TypeName = {
+                                                                        Namespace = String.Empty
+                                                                        Name =
+                                                                            if
+                                                                                List.isEmpty
+                                                                                    methodTypeParameters
+                                                                            then
+                                                                                closureName
+                                                                            else
+                                                                                closureName
+                                                                                + "`"
+                                                                                + methodTypeParameters.Length.ToString(
+                                                                                    CultureInfo.InvariantCulture
+                                                                                )
+                                                                    }
+                                                                    IsValueType = false
+                                                                }
+
+                                                                let closureType =
+                                                                    match
+                                                                        methodTypeParameters
+                                                                    with
+                                                                    | [] ->
+                                                                        CliNamedType closureTypeReference
+                                                                    | genericParameters ->
+                                                                        CliGenericType(
+                                                                            closureTypeReference,
+                                                                            genericParameters
+                                                                            |> List.mapi (fun index _ ->
+                                                                                CliMethodTypeParameter index
+                                                                            )
+                                                                        )
+
+                                                                Ok(
+                                                                    TypedDelegateLambda {
+                                                                        DelegateType = constructedCliType
+                                                                        ClosureType = closureType
+                                                                        ClosureName = closureName
+                                                                        LambdaParameterNames =
+                                                                            typedParameters
+                                                                            |> List.map _.Name
+                                                                        LambdaParameterTypes = parameterTypes
+                                                                        LambdaReturnType = returnType
+                                                                        LambdaBody = typedBody
+                                                                        LambdaSourceLine =
+                                                                            lambdaRange.Start.Line
+                                                                        LambdaRange = lambdaRange
+                                                                        ConstructionRange =
+                                                                            argumentRange
+                                                                    },
+                                                                    constructedCliType,
+                                                                    nextLocalIndex
+                                                                )
+                                                            | Ok _ ->
+                                                                diagnostic
+                                                                    argumentRange
+                                                                    "the lambda body does not match the F# delegate Invoke return type"
+                                                | [] ->
+                                                    diagnostic
+                                                        argumentRange
+                                                        "the F# delegate has no visible Invoke method"
+                                                | _ ->
+                                                    diagnostic
+                                                        argumentRange
+                                                        "the F# delegate Invoke method is ambiguous"
+                                            | _ ->
+                                                diagnostic
+                                                    argumentRange
+                                                    "lambda construction currently requires an F# delegate type"
                                     | TypeConstruction(constructedType,
                                                        arguments,
                                                        argumentRange) ->
@@ -3060,6 +5103,67 @@ type internal CompilerService() =
                                                     CliByRef(substituteTypeArguments elementType)
                                                 | cliType -> cliType
 
+                                            let substituteBaseTypeArguments
+                                                (typeArguments: CliType list)
+                                                =
+                                                let rec substitute =
+                                                    function
+                                                    | CliTypeParameter index when
+                                                        index < typeArguments.Length
+                                                        ->
+                                                        typeArguments.[index]
+                                                    | CliGenericType(typeReference, arguments) ->
+                                                        CliGenericType(
+                                                            typeReference,
+                                                            arguments |> List.map substitute
+                                                        )
+                                                    | CliByRef elementType ->
+                                                        CliByRef(substitute elementType)
+                                                    | cliType -> cliType
+
+                                                substitute
+
+                                            let rec isAssignableTo
+                                                (visited: Set<string>)
+                                                expectedType
+                                                actualType
+                                                =
+                                                if expectedType = actualType then
+                                                    true
+                                                else
+                                                    match expectedType, actualType with
+                                                    | CliObject, CliNamedType typeReference
+                                                    | CliObject, CliGenericType(typeReference, _) when
+                                                        not typeReference.IsValueType
+                                                        ->
+                                                        true
+                                                    | _, CliNamedType typeReference
+                                                    | _, CliGenericType(typeReference, _) when
+                                                        visited
+                                                        |> Set.contains typeReference.DeclarationId
+                                                        ->
+                                                        false
+                                                    | _, CliNamedType typeReference ->
+                                                        references.BaseType(typeReference.DeclarationId)
+                                                        |> Option.exists (
+                                                            isAssignableTo
+                                                                (visited
+                                                                 |> Set.add typeReference.DeclarationId)
+                                                                expectedType
+                                                        )
+                                                    | _, CliGenericType(typeReference, typeArguments) ->
+                                                        references.BaseType(typeReference.DeclarationId)
+                                                        |> Option.map (
+                                                            substituteBaseTypeArguments typeArguments
+                                                        )
+                                                        |> Option.exists (
+                                                            isAssignableTo
+                                                                (visited
+                                                                 |> Set.add typeReference.DeclarationId)
+                                                                expectedType
+                                                        )
+                                                    | _ -> false
+
                                             let candidates =
                                                 declaringType
                                                 |> Option.map (fun typeReference ->
@@ -3076,7 +5180,14 @@ type internal CompilerService() =
                                                                 constructor.ParameterTypes
                                                                 |> List.map substituteTypeArguments
 
-                                                            if parameterTypes = argumentTypes then
+                                                            if
+                                                                parameterTypes.Length
+                                                                = argumentTypes.Length
+                                                                && ((parameterTypes, argumentTypes)
+                                                                    ||> List.forall2 (
+                                                                        isAssignableTo Set.empty
+                                                                    ))
+                                                            then
                                                                 Some {
                                                                     DeclaringType = constructedCliType
                                                                     StableId = constructor.StableId
@@ -3098,6 +5209,22 @@ type internal CompilerService() =
                                                     ),
                                                     constructedCliType,
                                                     nextArgumentLocalIndex
+                                                )
+                                            | [] when
+                                                List.isEmpty arguments
+                                                && (match constructedCliType with
+                                                    | CliNamedType typeReference
+                                                    | CliGenericType(typeReference, _) ->
+                                                        typeReference.IsValueType
+                                                    | _ -> false)
+                                                ->
+                                                Ok(
+                                                    TypedDefaultValue(
+                                                        constructedCliType,
+                                                        nextArgumentLocalIndex
+                                                    ),
+                                                    constructedCliType,
+                                                    nextArgumentLocalIndex + 1
                                                 )
                                             | [] ->
                                                 diagnostic
@@ -3408,10 +5535,113 @@ type internal CompilerService() =
                                                 diagnostic
                                                     methodDeclaration.BodyRange
                                                     "the instance-member arguments do not match System.Func.Invoke"
-                                        | Ok _ ->
-                                            diagnostic
-                                                methodDeclaration.BodyRange
-                                                "this expression member call is not yet supported"
+                                        | Ok(typedReceiver,
+                                             receiverType,
+                                             nextReceiverLocalIndex) ->
+                                            let ownerType =
+                                                match receiverType with
+                                                | CliByRef elementType -> elementType
+                                                | cliType -> cliType
+
+                                            let declaringType, declaringTypeArguments =
+                                                match ownerType with
+                                                | CliNamedType typeReference ->
+                                                    Some typeReference, []
+                                                | CliGenericType(typeReference, typeArguments) ->
+                                                    Some typeReference, typeArguments
+                                                | _ -> None, []
+
+                                            let rec typeArguments'
+                                                typedArguments
+                                                argumentTypes
+                                                argumentLocalIndex
+                                                =
+                                                function
+                                                | [] ->
+                                                    Ok(
+                                                        List.rev typedArguments,
+                                                        List.rev argumentTypes,
+                                                        argumentLocalIndex
+                                                    )
+                                                | argument :: remaining ->
+                                                    match
+                                                        typeStaticExpression
+                                                            localBindings
+                                                            argumentLocalIndex
+                                                            argument
+                                                    with
+                                                    | Error error -> Error error
+                                                    | Ok(typedArgument,
+                                                         argumentType,
+                                                         nextArgumentLocalIndex) ->
+                                                        typeArguments'
+                                                            (typedArgument :: typedArguments)
+                                                            (argumentType :: argumentTypes)
+                                                            nextArgumentLocalIndex
+                                                            remaining
+
+                                            match
+                                                declaringType,
+                                                typeArguments'
+                                                    []
+                                                    []
+                                                    nextReceiverLocalIndex
+                                                    arguments
+                                            with
+                                            | None, _ ->
+                                                diagnostic
+                                                    methodDeclaration.BodyRange
+                                                    $"the expression type has no instance member '{memberName}'"
+                                            | _, Error error -> Error error
+                                            | Some typeReference,
+                                              Ok(typedArguments,
+                                                 argumentTypes,
+                                                 nextArgumentLocalIndex) ->
+                                                let candidates =
+                                                    references.Methods(
+                                                        typeReference.DeclarationId,
+                                                        memberName,
+                                                        false
+                                                    )
+                                                    |> List.filter (fun methodDefinition ->
+                                                        methodDefinition.GenericArity = 0
+                                                    )
+                                                    |> List.choose (fun methodDefinition ->
+                                                        tryInferReferenceStaticMethod
+                                                            ownerType
+                                                            declaringTypeArguments
+                                                            methodDefinition
+                                                            argumentTypes
+                                                    )
+                                                    |> List.distinctBy (fun (target, _, _) ->
+                                                        target.StableId
+                                                    )
+
+                                                match candidates with
+                                                | [ target, _, resultType ] ->
+                                                    Ok(
+                                                        TypedInstanceMethodCall(
+                                                            {
+                                                                DeclaringType = target.DeclaringType
+                                                                Name = target.Name
+                                                                ParameterTypes = target.ParameterTypes
+                                                                ReturnType = target.ReturnType
+                                                                ResultType = resultType
+                                                            },
+                                                            typedReceiver,
+                                                            typedArguments
+                                                        ),
+                                                        resultType,
+                                                        nextArgumentLocalIndex
+                                                    )
+                                                | [] ->
+                                                    diagnostic
+                                                        methodDeclaration.BodyRange
+                                                        $"the expression type has no matching instance member '{memberName}'"
+                                                | _ ->
+                                                    diagnostic
+                                                        methodDeclaration.BodyRange
+                                                        $"the instance member call '{memberName}' is ambiguous"
                                     | ConditionalExpression(condition,
                                                             ifTrue,
                                                             ifFalse,
@@ -3528,6 +5758,84 @@ type internal CompilerService() =
                                             diagnostic
                                                 methodDeclaration.BodyRange
                                                 "the operand of 'not' is not bool"
+                                    | TryWithExpression(body,
+                                                        bindingName,
+                                                        handler,
+                                                        tryRange,
+                                                        withRange,
+                                                        bodyRange,
+                                                        handlerRange,
+                                                        range) ->
+                                        match
+                                            typeStaticExpression
+                                                localBindings
+                                                nextLocalIndex
+                                                body
+                                        with
+                                        | Error error -> Error error
+                                        | Ok(typedBody, bodyType, nextBodyLocalIndex) ->
+                                            let catchTypeResult =
+                                                resolveNamedType
+                                                    0
+                                                    {
+                                                        Namespace = "System"
+                                                        Name = "Exception"
+                                                    }
+                                                    range
+                                                |> Result.bind (
+                                                    toCliType methodParameterIndex range
+                                                )
+
+                                            match catchTypeResult with
+                                            | Error error -> Error error
+                                            | Ok catchType ->
+                                                let handlerLocalIndex = nextBodyLocalIndex
+
+                                                match
+                                                    typeStaticExpression
+                                                        (localBindings
+                                                         |> Map.add
+                                                             bindingName
+                                                             (handlerLocalIndex,
+                                                              catchType,
+                                                              false))
+                                                        (handlerLocalIndex
+                                                         + 1)
+                                                        handler
+                                                with
+                                                | Error error -> Error error
+                                                | Ok(typedHandler,
+                                                     handlerType,
+                                                     nextHandlerLocalIndex) when
+                                                    bodyType = CliVoid
+                                                    && handlerType = CliVoid
+                                                    ->
+                                                    Ok(
+                                                        TypedTryWith(
+                                                            typedBody,
+                                                            handlerLocalIndex,
+                                                            bindingName,
+                                                            catchType,
+                                                            typedHandler,
+                                                            tryRange,
+                                                            withRange,
+                                                            bodyRange,
+                                                            handlerRange,
+                                                            range
+                                                        ),
+                                                        CliVoid,
+                                                        nextHandlerLocalIndex
+                                                    )
+                                                | Ok(_, handlerType, _) when
+                                                    bodyType <> handlerType
+                                                    ->
+                                                    diagnostic
+                                                        range
+                                                        "the try body and exception handler must have the same type"
+                                                | Ok _ ->
+                                                    diagnostic
+                                                        range
+                                                        "only unit-valued try-with expressions are currently supported"
                                     | LocalAssignment(name, value) ->
                                         match
                                             localBindings
@@ -3551,6 +5859,13 @@ type internal CompilerService() =
                                             | Error error -> Error error
                                             | Ok(typedValue, valueType, nextValueLocalIndex) when
                                                 valueType = localType
+                                                || (localType = CliObject
+                                                    && match valueType with
+                                                       | CliString
+                                                       | CliObject
+                                                       | CliNamedType _
+                                                       | CliGenericType _ -> true
+                                                       | _ -> false)
                                                 ->
                                                 Ok(
                                                     TypedLocalAssignment(
@@ -3649,6 +5964,82 @@ type internal CompilerService() =
                                                       matchHeaderRange,
                                                       range) ->
                                         match clauses with
+                                        | [ (ParsedNullPattern _,
+                                             ifNull,
+                                             ifNullRange)
+                                            (ParsedNamedPattern(bindingName, _),
+                                             ifNotNull,
+                                             ifNotNullRange) ] ->
+                                            match
+                                                typeStaticExpression
+                                                    localBindings
+                                                    nextLocalIndex
+                                                    inputExpression
+                                            with
+                                            | Error error -> Error error
+                                            | Ok(typedInput,
+                                                 (CliObject | CliString | CliNamedType _ | CliGenericType _ as inputType),
+                                                 nextInputLocalIndex) ->
+                                                let localIndex = nextInputLocalIndex
+
+                                                match
+                                                    typeStaticExpression
+                                                        localBindings
+                                                        (localIndex
+                                                         + 1)
+                                                        ifNull
+                                                with
+                                                | Error error -> Error error
+                                                | Ok(typedIfNull,
+                                                     ifNullType,
+                                                     nextNullLocalIndex) ->
+                                                    let nonNullBindings =
+                                                        if bindingName = "_" then
+                                                            localBindings
+                                                        else
+                                                            localBindings
+                                                            |> Map.add
+                                                                bindingName
+                                                                (localIndex,
+                                                                 inputType,
+                                                                 false)
+
+                                                    match
+                                                        typeStaticExpression
+                                                            nonNullBindings
+                                                            nextNullLocalIndex
+                                                            ifNotNull
+                                                    with
+                                                    | Error error -> Error error
+                                                    | Ok(typedIfNotNull,
+                                                         ifNotNullType,
+                                                         nextNotNullLocalIndex) when
+                                                        ifNullType = ifNotNullType
+                                                        ->
+                                                        Ok(
+                                                            TypedNullMatch(
+                                                                typedInput,
+                                                                inputType,
+                                                                localIndex,
+                                                                bindingName,
+                                                                typedIfNull,
+                                                                typedIfNotNull,
+                                                                matchHeaderRange,
+                                                                ifNullRange,
+                                                                ifNotNullRange,
+                                                                range
+                                                            ),
+                                                            ifNullType,
+                                                            nextNotNullLocalIndex
+                                                        )
+                                                    | Ok _ ->
+                                                        diagnostic
+                                                            range
+                                                            "the null-pattern match arms must have the same type"
+                                            | Ok _ ->
+                                                diagnostic
+                                                    range
+                                                    "the null-pattern match requires a reference type"
                                         | [ (ParsedTypeTestPattern(targetType,
                                                                    bindingName,
                                                                    patternRange),
@@ -3737,28 +6128,15 @@ type internal CompilerService() =
                                         | _ ->
                                             diagnostic
                                                 range
-                                                "only a type-test clause followed by a wildcard clause is currently supported"
+                                                "only a null or type-test clause followed by a named fallback clause is currently supported"
                                     | ObjectExpression(baseType,
                                                        constructorArguments,
-                                                       isOverride,
-                                                       receiverName,
-                                                       memberName,
-                                                       memberParameterNames,
-                                                       memberBody,
+                                                       members,
                                                        range) ->
                                         if not (List.isEmpty constructorArguments) then
                                             diagnostic
                                                 range
                                                 "object-expression constructor arguments are not yet supported"
-                                        elif not isOverride then
-                                            diagnostic
-                                                range
-                                                "only object-expression overrides are currently supported"
-                                        elif (memberParameterNames |> Set.ofList).Count
-                                             <> memberParameterNames.Length then
-                                            diagnostic
-                                                range
-                                                "object-expression parameter names must be unique"
                                         else
                                             match
                                                 baseType
@@ -3811,134 +6189,173 @@ type internal CompilerService() =
                                                             range
                                                             "an object expression requires a named reference base type"
                                                     | Some(baseTypeReference, typeArguments) ->
-                                                        let indexedCandidates =
-                                                            references.Methods(
-                                                                baseTypeReference.DeclarationId,
-                                                                memberName,
-                                                                false
-                                                            )
-                                                            |> List.filter (fun candidate ->
-                                                                candidate.GenericArity = 0
-                                                                && candidate.ParameterTypes.Length
-                                                                   = memberParameterNames.Length
-                                                            )
-                                                            |> List.map (fun candidate ->
-                                                                let parameterTypes =
-                                                                    candidate.ParameterTypes
-                                                                    |> List.map (
-                                                                        substituteTypeArguments
-                                                                            typeArguments
-                                                                    )
+                                                        let typeMember memberDeclaration =
+                                                            let memberParameterNames =
+                                                                memberDeclaration.ParameterNames
 
-                                                                let returnType =
-                                                                    candidate.ReturnType
-                                                                    |> substituteTypeArguments
-                                                                        typeArguments
-
-                                                                parameterTypes, returnType
-                                                            )
-
-                                                        let intrinsicCandidates =
-                                                            match baseCliType, memberName with
-                                                            | CliObject, "ToString" -> [ [], CliString ]
-                                                            | CliObject, "Equals" ->
-                                                                [ [ CliObject ], CliBoolean ]
-                                                            | CliObject, "GetHashCode" -> [ [], CliInt32 ]
-                                                            | _ -> []
-
-                                                        let candidates =
-                                                            intrinsicCandidates
-                                                            @ indexedCandidates
-                                                            |> List.filter (fun (parameterTypes, _) ->
-                                                                List.length parameterTypes =
-                                                                    List.length memberParameterNames
-                                                            )
-                                                            |> List.distinct
-
-                                                        match candidates with
-                                                        | [] ->
-                                                            diagnostic
-                                                                range
-                                                                $"the base type has no instance member '{memberName}' with {memberParameterNames.Length} parameter(s)"
-                                                        | [ parameterTypes, memberReturnType ] ->
-                                                            let memberParameters: TypedParameter list =
-                                                                (memberParameterNames, parameterTypes)
-                                                                ||> List.map2 (fun name parameterType ->
-                                                                    ({
-                                                                        Name = name
-                                                                        Type = parameterType
-                                                                        Attributes = []
-                                                                     }
-                                                                     : TypedParameter)
-                                                                )
-
-                                                            match
-                                                                typeStaticExpressionFor
-                                                                    (Some(
-                                                                        receiverName,
-                                                                        baseCliType
-                                                                    ))
-                                                                    memberParameters
-                                                                    Map.empty
-                                                                    0
-                                                                    memberBody
-                                                            with
-                                                            | Error error -> Error error
-                                                            | Ok(_, inferredReturnType, _) when
-                                                                inferredReturnType
-                                                                <> memberReturnType
-                                                                ->
+                                                            if not memberDeclaration.IsOverride then
                                                                 diagnostic
-                                                                    range
-                                                                    $"the object-expression member body has type '{TypeIdentity.cliType inferredReturnType}', but the overridden member returns '{TypeIdentity.cliType memberReturnType}'"
-                                                            | Ok(typedMemberBody, _, _) ->
-                                                                let objectTypeStableId =
-                                                                    stableId
-                                                                    + "/method:"
-                                                                    + methodDeclaration.Name
-                                                                    + "/object-expression:"
-                                                                    + range.Start.Offset.ToString(
-                                                                        CultureInfo.InvariantCulture
+                                                                    memberDeclaration.Range
+                                                                    "only object-expression overrides are currently supported"
+                                                            elif
+                                                                (memberParameterNames
+                                                                 |> Set.ofList
+                                                                 |> Set.count)
+                                                                <> memberParameterNames.Length
+                                                            then
+                                                                diagnostic
+                                                                    memberDeclaration.Range
+                                                                    "object-expression parameter names must be unique"
+                                                            else
+                                                                let indexedCandidates =
+                                                                    references.Methods(
+                                                                        baseTypeReference.DeclarationId,
+                                                                        memberDeclaration.Name,
+                                                                        false
+                                                                    )
+                                                                    |> List.filter (fun candidate ->
+                                                                        candidate.GenericArity = 0
+                                                                        && candidate.ParameterTypes.Length
+                                                                           = memberParameterNames.Length
+                                                                    )
+                                                                    |> List.map (fun candidate ->
+                                                                        let parameterTypes =
+                                                                            candidate.ParameterTypes
+                                                                            |> List.map (
+                                                                                substituteTypeArguments
+                                                                                    typeArguments
+                                                                            )
+
+                                                                        let returnType =
+                                                                            candidate.ReturnType
+                                                                            |> substituteTypeArguments
+                                                                                typeArguments
+
+                                                                        parameterTypes, returnType
                                                                     )
 
-                                                                let objectTypeReference = {
-                                                                    DeclarationId = objectTypeStableId
-                                                                    AssemblyName = String.Empty
-                                                                    TypeName = {
-                                                                        Namespace = String.Empty
-                                                                        Name =
-                                                                            "objectExpression@"
-                                                                            + range.Start.Line.ToString(
-                                                                                CultureInfo.InvariantCulture
-                                                                            )
-                                                                    }
-                                                                    IsValueType = false
-                                                                }
-
-                                                                Ok(
-                                                                    TypedObjectExpression(
-                                                                        objectTypeReference,
+                                                                let intrinsicCandidates =
+                                                                    match
                                                                         baseCliType,
-                                                                        [],
-                                                                        true,
-                                                                        receiverName,
-                                                                        memberName,
-                                                                        memberParameters,
-                                                                        memberReturnType,
-                                                                        typedMemberBody,
-                                                                        range
-                                                                    ),
-                                                                    baseCliType,
-                                                                    nextLocalIndex
+                                                                        memberDeclaration.Name
+                                                                    with
+                                                                    | CliObject, "ToString" ->
+                                                                        [ [], CliString ]
+                                                                    | CliObject, "Equals" ->
+                                                                        [ [ CliObject ], CliBoolean ]
+                                                                    | CliObject, "GetHashCode" ->
+                                                                        [ [], CliInt32 ]
+                                                                    | _ -> []
+
+                                                                let candidates =
+                                                                    intrinsicCandidates
+                                                                    @ indexedCandidates
+                                                                    |> List.filter (fun (parameterTypes, _) ->
+                                                                        List.length parameterTypes =
+                                                                            memberParameterNames.Length
+                                                                    )
+                                                                    |> List.distinct
+
+                                                                match candidates with
+                                                                | [] ->
+                                                                    diagnostic
+                                                                        memberDeclaration.Range
+                                                                        $"the base type has no instance member '{memberDeclaration.Name}' with {memberParameterNames.Length} parameter(s)"
+                                                                | [ parameterTypes, memberReturnType ] ->
+                                                                    let memberParameters: TypedParameter list =
+                                                                        (memberParameterNames, parameterTypes)
+                                                                        ||> List.map2 (fun name parameterType ->
+                                                                            ({
+                                                                                Name = name
+                                                                                Type = parameterType
+                                                                                Attributes = []
+                                                                             }
+                                                                             : TypedParameter)
+                                                                        )
+
+                                                                    match
+                                                                        typeStaticExpressionFor
+                                                                            (Some(
+                                                                                memberDeclaration.ReceiverName,
+                                                                                baseCliType
+                                                                            ))
+                                                                            memberParameters
+                                                                            Map.empty
+                                                                            0
+                                                                            memberDeclaration.Body
+                                                                    with
+                                                                    | Error error -> Error error
+                                                                    | Ok(_, inferredReturnType, _) when
+                                                                        inferredReturnType
+                                                                        <> memberReturnType
+                                                                        ->
+                                                                        diagnostic
+                                                                            memberDeclaration.BodyRange
+                                                                            $"the object-expression member body has type '{TypeIdentity.cliType inferredReturnType}', but the overridden member returns '{TypeIdentity.cliType memberReturnType}'"
+                                                                    | Ok(typedMemberBody, _, _) ->
+                                                                        Ok {
+                                                                            IsOverride = true
+                                                                            ReceiverName =
+                                                                                memberDeclaration.ReceiverName
+                                                                            Name = memberDeclaration.Name
+                                                                            Parameters = memberParameters
+                                                                            ReturnType = memberReturnType
+                                                                            Body = typedMemberBody
+                                                                            BodyRange =
+                                                                                memberDeclaration.BodyRange
+                                                                            Range = memberDeclaration.Range
+                                                                        }
+                                                                | _ ->
+                                                                    diagnostic
+                                                                        memberDeclaration.Range
+                                                                        $"the object-expression member '{memberDeclaration.Name}' is ambiguous on the base type"
+
+                                                        match
+                                                            members
+                                                            |> List.map typeMember
+                                                            |> collectResults []
+                                                        with
+                                                        | Error error -> Error error
+                                                        | Ok typedMembers ->
+                                                            let objectTypeStableId =
+                                                                stableId
+                                                                + "/method:"
+                                                                + methodDeclaration.Name
+                                                                + "/object-expression:"
+                                                                + range.Start.Offset.ToString(
+                                                                    CultureInfo.InvariantCulture
                                                                 )
-                                                        | _ ->
-                                                            diagnostic
-                                                                range
-                                                                $"the object-expression member '{memberName}' is ambiguous on the base type"
+
+                                                            let objectTypeReference = {
+                                                                DeclarationId = objectTypeStableId
+                                                                AssemblyName = String.Empty
+                                                                TypeName = {
+                                                                    Namespace = String.Empty
+                                                                    Name =
+                                                                        "objectExpression@"
+                                                                        + range.Start.Line.ToString(
+                                                                            CultureInfo.InvariantCulture
+                                                                        )
+                                                                }
+                                                                IsValueType = false
+                                                            }
+
+                                                            Ok(
+                                                                TypedObjectExpression(
+                                                                    objectTypeReference,
+                                                                    baseCliType,
+                                                                    [],
+                                                                    typedMembers,
+                                                                    range
+                                                                ),
+                                                                baseCliType,
+                                                                nextLocalIndex
+                                                            )
                                     | UnitApplication _
                                     | MemberAssignment _
                                     | SequentialExpression _
-                                    | LambdaExpression _ ->
+                                    | LambdaExpression _
+                                    | TupleExpression _ ->
                                         diagnostic
                                             methodDeclaration.BodyRange
                                             "this static-member expression is not yet supported"
@@ -3968,6 +6385,22 @@ type internal CompilerService() =
                                         inferredSubtypeConstraints value
                                     | TypedBooleanNegation(expression, _) ->
                                         inferredSubtypeConstraints expression
+                                    | TypedTryWith(body, _, _, _, handler, _, _, _, _, _) ->
+                                        inferredSubtypeConstraints body
+                                        @ inferredSubtypeConstraints handler
+                                    | TypedNullMatch(input,
+                                                     _,
+                                                     _,
+                                                     _,
+                                                     ifNull,
+                                                     ifNotNull,
+                                                     _,
+                                                     _,
+                                                     _,
+                                                     _) ->
+                                        inferredSubtypeConstraints input
+                                        @ inferredSubtypeConstraints ifNull
+                                        @ inferredSubtypeConstraints ifNotNull
                                     | TypedStaticMethodCall(_, _, arguments) ->
                                         arguments
                                         |> List.collect inferredSubtypeConstraints
@@ -3991,10 +6424,13 @@ type internal CompilerService() =
                                         inferredSubtypeConstraints condition
                                         @ inferredSubtypeConstraints ifTrue
                                         @ inferredSubtypeConstraints ifFalse
-                                    | TypedObjectExpression(_, _, arguments, _, _, _, _, _, body, _) ->
+                                    | TypedObjectExpression(_, _, arguments, members, _) ->
                                         (arguments
                                          |> List.collect inferredSubtypeConstraints)
-                                        @ inferredSubtypeConstraints body
+                                        @ (members
+                                           |> List.collect (fun memberDeclaration ->
+                                               inferredSubtypeConstraints memberDeclaration.Body
+                                           ))
                                     | TypedTypeTestMatch(input,
                                                          _,
                                                          _,
@@ -4013,6 +6449,8 @@ type internal CompilerService() =
                                         |> List.collect (fun (expression, _, _) ->
                                             inferredSubtypeConstraints expression
                                         )
+                                    | TypedDelegateLambda expression ->
+                                        inferredSubtypeConstraints expression.LambdaBody
                                     | TypedIntegerLiteral _
                                     | TypedStringLiteral _
                                     | TypedNullLiteral
@@ -4021,11 +6459,16 @@ type internal CompilerService() =
                                     | TypedParameterReference _
                                     | TypedLocalReference _
                                     | TypedAddressOf _
+                                    | TypedDefaultValue _
                                     | TypedBoundInstanceMethod _
                                     | TypedUnitLambda _
                                     | TypedResumableCode _
                                     | TypedResumableTryFinally _
                                     | TypedTraitCall _ -> []
+                                    | TypedValueTaskBind _
+                                    | TypedValueTaskApply _
+                                    | TypedValueTaskZip _
+                                    | TypedValueTaskOfUnit _ -> []
 
                                 let typedBody =
                                     typeStaticExpression Map.empty 0 methodDeclaration.Body
@@ -4062,7 +6505,11 @@ type internal CompilerService() =
                                             Parameters = parameters
                                             ReturnType = returnType
                                             Body = body
-                                            Range = methodDeclaration.BodyRange
+                                            Range =
+                                                match body with
+                                                | TypedDelegateLambda expression ->
+                                                    expression.ConstructionRange
+                                                | _ -> methodDeclaration.BodyRange
                                         }
 
                     let typeMethod (methodDeclaration: ParsedInstanceMethodDeclaration) =
@@ -4969,7 +7416,8 @@ type internal CompilerService() =
                                                TypeConstruction(constructedType,
                                                                 [ LambdaExpression(lambdaParameter,
                                                                                    lambdaParameterType,
-                                                                                   lambdaBody) ],
+                                                                                   lambdaBody,
+                                                                                   _) ],
                                                                 argumentRange) ]) ->
                                     typeResumableTryFinally
                                         computationName
@@ -4986,10 +7434,15 @@ type internal CompilerService() =
                                     diagnostic
                                         methodDeclaration.BodyRange
                                         "explicit generic static calls are not yet supported in instance members"
+                                | StaticTypeMemberCall _ ->
+                                    diagnostic
+                                        methodDeclaration.BodyRange
+                                        "constructed-type static calls are not yet supported in instance members"
                                 | TypeConstruction(constructedType,
                                                    [ LambdaExpression(lambdaParameter,
                                                                       lambdaParameterType,
-                                                                      lambdaBody) ],
+                                                                      lambdaBody,
+                                                                      _) ],
                                                    argumentRange) ->
                                     typeResumableCode
                                         None
@@ -5012,10 +7465,14 @@ type internal CompilerService() =
                                 | SequentialValueExpression _
                                 | LocalAssignment _
                                 | BooleanNegationExpression _
+                                | TryWithExpression _
                                 | LetExpression _
                                 | LambdaExpression _
                                 | UnitLambdaExpression _
+                                | TupleExpression _
+                                | StructTupleExpression _
                                 | TypeConstruction _
+                                | BindReturnFromComputation _
                                 | ObjectExpression _
                                 | MatchExpression _ ->
                                     diagnostic
@@ -5058,17 +7515,25 @@ type internal CompilerService() =
                                     | TypedInstanceFieldGet _
                                     | TypedStaticMethodCall _
                                     | TypedObjectConstruction _
+                                    | TypedDefaultValue _
                                     | TypedFunctionApplication _
                                     | TypedInstanceMethodCall _
                                     | TypedBoundInstanceMethod _
                                     | TypedUnitLambda _
+                                    | TypedDelegateLambda _
+                                    | TypedValueTaskBind _
+                                    | TypedValueTaskApply _
+                                    | TypedValueTaskZip _
+                                    | TypedValueTaskOfUnit _
                                     | TypedConditional _
                                     | TypedUpcast _
                                     | TypedSequential _
                                     | TypedLocalAssignment _
                                     | TypedBooleanNegation _
+                                    | TypedTryWith _
                                     | TypedResumableTryFinally _
                                     | TypedObjectExpression _
+                                    | TypedNullMatch _
                                     | TypedTypeTestMatch _
                                     | TypedTraitCall _ -> methodDeclaration.BodyRange
 
@@ -5536,6 +8001,39 @@ type internal CompilerService() =
                 TypeIdentity.inlineBody methodDeclaration.Body
             ]
 
+        let rec nestedModuleContentHash (moduleDeclaration: TypedNestedModuleDeclaration) =
+            Fingerprint.parts [
+                moduleDeclaration.StableId
+                moduleDeclaration.ExportFingerprint
+
+                yield!
+                    moduleDeclaration.Values
+                    |> List.collect (fun value -> [
+                        value.StableId
+                        value.ExportFingerprint
+
+                        match value.Initializer with
+                        | TypedModuleValueConstruction target ->
+                            "construct"
+                            target.StableId
+                        | TypedModuleValueAlias targetStableId ->
+                            "alias"
+                            targetStableId
+                    ])
+
+                yield!
+                    moduleDeclaration.Methods
+                    |> List.collect (fun methodDeclaration -> [
+                        methodDeclaration.StableId
+                        methodDeclaration.ExportFingerprint
+                        methodImplementationHash methodDeclaration
+                    ])
+
+                yield!
+                    moduleDeclaration.Modules
+                    |> List.map nestedModuleContentHash
+            ]
+
         let modulesWithContentHashes =
             typedModules
             |> List.map (fun typed ->
@@ -5552,6 +8050,8 @@ type internal CompilerService() =
                                     + "="
                                     + fieldDeclaration.Value
                                 )
+                            | TypedNestedModule moduleDeclaration ->
+                                nestedModuleContentHash moduleDeclaration
                             | TypedTypeAbbreviation typeDeclaration ->
                                 Fingerprint.parts [
                                     typeDeclaration.StableId
@@ -5572,6 +8072,7 @@ type internal CompilerService() =
                             | TypedStaticType typeDeclaration ->
                                 Fingerprint.parts [
                                     typeDeclaration.StableId
+                                    if typeDeclaration.IsPublic then "public" else "internal"
 
                                     yield!
                                         typeDeclaration.Methods
@@ -5765,6 +8266,7 @@ type internal CompilerService() =
                             }
                         | TypedMethod _
                         | TypedLiteralField _
+                        | TypedNestedModule _
                         | TypedStaticType _
                         | TypedObjectType _
                         | TypedStructType _ -> None
@@ -5821,6 +8323,455 @@ type internal CompilerService() =
                     )
                 | (CliInt32 | CliBoolean | CliString | CliObject | CliNativeInt | CliVoid | CliTypeParameter _ | CliNamedType _) as cliType ->
                     cliType
+
+            let mapTypedParameterType (parameter: TypedParameter) = {
+                parameter with
+                    Type = methodTypeParametersToTypeParameters parameter.Type
+            }
+
+            let mapTypedFieldAddress (field: TypedFieldAddress) = {
+                field with
+                    DeclaringType = methodTypeParametersToTypeParameters field.DeclaringType
+                    FieldType = methodTypeParametersToTypeParameters field.FieldType
+            }
+
+            let mapTypedStaticMethodTarget (target: TypedStaticMethodCallTarget) = {
+                target with
+                    DeclaringType = methodTypeParametersToTypeParameters target.DeclaringType
+                    ParameterTypes =
+                        target.ParameterTypes
+                        |> List.map methodTypeParametersToTypeParameters
+                    ReturnType = methodTypeParametersToTypeParameters target.ReturnType
+            }
+
+            let mapTypedObjectConstructionTarget (target: TypedObjectConstructionTarget) = {
+                target with
+                    DeclaringType = methodTypeParametersToTypeParameters target.DeclaringType
+                    ParameterTypes =
+                        target.ParameterTypes
+                        |> List.map methodTypeParametersToTypeParameters
+            }
+
+            let mapTypedInstanceMethodTarget (target: TypedInstanceMethodCallTarget) = {
+                target with
+                    DeclaringType = methodTypeParametersToTypeParameters target.DeclaringType
+                    ParameterTypes =
+                        target.ParameterTypes
+                        |> List.map methodTypeParametersToTypeParameters
+                    ReturnType = methodTypeParametersToTypeParameters target.ReturnType
+                    ResultType = methodTypeParametersToTypeParameters target.ResultType
+            }
+
+            let mapTypedResumableCode (expression: TypedResumableCodeExpression) = {
+                expression with
+                    DelegateType = methodTypeParametersToTypeParameters expression.DelegateType
+                    StateMachineType =
+                        methodTypeParametersToTypeParameters expression.StateMachineType
+                    DataType = methodTypeParametersToTypeParameters expression.DataType
+            }
+
+            let rec methodExpressionTypesToTypeParameters =
+                function
+                | TypedIntegerLiteral value -> TypedIntegerLiteral value
+                | TypedStringLiteral value -> TypedStringLiteral value
+                | TypedNullLiteral -> TypedNullLiteral
+                | TypedUnitLiteral -> TypedUnitLiteral
+                | TypedReceiverReference -> TypedReceiverReference
+                | TypedParameterReference index -> TypedParameterReference index
+                | TypedLocalReference index -> TypedLocalReference index
+                | TypedLet(localIndex,
+                           name,
+                           isMutable,
+                           localType,
+                           value,
+                           body,
+                           bindingRange,
+                           bodyRange) ->
+                    TypedLet(
+                        localIndex,
+                        name,
+                        isMutable,
+                        methodTypeParametersToTypeParameters localType,
+                        methodExpressionTypesToTypeParameters value,
+                        methodExpressionTypesToTypeParameters body,
+                        bindingRange,
+                        bodyRange
+                    )
+                | TypedLocalAssignment(localIndex, localType, value) ->
+                    TypedLocalAssignment(
+                        localIndex,
+                        methodTypeParametersToTypeParameters localType,
+                        methodExpressionTypesToTypeParameters value
+                    )
+                | TypedAddressOf(source, fields) ->
+                    let source =
+                        match source with
+                        | TypedParameterAddress(index, parameterType) ->
+                            TypedParameterAddress(
+                                index,
+                                methodTypeParametersToTypeParameters parameterType
+                            )
+                        | TypedLocalAddress(index, localType) ->
+                            TypedLocalAddress(
+                                index,
+                                methodTypeParametersToTypeParameters localType
+                            )
+
+                    TypedAddressOf(source, fields |> List.map mapTypedFieldAddress)
+                | TypedInstanceFieldGet(receiver, field) ->
+                    TypedInstanceFieldGet(
+                        methodExpressionTypesToTypeParameters receiver,
+                        mapTypedFieldAddress field
+                    )
+                | TypedStaticMethodCall(target, genericArguments, arguments) ->
+                    TypedStaticMethodCall(
+                        mapTypedStaticMethodTarget target,
+                        genericArguments
+                        |> List.map methodTypeParametersToTypeParameters,
+                        arguments
+                        |> List.map methodExpressionTypesToTypeParameters
+                    )
+                | TypedObjectConstruction(target, arguments) ->
+                    TypedObjectConstruction(
+                        mapTypedObjectConstructionTarget target,
+                        arguments
+                        |> List.map methodExpressionTypesToTypeParameters
+                    )
+                | TypedDefaultValue(valueType, localIndex) ->
+                    TypedDefaultValue(
+                        methodTypeParametersToTypeParameters valueType,
+                        localIndex
+                    )
+                | TypedFunctionApplication(functionType,
+                                             domainType,
+                                             rangeType,
+                                             functionExpression,
+                                             argumentExpression) ->
+                    TypedFunctionApplication(
+                        methodTypeParametersToTypeParameters functionType,
+                        methodTypeParametersToTypeParameters domainType,
+                        methodTypeParametersToTypeParameters rangeType,
+                        methodExpressionTypesToTypeParameters functionExpression,
+                        methodExpressionTypesToTypeParameters argumentExpression
+                    )
+                | TypedInstanceMethodCall(target, receiver, arguments) ->
+                    TypedInstanceMethodCall(
+                        mapTypedInstanceMethodTarget target,
+                        methodExpressionTypesToTypeParameters receiver,
+                        arguments
+                        |> List.map methodExpressionTypesToTypeParameters
+                    )
+                | TypedBoundInstanceMethod expression ->
+                    TypedBoundInstanceMethod {
+                        expression with
+                            FunctionType =
+                                methodTypeParametersToTypeParameters expression.FunctionType
+                            DelegateType =
+                                methodTypeParametersToTypeParameters expression.DelegateType
+                            ReceiverType =
+                                methodTypeParametersToTypeParameters expression.ReceiverType
+                            Target = mapTypedInstanceMethodTarget expression.Target
+                            DomainType =
+                                methodTypeParametersToTypeParameters expression.DomainType
+                            RangeType =
+                                methodTypeParametersToTypeParameters expression.RangeType
+                    }
+                | TypedUnitLambda expression ->
+                    TypedUnitLambda {
+                        expression with
+                            FunctionType =
+                                methodTypeParametersToTypeParameters expression.FunctionType
+                            DelegateType =
+                                methodTypeParametersToTypeParameters expression.DelegateType
+                            CaptureType =
+                                methodTypeParametersToTypeParameters expression.CaptureType
+                            DomainType =
+                                methodTypeParametersToTypeParameters expression.DomainType
+                            RangeType =
+                                methodTypeParametersToTypeParameters expression.RangeType
+                    }
+                | TypedDelegateLambda expression ->
+                    TypedDelegateLambda {
+                        expression with
+                            DelegateType =
+                                methodTypeParametersToTypeParameters expression.DelegateType
+                            ClosureType =
+                                methodTypeParametersToTypeParameters expression.ClosureType
+                            LambdaParameterTypes =
+                                expression.LambdaParameterTypes
+                                |> List.map methodTypeParametersToTypeParameters
+                            LambdaReturnType =
+                                methodTypeParametersToTypeParameters expression.LambdaReturnType
+                            LambdaBody =
+                                methodExpressionTypesToTypeParameters expression.LambdaBody
+                    }
+                | TypedValueTaskBind expression ->
+                    TypedValueTaskBind {
+                        expression with
+                            InputType =
+                                methodTypeParametersToTypeParameters expression.InputType
+                            OutputType =
+                                methodTypeParametersToTypeParameters expression.OutputType
+                            BinderType =
+                                methodTypeParametersToTypeParameters expression.BinderType
+                            InputValueTaskType =
+                                methodTypeParametersToTypeParameters
+                                    expression.InputValueTaskType
+                            OutputValueTaskType =
+                                methodTypeParametersToTypeParameters
+                                    expression.OutputValueTaskType
+                            CancellationTokenType =
+                                methodTypeParametersToTypeParameters
+                                    expression.CancellationTokenType
+                            TaskContinuationOptionsType =
+                                methodTypeParametersToTypeParameters
+                                    expression.TaskContinuationOptionsType
+                            TaskSchedulerType =
+                                methodTypeParametersToTypeParameters
+                                    expression.TaskSchedulerType
+                            OperationCanceledExceptionType =
+                                methodTypeParametersToTypeParameters
+                                    expression.OperationCanceledExceptionType
+                            ExceptionType =
+                                methodTypeParametersToTypeParameters expression.ExceptionType
+                    }
+                | TypedValueTaskApply expression ->
+                    TypedValueTaskApply {
+                        expression with
+                            InputType =
+                                methodTypeParametersToTypeParameters expression.InputType
+                            OutputType =
+                                methodTypeParametersToTypeParameters expression.OutputType
+                            ApplierType =
+                                methodTypeParametersToTypeParameters expression.ApplierType
+                            ApplicableValueTaskType =
+                                methodTypeParametersToTypeParameters
+                                    expression.ApplicableValueTaskType
+                            InputValueTaskType =
+                                methodTypeParametersToTypeParameters
+                                    expression.InputValueTaskType
+                            OutputValueTaskType =
+                                methodTypeParametersToTypeParameters
+                                    expression.OutputValueTaskType
+                            CancellationTokenType =
+                                methodTypeParametersToTypeParameters
+                                    expression.CancellationTokenType
+                            TaskContinuationOptionsType =
+                                methodTypeParametersToTypeParameters
+                                    expression.TaskContinuationOptionsType
+                            TaskSchedulerType =
+                                methodTypeParametersToTypeParameters
+                                    expression.TaskSchedulerType
+                            OperationCanceledExceptionType =
+                                methodTypeParametersToTypeParameters
+                                    expression.OperationCanceledExceptionType
+                            ExceptionType =
+                                methodTypeParametersToTypeParameters expression.ExceptionType
+                    }
+                | TypedValueTaskZip expression ->
+                    TypedValueTaskZip {
+                        expression with
+                            LeftType =
+                                methodTypeParametersToTypeParameters expression.LeftType
+                            RightType =
+                                methodTypeParametersToTypeParameters expression.RightType
+                            TupleType =
+                                methodTypeParametersToTypeParameters expression.TupleType
+                            LeftValueTaskType =
+                                methodTypeParametersToTypeParameters
+                                    expression.LeftValueTaskType
+                            RightValueTaskType =
+                                methodTypeParametersToTypeParameters
+                                    expression.RightValueTaskType
+                            OutputValueTaskType =
+                                methodTypeParametersToTypeParameters
+                                    expression.OutputValueTaskType
+                            CancellationTokenType =
+                                methodTypeParametersToTypeParameters
+                                    expression.CancellationTokenType
+                            TaskContinuationOptionsType =
+                                methodTypeParametersToTypeParameters
+                                    expression.TaskContinuationOptionsType
+                            TaskSchedulerType =
+                                methodTypeParametersToTypeParameters
+                                    expression.TaskSchedulerType
+                            OperationCanceledExceptionType =
+                                methodTypeParametersToTypeParameters
+                                    expression.OperationCanceledExceptionType
+                            ExceptionType =
+                                methodTypeParametersToTypeParameters expression.ExceptionType
+                    }
+                | TypedValueTaskOfUnit expression ->
+                    TypedValueTaskOfUnit {
+                        expression with
+                            SourceValueTaskType =
+                                methodTypeParametersToTypeParameters
+                                    expression.SourceValueTaskType
+                            UnitType =
+                                methodTypeParametersToTypeParameters expression.UnitType
+                            OutputValueTaskType =
+                                methodTypeParametersToTypeParameters
+                                    expression.OutputValueTaskType
+                            CancellationTokenType =
+                                methodTypeParametersToTypeParameters
+                                    expression.CancellationTokenType
+                            TaskContinuationOptionsType =
+                                methodTypeParametersToTypeParameters
+                                    expression.TaskContinuationOptionsType
+                            TaskSchedulerType =
+                                methodTypeParametersToTypeParameters
+                                    expression.TaskSchedulerType
+                            OperationCanceledExceptionType =
+                                methodTypeParametersToTypeParameters
+                                    expression.OperationCanceledExceptionType
+                            ExceptionType =
+                                methodTypeParametersToTypeParameters expression.ExceptionType
+                    }
+                | TypedConditional(condition,
+                                   ifTrue,
+                                   ifFalse,
+                                   conditionRange,
+                                   ifTrueRange,
+                                   ifFalseRange) ->
+                    TypedConditional(
+                        methodExpressionTypesToTypeParameters condition,
+                        methodExpressionTypesToTypeParameters ifTrue,
+                        methodExpressionTypesToTypeParameters ifFalse,
+                        conditionRange,
+                        ifTrueRange,
+                        ifFalseRange
+                    )
+                | TypedUpcast(sourceType, targetType, targetResolvedType, expression) ->
+                    TypedUpcast(
+                        methodTypeParametersToTypeParameters sourceType,
+                        methodTypeParametersToTypeParameters targetType,
+                        targetResolvedType,
+                        methodExpressionTypesToTypeParameters expression
+                    )
+                | TypedSequential expressions ->
+                    expressions
+                    |> List.map (fun (expression, expressionType, range) ->
+                        methodExpressionTypesToTypeParameters expression,
+                        methodTypeParametersToTypeParameters expressionType,
+                        range
+                    )
+                    |> TypedSequential
+                | TypedBooleanNegation(expression, range) ->
+                    TypedBooleanNegation(
+                        methodExpressionTypesToTypeParameters expression,
+                        range
+                    )
+                | TypedTryWith(body,
+                               handlerLocalIndex,
+                               handlerName,
+                               catchType,
+                               handler,
+                               tryRange,
+                               withRange,
+                               bodyRange,
+                               handlerRange,
+                               range) ->
+                    TypedTryWith(
+                        methodExpressionTypesToTypeParameters body,
+                        handlerLocalIndex,
+                        handlerName,
+                        methodTypeParametersToTypeParameters catchType,
+                        methodExpressionTypesToTypeParameters handler,
+                        tryRange,
+                        withRange,
+                        bodyRange,
+                        handlerRange,
+                        range
+                    )
+                | TypedNullMatch(input,
+                                 inputType,
+                                 localIndex,
+                                 bindingName,
+                                 ifNull,
+                                 ifNotNull,
+                                 matchHeaderRange,
+                                 ifNullRange,
+                                 ifNotNullRange,
+                                 range) ->
+                    TypedNullMatch(
+                        methodExpressionTypesToTypeParameters input,
+                        methodTypeParametersToTypeParameters inputType,
+                        localIndex,
+                        bindingName,
+                        methodExpressionTypesToTypeParameters ifNull,
+                        methodExpressionTypesToTypeParameters ifNotNull,
+                        matchHeaderRange,
+                        ifNullRange,
+                        ifNotNullRange,
+                        range
+                    )
+                | TypedTypeTestMatch(input,
+                                     targetType,
+                                     localIndex,
+                                     bindingName,
+                                     ifMatched,
+                                     ifNotMatched,
+                                     matchHeaderRange,
+                                     ifMatchedRange,
+                                     ifNotMatchedRange,
+                                     range) ->
+                    TypedTypeTestMatch(
+                        methodExpressionTypesToTypeParameters input,
+                        methodTypeParametersToTypeParameters targetType,
+                        localIndex,
+                        bindingName,
+                        methodExpressionTypesToTypeParameters ifMatched,
+                        methodExpressionTypesToTypeParameters ifNotMatched,
+                        matchHeaderRange,
+                        ifMatchedRange,
+                        ifNotMatchedRange,
+                        range
+                    )
+                | TypedResumableCode expression ->
+                    expression
+                    |> mapTypedResumableCode
+                    |> TypedResumableCode
+                | TypedResumableTryFinally expression ->
+                    TypedResumableTryFinally {
+                        expression with
+                            ResumableCodeModuleType =
+                                methodTypeParametersToTypeParameters
+                                    expression.ResumableCodeModuleType
+                            DelegateType =
+                                methodTypeParametersToTypeParameters expression.DelegateType
+                            DataType =
+                                methodTypeParametersToTypeParameters expression.DataType
+                            ResultType =
+                                methodTypeParametersToTypeParameters expression.ResultType
+                            Compensation = mapTypedResumableCode expression.Compensation
+                    }
+                | TypedObjectExpression(typeReference,
+                                        baseType,
+                                        constructorArguments,
+                                        members,
+                                        range) ->
+                    TypedObjectExpression(
+                        typeReference,
+                        methodTypeParametersToTypeParameters baseType,
+                        constructorArguments
+                        |> List.map methodExpressionTypesToTypeParameters,
+                        members
+                        |> List.map (fun memberDeclaration -> {
+                            memberDeclaration with
+                                Parameters =
+                                    memberDeclaration.Parameters
+                                    |> List.map mapTypedParameterType
+                                ReturnType =
+                                    methodTypeParametersToTypeParameters
+                                        memberDeclaration.ReturnType
+                                Body =
+                                    methodExpressionTypesToTypeParameters
+                                        memberDeclaration.Body
+                        }),
+                        range
+                    )
+                | TypedTraitCall(receiverName, memberName, arguments) ->
+                    TypedTraitCall(receiverName, memberName, arguments)
 
             let closureName
                 (methodDeclaration: TypedMethodDeclaration)
@@ -6107,6 +9058,237 @@ type internal CompilerService() =
                         + "/method:Invoke"
                 |}
 
+            let valueTaskBindHelperLayout
+                (methodDeclaration: TypedMethodDeclaration)
+                (expression: TypedValueTaskBindExpression)
+                =
+                let stableId =
+                    methodDeclaration.StableId
+                    + "/value-task-bind:"
+                    + expression.Range.Start.Offset.ToString(CultureInfo.InvariantCulture)
+
+                let name =
+                    methodDeclaration.Name
+                    + "@ValueTaskBind"
+                    + expression.Range.Start.Line.ToString(CultureInfo.InvariantCulture)
+
+                let typeReference = {
+                    DeclarationId = stableId
+                    AssemblyName = String.Empty
+                    TypeName = {
+                        Namespace = String.Empty
+                        Name =
+                            if List.isEmpty methodDeclaration.GenericParameters then
+                                name
+                            else
+                                name
+                                + "`"
+                                + methodDeclaration.GenericParameters.Length.ToString(
+                                    CultureInfo.InvariantCulture
+                                )
+                    }
+                    IsValueType = false
+                }
+
+                let methodArguments =
+                    methodDeclaration.GenericParameters
+                    |> List.mapi (fun index _ -> CliMethodTypeParameter index)
+
+                let definitionArguments =
+                    methodDeclaration.GenericParameters
+                    |> List.mapi (fun index _ -> CliTypeParameter index)
+
+                {| StableId = stableId
+                   Name = name
+                   MethodType = instantiateClosure typeReference methodArguments
+                   DefinitionType = instantiateClosure typeReference definitionArguments
+                   DefinitionExpression =
+                       match
+                           methodExpressionTypesToTypeParameters (
+                               TypedValueTaskBind expression
+                           )
+                       with
+                       | TypedValueTaskBind mapped -> mapped
+                       | _ ->
+                           invalidOp
+                               "the value-task bind expression mapping changed its shape"
+                   CompletedStableId = stableId + "/method:InvokeCompleted"
+                   ContinuationStableId = stableId + "/method:Continue" |}
+
+            let valueTaskApplyHelperLayout
+                (methodDeclaration: TypedMethodDeclaration)
+                (expression: TypedValueTaskApplyExpression)
+                =
+                let stableId =
+                    methodDeclaration.StableId
+                    + "/value-task-apply:"
+                    + expression.Range.Start.Offset.ToString(CultureInfo.InvariantCulture)
+
+                let name =
+                    methodDeclaration.Name
+                    + "@ValueTaskApply"
+                    + expression.Range.Start.Line.ToString(CultureInfo.InvariantCulture)
+
+                let typeReference = {
+                    DeclarationId = stableId
+                    AssemblyName = String.Empty
+                    TypeName = {
+                        Namespace = String.Empty
+                        Name =
+                            if List.isEmpty methodDeclaration.GenericParameters then
+                                name
+                            else
+                                name
+                                + "`"
+                                + methodDeclaration.GenericParameters.Length.ToString(
+                                    CultureInfo.InvariantCulture
+                                )
+                    }
+                    IsValueType = false
+                }
+
+                let methodArguments =
+                    methodDeclaration.GenericParameters
+                    |> List.mapi (fun index _ -> CliMethodTypeParameter index)
+
+                let definitionArguments =
+                    methodDeclaration.GenericParameters
+                    |> List.mapi (fun index _ -> CliTypeParameter index)
+
+                {| StableId = stableId
+                   Name = name
+                   MethodType = instantiateClosure typeReference methodArguments
+                   DefinitionType = instantiateClosure typeReference definitionArguments
+                   DefinitionExpression =
+                       match
+                           methodExpressionTypesToTypeParameters (
+                               TypedValueTaskApply expression
+                           )
+                       with
+                       | TypedValueTaskApply mapped -> mapped
+                       | _ ->
+                           invalidOp
+                               "the value-task apply expression mapping changed its shape"
+                   CompletedStableId = stableId + "/method:InvokeCompleted"
+                   ApplicableContinuationStableId =
+                       stableId
+                       + "/method:ContinueApplicable"
+                   InputContinuationStableId = stableId + "/method:ContinueInput" |}
+
+            let valueTaskZipHelperLayout
+                (methodDeclaration: TypedMethodDeclaration)
+                (expression: TypedValueTaskZipExpression)
+                =
+                let stableId =
+                    methodDeclaration.StableId
+                    + "/value-task-zip:"
+                    + expression.Range.Start.Offset.ToString(CultureInfo.InvariantCulture)
+
+                let name =
+                    methodDeclaration.Name
+                    + "@ValueTaskZip"
+                    + expression.Range.Start.Line.ToString(CultureInfo.InvariantCulture)
+
+                let typeReference = {
+                    DeclarationId = stableId
+                    AssemblyName = String.Empty
+                    TypeName = {
+                        Namespace = String.Empty
+                        Name =
+                            if List.isEmpty methodDeclaration.GenericParameters then
+                                name
+                            else
+                                name
+                                + "`"
+                                + methodDeclaration.GenericParameters.Length.ToString(
+                                    CultureInfo.InvariantCulture
+                                )
+                    }
+                    IsValueType = false
+                }
+
+                let methodArguments =
+                    methodDeclaration.GenericParameters
+                    |> List.mapi (fun index _ -> CliMethodTypeParameter index)
+
+                let definitionArguments =
+                    methodDeclaration.GenericParameters
+                    |> List.mapi (fun index _ -> CliTypeParameter index)
+
+                {| StableId = stableId
+                   Name = name
+                   MethodType = instantiateClosure typeReference methodArguments
+                   DefinitionType = instantiateClosure typeReference definitionArguments
+                   DefinitionExpression =
+                       match
+                           methodExpressionTypesToTypeParameters (
+                               TypedValueTaskZip expression
+                           )
+                       with
+                       | TypedValueTaskZip mapped -> mapped
+                       | _ ->
+                           invalidOp
+                               "the value-task zip expression mapping changed its shape"
+                   CompletedStableId = stableId + "/method:InvokeCompleted"
+                   LeftContinuationStableId = stableId + "/method:ContinueLeft"
+                   RightContinuationStableId = stableId + "/method:ContinueRight" |}
+
+            let valueTaskOfUnitHelperLayout
+                (methodDeclaration: TypedMethodDeclaration)
+                (expression: TypedValueTaskOfUnitExpression)
+                =
+                let stableId =
+                    methodDeclaration.StableId
+                    + "/value-task-of-unit:"
+                    + expression.Range.Start.Offset.ToString(CultureInfo.InvariantCulture)
+
+                let name =
+                    methodDeclaration.Name
+                    + "@ValueTaskOfUnit"
+                    + expression.Range.Start.Line.ToString(CultureInfo.InvariantCulture)
+
+                let typeReference = {
+                    DeclarationId = stableId
+                    AssemblyName = String.Empty
+                    TypeName = {
+                        Namespace = String.Empty
+                        Name =
+                            if List.isEmpty methodDeclaration.GenericParameters then
+                                name
+                            else
+                                name
+                                + "`"
+                                + methodDeclaration.GenericParameters.Length.ToString(
+                                    CultureInfo.InvariantCulture
+                                )
+                    }
+                    IsValueType = false
+                }
+
+                let methodArguments =
+                    methodDeclaration.GenericParameters
+                    |> List.mapi (fun index _ -> CliMethodTypeParameter index)
+
+                let definitionArguments =
+                    methodDeclaration.GenericParameters
+                    |> List.mapi (fun index _ -> CliTypeParameter index)
+
+                {| StableId = stableId
+                   Name = name
+                   MethodType = instantiateClosure typeReference methodArguments
+                   DefinitionType = instantiateClosure typeReference definitionArguments
+                   DefinitionExpression =
+                       match
+                           methodExpressionTypesToTypeParameters (
+                               TypedValueTaskOfUnit expression
+                           )
+                       with
+                       | TypedValueTaskOfUnit mapped -> mapped
+                       | _ ->
+                           invalidOp
+                               "the value-task unit expression mapping changed its shape"
+                   ContinuationStableId = stableId + "/method:Continue" |}
+
             let methodArgumentIndex kind parameterIndex =
                 match kind with
                 | InstanceConstructor
@@ -6117,10 +9299,13 @@ type internal CompilerService() =
                     parameterIndex
                     + 1
                 | ModuleFunction
+                | ModuleValueGetter
+                | StaticConstructor
                 | StaticTypeExtensionMember
                 | StaticInlineMemberStub
-                | ClosureConstructor
-                | ClosureInvoke -> parameterIndex
+                | InternalStaticInlineMemberStub
+                | ClosureConstructor -> parameterIndex
+                | ClosureInvoke -> parameterIndex + 1
 
             let objectExpressionConstructorStableId (typeReference: CliTypeReference) =
                 typeReference.DeclarationId
@@ -6338,8 +9523,241 @@ type internal CompilerService() =
                     CallMethod fromConverter
                 ]
 
-            let rec valueExpressionInstructions freshLabel kind =
-                function
+            let delegateLambdaConstructionInstructions
+                (expression: TypedDelegateLambdaExpression)
+                =
+                let closureStableId =
+                    match expression.ClosureType with
+                    | CliNamedType typeReference
+                    | CliGenericType(typeReference, _) -> typeReference.DeclarationId
+                    | _ -> invalidOp "a delegate lambda closure must be a named CLI type"
+
+                let constructor = {
+                    DeclaringType = CliDeclaringType expression.ClosureType
+                    Name = ".ctor"
+                    GenericArity = 0
+                    IsInstance = true
+                    ParameterTypes = []
+                    ReturnType = CliVoid
+                    TargetStableId = Some(closureStableId + "/constructor")
+                }
+
+                let invoke = {
+                    DeclaringType = CliDeclaringType expression.ClosureType
+                    Name = "Invoke"
+                    GenericArity = 0
+                    IsInstance = true
+                    ParameterTypes = expression.LambdaParameterTypes
+                    ReturnType = expression.LambdaReturnType
+                    TargetStableId = Some(closureStableId + "/method:Invoke")
+                }
+
+                let delegateConstructor = {
+                    DeclaringType = CliDeclaringType expression.DelegateType
+                    Name = ".ctor"
+                    GenericArity = 0
+                    IsInstance = true
+                    ParameterTypes = [
+                        CliObject
+                        CliNativeInt
+                    ]
+                    ReturnType = CliVoid
+                    TargetStableId = None
+                }
+
+                [
+                    NewObject constructor
+                    LoadFunctionPointer invoke
+                    NewObject delegateConstructor
+                ]
+
+            let valueTaskOfUnitInstructions
+                (methodDeclaration: TypedMethodDeclaration)
+                kind
+                (expression: TypedValueTaskOfUnitExpression)
+                =
+                let layout =
+                    valueTaskOfUnitHelperLayout methodDeclaration expression
+
+                let definition = layout.DefinitionExpression
+
+                let nonGenericTaskType =
+                    CliNamedType expression.NonGenericTaskTypeReference
+
+                let definitionNonGenericTaskType =
+                    CliNamedType definition.NonGenericTaskTypeReference
+
+                let taskUnitType =
+                    CliGenericType(expression.TaskTypeReference, [ expression.UnitType ])
+
+                let definitionTaskUnitType =
+                    CliGenericType(
+                        definition.TaskTypeReference,
+                        [ definition.UnitType ]
+                    )
+
+                let continuationHelper = {
+                    DeclaringType = CliDeclaringType layout.MethodType
+                    Name = "Continue"
+                    GenericArity = 0
+                    IsInstance = false
+                    ParameterTypes = [
+                        definitionNonGenericTaskType
+                        CliObject
+                    ]
+                    ReturnType = definitionTaskUnitType
+                    TargetStableId = None
+                }
+
+                let asTask = {
+                    DeclaringType = CliDeclaringType expression.SourceValueTaskType
+                    Name = "AsTask"
+                    GenericArity = 0
+                    IsInstance = true
+                    ParameterTypes = []
+                    ReturnType = nonGenericTaskType
+                    TargetStableId = None
+                }
+
+                let continuationDelegateType =
+                    CliGenericType(
+                        expression.FuncTypeReference,
+                        [
+                            nonGenericTaskType
+                            CliObject
+                            taskUnitType
+                        ]
+                    )
+
+                let continuationDelegateConstructor = {
+                    DeclaringType = CliDeclaringType continuationDelegateType
+                    Name = ".ctor"
+                    GenericArity = 0
+                    IsInstance = true
+                    ParameterTypes = [
+                        CliObject
+                        CliNativeInt
+                    ]
+                    ReturnType = CliVoid
+                    TargetStableId = None
+                }
+
+                let continuationDefinitionDelegateType =
+                    CliGenericType(
+                        definition.FuncTypeReference,
+                        [
+                            definitionNonGenericTaskType
+                            CliObject
+                            CliMethodTypeParameter 0
+                        ]
+                    )
+
+                let continueWith = {
+                    DeclaringType = CliDeclaringType nonGenericTaskType
+                    Name = "ContinueWith"
+                    GenericArity = 1
+                    IsInstance = true
+                    ParameterTypes = [
+                        continuationDefinitionDelegateType
+                        CliObject
+                        expression.CancellationTokenType
+                        expression.TaskContinuationOptionsType
+                        expression.TaskSchedulerType
+                    ]
+                    ReturnType =
+                        CliGenericType(
+                            expression.TaskTypeReference,
+                            [ CliMethodTypeParameter 0 ]
+                        )
+                    TargetStableId = None
+                }
+
+                let cancellationTokenNone = {
+                    DeclaringType = CliDeclaringType expression.CancellationTokenType
+                    Name = "get_None"
+                    GenericArity = 0
+                    IsInstance = false
+                    ParameterTypes = []
+                    ReturnType = expression.CancellationTokenType
+                    TargetStableId = None
+                }
+
+                let taskSchedulerDefault = {
+                    DeclaringType = CliDeclaringType expression.TaskSchedulerType
+                    Name = "get_Default"
+                    GenericArity = 0
+                    IsInstance = false
+                    ParameterTypes = []
+                    ReturnType = expression.TaskSchedulerType
+                    TargetStableId = None
+                }
+
+                let unwrap = {
+                    DeclaringType =
+                        CliDeclaringType(
+                            CliNamedType expression.TaskExtensionsTypeReference
+                        )
+                    Name = "Unwrap"
+                    GenericArity = 1
+                    IsInstance = false
+                    ParameterTypes = [
+                        CliGenericType(
+                            expression.TaskTypeReference,
+                            [
+                                CliGenericType(
+                                    expression.TaskTypeReference,
+                                    [ CliMethodTypeParameter 0 ]
+                                )
+                            ]
+                        )
+                    ]
+                    ReturnType =
+                        CliGenericType(
+                            expression.TaskTypeReference,
+                            [ CliMethodTypeParameter 0 ]
+                        )
+                    TargetStableId = None
+                }
+
+                let valueTaskConstructor = {
+                    DeclaringType = CliDeclaringType expression.OutputValueTaskType
+                    Name = ".ctor"
+                    GenericArity = 0
+                    IsInstance = true
+                    ParameterTypes = [
+                        CliGenericType(
+                            expression.TaskTypeReference,
+                            [ CliTypeParameter 0 ]
+                        )
+                    ]
+                    ReturnType = CliVoid
+                    TargetStableId = None
+                }
+
+                [
+                    LoadArgumentAddress(
+                        methodArgumentIndex kind expression.SourceParameterIndex
+                    )
+                    CallMethod asTask
+                    LoadNull
+                    LoadFunctionPointer continuationHelper
+                    NewObject continuationDelegateConstructor
+                    LoadNull
+                    CallMethod cancellationTokenNone
+                    LoadInt32(
+                        int
+                            System.Threading.Tasks.TaskContinuationOptions.ExecuteSynchronously
+                    )
+                    CallMethod taskSchedulerDefault
+                    CallGenericMethod(continueWith, [ taskUnitType ])
+                    CallGenericMethod(unwrap, [ expression.UnitType ])
+                    NewObject valueTaskConstructor
+                ]
+            let rec valueExpressionInstructions methodDeclaration freshLabel kind expression =
+                let valueExpressionInstructions =
+                    valueExpressionInstructions methodDeclaration
+
+                match expression with
                 | TypedIntegerLiteral value -> [ LoadInt32 value ], []
                 | TypedStringLiteral value -> [ LoadString value ], []
                 | TypedNullLiteral -> [ LoadNull ], []
@@ -6402,6 +9820,77 @@ type internal CompilerService() =
                         MarkHiddenSequencePoint
                     ],
                     expressionLocals
+                | TypedTryWith(body,
+                               handlerLocalIndex,
+                               handlerName,
+                               catchType,
+                               handler,
+                               tryRange,
+                               withRange,
+                               bodyRange,
+                               handlerRange,
+                               _) ->
+                    let tryStart = freshLabel ()
+                    let tryEnd = freshLabel ()
+                    let handlerStart = freshLabel ()
+                    let handlerEnd = freshLabel ()
+                    let endLabel = freshLabel ()
+
+                    let bodyInstructions, bodyLocals =
+                        valueExpressionInstructions freshLabel kind body
+
+                    let handlerInstructions, handlerLocals =
+                        valueExpressionInstructions freshLabel kind handler
+
+                    let initialSequencePoint expression range =
+                        match expression with
+                        | TypedLet _
+                        | TypedSequential _
+                        | TypedConditional _
+                        | TypedBooleanNegation _
+                        | TypedTryWith _
+                        | TypedNullMatch _
+                        | TypedTypeTestMatch _ -> []
+                        | _ -> [ MarkSequencePoint range ]
+
+                    [
+                        MarkLabel tryStart
+                        MarkSequencePoint tryRange
+                        Nop
+                    ]
+                    @ initialSequencePoint body bodyRange
+                    @ bodyInstructions
+                    @ [
+                        Leave endLabel
+                        MarkLabel tryEnd
+                        MarkLabel handlerStart
+                        StoreLocal handlerLocalIndex
+                        MarkSequencePoint withRange
+                        Nop
+                    ]
+                    @ initialSequencePoint handler handlerRange
+                    @ handlerInstructions
+                    @ [
+                        Leave endLabel
+                        MarkLabel handlerEnd
+                        MarkLabel endLabel
+                        DefineCatchRegion(
+                            tryStart,
+                            tryEnd,
+                            handlerStart,
+                            handlerEnd,
+                            catchType
+                        )
+                    ],
+                    bodyLocals
+                    @ [
+                        {
+                            Index = handlerLocalIndex
+                            Name = handlerName
+                            Type = catchType
+                        }
+                    ]
+                    @ handlerLocals
                 | TypedLet(localIndex, name, _, localType, value, body, bindingRange, bodyRange) ->
                     let valueInstructions, valueLocals =
                         valueExpressionInstructions freshLabel kind value
@@ -6411,7 +9900,13 @@ type internal CompilerService() =
 
                     let bodySequencePoint =
                         match body with
-                        | TypedSequential _ -> []
+                        | TypedLet _
+                        | TypedSequential _
+                        | TypedConditional _
+                        | TypedBooleanNegation _
+                        | TypedTryWith _
+                        | TypedNullMatch _
+                        | TypedTypeTestMatch _ -> []
                         | _ -> [ MarkSequencePoint bodyRange ]
 
                     [ MarkSequencePoint bindingRange ]
@@ -6440,7 +9935,7 @@ type internal CompilerService() =
                             LoadNull
 
                     let methodReference = {
-                        DeclaringType = CliDeclaringType(CliNamedType target.DeclaringType)
+                        DeclaringType = CliDeclaringType target.DeclaringType
                         Name = target.Name
                         GenericArity = target.GenericArity
                         IsInstance = false
@@ -6455,10 +9950,24 @@ type internal CompilerService() =
                         else
                             CallGenericMethod(methodReference, genericArguments)
 
+                    let intrinsicSequencePoints =
+                        if target.StableId.EndsWith("|intrinsic|isNull", StringComparison.Ordinal) then
+                            [
+                                MarkHiddenSequencePoint
+                                Nop
+                                MarkHiddenSequencePoint
+                                Nop
+                                MarkHiddenSequencePoint
+                                Nop
+                            ]
+                        else
+                            []
+
                     (loweredArguments
                      |> List.collect fst)
                     @ omittedOptionalArguments
-                    @ [ callInstruction ],
+                    @ [ callInstruction ]
+                    @ intrinsicSequencePoints,
                     (loweredArguments
                      |> List.collect snd)
                 | TypedObjectConstruction(target, arguments) ->
@@ -6481,6 +9990,22 @@ type internal CompilerService() =
                     @ [ NewObject constructorReference ],
                     (loweredArguments
                      |> List.collect snd)
+                | TypedDefaultValue(valueType, localIndex) ->
+                    [
+                        LoadLocalAddress localIndex
+                        InitializeObject valueType
+                        LoadLocal localIndex
+                    ],
+                    [
+                        {
+                            Index = localIndex
+                            Name = "defaultValue"
+                            Type = valueType
+                        }
+                    ]
+                | TypedValueTaskOfUnit expression ->
+                    valueTaskOfUnitInstructions methodDeclaration kind expression,
+                    []
                 | TypedFunctionApplication(functionType,
                                            domainType,
                                            rangeType,
@@ -6508,9 +10033,6 @@ type internal CompilerService() =
                     functionLocals
                     @ argumentLocals
                 | TypedInstanceMethodCall(target, receiver, arguments) ->
-                    let receiverInstructions, receiverLocals =
-                        valueExpressionInstructions freshLabel kind receiver
-
                     let loweredArguments =
                         arguments
                         |> List.map (valueExpressionInstructions freshLabel kind)
@@ -6525,10 +10047,48 @@ type internal CompilerService() =
                         TargetStableId = None
                     }
 
+                    let isValueTypeReceiver =
+                        match target.DeclaringType with
+                        | CliNamedType typeReference
+                        | CliGenericType(typeReference, _) -> typeReference.IsValueType
+                        | CliInt32
+                        | CliBoolean
+                        | CliNativeInt -> true
+                        | CliString
+                        | CliObject
+                        | CliVoid
+                        | CliByRef _
+                        | CliTypeParameter _
+                        | CliMethodTypeParameter _ -> false
+
+                    let receiverInstructions, receiverLocals, callInstruction =
+                        if isValueTypeReceiver then
+                            match receiver with
+                            | TypedParameterReference index ->
+                                [
+                                    LoadArgumentAddress(
+                                        methodArgumentIndex kind index
+                                    )
+                                ],
+                                [],
+                                CallMethod methodReference
+                            | TypedLocalReference index ->
+                                [ LoadLocalAddress index ], [], CallMethod methodReference
+                            | _ ->
+                                invalidOp
+                                    "a value-type instance call requires an addressable receiver"
+                        else
+                            let receiverInstructions, receiverLocals =
+                                valueExpressionInstructions freshLabel kind receiver
+
+                            receiverInstructions,
+                            receiverLocals,
+                            CallVirtualMethod methodReference
+
                     receiverInstructions
                     @ (loweredArguments
                        |> List.collect fst)
-                    @ [ CallVirtualMethod methodReference ],
+                    @ [ callInstruction ],
                     receiverLocals
                     @ (loweredArguments
                        |> List.collect snd)
@@ -6550,10 +10110,14 @@ type internal CompilerService() =
 
                             let sequencePoint =
                                 match expression with
+                                | TypedUnitLiteral
                                 | TypedConditional _
                                 | TypedBooleanNegation _
                                 | TypedLet _
-                                | TypedSequential _ -> []
+                                | TypedSequential _
+                                | TypedTryWith _
+                                | TypedNullMatch _
+                                | TypedTypeTestMatch _ -> []
                                 | _ -> [ MarkSequencePoint expressionRange ]
 
                             sequencePoint
@@ -6583,8 +10147,69 @@ type internal CompilerService() =
                     let falseLabel = freshLabel ()
                     let endLabel = freshLabel ()
 
-                    let conditionInstructions, conditionLocals =
-                        valueExpressionInstructions freshLabel kind condition
+                    let conditionInstructions, conditionLocals, conditionPrefix =
+                        match condition with
+                        | TypedConditional(andLeft,
+                                           andRight,
+                                           TypedIntegerLiteral 0,
+                                           andLeftRange,
+                                           andRightRange,
+                                           syntheticFalseRange) when
+                            syntheticFalseRange.Start = syntheticFalseRange.End
+                            ->
+                            let andFalseLabel = freshLabel ()
+                            let andEndLabel = freshLabel ()
+
+                            let andLeftInstructions, andLeftLocals =
+                                valueExpressionInstructions freshLabel kind andLeft
+
+                            let andRightInstructions, andRightLocals =
+                                valueExpressionInstructions freshLabel kind andRight
+
+                            [ MarkSequencePoint andLeftRange ]
+                            @ andLeftInstructions
+                            @ [
+                                BranchIfFalse andFalseLabel
+                                MarkSequencePoint andRightRange
+                              ]
+                            @ andRightInstructions
+                            @ [
+                                Branch andEndLabel
+                                MarkLabel andFalseLabel
+                                LoadInt32 0
+                                MarkLabel andEndLabel
+                                MarkHiddenSequencePoint
+                                Nop
+                                MarkHiddenSequencePoint
+                                Nop
+                                MarkHiddenSequencePoint
+                                Nop
+                                MarkHiddenSequencePoint
+                                Nop
+                              ],
+                            andLeftLocals @ andRightLocals,
+                            [
+                                MarkSequencePoint conditionRange
+                                Nop
+                            ]
+                        | _ ->
+                            let instructions, locals =
+                                valueExpressionInstructions freshLabel kind condition
+
+                            let boundary =
+                                match instructions with
+                                | MarkSequencePoint _ :: _
+                                | MarkHiddenSequencePoint :: _ -> [ Nop ]
+                                | _ -> []
+
+                            instructions,
+                            locals,
+                            [
+                                MarkSequencePoint conditionRange
+                                Nop
+                                MarkHiddenSequencePoint
+                            ]
+                            @ boundary
 
                     let ifTrueInstructions, ifTrueLocals =
                         valueExpressionInstructions freshLabel kind ifTrue
@@ -6623,11 +10248,7 @@ type internal CompilerService() =
                             @ ifFalseInstructions
                             @ [ MarkLabel endLabel ]
 
-                    [
-                        MarkSequencePoint conditionRange
-                        Nop
-                        MarkHiddenSequencePoint
-                    ]
+                    conditionPrefix
                     @ conditionInstructions
                     @ [ BranchIfFalse falseLabel ]
                     @ ifTrueSequencePoint
@@ -6636,6 +10257,66 @@ type internal CompilerService() =
                     conditionLocals
                     @ ifTrueLocals
                     @ ifFalseLocals
+                | TypedNullMatch(input,
+                                 inputType,
+                                 localIndex,
+                                 bindingName,
+                                 ifNull,
+                                 ifNotNull,
+                                 matchHeaderRange,
+                                 ifNullRange,
+                                 ifNotNullRange,
+                                 _) ->
+                    let notNullLabel = freshLabel ()
+                    let endLabel = freshLabel ()
+
+                    let inputInstructions, inputLocals =
+                        valueExpressionInstructions freshLabel kind input
+
+                    let nullInstructions, nullLocals =
+                        valueExpressionInstructions freshLabel kind ifNull
+
+                    let nullArmInstructions =
+                        match ifNull with
+                        | TypedUnitLiteral -> [ Nop ]
+                        | _ -> nullInstructions
+
+                    let notNullInstructions, notNullLocals =
+                        valueExpressionInstructions freshLabel kind ifNotNull
+
+                    [
+                        MarkSequencePoint matchHeaderRange
+                        Nop
+                        MarkHiddenSequencePoint
+                    ]
+                    @ inputInstructions
+                    @ [
+                        StoreLocal localIndex
+                        LoadLocal localIndex
+                        LoadNull
+                        CompareEqual
+                        BranchIfFalse notNullLabel
+                        MarkSequencePoint ifNullRange
+                    ]
+                    @ nullArmInstructions
+                    @ [
+                        MarkHiddenSequencePoint
+                        Branch endLabel
+                        MarkLabel notNullLabel
+                        MarkSequencePoint ifNotNullRange
+                    ]
+                    @ notNullInstructions
+                    @ [ MarkLabel endLabel ],
+                    inputLocals
+                    @ [
+                        {
+                            Index = localIndex
+                            Name = bindingName
+                            Type = inputType
+                        }
+                    ]
+                    @ nullLocals
+                    @ notNullLocals
                 | TypedTypeTestMatch(input,
                                      targetType,
                                      localIndex,
@@ -6695,19 +10376,20 @@ type internal CompilerService() =
                                         _,
                                         constructorArguments,
                                         _,
-                                        _,
-                                        _,
-                                        _,
-                                        _,
-                                        _,
                                         _) ->
                     if not (List.isEmpty constructorArguments) then
                         invalidOp
                             "object-expression constructor arguments reached an unsupported lowering path"
 
                     [ NewObject(objectExpressionConstructorReference typeReference) ], []
+                | TypedDelegateLambda expression ->
+                    delegateLambdaConstructionInstructions expression, []
                 | TypedBoundInstanceMethod _
                 | TypedUnitLambda _
+                | TypedValueTaskBind _
+                | TypedValueTaskApply _
+                | TypedValueTaskZip _
+                | TypedValueTaskOfUnit _
                 | TypedResumableCode _
                 | TypedResumableTryFinally _
                 | TypedTraitCall _ -> invalidOp "this expression cannot be lowered as a local value"
@@ -6737,9 +10419,739 @@ type internal CompilerService() =
                         Return
                     ],
                     []
-                | (TypedStringLiteral _ | TypedNullLiteral | TypedUnitLiteral | TypedReceiverReference | TypedLocalReference _ | TypedLet _ | TypedLocalAssignment _ | TypedAddressOf _ | TypedInstanceFieldGet _ | TypedStaticMethodCall _ | TypedObjectConstruction _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedConditional _ | TypedUpcast _ | TypedSequential _ | TypedBooleanNegation _ | TypedTypeTestMatch _ | TypedObjectExpression _) as expression ->
+                | TypedValueTaskOfUnit expression ->
+                    valueTaskOfUnitInstructions methodDeclaration kind expression
+                    @ [ Return ],
+                    []
+                | TypedValueTaskBind expression ->
+                    let layout = valueTaskBindHelperLayout methodDeclaration expression
+                    let definition = layout.DefinitionExpression
+                    let slowPath = freshLabel ()
+
+                    let taskInputType =
+                        CliGenericType(expression.TaskTypeReference, [ expression.InputType ])
+
+                    let taskOutputType =
+                        CliGenericType(expression.TaskTypeReference, [ expression.OutputType ])
+
+                    let definitionTaskInputType =
+                        CliGenericType(
+                            definition.TaskTypeReference,
+                            [ definition.InputType ]
+                        )
+
+                    let definitionTaskOutputType =
+                        CliGenericType(
+                            definition.TaskTypeReference,
+                            [ definition.OutputType ]
+                        )
+
+                    let completedHelper = {
+                        DeclaringType = CliDeclaringType layout.MethodType
+                        Name = "InvokeCompleted"
+                        GenericArity = 0
+                        IsInstance = false
+                        ParameterTypes = [
+                            definition.BinderType
+                            definition.InputValueTaskType
+                        ]
+                        ReturnType = definition.OutputValueTaskType
+                        TargetStableId = None
+                    }
+
+                    let continuationHelper = {
+                        DeclaringType = CliDeclaringType layout.MethodType
+                        Name = "Continue"
+                        GenericArity = 0
+                        IsInstance = false
+                        ParameterTypes = [
+                            definitionTaskInputType
+                            CliObject
+                        ]
+                        ReturnType = definitionTaskOutputType
+                        TargetStableId = None
+                    }
+
+                    let isCompletedSuccessfully = {
+                        DeclaringType = CliDeclaringType expression.InputValueTaskType
+                        Name = "get_IsCompletedSuccessfully"
+                        GenericArity = 0
+                        IsInstance = true
+                        ParameterTypes = []
+                        ReturnType = CliBoolean
+                        TargetStableId = None
+                    }
+
+                    let asTask = {
+                        DeclaringType = CliDeclaringType expression.InputValueTaskType
+                        Name = "AsTask"
+                        GenericArity = 0
+                        IsInstance = true
+                        ParameterTypes = []
+                        ReturnType =
+                            CliGenericType(
+                                expression.TaskTypeReference,
+                                [ CliTypeParameter 0 ]
+                            )
+                        TargetStableId = None
+                    }
+
+                    let continuationDelegateType =
+                        CliGenericType(
+                            expression.FuncTypeReference,
+                            [
+                                taskInputType
+                                CliObject
+                                taskOutputType
+                            ]
+                        )
+
+                    let continuationDelegateConstructor = {
+                        DeclaringType = CliDeclaringType continuationDelegateType
+                        Name = ".ctor"
+                        GenericArity = 0
+                        IsInstance = true
+                        ParameterTypes = [
+                            CliObject
+                            CliNativeInt
+                        ]
+                        ReturnType = CliVoid
+                        TargetStableId = None
+                    }
+
+                    let continuationDefinitionDelegateType =
+                        CliGenericType(
+                            definition.FuncTypeReference,
+                            [
+                                CliGenericType(
+                                    definition.TaskTypeReference,
+                                    [ CliTypeParameter 0 ]
+                                )
+                                CliObject
+                                CliMethodTypeParameter 0
+                            ]
+                        )
+
+                    let continueWith = {
+                        DeclaringType = CliDeclaringType taskInputType
+                        Name = "ContinueWith"
+                        GenericArity = 1
+                        IsInstance = true
+                        ParameterTypes = [
+                            continuationDefinitionDelegateType
+                            CliObject
+                            expression.CancellationTokenType
+                            expression.TaskContinuationOptionsType
+                            expression.TaskSchedulerType
+                        ]
+                        ReturnType =
+                            CliGenericType(
+                                expression.TaskTypeReference,
+                                [ CliMethodTypeParameter 0 ]
+                            )
+                        TargetStableId = None
+                    }
+
+                    let cancellationTokenNone = {
+                        DeclaringType = CliDeclaringType expression.CancellationTokenType
+                        Name = "get_None"
+                        GenericArity = 0
+                        IsInstance = false
+                        ParameterTypes = []
+                        ReturnType = expression.CancellationTokenType
+                        TargetStableId = None
+                    }
+
+                    let taskSchedulerDefault = {
+                        DeclaringType = CliDeclaringType expression.TaskSchedulerType
+                        Name = "get_Default"
+                        GenericArity = 0
+                        IsInstance = false
+                        ParameterTypes = []
+                        ReturnType = expression.TaskSchedulerType
+                        TargetStableId = None
+                    }
+
+                    let unwrap = {
+                        DeclaringType =
+                            CliDeclaringType(
+                                CliNamedType expression.TaskExtensionsTypeReference
+                            )
+                        Name = "Unwrap"
+                        GenericArity = 1
+                        IsInstance = false
+                        ParameterTypes = [
+                            CliGenericType(
+                                expression.TaskTypeReference,
+                                [
+                                    CliGenericType(
+                                        expression.TaskTypeReference,
+                                        [ CliMethodTypeParameter 0 ]
+                                    )
+                                ]
+                            )
+                        ]
+                        ReturnType =
+                            CliGenericType(
+                                expression.TaskTypeReference,
+                                [ CliMethodTypeParameter 0 ]
+                            )
+                        TargetStableId = None
+                    }
+
+                    let valueTaskConstructor = {
+                        DeclaringType = CliDeclaringType expression.OutputValueTaskType
+                        Name = ".ctor"
+                        GenericArity = 0
+                        IsInstance = true
+                        ParameterTypes = [
+                            CliGenericType(
+                                expression.TaskTypeReference,
+                                [ CliTypeParameter 0 ]
+                            )
+                        ]
+                        ReturnType = CliVoid
+                        TargetStableId = None
+                    }
+
+                    [
+                        LoadArgumentAddress(
+                            methodArgumentIndex kind expression.SourceParameterIndex
+                        )
+                        CallMethod isCompletedSuccessfully
+                        BranchIfFalse slowPath
+                        LoadArgument(
+                            methodArgumentIndex kind expression.BinderParameterIndex
+                        )
+                        LoadArgument(
+                            methodArgumentIndex kind expression.SourceParameterIndex
+                        )
+                        CallMethod completedHelper
+                        Return
+                        MarkLabel slowPath
+                        LoadArgumentAddress(
+                            methodArgumentIndex kind expression.SourceParameterIndex
+                        )
+                        CallMethod asTask
+                        LoadNull
+                        LoadFunctionPointer continuationHelper
+                        NewObject continuationDelegateConstructor
+                        LoadArgument(
+                            methodArgumentIndex kind expression.BinderParameterIndex
+                        )
+                        CallMethod cancellationTokenNone
+                        LoadInt32(
+                            int
+                                System.Threading.Tasks.TaskContinuationOptions.ExecuteSynchronously
+                        )
+                        CallMethod taskSchedulerDefault
+                        CallGenericMethod(continueWith, [ taskOutputType ])
+                        CallGenericMethod(unwrap, [ expression.OutputType ])
+                        NewObject valueTaskConstructor
+                        Return
+                    ],
+                    []
+                | TypedValueTaskApply expression ->
+                    let layout = valueTaskApplyHelperLayout methodDeclaration expression
+                    let definition = layout.DefinitionExpression
+                    let slowPath = freshLabel ()
+
+                    let taskApplicableType =
+                        CliGenericType(
+                            expression.TaskTypeReference,
+                            [ expression.ApplierType ]
+                        )
+
+                    let taskOutputType =
+                        CliGenericType(expression.TaskTypeReference, [ expression.OutputType ])
+
+                    let definitionTaskApplicableType =
+                        CliGenericType(
+                            definition.TaskTypeReference,
+                            [ definition.ApplierType ]
+                        )
+
+                    let definitionTaskOutputType =
+                        CliGenericType(
+                            definition.TaskTypeReference,
+                            [ definition.OutputType ]
+                        )
+
+                    let completedHelper = {
+                        DeclaringType = CliDeclaringType layout.MethodType
+                        Name = "InvokeCompleted"
+                        GenericArity = 0
+                        IsInstance = false
+                        ParameterTypes = [
+                            definition.ApplierType
+                            definition.InputValueTaskType
+                        ]
+                        ReturnType = definition.OutputValueTaskType
+                        TargetStableId = None
+                    }
+
+                    let applicableContinuationHelper = {
+                        DeclaringType = CliDeclaringType layout.MethodType
+                        Name = "ContinueApplicable"
+                        GenericArity = 0
+                        IsInstance = false
+                        ParameterTypes = [
+                            definitionTaskApplicableType
+                            CliObject
+                        ]
+                        ReturnType = definitionTaskOutputType
+                        TargetStableId = None
+                    }
+
+                    let isCompletedSuccessfully = {
+                        DeclaringType =
+                            CliDeclaringType expression.ApplicableValueTaskType
+                        Name = "get_IsCompletedSuccessfully"
+                        GenericArity = 0
+                        IsInstance = true
+                        ParameterTypes = []
+                        ReturnType = CliBoolean
+                        TargetStableId = None
+                    }
+
+                    let applicableResult = {
+                        DeclaringType =
+                            CliDeclaringType expression.ApplicableValueTaskType
+                        Name = "get_Result"
+                        GenericArity = 0
+                        IsInstance = true
+                        ParameterTypes = []
+                        ReturnType = CliTypeParameter 0
+                        TargetStableId = None
+                    }
+
+                    let asTask = {
+                        DeclaringType =
+                            CliDeclaringType expression.ApplicableValueTaskType
+                        Name = "AsTask"
+                        GenericArity = 0
+                        IsInstance = true
+                        ParameterTypes = []
+                        ReturnType =
+                            CliGenericType(
+                                expression.TaskTypeReference,
+                                [ CliTypeParameter 0 ]
+                            )
+                        TargetStableId = None
+                    }
+
+                    let continuationDelegateType =
+                        CliGenericType(
+                            expression.FuncTypeReference,
+                            [
+                                taskApplicableType
+                                CliObject
+                                taskOutputType
+                            ]
+                        )
+
+                    let continuationDelegateConstructor = {
+                        DeclaringType = CliDeclaringType continuationDelegateType
+                        Name = ".ctor"
+                        GenericArity = 0
+                        IsInstance = true
+                        ParameterTypes = [
+                            CliObject
+                            CliNativeInt
+                        ]
+                        ReturnType = CliVoid
+                        TargetStableId = None
+                    }
+
+                    let continuationDefinitionDelegateType =
+                        CliGenericType(
+                            definition.FuncTypeReference,
+                            [
+                                CliGenericType(
+                                    definition.TaskTypeReference,
+                                    [ CliTypeParameter 0 ]
+                                )
+                                CliObject
+                                CliMethodTypeParameter 0
+                            ]
+                        )
+
+                    let continueWith = {
+                        DeclaringType = CliDeclaringType taskApplicableType
+                        Name = "ContinueWith"
+                        GenericArity = 1
+                        IsInstance = true
+                        ParameterTypes = [
+                            continuationDefinitionDelegateType
+                            CliObject
+                            expression.CancellationTokenType
+                            expression.TaskContinuationOptionsType
+                            expression.TaskSchedulerType
+                        ]
+                        ReturnType =
+                            CliGenericType(
+                                expression.TaskTypeReference,
+                                [ CliMethodTypeParameter 0 ]
+                            )
+                        TargetStableId = None
+                    }
+
+                    let cancellationTokenNone = {
+                        DeclaringType =
+                            CliDeclaringType expression.CancellationTokenType
+                        Name = "get_None"
+                        GenericArity = 0
+                        IsInstance = false
+                        ParameterTypes = []
+                        ReturnType = expression.CancellationTokenType
+                        TargetStableId = None
+                    }
+
+                    let taskSchedulerDefault = {
+                        DeclaringType = CliDeclaringType expression.TaskSchedulerType
+                        Name = "get_Default"
+                        GenericArity = 0
+                        IsInstance = false
+                        ParameterTypes = []
+                        ReturnType = expression.TaskSchedulerType
+                        TargetStableId = None
+                    }
+
+                    let unwrap = {
+                        DeclaringType =
+                            CliDeclaringType(
+                                CliNamedType expression.TaskExtensionsTypeReference
+                            )
+                        Name = "Unwrap"
+                        GenericArity = 1
+                        IsInstance = false
+                        ParameterTypes = [
+                            CliGenericType(
+                                expression.TaskTypeReference,
+                                [
+                                    CliGenericType(
+                                        expression.TaskTypeReference,
+                                        [ CliMethodTypeParameter 0 ]
+                                    )
+                                ]
+                            )
+                        ]
+                        ReturnType =
+                            CliGenericType(
+                                expression.TaskTypeReference,
+                                [ CliMethodTypeParameter 0 ]
+                            )
+                        TargetStableId = None
+                    }
+
+                    let valueTaskConstructor = {
+                        DeclaringType = CliDeclaringType expression.OutputValueTaskType
+                        Name = ".ctor"
+                        GenericArity = 0
+                        IsInstance = true
+                        ParameterTypes = [
+                            CliGenericType(
+                                expression.TaskTypeReference,
+                                [ CliTypeParameter 0 ]
+                            )
+                        ]
+                        ReturnType = CliVoid
+                        TargetStableId = None
+                    }
+
+                    [
+                        LoadArgumentAddress(
+                            methodArgumentIndex
+                                kind
+                                expression.ApplicableParameterIndex
+                        )
+                        CallMethod isCompletedSuccessfully
+                        BranchIfFalse slowPath
+                        LoadArgumentAddress(
+                            methodArgumentIndex
+                                kind
+                                expression.ApplicableParameterIndex
+                        )
+                        CallMethod applicableResult
+                        LoadArgument(
+                            methodArgumentIndex kind expression.InputParameterIndex
+                        )
+                        CallMethod completedHelper
+                        Return
+                        MarkLabel slowPath
+                        LoadArgumentAddress(
+                            methodArgumentIndex
+                                kind
+                                expression.ApplicableParameterIndex
+                        )
+                        CallMethod asTask
+                        LoadNull
+                        LoadFunctionPointer applicableContinuationHelper
+                        NewObject continuationDelegateConstructor
+                        LoadArgument(
+                            methodArgumentIndex kind expression.InputParameterIndex
+                        )
+                        Box expression.InputValueTaskType
+                        CallMethod cancellationTokenNone
+                        LoadInt32(
+                            int
+                                System.Threading.Tasks.TaskContinuationOptions.ExecuteSynchronously
+                        )
+                        CallMethod taskSchedulerDefault
+                        CallGenericMethod(continueWith, [ taskOutputType ])
+                        CallGenericMethod(unwrap, [ expression.OutputType ])
+                        NewObject valueTaskConstructor
+                        Return
+                    ],
+                    []
+                | TypedValueTaskZip expression ->
+                    let layout = valueTaskZipHelperLayout methodDeclaration expression
+                    let definition = layout.DefinitionExpression
+                    let slowPath = freshLabel ()
+
+                    let taskLeftType =
+                        CliGenericType(expression.TaskTypeReference, [ expression.LeftType ])
+
+                    let taskOutputType =
+                        CliGenericType(expression.TaskTypeReference, [ expression.TupleType ])
+
+                    let definitionTaskLeftType =
+                        CliGenericType(
+                            definition.TaskTypeReference,
+                            [ definition.LeftType ]
+                        )
+
+                    let definitionTaskOutputType =
+                        CliGenericType(
+                            definition.TaskTypeReference,
+                            [ definition.TupleType ]
+                        )
+
+                    let completedHelper = {
+                        DeclaringType = CliDeclaringType layout.MethodType
+                        Name = "InvokeCompleted"
+                        GenericArity = 0
+                        IsInstance = false
+                        ParameterTypes = [
+                            definition.LeftType
+                            definition.RightValueTaskType
+                        ]
+                        ReturnType = definition.OutputValueTaskType
+                        TargetStableId = None
+                    }
+
+                    let leftContinuationHelper = {
+                        DeclaringType = CliDeclaringType layout.MethodType
+                        Name = "ContinueLeft"
+                        GenericArity = 0
+                        IsInstance = false
+                        ParameterTypes = [
+                            definitionTaskLeftType
+                            CliObject
+                        ]
+                        ReturnType = definitionTaskOutputType
+                        TargetStableId = None
+                    }
+
+                    let isCompletedSuccessfully = {
+                        DeclaringType = CliDeclaringType expression.LeftValueTaskType
+                        Name = "get_IsCompletedSuccessfully"
+                        GenericArity = 0
+                        IsInstance = true
+                        ParameterTypes = []
+                        ReturnType = CliBoolean
+                        TargetStableId = None
+                    }
+
+                    let leftResult = {
+                        DeclaringType = CliDeclaringType expression.LeftValueTaskType
+                        Name = "get_Result"
+                        GenericArity = 0
+                        IsInstance = true
+                        ParameterTypes = []
+                        ReturnType = CliTypeParameter 0
+                        TargetStableId = None
+                    }
+
+                    let asTask = {
+                        DeclaringType = CliDeclaringType expression.LeftValueTaskType
+                        Name = "AsTask"
+                        GenericArity = 0
+                        IsInstance = true
+                        ParameterTypes = []
+                        ReturnType =
+                            CliGenericType(
+                                expression.TaskTypeReference,
+                                [ CliTypeParameter 0 ]
+                            )
+                        TargetStableId = None
+                    }
+
+                    let continuationDelegateType =
+                        CliGenericType(
+                            expression.FuncTypeReference,
+                            [
+                                taskLeftType
+                                CliObject
+                                taskOutputType
+                            ]
+                        )
+
+                    let continuationDelegateConstructor = {
+                        DeclaringType = CliDeclaringType continuationDelegateType
+                        Name = ".ctor"
+                        GenericArity = 0
+                        IsInstance = true
+                        ParameterTypes = [
+                            CliObject
+                            CliNativeInt
+                        ]
+                        ReturnType = CliVoid
+                        TargetStableId = None
+                    }
+
+                    let continuationDefinitionDelegateType =
+                        CliGenericType(
+                            definition.FuncTypeReference,
+                            [
+                                CliGenericType(
+                                    definition.TaskTypeReference,
+                                    [ CliTypeParameter 0 ]
+                                )
+                                CliObject
+                                CliMethodTypeParameter 0
+                            ]
+                        )
+
+                    let continueWith = {
+                        DeclaringType = CliDeclaringType taskLeftType
+                        Name = "ContinueWith"
+                        GenericArity = 1
+                        IsInstance = true
+                        ParameterTypes = [
+                            continuationDefinitionDelegateType
+                            CliObject
+                            expression.CancellationTokenType
+                            expression.TaskContinuationOptionsType
+                            expression.TaskSchedulerType
+                        ]
+                        ReturnType =
+                            CliGenericType(
+                                expression.TaskTypeReference,
+                                [ CliMethodTypeParameter 0 ]
+                            )
+                        TargetStableId = None
+                    }
+
+                    let cancellationTokenNone = {
+                        DeclaringType =
+                            CliDeclaringType expression.CancellationTokenType
+                        Name = "get_None"
+                        GenericArity = 0
+                        IsInstance = false
+                        ParameterTypes = []
+                        ReturnType = expression.CancellationTokenType
+                        TargetStableId = None
+                    }
+
+                    let taskSchedulerDefault = {
+                        DeclaringType = CliDeclaringType expression.TaskSchedulerType
+                        Name = "get_Default"
+                        GenericArity = 0
+                        IsInstance = false
+                        ParameterTypes = []
+                        ReturnType = expression.TaskSchedulerType
+                        TargetStableId = None
+                    }
+
+                    let unwrap = {
+                        DeclaringType =
+                            CliDeclaringType(
+                                CliNamedType expression.TaskExtensionsTypeReference
+                            )
+                        Name = "Unwrap"
+                        GenericArity = 1
+                        IsInstance = false
+                        ParameterTypes = [
+                            CliGenericType(
+                                expression.TaskTypeReference,
+                                [
+                                    CliGenericType(
+                                        expression.TaskTypeReference,
+                                        [ CliMethodTypeParameter 0 ]
+                                    )
+                                ]
+                            )
+                        ]
+                        ReturnType =
+                            CliGenericType(
+                                expression.TaskTypeReference,
+                                [ CliMethodTypeParameter 0 ]
+                            )
+                        TargetStableId = None
+                    }
+
+                    let valueTaskConstructor = {
+                        DeclaringType = CliDeclaringType expression.OutputValueTaskType
+                        Name = ".ctor"
+                        GenericArity = 0
+                        IsInstance = true
+                        ParameterTypes = [
+                            CliGenericType(
+                                expression.TaskTypeReference,
+                                [ CliTypeParameter 0 ]
+                            )
+                        ]
+                        ReturnType = CliVoid
+                        TargetStableId = None
+                    }
+
+                    [
+                        LoadArgumentAddress(
+                            methodArgumentIndex kind expression.LeftParameterIndex
+                        )
+                        CallMethod isCompletedSuccessfully
+                        BranchIfFalse slowPath
+                        LoadArgumentAddress(
+                            methodArgumentIndex kind expression.LeftParameterIndex
+                        )
+                        CallMethod leftResult
+                        LoadArgument(
+                            methodArgumentIndex kind expression.RightParameterIndex
+                        )
+                        CallMethod completedHelper
+                        Return
+                        MarkLabel slowPath
+                        LoadArgumentAddress(
+                            methodArgumentIndex kind expression.LeftParameterIndex
+                        )
+                        CallMethod asTask
+                        LoadNull
+                        LoadFunctionPointer leftContinuationHelper
+                        NewObject continuationDelegateConstructor
+                        LoadArgument(
+                            methodArgumentIndex kind expression.RightParameterIndex
+                        )
+                        Box expression.RightValueTaskType
+                        CallMethod cancellationTokenNone
+                        LoadInt32(
+                            int
+                                System.Threading.Tasks.TaskContinuationOptions.ExecuteSynchronously
+                        )
+                        CallMethod taskSchedulerDefault
+                        CallGenericMethod(continueWith, [ taskOutputType ])
+                        CallGenericMethod(unwrap, [ expression.TupleType ])
+                        NewObject valueTaskConstructor
+                        Return
+                    ],
+                    []
+                | (TypedStringLiteral _ | TypedNullLiteral | TypedUnitLiteral | TypedReceiverReference | TypedLocalReference _ | TypedLet _ | TypedLocalAssignment _ | TypedAddressOf _ | TypedInstanceFieldGet _ | TypedStaticMethodCall _ | TypedObjectConstruction _ | TypedDefaultValue _ | TypedFunctionApplication _ | TypedInstanceMethodCall _ | TypedDelegateLambda _ | TypedConditional _ | TypedUpcast _ | TypedSequential _ | TypedBooleanNegation _ | TypedTryWith _ | TypedNullMatch _ | TypedTypeTestMatch _ | TypedObjectExpression _) as expression ->
                     let instructions, locals =
-                        valueExpressionInstructions freshLabel kind expression
+                        valueExpressionInstructions
+                            methodDeclaration
+                            freshLabel
+                            kind
+                            expression
 
                     instructions
                     @ [ Return ],
@@ -6950,6 +11362,51 @@ type internal CompilerService() =
                 | CliTypeParameter _
                 | CliMethodTypeParameter _ -> []
 
+            let instructionDependencyIds instructions =
+                instructions
+                |> List.collect (
+                    function
+                    | LoadField fieldReference
+                    | LoadFieldAddress fieldReference
+                    | StoreField fieldReference
+                    | LoadStaticField fieldReference
+                    | StoreStaticField fieldReference -> [ fieldReference.DependencyId ]
+                    | CallMethod methodReference
+                    | CallVirtualMethod methodReference
+                    | LoadFunctionPointer methodReference
+                    | NewObject methodReference -> [ methodReference.DependencyId ]
+                    | CallGenericMethod(methodReference, genericArguments) ->
+                        methodReference.DependencyId
+                        :: (genericArguments
+                            |> List.collect cliTypeDependencyIds)
+                    | Box cliType
+                    | UnboxAny cliType
+                    | CastClass cliType
+                    | IsInstance cliType
+                    | InitializeObject cliType -> cliTypeDependencyIds cliType
+                    | DefineCatchRegion(_, _, _, _, catchType) ->
+                        cliTypeDependencyIds catchType
+                    | MarkHiddenSequencePoint
+                    | MarkLabel _
+                    | BranchIfFalse _
+                    | Branch _
+                    | Leave _
+                    | Nop
+                    | CompareEqual
+                    | LoadInt32 _
+                    | LoadString _
+                    | LoadNull
+                    | LoadArgument _
+                    | LoadArgumentAddress _
+                    | LoadLocal _
+                    | LoadLocalAddress _
+                    | StoreLocal _
+                    | MarkSequencePoint _
+                    | Pop
+                    | Throw
+                    | Return -> []
+                )
+
             let methodFragment
                 kind
                 documentIndex
@@ -6960,42 +11417,19 @@ type internal CompilerService() =
                 =
                 let instructions, locals = methodInstructions kind methodDeclaration
 
-                let instructionDependencies =
-                    instructions
-                    |> List.collect (
-                        function
-                        | LoadField fieldReference
-                        | LoadFieldAddress fieldReference
-                        | StoreField fieldReference -> [ fieldReference.DependencyId ]
-                        | CallMethod methodReference
-                        | CallVirtualMethod methodReference
-                        | LoadFunctionPointer methodReference
-                        | NewObject methodReference -> [ methodReference.DependencyId ]
-                        | CallGenericMethod(methodReference, genericArguments) ->
-                            methodReference.DependencyId
-                            :: (genericArguments
-                                |> List.collect cliTypeDependencyIds)
-                        | Box cliType -> cliTypeDependencyIds cliType
-                        | IsInstance cliType -> cliTypeDependencyIds cliType
-                        | MarkHiddenSequencePoint
-                        | MarkLabel _
-                        | BranchIfFalse _
-                        | Branch _
-                        | Nop
-                        | CompareEqual
-                        | LoadInt32 _
-                        | LoadString _
-                        | LoadNull
-                        | LoadArgument _
-                        | LoadArgumentAddress _
-                        | LoadLocal _
-                        | LoadLocalAddress _
-                        | StoreLocal _
-                        | MarkSequencePoint _
-                        | Pop
-                        | Throw
-                        | Return -> []
-                    )
+                let instructions =
+                    match methodDeclaration.Body with
+                    | TypedStaticMethodCall(target, _, _) when
+                        target.StableId.EndsWith(
+                            "|intrinsic|isNull",
+                            StringComparison.Ordinal
+                        )
+                        ->
+                        MarkSequencePoint methodDeclaration.Range
+                        :: instructions
+                    | _ -> instructions
+
+                let instructionDependencies = instructionDependencyIds instructions
 
                 {
                     SchemaVersion = querySchema
@@ -7023,6 +11457,11 @@ type internal CompilerService() =
                         | TypedResumableCode _
                         | TypedBoundInstanceMethod _
                         | TypedUnitLambda _
+                        | TypedDelegateLambda _
+                        | TypedValueTaskBind _
+                        | TypedValueTaskApply _
+                        | TypedValueTaskZip _
+                        | TypedValueTaskOfUnit _
                         | TypedResumableTryFinally _ -> 8
                         | TypedIntegerLiteral _
                         | TypedStringLiteral _
@@ -7033,6 +11472,7 @@ type internal CompilerService() =
                         | TypedLocalReference _
                         | TypedLet _
                         | TypedAddressOf _
+                        | TypedDefaultValue _
                         | TypedObjectExpression _
                         | TypedTraitCall _ -> 1
                         | TypedInstanceFieldGet _
@@ -7045,6 +11485,8 @@ type internal CompilerService() =
                         | TypedSequential _
                         | TypedLocalAssignment _
                         | TypedBooleanNegation _
+                        | TypedTryWith _
+                        | TypedNullMatch _
                         | TypedTypeTestMatch _ -> 8
                     DependencyIds =
                         methodDependencies methodDeclaration
@@ -7082,6 +11524,7 @@ type internal CompilerService() =
                                     ContentHash = contentHash
                                 }
                             | TypedMethod _
+                            | TypedNestedModule _
                             | TypedTypeAbbreviation _
                             | TypedStaticType _
                             | TypedObjectType _
@@ -7165,6 +11608,7 @@ type internal CompilerService() =
                                         extensionMethod
                                 )
                             | TypedLiteralField _
+                            | TypedNestedModule _
                             | TypedTypeAbbreviation _
                             | TypedStaticType _
                             | TypedObjectType _
@@ -7181,7 +11625,8 @@ type internal CompilerService() =
                                                           Container = TypedCurrentModuleAugmentation _
                                                       } -> false
                                     | TypedObjectType _
-                                    | TypedStructType _ -> true
+                                    | TypedStructType _
+                                    | TypedNestedModule _ -> true
                                     | _ -> false
                             ))
 
@@ -7219,10 +11664,2767 @@ type internal CompilerService() =
                             Attributes = customAttributes
                             LiteralFields = literalFields
                             InstanceFields = []
+                            StaticFields = []
+                            Properties = []
                             Methods = methods
                         }
                 )
                 |> List.choose id
+
+            let rec flattenNestedModule
+                typed
+                parentTypeStableId
+                typeContentHash
+                (moduleDeclaration: TypedNestedModuleDeclaration)
+                =
+                (typed, parentTypeStableId, typeContentHash, moduleDeclaration)
+                :: (moduleDeclaration.Modules
+                    |> List.collect (fun childModule ->
+                        flattenNestedModule
+                            typed
+                            moduleDeclaration.StableId
+                            (nestedModuleContentHash childModule)
+                            childModule
+                    ))
+
+            let nestedModulesWithContentHashes =
+                modulesWithContentHashes
+                |> List.collect (fun (typed, declarationsWithContentHashes) ->
+                    let parentTypeStableId =
+                        moduleStableId
+                        + "/type:"
+                        + typed.StableId
+
+                    declarationsWithContentHashes
+                    |> List.collect (fun (declaration, typeContentHash) ->
+                        match declaration with
+                        | TypedNestedModule moduleDeclaration ->
+                            flattenNestedModule
+                                typed
+                                parentTypeStableId
+                                typeContentHash
+                                moduleDeclaration
+                        | TypedMethod _
+                        | TypedLiteralField _
+                        | TypedTypeAbbreviation _
+                        | TypedStaticType _
+                        | TypedObjectType _
+                        | TypedStructType _ -> []
+                    )
+                )
+
+            let nestedModuleTypes =
+                nestedModulesWithContentHashes
+                |> List.map (fun (typed,
+                                  parentTypeStableId,
+                                  typeContentHash,
+                                  moduleDeclaration) ->
+                            let nestedTypeReference = {
+                                DeclarationId = moduleDeclaration.StableId
+                                AssemblyName = String.Empty
+                                TypeName = {
+                                    Namespace = String.Empty
+                                    Name = moduleDeclaration.CompiledName
+                                }
+                                IsValueType = false
+                            }
+
+                            let declaringType =
+                                CliDeclaringType(CliNamedType nestedTypeReference)
+
+                            let fieldReference (value: TypedModuleValueDeclaration) = {
+                                DeclaringType = declaringType
+                                Name =
+                                    value.Name
+                                    + "@"
+                                FieldType = value.Type
+                                TargetStableId =
+                                    Some(
+                                        value.StableId
+                                        + "/field"
+                                    )
+                            }
+
+                            let fieldReferences =
+                                moduleDeclaration.Values
+                                |> List.map (fun value -> value.StableId, fieldReference value)
+                                |> Map.ofList
+
+                            let staticFields =
+                                moduleDeclaration.Values
+                                |> List.map (fun value ->
+                                    let field = fieldReferences.[value.StableId]
+
+                                    {
+                                        SchemaVersion = querySchema
+                                        StableId = field.TargetStableId.Value
+                                        Name = field.Name
+                                        Type = value.Type
+                                        ContentHash =
+                                            Fingerprint.parts [
+                                                typeContentHash
+                                                value.StableId
+                                                TypeIdentity.cliType value.Type
+                                            ]
+                                    }
+                                )
+
+                            let getters =
+                                moduleDeclaration.Values
+                                |> List.map (fun value ->
+                                    let field = fieldReferences.[value.StableId]
+                                    let getterStableId = value.StableId + "/getter"
+
+                                    {
+                                        SchemaVersion = querySchema
+                                        StableId = getterStableId
+                                        Name =
+                                            "get_"
+                                            + value.Name
+                                        Kind = ModuleValueGetter
+                                        GenericParameters = []
+                                        Constraints = []
+                                        GenericParameterConstraints = []
+                                        Attributes = []
+                                        Parameters = []
+                                        Locals = []
+                                        ReturnType = value.Type
+                                        Instructions = [
+                                            LoadStaticField field
+                                            Return
+                                        ]
+                                        EmitDefaultSequencePoint = true
+                                        MaxStack = 1
+                                        DependencyIds = [ field.DependencyId ]
+                                        ContentHash =
+                                            Fingerprint.parts [
+                                                value.ExportFingerprint
+                                                field.StableId
+                                            ]
+                                        DocumentIndex = typed.DocumentIndex
+                                        DocumentChecksum = typed.SourceChecksum
+                                        Range = value.Range
+                                    }
+                                )
+
+                            let moduleFunctions =
+                                moduleDeclaration.Methods
+                                |> List.map (fun methodDeclaration ->
+                                    methodFragment
+                                        ModuleFunction
+                                        typed.DocumentIndex
+                                        typed.SourceChecksum
+                                        methodDeclaration.StableId
+                                        (methodImplementationHash methodDeclaration)
+                                        methodDeclaration
+                                )
+
+                            let initializerInstructions, initializerDependencies =
+                                (([], []), moduleDeclaration.Values)
+                                ||> List.fold (fun (instructions, dependencies) value ->
+                                    let targetField = fieldReferences.[value.StableId]
+
+                                    match value.Initializer with
+                                    | TypedModuleValueConstruction target ->
+                                        let constructor = {
+                                            DeclaringType = CliDeclaringType target.DeclaringType
+                                            Name = ".ctor"
+                                            GenericArity = 0
+                                            IsInstance = true
+                                            ParameterTypes = target.ParameterTypes
+                                            ReturnType = CliVoid
+                                            TargetStableId = Some target.StableId
+                                        }
+
+                                        instructions
+                                        @ [
+                                            NewObject constructor
+                                            StoreStaticField targetField
+                                          ],
+                                        dependencies
+                                        @ [
+                                            constructor.DependencyId
+                                            targetField.DependencyId
+                                          ]
+                                    | TypedModuleValueAlias targetStableId ->
+                                        let sourceField = fieldReferences.[targetStableId]
+
+                                        instructions
+                                        @ [
+                                            LoadStaticField sourceField
+                                            StoreStaticField targetField
+                                          ],
+                                        dependencies
+                                        @ [
+                                            sourceField.DependencyId
+                                            targetField.DependencyId
+                                          ]
+                                )
+
+                            let staticConstructorStableId =
+                                moduleDeclaration.StableId
+                                + "/static-constructor"
+
+                            let staticConstructor = {
+                                SchemaVersion = querySchema
+                                StableId = staticConstructorStableId
+                                Name = ".cctor"
+                                Kind = StaticConstructor
+                                GenericParameters = []
+                                Constraints = []
+                                GenericParameterConstraints = []
+                                Attributes = []
+                                Parameters = []
+                                Locals = []
+                                ReturnType = CliVoid
+                                Instructions = initializerInstructions @ [ Return ]
+                                EmitDefaultSequencePoint = false
+                                MaxStack = 1
+                                DependencyIds = initializerDependencies |> List.distinct
+                                ContentHash =
+                                    Fingerprint.parts [
+                                        staticConstructorStableId
+                                        typeContentHash
+                                        yield! initializerDependencies
+                                    ]
+                                DocumentIndex = typed.DocumentIndex
+                                DocumentChecksum = typed.SourceChecksum
+                                Range = moduleDeclaration.Range
+                            }
+
+                            let staticConstructors =
+                                if List.isEmpty moduleDeclaration.Values then
+                                    []
+                                else
+                                    [ staticConstructor ]
+
+                            let properties =
+                                moduleDeclaration.Values
+                                |> List.map (fun value -> {
+                                    SchemaVersion = querySchema
+                                    StableId = value.StableId + "/property"
+                                    Name = value.Name
+                                    Type = value.Type
+                                    GetterStableId = value.StableId + "/getter"
+                                    ContentHash = value.ExportFingerprint
+                                })
+
+                            {
+                                SchemaVersion = querySchema
+                                StableId = moduleDeclaration.StableId
+                                Namespace = String.Empty
+                                Name = moduleDeclaration.CompiledName
+                                IsPublic = true
+                                EnclosingTypeStableId = Some parentTypeStableId
+                                Kind = ModuleContainer
+                                GenericParameters = []
+                                Attributes = [
+                                    yield!
+                                        moduleDeclaration.Attributes
+                                        |> List.map customAttributeFragment
+
+                                    compilationMappingAttribute
+                                        moduleDeclaration.StableId
+                                        ModuleConstruct
+                                ]
+                                LiteralFields = []
+                                InstanceFields = []
+                                StaticFields = staticFields
+                                Properties = properties
+                                Methods =
+                                    moduleFunctions
+                                    @ getters
+                                    @ staticConstructors
+                            }
+                )
+
+            let valueTaskBindHelperTypes =
+                modulesWithContentHashes
+                |> List.collect (fun (typed, declarationsWithContentHashes) ->
+                    declarationsWithContentHashes
+                    |> List.collect (fun (declaration, _) ->
+                        match declaration with
+                        | TypedNestedModule moduleDeclaration ->
+                            moduleDeclaration.Methods
+                            |> List.choose (fun methodDeclaration ->
+                                match methodDeclaration.Body with
+                                | TypedValueTaskBind expression ->
+                                    let layout =
+                                        valueTaskBindHelperLayout
+                                            methodDeclaration
+                                            expression
+
+                                    let expression = layout.DefinitionExpression
+
+                                    let taskInputType =
+                                        CliGenericType(
+                                            expression.TaskTypeReference,
+                                            [ expression.InputType ]
+                                        )
+
+                                    let taskOutputType =
+                                        CliGenericType(
+                                            expression.TaskTypeReference,
+                                            [ expression.OutputType ]
+                                        )
+
+                                    let taskAwaiterInputType =
+                                        CliGenericType(
+                                            expression.TaskAwaiterTypeReference,
+                                            [ expression.InputType ]
+                                        )
+
+                                    let inputValueTaskResult = {
+                                        DeclaringType =
+                                            CliDeclaringType expression.InputValueTaskType
+                                        Name = "get_Result"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType = CliTypeParameter 0
+                                        TargetStableId = None
+                                    }
+
+                                    let binderInvoke = {
+                                        DeclaringType = CliDeclaringType expression.BinderType
+                                        Name = "Invoke"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = [ CliTypeParameter 0 ]
+                                        ReturnType = CliTypeParameter 1
+                                        TargetStableId = None
+                                    }
+
+                                    let outputValueTaskAsTask = {
+                                        DeclaringType =
+                                            CliDeclaringType expression.OutputValueTaskType
+                                        Name = "AsTask"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [ CliTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let taskGetAwaiter = {
+                                        DeclaringType = CliDeclaringType taskInputType
+                                        Name = "GetAwaiter"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskAwaiterTypeReference,
+                                                [ CliTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let awaiterGetResult = {
+                                        DeclaringType = CliDeclaringType taskAwaiterInputType
+                                        Name = "GetResult"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType = CliTypeParameter 0
+                                        TargetStableId = None
+                                    }
+
+                                    let cancellationToken = {
+                                        DeclaringType =
+                                            CliDeclaringType
+                                                expression.OperationCanceledExceptionType
+                                        Name = "get_CancellationToken"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType = expression.CancellationTokenType
+                                        TargetStableId = None
+                                    }
+
+                                    let fromCanceled = {
+                                        DeclaringType =
+                                            CliDeclaringType(
+                                                CliNamedType
+                                                    expression.NonGenericTaskTypeReference
+                                            )
+                                        Name = "FromCanceled"
+                                        GenericArity = 1
+                                        IsInstance = false
+                                        ParameterTypes = [
+                                            expression.CancellationTokenType
+                                        ]
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [ CliMethodTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let fromException = {
+                                        DeclaringType =
+                                            CliDeclaringType(
+                                                CliNamedType
+                                                    expression.NonGenericTaskTypeReference
+                                            )
+                                        Name = "FromException"
+                                        GenericArity = 1
+                                        IsInstance = false
+                                        ParameterTypes = [ expression.ExceptionType ]
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [ CliMethodTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let fromResult = {
+                                        DeclaringType =
+                                            CliDeclaringType(
+                                                CliNamedType
+                                                    expression.NonGenericTaskTypeReference
+                                            )
+                                        Name = "FromResult"
+                                        GenericArity = 1
+                                        IsInstance = false
+                                        ParameterTypes = [ CliMethodTypeParameter 0 ]
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [ CliMethodTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let outputValueTaskConstructor = {
+                                        DeclaringType =
+                                            CliDeclaringType expression.OutputValueTaskType
+                                        Name = ".ctor"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = [
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [ CliTypeParameter 0 ]
+                                            )
+                                        ]
+                                        ReturnType = CliVoid
+                                        TargetStableId = None
+                                    }
+
+                                    let outputValueTaskValueConstructor = {
+                                        DeclaringType =
+                                            CliDeclaringType expression.OutputValueTaskType
+                                        Name = ".ctor"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = [ CliTypeParameter 0 ]
+                                        ReturnType = CliVoid
+                                        TargetStableId = None
+                                    }
+
+                                    let completedInstructions = [
+                                        MarkLabel 0
+                                        LoadArgument 0
+                                        LoadArgumentAddress 1
+                                        CallMethod inputValueTaskResult
+                                        CallVirtualMethod binderInvoke
+
+                                        yield!
+                                            match expression.ReturnKind with
+                                            | ComputationReturn -> [
+                                                NewObject outputValueTaskValueConstructor
+                                              ]
+                                            | ComputationReturnFrom -> []
+
+                                        StoreLocal 0
+                                        Leave 6
+                                        MarkLabel 1
+                                        MarkLabel 2
+                                        StoreLocal 1
+                                        LoadLocal 1
+                                        CallVirtualMethod cancellationToken
+                                        CallGenericMethod(
+                                            fromCanceled,
+                                            [ expression.OutputType ]
+                                        )
+                                        NewObject outputValueTaskConstructor
+                                        StoreLocal 0
+                                        Leave 6
+                                        MarkLabel 3
+                                        MarkLabel 4
+                                        StoreLocal 2
+                                        LoadLocal 2
+                                        CallGenericMethod(
+                                            fromException,
+                                            [ expression.OutputType ]
+                                        )
+                                        NewObject outputValueTaskConstructor
+                                        StoreLocal 0
+                                        Leave 6
+                                        MarkLabel 5
+                                        MarkLabel 6
+                                        LoadLocal 0
+                                        Return
+                                        DefineCatchRegion(
+                                            0,
+                                            1,
+                                            2,
+                                            3,
+                                            expression.OperationCanceledExceptionType
+                                        )
+                                        DefineCatchRegion(
+                                            0,
+                                            1,
+                                            4,
+                                            5,
+                                            expression.ExceptionType
+                                        )
+                                    ]
+
+                                    let completedMethod = {
+                                        SchemaVersion = querySchema
+                                        StableId = layout.CompletedStableId
+                                        Name = "InvokeCompleted"
+                                        Kind = ModuleFunction
+                                        GenericParameters = []
+                                        Constraints = []
+                                        GenericParameterConstraints = []
+                                        Attributes = []
+                                        Parameters = [
+                                            {
+                                                Name = "binder"
+                                                Type = expression.BinderType
+                                                Attributes = []
+                                            }
+                                            {
+                                                Name = "source"
+                                                Type = expression.InputValueTaskType
+                                                Attributes = []
+                                            }
+                                        ]
+                                        Locals = [
+                                            {
+                                                Index = 0
+                                                Name = "result"
+                                                Type = expression.OutputValueTaskType
+                                            }
+                                            {
+                                                Index = 1
+                                                Name = "cancellationError"
+                                                Type =
+                                                    expression.OperationCanceledExceptionType
+                                            }
+                                            {
+                                                Index = 2
+                                                Name = "error"
+                                                Type = expression.ExceptionType
+                                            }
+                                        ]
+                                        ReturnType = expression.OutputValueTaskType
+                                        Instructions = completedInstructions
+                                        EmitDefaultSequencePoint = true
+                                        MaxStack = 3
+                                        DependencyIds =
+                                            instructionDependencyIds completedInstructions
+                                            @ (cliTypeDependencyIds
+                                                expression.BinderType)
+                                            @ (cliTypeDependencyIds
+                                                expression.InputValueTaskType)
+                                            @ (cliTypeDependencyIds
+                                                expression.OutputValueTaskType)
+                                            |> List.distinct
+                                        ContentHash =
+                                            Fingerprint.parts [
+                                                layout.CompletedStableId
+                                                methodImplementationHash
+                                                    methodDeclaration
+                                            ]
+                                        DocumentIndex = typed.DocumentIndex
+                                        DocumentChecksum = typed.SourceChecksum
+                                        Range = expression.Range
+                                    }
+
+                                    let continuationInstructions = [
+                                        MarkLabel 0
+                                        LoadArgument 1
+                                        CastClass expression.BinderType
+                                        LoadArgument 0
+                                        CallVirtualMethod taskGetAwaiter
+                                        StoreLocal 0
+                                        LoadLocalAddress 0
+                                        CallMethod awaiterGetResult
+                                        CallVirtualMethod binderInvoke
+                                        StoreLocal 1
+
+                                        yield!
+                                            match expression.ReturnKind with
+                                            | ComputationReturn -> [
+                                                LoadLocal 1
+                                                CallGenericMethod(
+                                                    fromResult,
+                                                    [ expression.OutputType ]
+                                                )
+                                              ]
+                                            | ComputationReturnFrom -> [
+                                                LoadLocalAddress 1
+                                                CallMethod outputValueTaskAsTask
+                                              ]
+
+                                        StoreLocal 4
+                                        Leave 6
+                                        MarkLabel 1
+                                        MarkLabel 2
+                                        StoreLocal 2
+                                        LoadLocal 2
+                                        CallVirtualMethod cancellationToken
+                                        CallGenericMethod(
+                                            fromCanceled,
+                                            [ expression.OutputType ]
+                                        )
+                                        StoreLocal 4
+                                        Leave 6
+                                        MarkLabel 3
+                                        MarkLabel 4
+                                        StoreLocal 3
+                                        LoadLocal 3
+                                        CallGenericMethod(
+                                            fromException,
+                                            [ expression.OutputType ]
+                                        )
+                                        StoreLocal 4
+                                        Leave 6
+                                        MarkLabel 5
+                                        MarkLabel 6
+                                        LoadLocal 4
+                                        Return
+                                        DefineCatchRegion(
+                                            0,
+                                            1,
+                                            2,
+                                            3,
+                                            expression.OperationCanceledExceptionType
+                                        )
+                                        DefineCatchRegion(
+                                            0,
+                                            1,
+                                            4,
+                                            5,
+                                            expression.ExceptionType
+                                        )
+                                    ]
+
+                                    let continuationMethod = {
+                                        SchemaVersion = querySchema
+                                        StableId = layout.ContinuationStableId
+                                        Name = "Continue"
+                                        Kind = ModuleFunction
+                                        GenericParameters = []
+                                        Constraints = []
+                                        GenericParameterConstraints = []
+                                        Attributes = []
+                                        Parameters = [
+                                            {
+                                                Name = "source"
+                                                Type = taskInputType
+                                                Attributes = []
+                                            }
+                                            {
+                                                Name = "state"
+                                                Type = CliObject
+                                                Attributes = []
+                                            }
+                                        ]
+                                        Locals = [
+                                            {
+                                                Index = 0
+                                                Name = "awaiter"
+                                                Type = taskAwaiterInputType
+                                            }
+                                            {
+                                                Index = 1
+                                                Name =
+                                                    match expression.ReturnKind with
+                                                    | ComputationReturn -> "mappedResult"
+                                                    | ComputationReturnFrom ->
+                                                        "valueTaskResult"
+                                                Type =
+                                                    match expression.ReturnKind with
+                                                    | ComputationReturn ->
+                                                        expression.OutputType
+                                                    | ComputationReturnFrom ->
+                                                        expression.OutputValueTaskType
+                                            }
+                                            {
+                                                Index = 2
+                                                Name = "cancellationError"
+                                                Type =
+                                                    expression.OperationCanceledExceptionType
+                                            }
+                                            {
+                                                Index = 3
+                                                Name = "error"
+                                                Type = expression.ExceptionType
+                                            }
+                                            {
+                                                Index = 4
+                                                Name = "result"
+                                                Type = taskOutputType
+                                            }
+                                        ]
+                                        ReturnType = taskOutputType
+                                        Instructions = continuationInstructions
+                                        EmitDefaultSequencePoint = true
+                                        MaxStack = 3
+                                        DependencyIds =
+                                            instructionDependencyIds
+                                                continuationInstructions
+                                            @ (cliTypeDependencyIds taskInputType)
+                                            @ (cliTypeDependencyIds taskOutputType)
+                                            |> List.distinct
+                                        ContentHash =
+                                            Fingerprint.parts [
+                                                layout.ContinuationStableId
+                                                methodImplementationHash
+                                                    methodDeclaration
+                                            ]
+                                        DocumentIndex = typed.DocumentIndex
+                                        DocumentChecksum = typed.SourceChecksum
+                                        Range = expression.Range
+                                    }
+
+
+                                    Some {
+                                        SchemaVersion = querySchema
+                                        StableId = layout.StableId
+                                        Namespace = String.Empty
+                                        Name = layout.Name
+                                        IsPublic = false
+                                        EnclosingTypeStableId =
+                                            Some moduleDeclaration.StableId
+                                        Kind = ClosureContainer
+                                        GenericParameters =
+                                            methodDeclaration.GenericParameters
+                                        Attributes = []
+                                        LiteralFields = []
+                                        InstanceFields = []
+                                        StaticFields = []
+                                        Properties = []
+                                        Methods = [
+                                            completedMethod
+                                            continuationMethod
+                                        ]
+                                    }
+                                | _ -> None
+                            )
+                        | TypedMethod _
+                        | TypedLiteralField _
+                        | TypedTypeAbbreviation _
+                        | TypedStaticType _
+                        | TypedObjectType _
+                        | TypedStructType _ -> []
+                    )
+                )
+
+            let valueTaskApplyHelperTypes =
+                modulesWithContentHashes
+                |> List.collect (fun (typed, declarationsWithContentHashes) ->
+                    declarationsWithContentHashes
+                    |> List.collect (fun (declaration, _) ->
+                        match declaration with
+                        | TypedNestedModule moduleDeclaration ->
+                            moduleDeclaration.Methods
+                            |> List.choose (fun methodDeclaration ->
+                                match methodDeclaration.Body with
+                                | TypedValueTaskApply applyExpression ->
+                                    let layout =
+                                        valueTaskApplyHelperLayout
+                                            methodDeclaration
+                                            applyExpression
+
+                                    let expression = layout.DefinitionExpression
+
+                                    let taskApplicableType =
+                                        CliGenericType(
+                                            expression.TaskTypeReference,
+                                            [ expression.ApplierType ]
+                                        )
+
+                                    let taskInputType =
+                                        CliGenericType(
+                                            expression.TaskTypeReference,
+                                            [ expression.InputType ]
+                                        )
+
+                                    let taskOutputType =
+                                        CliGenericType(
+                                            expression.TaskTypeReference,
+                                            [ expression.OutputType ]
+                                        )
+
+                                    let taskAwaiterApplicableType =
+                                        CliGenericType(
+                                            expression.TaskAwaiterTypeReference,
+                                            [ expression.ApplierType ]
+                                        )
+
+                                    let taskAwaiterInputType =
+                                        CliGenericType(
+                                            expression.TaskAwaiterTypeReference,
+                                            [ expression.InputType ]
+                                        )
+
+                                    let inputValueTaskIsCompletedSuccessfully = {
+                                        DeclaringType =
+                                            CliDeclaringType expression.InputValueTaskType
+                                        Name = "get_IsCompletedSuccessfully"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType = CliBoolean
+                                        TargetStableId = None
+                                    }
+
+                                    let inputValueTaskResult = {
+                                        DeclaringType =
+                                            CliDeclaringType expression.InputValueTaskType
+                                        Name = "get_Result"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType = CliTypeParameter 0
+                                        TargetStableId = None
+                                    }
+
+                                    let inputValueTaskAsTask = {
+                                        DeclaringType =
+                                            CliDeclaringType expression.InputValueTaskType
+                                        Name = "AsTask"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [ CliTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let outputValueTaskAsTask = {
+                                        DeclaringType =
+                                            CliDeclaringType expression.OutputValueTaskType
+                                        Name = "AsTask"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [ CliTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let applierInvoke = {
+                                        DeclaringType = CliDeclaringType expression.ApplierType
+                                        Name = "Invoke"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = [ CliTypeParameter 0 ]
+                                        ReturnType = CliTypeParameter 1
+                                        TargetStableId = None
+                                    }
+
+                                    let applicableTaskGetAwaiter = {
+                                        DeclaringType = CliDeclaringType taskApplicableType
+                                        Name = "GetAwaiter"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskAwaiterTypeReference,
+                                                [ CliTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let inputTaskGetAwaiter = {
+                                        DeclaringType = CliDeclaringType taskInputType
+                                        Name = "GetAwaiter"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskAwaiterTypeReference,
+                                                [ CliTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let applicableAwaiterGetResult = {
+                                        DeclaringType =
+                                            CliDeclaringType taskAwaiterApplicableType
+                                        Name = "GetResult"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType = CliTypeParameter 0
+                                        TargetStableId = None
+                                    }
+
+                                    let inputAwaiterGetResult = {
+                                        DeclaringType = CliDeclaringType taskAwaiterInputType
+                                        Name = "GetResult"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType = CliTypeParameter 0
+                                        TargetStableId = None
+                                    }
+
+                                    let cancellationToken = {
+                                        DeclaringType =
+                                            CliDeclaringType
+                                                expression.OperationCanceledExceptionType
+                                        Name = "get_CancellationToken"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType = expression.CancellationTokenType
+                                        TargetStableId = None
+                                    }
+
+                                    let fromCanceled = {
+                                        DeclaringType =
+                                            CliDeclaringType(
+                                                CliNamedType
+                                                    expression.NonGenericTaskTypeReference
+                                            )
+                                        Name = "FromCanceled"
+                                        GenericArity = 1
+                                        IsInstance = false
+                                        ParameterTypes = [
+                                            expression.CancellationTokenType
+                                        ]
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [ CliMethodTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let fromException = {
+                                        DeclaringType =
+                                            CliDeclaringType(
+                                                CliNamedType
+                                                    expression.NonGenericTaskTypeReference
+                                            )
+                                        Name = "FromException"
+                                        GenericArity = 1
+                                        IsInstance = false
+                                        ParameterTypes = [ expression.ExceptionType ]
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [ CliMethodTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let fromResult = {
+                                        DeclaringType =
+                                            CliDeclaringType(
+                                                CliNamedType
+                                                    expression.NonGenericTaskTypeReference
+                                            )
+                                        Name = "FromResult"
+                                        GenericArity = 1
+                                        IsInstance = false
+                                        ParameterTypes = [ CliMethodTypeParameter 0 ]
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [ CliMethodTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let outputValueTaskValueConstructor = {
+                                        DeclaringType =
+                                            CliDeclaringType expression.OutputValueTaskType
+                                        Name = ".ctor"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = [ CliTypeParameter 0 ]
+                                        ReturnType = CliVoid
+                                        TargetStableId = None
+                                    }
+
+                                    let outputValueTaskTaskConstructor = {
+                                        DeclaringType =
+                                            CliDeclaringType expression.OutputValueTaskType
+                                        Name = ".ctor"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = [
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [ CliTypeParameter 0 ]
+                                            )
+                                        ]
+                                        ReturnType = CliVoid
+                                        TargetStableId = None
+                                    }
+
+                                    let inputContinuationHelper = {
+                                        DeclaringType = CliDeclaringType layout.DefinitionType
+                                        Name = "ContinueInput"
+                                        GenericArity = 0
+                                        IsInstance = false
+                                        ParameterTypes = [
+                                            taskInputType
+                                            CliObject
+                                        ]
+                                        ReturnType = taskOutputType
+                                        TargetStableId = None
+                                    }
+
+                                    let inputContinuationDelegateType =
+                                        CliGenericType(
+                                            expression.FuncTypeReference,
+                                            [
+                                                taskInputType
+                                                CliObject
+                                                taskOutputType
+                                            ]
+                                        )
+
+                                    let inputContinuationDelegateConstructor = {
+                                        DeclaringType =
+                                            CliDeclaringType inputContinuationDelegateType
+                                        Name = ".ctor"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = [
+                                            CliObject
+                                            CliNativeInt
+                                        ]
+                                        ReturnType = CliVoid
+                                        TargetStableId = None
+                                    }
+
+                                    let inputContinuationDefinitionDelegateType =
+                                        CliGenericType(
+                                            expression.FuncTypeReference,
+                                            [
+                                                CliGenericType(
+                                                    expression.TaskTypeReference,
+                                                    [ CliTypeParameter 0 ]
+                                                )
+                                                CliObject
+                                                CliMethodTypeParameter 0
+                                            ]
+                                        )
+
+                                    let inputContinueWith = {
+                                        DeclaringType = CliDeclaringType taskInputType
+                                        Name = "ContinueWith"
+                                        GenericArity = 1
+                                        IsInstance = true
+                                        ParameterTypes = [
+                                            inputContinuationDefinitionDelegateType
+                                            CliObject
+                                            expression.CancellationTokenType
+                                            expression.TaskContinuationOptionsType
+                                            expression.TaskSchedulerType
+                                        ]
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [ CliMethodTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let cancellationTokenNone = {
+                                        DeclaringType =
+                                            CliDeclaringType expression.CancellationTokenType
+                                        Name = "get_None"
+                                        GenericArity = 0
+                                        IsInstance = false
+                                        ParameterTypes = []
+                                        ReturnType = expression.CancellationTokenType
+                                        TargetStableId = None
+                                    }
+
+                                    let taskSchedulerDefault = {
+                                        DeclaringType =
+                                            CliDeclaringType expression.TaskSchedulerType
+                                        Name = "get_Default"
+                                        GenericArity = 0
+                                        IsInstance = false
+                                        ParameterTypes = []
+                                        ReturnType = expression.TaskSchedulerType
+                                        TargetStableId = None
+                                    }
+
+                                    let unwrap = {
+                                        DeclaringType =
+                                            CliDeclaringType(
+                                                CliNamedType
+                                                    expression.TaskExtensionsTypeReference
+                                            )
+                                        Name = "Unwrap"
+                                        GenericArity = 1
+                                        IsInstance = false
+                                        ParameterTypes = [
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [
+                                                    CliGenericType(
+                                                        expression.TaskTypeReference,
+                                                        [ CliMethodTypeParameter 0 ]
+                                                    )
+                                                ]
+                                            )
+                                        ]
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [ CliMethodTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let completedInstructions = [
+                                        MarkLabel 0
+                                        LoadArgumentAddress 1
+                                        CallMethod inputValueTaskIsCompletedSuccessfully
+                                        BranchIfFalse 7
+                                        LoadArgument 0
+                                        LoadArgumentAddress 1
+                                        CallMethod inputValueTaskResult
+                                        CallVirtualMethod applierInvoke
+                                        NewObject outputValueTaskValueConstructor
+                                        StoreLocal 0
+                                        Leave 6
+                                        MarkLabel 7
+                                        LoadArgumentAddress 1
+                                        CallMethod inputValueTaskAsTask
+                                        LoadNull
+                                        LoadFunctionPointer inputContinuationHelper
+                                        NewObject inputContinuationDelegateConstructor
+                                        LoadArgument 0
+                                        CallMethod cancellationTokenNone
+                                        LoadInt32(
+                                            int
+                                                System.Threading.Tasks.TaskContinuationOptions.ExecuteSynchronously
+                                        )
+                                        CallMethod taskSchedulerDefault
+                                        CallGenericMethod(
+                                            inputContinueWith,
+                                            [ taskOutputType ]
+                                        )
+                                        CallGenericMethod(
+                                            unwrap,
+                                            [ expression.OutputType ]
+                                        )
+                                        NewObject outputValueTaskTaskConstructor
+                                        StoreLocal 0
+                                        Leave 6
+                                        MarkLabel 1
+                                        MarkLabel 2
+                                        StoreLocal 1
+                                        LoadLocal 1
+                                        CallVirtualMethod cancellationToken
+                                        CallGenericMethod(
+                                            fromCanceled,
+                                            [ expression.OutputType ]
+                                        )
+                                        NewObject outputValueTaskTaskConstructor
+                                        StoreLocal 0
+                                        Leave 6
+                                        MarkLabel 3
+                                        MarkLabel 4
+                                        StoreLocal 2
+                                        LoadLocal 2
+                                        CallGenericMethod(
+                                            fromException,
+                                            [ expression.OutputType ]
+                                        )
+                                        NewObject outputValueTaskTaskConstructor
+                                        StoreLocal 0
+                                        Leave 6
+                                        MarkLabel 5
+                                        MarkLabel 6
+                                        LoadLocal 0
+                                        Return
+                                        DefineCatchRegion(
+                                            0,
+                                            1,
+                                            2,
+                                            3,
+                                            expression.OperationCanceledExceptionType
+                                        )
+                                        DefineCatchRegion(
+                                            0,
+                                            1,
+                                            4,
+                                            5,
+                                            expression.ExceptionType
+                                        )
+                                    ]
+
+                                    let completedMethod = {
+                                        SchemaVersion = querySchema
+                                        StableId = layout.CompletedStableId
+                                        Name = "InvokeCompleted"
+                                        Kind = ModuleFunction
+                                        GenericParameters = []
+                                        Constraints = []
+                                        GenericParameterConstraints = []
+                                        Attributes = []
+                                        Parameters = [
+                                            {
+                                                Name = "applier"
+                                                Type = expression.ApplierType
+                                                Attributes = []
+                                            }
+                                            {
+                                                Name = "source"
+                                                Type = expression.InputValueTaskType
+                                                Attributes = []
+                                            }
+                                        ]
+                                        Locals = [
+                                            {
+                                                Index = 0
+                                                Name = "result"
+                                                Type = expression.OutputValueTaskType
+                                            }
+                                            {
+                                                Index = 1
+                                                Name = "cancellationError"
+                                                Type =
+                                                    expression.OperationCanceledExceptionType
+                                            }
+                                            {
+                                                Index = 2
+                                                Name = "error"
+                                                Type = expression.ExceptionType
+                                            }
+                                        ]
+                                        ReturnType = expression.OutputValueTaskType
+                                        Instructions = completedInstructions
+                                        EmitDefaultSequencePoint = true
+                                        MaxStack = 8
+                                        DependencyIds =
+                                            instructionDependencyIds completedInstructions
+                                            @ (cliTypeDependencyIds expression.ApplierType)
+                                            @ (cliTypeDependencyIds
+                                                expression.InputValueTaskType)
+                                            @ (cliTypeDependencyIds
+                                                expression.OutputValueTaskType)
+                                            |> List.distinct
+                                        ContentHash =
+                                            Fingerprint.parts [
+                                                layout.CompletedStableId
+                                                methodImplementationHash methodDeclaration
+                                            ]
+                                        DocumentIndex = typed.DocumentIndex
+                                        DocumentChecksum = typed.SourceChecksum
+                                        Range = expression.Range
+                                    }
+
+                                    let inputContinuationInstructions = [
+                                        MarkLabel 0
+                                        LoadArgument 1
+                                        CastClass expression.ApplierType
+                                        LoadArgument 0
+                                        CallVirtualMethod inputTaskGetAwaiter
+                                        StoreLocal 0
+                                        LoadLocalAddress 0
+                                        CallMethod inputAwaiterGetResult
+                                        CallVirtualMethod applierInvoke
+                                        StoreLocal 1
+                                        LoadLocal 1
+                                        CallGenericMethod(
+                                            fromResult,
+                                            [ expression.OutputType ]
+                                        )
+                                        StoreLocal 4
+                                        Leave 6
+                                        MarkLabel 1
+                                        MarkLabel 2
+                                        StoreLocal 2
+                                        LoadLocal 2
+                                        CallVirtualMethod cancellationToken
+                                        CallGenericMethod(
+                                            fromCanceled,
+                                            [ expression.OutputType ]
+                                        )
+                                        StoreLocal 4
+                                        Leave 6
+                                        MarkLabel 3
+                                        MarkLabel 4
+                                        StoreLocal 3
+                                        LoadLocal 3
+                                        CallGenericMethod(
+                                            fromException,
+                                            [ expression.OutputType ]
+                                        )
+                                        StoreLocal 4
+                                        Leave 6
+                                        MarkLabel 5
+                                        MarkLabel 6
+                                        LoadLocal 4
+                                        Return
+                                        DefineCatchRegion(
+                                            0,
+                                            1,
+                                            2,
+                                            3,
+                                            expression.OperationCanceledExceptionType
+                                        )
+                                        DefineCatchRegion(
+                                            0,
+                                            1,
+                                            4,
+                                            5,
+                                            expression.ExceptionType
+                                        )
+                                    ]
+
+                                    let inputContinuationMethod = {
+                                        SchemaVersion = querySchema
+                                        StableId = layout.InputContinuationStableId
+                                        Name = "ContinueInput"
+                                        Kind = ModuleFunction
+                                        GenericParameters = []
+                                        Constraints = []
+                                        GenericParameterConstraints = []
+                                        Attributes = []
+                                        Parameters = [
+                                            {
+                                                Name = "source"
+                                                Type = taskInputType
+                                                Attributes = []
+                                            }
+                                            {
+                                                Name = "state"
+                                                Type = CliObject
+                                                Attributes = []
+                                            }
+                                        ]
+                                        Locals = [
+                                            {
+                                                Index = 0
+                                                Name = "awaiter"
+                                                Type = taskAwaiterInputType
+                                            }
+                                            {
+                                                Index = 1
+                                                Name = "mappedResult"
+                                                Type = expression.OutputType
+                                            }
+                                            {
+                                                Index = 2
+                                                Name = "cancellationError"
+                                                Type =
+                                                    expression.OperationCanceledExceptionType
+                                            }
+                                            {
+                                                Index = 3
+                                                Name = "error"
+                                                Type = expression.ExceptionType
+                                            }
+                                            {
+                                                Index = 4
+                                                Name = "result"
+                                                Type = taskOutputType
+                                            }
+                                        ]
+                                        ReturnType = taskOutputType
+                                        Instructions = inputContinuationInstructions
+                                        EmitDefaultSequencePoint = true
+                                        MaxStack = 3
+                                        DependencyIds =
+                                            instructionDependencyIds
+                                                inputContinuationInstructions
+                                            @ (cliTypeDependencyIds taskInputType)
+                                            @ (cliTypeDependencyIds taskOutputType)
+                                            |> List.distinct
+                                        ContentHash =
+                                            Fingerprint.parts [
+                                                layout.InputContinuationStableId
+                                                methodImplementationHash methodDeclaration
+                                            ]
+                                        DocumentIndex = typed.DocumentIndex
+                                        DocumentChecksum = typed.SourceChecksum
+                                        Range = expression.Range
+                                    }
+
+                                    let completedHelper = {
+                                        DeclaringType = CliDeclaringType layout.DefinitionType
+                                        Name = "InvokeCompleted"
+                                        GenericArity = 0
+                                        IsInstance = false
+                                        ParameterTypes = [
+                                            expression.ApplierType
+                                            expression.InputValueTaskType
+                                        ]
+                                        ReturnType = expression.OutputValueTaskType
+                                        TargetStableId = None
+                                    }
+
+                                    let applicableContinuationInstructions = [
+                                        MarkLabel 0
+                                        LoadArgument 0
+                                        CallVirtualMethod applicableTaskGetAwaiter
+                                        StoreLocal 0
+                                        LoadLocalAddress 0
+                                        CallMethod applicableAwaiterGetResult
+                                        StoreLocal 1
+                                        LoadArgument 1
+                                        UnboxAny expression.InputValueTaskType
+                                        StoreLocal 2
+                                        LoadLocal 1
+                                        LoadLocal 2
+                                        CallMethod completedHelper
+                                        StoreLocal 3
+                                        LoadLocalAddress 3
+                                        CallMethod outputValueTaskAsTask
+                                        StoreLocal 6
+                                        Leave 6
+                                        MarkLabel 1
+                                        MarkLabel 2
+                                        StoreLocal 4
+                                        LoadLocal 4
+                                        CallVirtualMethod cancellationToken
+                                        CallGenericMethod(
+                                            fromCanceled,
+                                            [ expression.OutputType ]
+                                        )
+                                        StoreLocal 6
+                                        Leave 6
+                                        MarkLabel 3
+                                        MarkLabel 4
+                                        StoreLocal 5
+                                        LoadLocal 5
+                                        CallGenericMethod(
+                                            fromException,
+                                            [ expression.OutputType ]
+                                        )
+                                        StoreLocal 6
+                                        Leave 6
+                                        MarkLabel 5
+                                        MarkLabel 6
+                                        LoadLocal 6
+                                        Return
+                                        DefineCatchRegion(
+                                            0,
+                                            1,
+                                            2,
+                                            3,
+                                            expression.OperationCanceledExceptionType
+                                        )
+                                        DefineCatchRegion(
+                                            0,
+                                            1,
+                                            4,
+                                            5,
+                                            expression.ExceptionType
+                                        )
+                                    ]
+
+                                    let applicableContinuationMethod = {
+                                        SchemaVersion = querySchema
+                                        StableId = layout.ApplicableContinuationStableId
+                                        Name = "ContinueApplicable"
+                                        Kind = ModuleFunction
+                                        GenericParameters = []
+                                        Constraints = []
+                                        GenericParameterConstraints = []
+                                        Attributes = []
+                                        Parameters = [
+                                            {
+                                                Name = "source"
+                                                Type = taskApplicableType
+                                                Attributes = []
+                                            }
+                                            {
+                                                Name = "state"
+                                                Type = CliObject
+                                                Attributes = []
+                                            }
+                                        ]
+                                        Locals = [
+                                            {
+                                                Index = 0
+                                                Name = "awaiter"
+                                                Type = taskAwaiterApplicableType
+                                            }
+                                            {
+                                                Index = 1
+                                                Name = "applier"
+                                                Type = expression.ApplierType
+                                            }
+                                            {
+                                                Index = 2
+                                                Name = "inputSource"
+                                                Type = expression.InputValueTaskType
+                                            }
+                                            {
+                                                Index = 3
+                                                Name = "valueTaskResult"
+                                                Type = expression.OutputValueTaskType
+                                            }
+                                            {
+                                                Index = 4
+                                                Name = "cancellationError"
+                                                Type =
+                                                    expression.OperationCanceledExceptionType
+                                            }
+                                            {
+                                                Index = 5
+                                                Name = "error"
+                                                Type = expression.ExceptionType
+                                            }
+                                            {
+                                                Index = 6
+                                                Name = "result"
+                                                Type = taskOutputType
+                                            }
+                                        ]
+                                        ReturnType = taskOutputType
+                                        Instructions = applicableContinuationInstructions
+                                        EmitDefaultSequencePoint = true
+                                        MaxStack = 3
+                                        DependencyIds =
+                                            instructionDependencyIds
+                                                applicableContinuationInstructions
+                                            @ (cliTypeDependencyIds taskApplicableType)
+                                            @ (cliTypeDependencyIds taskOutputType)
+                                            |> List.distinct
+                                        ContentHash =
+                                            Fingerprint.parts [
+                                                layout.ApplicableContinuationStableId
+                                                methodImplementationHash methodDeclaration
+                                            ]
+                                        DocumentIndex = typed.DocumentIndex
+                                        DocumentChecksum = typed.SourceChecksum
+                                        Range = expression.Range
+                                    }
+
+
+                                    Some {
+                                        SchemaVersion = querySchema
+                                        StableId = layout.StableId
+                                        Namespace = String.Empty
+                                        Name = layout.Name
+                                        IsPublic = false
+                                        EnclosingTypeStableId =
+                                            Some moduleDeclaration.StableId
+                                        Kind = ClosureContainer
+                                        GenericParameters =
+                                            methodDeclaration.GenericParameters
+                                        Attributes = []
+                                        LiteralFields = []
+                                        InstanceFields = []
+                                        StaticFields = []
+                                        Properties = []
+                                        Methods = [
+                                            completedMethod
+                                            inputContinuationMethod
+                                            applicableContinuationMethod
+                                        ]
+                                    }
+                                | _ -> None
+                            )
+                        | TypedMethod _
+                        | TypedLiteralField _
+                        | TypedTypeAbbreviation _
+                        | TypedStaticType _
+                        | TypedObjectType _
+                        | TypedStructType _ -> []
+                    )
+                )
+
+            let valueTaskZipHelperTypes =
+                modulesWithContentHashes
+                |> List.collect (fun (typed, declarationsWithContentHashes) ->
+                    declarationsWithContentHashes
+                    |> List.collect (fun (declaration, _) ->
+                        match declaration with
+                        | TypedNestedModule moduleDeclaration ->
+                            moduleDeclaration.Methods
+                            |> List.choose (fun methodDeclaration ->
+                                match methodDeclaration.Body with
+                                | TypedValueTaskZip zipExpression ->
+                                    let layout =
+                                        valueTaskZipHelperLayout
+                                            methodDeclaration
+                                            zipExpression
+
+                                    let expression = layout.DefinitionExpression
+
+                                    let taskLeftType =
+                                        CliGenericType(
+                                            expression.TaskTypeReference,
+                                            [ expression.LeftType ]
+                                        )
+
+                                    let taskRightType =
+                                        CliGenericType(
+                                            expression.TaskTypeReference,
+                                            [ expression.RightType ]
+                                        )
+
+                                    let taskOutputType =
+                                        CliGenericType(
+                                            expression.TaskTypeReference,
+                                            [ expression.TupleType ]
+                                        )
+
+                                    let taskAwaiterLeftType =
+                                        CliGenericType(
+                                            expression.TaskAwaiterTypeReference,
+                                            [ expression.LeftType ]
+                                        )
+
+                                    let taskAwaiterRightType =
+                                        CliGenericType(
+                                            expression.TaskAwaiterTypeReference,
+                                            [ expression.RightType ]
+                                        )
+
+                                    let rightValueTaskIsCompletedSuccessfully = {
+                                        DeclaringType =
+                                            CliDeclaringType expression.RightValueTaskType
+                                        Name = "get_IsCompletedSuccessfully"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType = CliBoolean
+                                        TargetStableId = None
+                                    }
+
+                                    let rightValueTaskResult = {
+                                        DeclaringType =
+                                            CliDeclaringType expression.RightValueTaskType
+                                        Name = "get_Result"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType = CliTypeParameter 0
+                                        TargetStableId = None
+                                    }
+
+                                    let rightValueTaskAsTask = {
+                                        DeclaringType =
+                                            CliDeclaringType expression.RightValueTaskType
+                                        Name = "AsTask"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [ CliTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let outputValueTaskAsTask = {
+                                        DeclaringType =
+                                            CliDeclaringType expression.OutputValueTaskType
+                                        Name = "AsTask"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [ CliTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let tupleConstructor = {
+                                        DeclaringType = CliDeclaringType expression.TupleType
+                                        Name = ".ctor"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = [
+                                            CliTypeParameter 0
+                                            CliTypeParameter 1
+                                        ]
+                                        ReturnType = CliVoid
+                                        TargetStableId = None
+                                    }
+
+                                    let leftTaskGetAwaiter = {
+                                        DeclaringType = CliDeclaringType taskLeftType
+                                        Name = "GetAwaiter"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskAwaiterTypeReference,
+                                                [ CliTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let rightTaskGetAwaiter = {
+                                        DeclaringType = CliDeclaringType taskRightType
+                                        Name = "GetAwaiter"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskAwaiterTypeReference,
+                                                [ CliTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let leftAwaiterGetResult = {
+                                        DeclaringType = CliDeclaringType taskAwaiterLeftType
+                                        Name = "GetResult"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType = CliTypeParameter 0
+                                        TargetStableId = None
+                                    }
+
+                                    let rightAwaiterGetResult = {
+                                        DeclaringType = CliDeclaringType taskAwaiterRightType
+                                        Name = "GetResult"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType = CliTypeParameter 0
+                                        TargetStableId = None
+                                    }
+
+                                    let cancellationToken = {
+                                        DeclaringType =
+                                            CliDeclaringType
+                                                expression.OperationCanceledExceptionType
+                                        Name = "get_CancellationToken"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType = expression.CancellationTokenType
+                                        TargetStableId = None
+                                    }
+
+                                    let fromCanceled = {
+                                        DeclaringType =
+                                            CliDeclaringType(
+                                                CliNamedType
+                                                    expression.NonGenericTaskTypeReference
+                                            )
+                                        Name = "FromCanceled"
+                                        GenericArity = 1
+                                        IsInstance = false
+                                        ParameterTypes = [
+                                            expression.CancellationTokenType
+                                        ]
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [ CliMethodTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let fromException = {
+                                        DeclaringType =
+                                            CliDeclaringType(
+                                                CliNamedType
+                                                    expression.NonGenericTaskTypeReference
+                                            )
+                                        Name = "FromException"
+                                        GenericArity = 1
+                                        IsInstance = false
+                                        ParameterTypes = [ expression.ExceptionType ]
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [ CliMethodTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let fromResult = {
+                                        DeclaringType =
+                                            CliDeclaringType(
+                                                CliNamedType
+                                                    expression.NonGenericTaskTypeReference
+                                            )
+                                        Name = "FromResult"
+                                        GenericArity = 1
+                                        IsInstance = false
+                                        ParameterTypes = [ CliMethodTypeParameter 0 ]
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [ CliMethodTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let outputValueTaskValueConstructor = {
+                                        DeclaringType =
+                                            CliDeclaringType expression.OutputValueTaskType
+                                        Name = ".ctor"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = [ CliTypeParameter 0 ]
+                                        ReturnType = CliVoid
+                                        TargetStableId = None
+                                    }
+
+                                    let outputValueTaskTaskConstructor = {
+                                        DeclaringType =
+                                            CliDeclaringType expression.OutputValueTaskType
+                                        Name = ".ctor"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = [
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [ CliTypeParameter 0 ]
+                                            )
+                                        ]
+                                        ReturnType = CliVoid
+                                        TargetStableId = None
+                                    }
+
+                                    let rightContinuationHelper = {
+                                        DeclaringType = CliDeclaringType layout.DefinitionType
+                                        Name = "ContinueRight"
+                                        GenericArity = 0
+                                        IsInstance = false
+                                        ParameterTypes = [
+                                            taskRightType
+                                            CliObject
+                                        ]
+                                        ReturnType = taskOutputType
+                                        TargetStableId = None
+                                    }
+
+                                    let rightContinuationDelegateType =
+                                        CliGenericType(
+                                            expression.FuncTypeReference,
+                                            [
+                                                taskRightType
+                                                CliObject
+                                                taskOutputType
+                                            ]
+                                        )
+
+                                    let rightContinuationDelegateConstructor = {
+                                        DeclaringType =
+                                            CliDeclaringType rightContinuationDelegateType
+                                        Name = ".ctor"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = [
+                                            CliObject
+                                            CliNativeInt
+                                        ]
+                                        ReturnType = CliVoid
+                                        TargetStableId = None
+                                    }
+
+                                    let rightContinuationDefinitionDelegateType =
+                                        CliGenericType(
+                                            expression.FuncTypeReference,
+                                            [
+                                                CliGenericType(
+                                                    expression.TaskTypeReference,
+                                                    [ CliTypeParameter 0 ]
+                                                )
+                                                CliObject
+                                                CliMethodTypeParameter 0
+                                            ]
+                                        )
+
+                                    let rightContinueWith = {
+                                        DeclaringType = CliDeclaringType taskRightType
+                                        Name = "ContinueWith"
+                                        GenericArity = 1
+                                        IsInstance = true
+                                        ParameterTypes = [
+                                            rightContinuationDefinitionDelegateType
+                                            CliObject
+                                            expression.CancellationTokenType
+                                            expression.TaskContinuationOptionsType
+                                            expression.TaskSchedulerType
+                                        ]
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [ CliMethodTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let cancellationTokenNone = {
+                                        DeclaringType =
+                                            CliDeclaringType expression.CancellationTokenType
+                                        Name = "get_None"
+                                        GenericArity = 0
+                                        IsInstance = false
+                                        ParameterTypes = []
+                                        ReturnType = expression.CancellationTokenType
+                                        TargetStableId = None
+                                    }
+
+                                    let taskSchedulerDefault = {
+                                        DeclaringType =
+                                            CliDeclaringType expression.TaskSchedulerType
+                                        Name = "get_Default"
+                                        GenericArity = 0
+                                        IsInstance = false
+                                        ParameterTypes = []
+                                        ReturnType = expression.TaskSchedulerType
+                                        TargetStableId = None
+                                    }
+
+                                    let unwrap = {
+                                        DeclaringType =
+                                            CliDeclaringType(
+                                                CliNamedType
+                                                    expression.TaskExtensionsTypeReference
+                                            )
+                                        Name = "Unwrap"
+                                        GenericArity = 1
+                                        IsInstance = false
+                                        ParameterTypes = [
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [
+                                                    CliGenericType(
+                                                        expression.TaskTypeReference,
+                                                        [ CliMethodTypeParameter 0 ]
+                                                    )
+                                                ]
+                                            )
+                                        ]
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [ CliMethodTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let completedInstructions = [
+                                        MarkLabel 0
+                                        LoadArgumentAddress 1
+                                        CallMethod rightValueTaskIsCompletedSuccessfully
+                                        BranchIfFalse 7
+                                        LoadArgument 0
+                                        LoadArgumentAddress 1
+                                        CallMethod rightValueTaskResult
+                                        NewObject tupleConstructor
+                                        NewObject outputValueTaskValueConstructor
+                                        StoreLocal 0
+                                        Leave 6
+                                        MarkLabel 7
+                                        LoadArgumentAddress 1
+                                        CallMethod rightValueTaskAsTask
+                                        LoadNull
+                                        LoadFunctionPointer rightContinuationHelper
+                                        NewObject rightContinuationDelegateConstructor
+                                        LoadArgument 0
+                                        Box expression.LeftType
+                                        CallMethod cancellationTokenNone
+                                        LoadInt32(
+                                            int
+                                                System.Threading.Tasks.TaskContinuationOptions.ExecuteSynchronously
+                                        )
+                                        CallMethod taskSchedulerDefault
+                                        CallGenericMethod(
+                                            rightContinueWith,
+                                            [ taskOutputType ]
+                                        )
+                                        CallGenericMethod(
+                                            unwrap,
+                                            [ expression.TupleType ]
+                                        )
+                                        NewObject outputValueTaskTaskConstructor
+                                        StoreLocal 0
+                                        Leave 6
+                                        MarkLabel 1
+                                        MarkLabel 2
+                                        StoreLocal 1
+                                        LoadLocal 1
+                                        CallVirtualMethod cancellationToken
+                                        CallGenericMethod(
+                                            fromCanceled,
+                                            [ expression.TupleType ]
+                                        )
+                                        NewObject outputValueTaskTaskConstructor
+                                        StoreLocal 0
+                                        Leave 6
+                                        MarkLabel 3
+                                        MarkLabel 4
+                                        StoreLocal 2
+                                        LoadLocal 2
+                                        CallGenericMethod(
+                                            fromException,
+                                            [ expression.TupleType ]
+                                        )
+                                        NewObject outputValueTaskTaskConstructor
+                                        StoreLocal 0
+                                        Leave 6
+                                        MarkLabel 5
+                                        MarkLabel 6
+                                        LoadLocal 0
+                                        Return
+                                        DefineCatchRegion(
+                                            0,
+                                            1,
+                                            2,
+                                            3,
+                                            expression.OperationCanceledExceptionType
+                                        )
+                                        DefineCatchRegion(
+                                            0,
+                                            1,
+                                            4,
+                                            5,
+                                            expression.ExceptionType
+                                        )
+                                    ]
+
+                                    let completedMethod = {
+                                        SchemaVersion = querySchema
+                                        StableId = layout.CompletedStableId
+                                        Name = "InvokeCompleted"
+                                        Kind = ModuleFunction
+                                        GenericParameters = []
+                                        Constraints = []
+                                        GenericParameterConstraints = []
+                                        Attributes = []
+                                        Parameters = [
+                                            {
+                                                Name = "left"
+                                                Type = expression.LeftType
+                                                Attributes = []
+                                            }
+                                            {
+                                                Name = "rightSource"
+                                                Type = expression.RightValueTaskType
+                                                Attributes = []
+                                            }
+                                        ]
+                                        Locals = [
+                                            {
+                                                Index = 0
+                                                Name = "result"
+                                                Type = expression.OutputValueTaskType
+                                            }
+                                            {
+                                                Index = 1
+                                                Name = "cancellationError"
+                                                Type =
+                                                    expression.OperationCanceledExceptionType
+                                            }
+                                            {
+                                                Index = 2
+                                                Name = "error"
+                                                Type = expression.ExceptionType
+                                            }
+                                        ]
+                                        ReturnType = expression.OutputValueTaskType
+                                        Instructions = completedInstructions
+                                        EmitDefaultSequencePoint = true
+                                        MaxStack = 8
+                                        DependencyIds =
+                                            instructionDependencyIds completedInstructions
+                                            @ (cliTypeDependencyIds expression.LeftType)
+                                            @ (cliTypeDependencyIds
+                                                expression.RightValueTaskType)
+                                            @ (cliTypeDependencyIds
+                                                expression.OutputValueTaskType)
+                                            |> List.distinct
+                                        ContentHash =
+                                            Fingerprint.parts [
+                                                layout.CompletedStableId
+                                                methodImplementationHash methodDeclaration
+                                            ]
+                                        DocumentIndex = typed.DocumentIndex
+                                        DocumentChecksum = typed.SourceChecksum
+                                        Range = expression.Range
+                                    }
+
+                                    let rightContinuationInstructions = [
+                                        MarkLabel 0
+                                        LoadArgument 1
+                                        UnboxAny expression.LeftType
+                                        StoreLocal 1
+                                        LoadArgument 0
+                                        CallVirtualMethod rightTaskGetAwaiter
+                                        StoreLocal 0
+                                        LoadLocalAddress 0
+                                        CallMethod rightAwaiterGetResult
+                                        StoreLocal 2
+                                        LoadLocal 1
+                                        LoadLocal 2
+                                        NewObject tupleConstructor
+                                        CallGenericMethod(
+                                            fromResult,
+                                            [ expression.TupleType ]
+                                        )
+                                        StoreLocal 5
+                                        Leave 6
+                                        MarkLabel 1
+                                        MarkLabel 2
+                                        StoreLocal 3
+                                        LoadLocal 3
+                                        CallVirtualMethod cancellationToken
+                                        CallGenericMethod(
+                                            fromCanceled,
+                                            [ expression.TupleType ]
+                                        )
+                                        StoreLocal 5
+                                        Leave 6
+                                        MarkLabel 3
+                                        MarkLabel 4
+                                        StoreLocal 4
+                                        LoadLocal 4
+                                        CallGenericMethod(
+                                            fromException,
+                                            [ expression.TupleType ]
+                                        )
+                                        StoreLocal 5
+                                        Leave 6
+                                        MarkLabel 5
+                                        MarkLabel 6
+                                        LoadLocal 5
+                                        Return
+                                        DefineCatchRegion(
+                                            0,
+                                            1,
+                                            2,
+                                            3,
+                                            expression.OperationCanceledExceptionType
+                                        )
+                                        DefineCatchRegion(
+                                            0,
+                                            1,
+                                            4,
+                                            5,
+                                            expression.ExceptionType
+                                        )
+                                    ]
+
+                                    let rightContinuationMethod = {
+                                        SchemaVersion = querySchema
+                                        StableId = layout.RightContinuationStableId
+                                        Name = "ContinueRight"
+                                        Kind = ModuleFunction
+                                        GenericParameters = []
+                                        Constraints = []
+                                        GenericParameterConstraints = []
+                                        Attributes = []
+                                        Parameters = [
+                                            {
+                                                Name = "source"
+                                                Type = taskRightType
+                                                Attributes = []
+                                            }
+                                            {
+                                                Name = "state"
+                                                Type = CliObject
+                                                Attributes = []
+                                            }
+                                        ]
+                                        Locals = [
+                                            {
+                                                Index = 0
+                                                Name = "awaiter"
+                                                Type = taskAwaiterRightType
+                                            }
+                                            {
+                                                Index = 1
+                                                Name = "left"
+                                                Type = expression.LeftType
+                                            }
+                                            {
+                                                Index = 2
+                                                Name = "right"
+                                                Type = expression.RightType
+                                            }
+                                            {
+                                                Index = 3
+                                                Name = "cancellationError"
+                                                Type =
+                                                    expression.OperationCanceledExceptionType
+                                            }
+                                            {
+                                                Index = 4
+                                                Name = "error"
+                                                Type = expression.ExceptionType
+                                            }
+                                            {
+                                                Index = 5
+                                                Name = "result"
+                                                Type = taskOutputType
+                                            }
+                                        ]
+                                        ReturnType = taskOutputType
+                                        Instructions = rightContinuationInstructions
+                                        EmitDefaultSequencePoint = true
+                                        MaxStack = 3
+                                        DependencyIds =
+                                            instructionDependencyIds
+                                                rightContinuationInstructions
+                                            @ (cliTypeDependencyIds taskRightType)
+                                            @ (cliTypeDependencyIds taskOutputType)
+                                            |> List.distinct
+                                        ContentHash =
+                                            Fingerprint.parts [
+                                                layout.RightContinuationStableId
+                                                methodImplementationHash methodDeclaration
+                                            ]
+                                        DocumentIndex = typed.DocumentIndex
+                                        DocumentChecksum = typed.SourceChecksum
+                                        Range = expression.Range
+                                    }
+
+                                    let completedHelper = {
+                                        DeclaringType = CliDeclaringType layout.DefinitionType
+                                        Name = "InvokeCompleted"
+                                        GenericArity = 0
+                                        IsInstance = false
+                                        ParameterTypes = [
+                                            expression.LeftType
+                                            expression.RightValueTaskType
+                                        ]
+                                        ReturnType = expression.OutputValueTaskType
+                                        TargetStableId = None
+                                    }
+
+                                    let leftContinuationInstructions = [
+                                        MarkLabel 0
+                                        LoadArgument 0
+                                        CallVirtualMethod leftTaskGetAwaiter
+                                        StoreLocal 0
+                                        LoadLocalAddress 0
+                                        CallMethod leftAwaiterGetResult
+                                        StoreLocal 1
+                                        LoadArgument 1
+                                        UnboxAny expression.RightValueTaskType
+                                        StoreLocal 2
+                                        LoadLocal 1
+                                        LoadLocal 2
+                                        CallMethod completedHelper
+                                        StoreLocal 3
+                                        LoadLocalAddress 3
+                                        CallMethod outputValueTaskAsTask
+                                        StoreLocal 6
+                                        Leave 6
+                                        MarkLabel 1
+                                        MarkLabel 2
+                                        StoreLocal 4
+                                        LoadLocal 4
+                                        CallVirtualMethod cancellationToken
+                                        CallGenericMethod(
+                                            fromCanceled,
+                                            [ expression.TupleType ]
+                                        )
+                                        StoreLocal 6
+                                        Leave 6
+                                        MarkLabel 3
+                                        MarkLabel 4
+                                        StoreLocal 5
+                                        LoadLocal 5
+                                        CallGenericMethod(
+                                            fromException,
+                                            [ expression.TupleType ]
+                                        )
+                                        StoreLocal 6
+                                        Leave 6
+                                        MarkLabel 5
+                                        MarkLabel 6
+                                        LoadLocal 6
+                                        Return
+                                        DefineCatchRegion(
+                                            0,
+                                            1,
+                                            2,
+                                            3,
+                                            expression.OperationCanceledExceptionType
+                                        )
+                                        DefineCatchRegion(
+                                            0,
+                                            1,
+                                            4,
+                                            5,
+                                            expression.ExceptionType
+                                        )
+                                    ]
+
+                                    let leftContinuationMethod = {
+                                        SchemaVersion = querySchema
+                                        StableId = layout.LeftContinuationStableId
+                                        Name = "ContinueLeft"
+                                        Kind = ModuleFunction
+                                        GenericParameters = []
+                                        Constraints = []
+                                        GenericParameterConstraints = []
+                                        Attributes = []
+                                        Parameters = [
+                                            {
+                                                Name = "source"
+                                                Type = taskLeftType
+                                                Attributes = []
+                                            }
+                                            {
+                                                Name = "state"
+                                                Type = CliObject
+                                                Attributes = []
+                                            }
+                                        ]
+                                        Locals = [
+                                            {
+                                                Index = 0
+                                                Name = "awaiter"
+                                                Type = taskAwaiterLeftType
+                                            }
+                                            {
+                                                Index = 1
+                                                Name = "left"
+                                                Type = expression.LeftType
+                                            }
+                                            {
+                                                Index = 2
+                                                Name = "rightSource"
+                                                Type = expression.RightValueTaskType
+                                            }
+                                            {
+                                                Index = 3
+                                                Name = "valueTaskResult"
+                                                Type = expression.OutputValueTaskType
+                                            }
+                                            {
+                                                Index = 4
+                                                Name = "cancellationError"
+                                                Type =
+                                                    expression.OperationCanceledExceptionType
+                                            }
+                                            {
+                                                Index = 5
+                                                Name = "error"
+                                                Type = expression.ExceptionType
+                                            }
+                                            {
+                                                Index = 6
+                                                Name = "result"
+                                                Type = taskOutputType
+                                            }
+                                        ]
+                                        ReturnType = taskOutputType
+                                        Instructions = leftContinuationInstructions
+                                        EmitDefaultSequencePoint = true
+                                        MaxStack = 3
+                                        DependencyIds =
+                                            instructionDependencyIds
+                                                leftContinuationInstructions
+                                            @ (cliTypeDependencyIds taskLeftType)
+                                            @ (cliTypeDependencyIds taskOutputType)
+                                            |> List.distinct
+                                        ContentHash =
+                                            Fingerprint.parts [
+                                                layout.LeftContinuationStableId
+                                                methodImplementationHash methodDeclaration
+                                            ]
+                                        DocumentIndex = typed.DocumentIndex
+                                        DocumentChecksum = typed.SourceChecksum
+                                        Range = expression.Range
+                                    }
+
+                                    Some {
+                                        SchemaVersion = querySchema
+                                        StableId = layout.StableId
+                                        Namespace = String.Empty
+                                        Name = layout.Name
+                                        IsPublic = false
+                                        EnclosingTypeStableId =
+                                            Some moduleDeclaration.StableId
+                                        Kind = ClosureContainer
+                                        GenericParameters =
+                                            methodDeclaration.GenericParameters
+                                        Attributes = []
+                                        LiteralFields = []
+                                        InstanceFields = []
+                                        StaticFields = []
+                                        Properties = []
+                                        Methods = [
+                                            completedMethod
+                                            rightContinuationMethod
+                                            leftContinuationMethod
+                                        ]
+                                    }
+                                | _ -> None
+                            )
+                        | TypedMethod _
+                        | TypedLiteralField _
+                        | TypedTypeAbbreviation _
+                        | TypedStaticType _
+                        | TypedObjectType _
+                        | TypedStructType _ -> []
+                    )
+                )
+
+            let rec valueTaskOfUnitExpressions =
+                function
+                | TypedValueTaskOfUnit expression -> [ expression ]
+                | TypedLet(_, _, _, _, value, body, _, _) ->
+                    valueTaskOfUnitExpressions value
+                    @ valueTaskOfUnitExpressions body
+                | TypedLocalAssignment(_, _, value)
+                | TypedBooleanNegation(value, _)
+                | TypedUpcast(_, _, _, value) -> valueTaskOfUnitExpressions value
+                | TypedStaticMethodCall(_, _, arguments)
+                | TypedObjectConstruction(_, arguments) ->
+                    arguments
+                    |> List.collect valueTaskOfUnitExpressions
+                | TypedFunctionApplication(_, _, _, functionExpression, argumentExpression) ->
+                    valueTaskOfUnitExpressions functionExpression
+                    @ valueTaskOfUnitExpressions argumentExpression
+                | TypedInstanceFieldGet(receiver, _) ->
+                    valueTaskOfUnitExpressions receiver
+                | TypedInstanceMethodCall(_, receiver, arguments) ->
+                    valueTaskOfUnitExpressions receiver
+                    @ (arguments
+                       |> List.collect valueTaskOfUnitExpressions)
+                | TypedConditional(condition, ifTrue, ifFalse, _, _, _) ->
+                    valueTaskOfUnitExpressions condition
+                    @ valueTaskOfUnitExpressions ifTrue
+                    @ valueTaskOfUnitExpressions ifFalse
+                | TypedTryWith(body, _, _, _, handler, _, _, _, _, _) ->
+                    valueTaskOfUnitExpressions body
+                    @ valueTaskOfUnitExpressions handler
+                | TypedNullMatch(input, _, _, _, ifNull, ifNotNull, _, _, _, _) ->
+                    valueTaskOfUnitExpressions input
+                    @ valueTaskOfUnitExpressions ifNull
+                    @ valueTaskOfUnitExpressions ifNotNull
+                | TypedTypeTestMatch(input, _, _, _, ifMatched, ifNotMatched, _, _, _, _) ->
+                    valueTaskOfUnitExpressions input
+                    @ valueTaskOfUnitExpressions ifMatched
+                    @ valueTaskOfUnitExpressions ifNotMatched
+                | TypedSequential expressions ->
+                    expressions
+                    |> List.collect (fun (expression, _, _) ->
+                        valueTaskOfUnitExpressions expression
+                    )
+                | TypedDelegateLambda expression ->
+                    valueTaskOfUnitExpressions expression.LambdaBody
+                | TypedObjectExpression(_, _, constructorArguments, members, _) ->
+                    (constructorArguments
+                     |> List.collect valueTaskOfUnitExpressions)
+                    @ (members
+                       |> List.collect (fun memberDeclaration ->
+                           valueTaskOfUnitExpressions memberDeclaration.Body
+                       ))
+                | TypedIntegerLiteral _
+                | TypedStringLiteral _
+                | TypedNullLiteral
+                | TypedUnitLiteral
+                | TypedReceiverReference
+                | TypedParameterReference _
+                | TypedLocalReference _
+                | TypedAddressOf _
+                | TypedDefaultValue _
+                | TypedBoundInstanceMethod _
+                | TypedUnitLambda _
+                | TypedValueTaskBind _
+                | TypedValueTaskApply _
+                | TypedValueTaskZip _
+                | TypedResumableCode _
+                | TypedResumableTryFinally _
+                | TypedTraitCall _ -> []
+
+            let valueTaskOfUnitHelperTypes =
+                modulesWithContentHashes
+                |> List.collect (fun (typed, declarationsWithContentHashes) ->
+                    declarationsWithContentHashes
+                    |> List.collect (fun (declaration, _) ->
+                        match declaration with
+                        | TypedNestedModule moduleDeclaration ->
+                            moduleDeclaration.Methods
+                            |> List.collect (fun methodDeclaration ->
+                                valueTaskOfUnitExpressions methodDeclaration.Body
+                                |> List.map (fun unitExpression ->
+                                    let layout =
+                                        valueTaskOfUnitHelperLayout
+                                            methodDeclaration
+                                            unitExpression
+
+                                    let expression = layout.DefinitionExpression
+
+                                    let nonGenericTaskType =
+                                        CliNamedType expression.NonGenericTaskTypeReference
+
+                                    let taskUnitType =
+                                        CliGenericType(
+                                            expression.TaskTypeReference,
+                                            [ expression.UnitType ]
+                                        )
+
+                                    let taskAwaiterType =
+                                        CliNamedType
+                                            expression.NonGenericTaskAwaiterTypeReference
+
+                                    let taskGetAwaiter = {
+                                        DeclaringType =
+                                            CliDeclaringType nonGenericTaskType
+                                        Name = "GetAwaiter"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType = taskAwaiterType
+                                        TargetStableId = None
+                                    }
+
+                                    let awaiterGetResult = {
+                                        DeclaringType =
+                                            CliDeclaringType taskAwaiterType
+                                        Name = "GetResult"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType = CliVoid
+                                        TargetStableId = None
+                                    }
+
+                                    let cancellationToken = {
+                                        DeclaringType =
+                                            CliDeclaringType
+                                                expression.OperationCanceledExceptionType
+                                        Name = "get_CancellationToken"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType = expression.CancellationTokenType
+                                        TargetStableId = None
+                                    }
+
+                                    let fromCanceled = {
+                                        DeclaringType =
+                                            CliDeclaringType nonGenericTaskType
+                                        Name = "FromCanceled"
+                                        GenericArity = 1
+                                        IsInstance = false
+                                        ParameterTypes = [
+                                            expression.CancellationTokenType
+                                        ]
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [ CliMethodTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let fromException = {
+                                        DeclaringType =
+                                            CliDeclaringType nonGenericTaskType
+                                        Name = "FromException"
+                                        GenericArity = 1
+                                        IsInstance = false
+                                        ParameterTypes = [ expression.ExceptionType ]
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [ CliMethodTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let fromResult = {
+                                        DeclaringType =
+                                            CliDeclaringType nonGenericTaskType
+                                        Name = "FromResult"
+                                        GenericArity = 1
+                                        IsInstance = false
+                                        ParameterTypes = [ CliMethodTypeParameter 0 ]
+                                        ReturnType =
+                                            CliGenericType(
+                                                expression.TaskTypeReference,
+                                                [ CliMethodTypeParameter 0 ]
+                                            )
+                                        TargetStableId = None
+                                    }
+
+                                    let continuationInstructions = [
+                                        MarkLabel 0
+                                        LoadArgument 0
+                                        CallVirtualMethod taskGetAwaiter
+                                        StoreLocal 0
+                                        LoadLocalAddress 0
+                                        CallMethod awaiterGetResult
+                                        LoadNull
+                                        CallGenericMethod(
+                                            fromResult,
+                                            [ expression.UnitType ]
+                                        )
+                                        StoreLocal 3
+                                        Leave 6
+                                        MarkLabel 1
+                                        MarkLabel 2
+                                        StoreLocal 1
+                                        LoadLocal 1
+                                        CallVirtualMethod cancellationToken
+                                        CallGenericMethod(
+                                            fromCanceled,
+                                            [ expression.UnitType ]
+                                        )
+                                        StoreLocal 3
+                                        Leave 6
+                                        MarkLabel 3
+                                        MarkLabel 4
+                                        StoreLocal 2
+                                        LoadLocal 2
+                                        CallGenericMethod(
+                                            fromException,
+                                            [ expression.UnitType ]
+                                        )
+                                        StoreLocal 3
+                                        Leave 6
+                                        MarkLabel 5
+                                        MarkLabel 6
+                                        LoadLocal 3
+                                        Return
+                                        DefineCatchRegion(
+                                            0,
+                                            1,
+                                            2,
+                                            3,
+                                            expression.OperationCanceledExceptionType
+                                        )
+                                        DefineCatchRegion(
+                                            0,
+                                            1,
+                                            4,
+                                            5,
+                                            expression.ExceptionType
+                                        )
+                                    ]
+
+                                    let continuationMethod = {
+                                        SchemaVersion = querySchema
+                                        StableId = layout.ContinuationStableId
+                                        Name = "Continue"
+                                        Kind = ModuleFunction
+                                        GenericParameters = []
+                                        Constraints = []
+                                        GenericParameterConstraints = []
+                                        Attributes = []
+                                        Parameters = [
+                                            {
+                                                Name = "source"
+                                                Type = nonGenericTaskType
+                                                Attributes = []
+                                            }
+                                            {
+                                                Name = "state"
+                                                Type = CliObject
+                                                Attributes = []
+                                            }
+                                        ]
+                                        Locals = [
+                                            {
+                                                Index = 0
+                                                Name = "awaiter"
+                                                Type = taskAwaiterType
+                                            }
+                                            {
+                                                Index = 1
+                                                Name = "cancellationError"
+                                                Type =
+                                                    expression.OperationCanceledExceptionType
+                                            }
+                                            {
+                                                Index = 2
+                                                Name = "error"
+                                                Type = expression.ExceptionType
+                                            }
+                                            {
+                                                Index = 3
+                                                Name = "result"
+                                                Type = taskUnitType
+                                            }
+                                        ]
+                                        ReturnType = taskUnitType
+                                        Instructions = continuationInstructions
+                                        EmitDefaultSequencePoint = true
+                                        MaxStack = 2
+                                        DependencyIds =
+                                            instructionDependencyIds
+                                                continuationInstructions
+                                            @ (cliTypeDependencyIds nonGenericTaskType)
+                                            @ (cliTypeDependencyIds taskUnitType)
+                                            |> List.distinct
+                                        ContentHash =
+                                            Fingerprint.parts [
+                                                layout.ContinuationStableId
+                                                methodImplementationHash methodDeclaration
+                                            ]
+                                        DocumentIndex = typed.DocumentIndex
+                                        DocumentChecksum = typed.SourceChecksum
+                                        Range = expression.Range
+                                    }
+
+                                    {
+                                        SchemaVersion = querySchema
+                                        StableId = layout.StableId
+                                        Namespace = String.Empty
+                                        Name = layout.Name
+                                        IsPublic = false
+                                        EnclosingTypeStableId =
+                                            Some moduleDeclaration.StableId
+                                        Kind = ClosureContainer
+                                        GenericParameters =
+                                            methodDeclaration.GenericParameters
+                                        Attributes = []
+                                        LiteralFields = []
+                                        InstanceFields = []
+                                        StaticFields = []
+                                        Properties = []
+                                        Methods = [ continuationMethod ]
+                                    }
+                                )
+                            )
+                        | TypedMethod _
+                        | TypedLiteralField _
+                        | TypedTypeAbbreviation _
+                        | TypedStaticType _
+                        | TypedObjectType _
+                        | TypedStructType _ -> []
+                    )
+                )
 
             let staticTypes =
                 modulesWithContentHashes
@@ -7236,6 +14438,12 @@ type internal CompilerService() =
                             let methods =
                                 typeDeclaration.Methods
                                 |> List.map (fun methodDeclaration ->
+                                    let kind =
+                                        if typeDeclaration.IsPublic then
+                                            StaticInlineMemberStub
+                                        else
+                                            InternalStaticInlineMemberStub
+
                                     let contentHash =
                                         Fingerprint.parts [
                                             typeContentHash
@@ -7243,7 +14451,7 @@ type internal CompilerService() =
                                         ]
 
                                     methodFragment
-                                        StaticInlineMemberStub
+                                        kind
                                         documentIndex
                                         typed.SourceChecksum
                                         methodDeclaration.StableId
@@ -7256,17 +14464,20 @@ type internal CompilerService() =
                                 StableId = typeDeclaration.StableId
                                 Namespace = typed.Namespace
                                 Name = typeDeclaration.Name
-                                IsPublic = true
+                                IsPublic = typeDeclaration.IsPublic
                                 EnclosingTypeStableId = None
                                 Kind = StaticMemberContainer
                                 GenericParameters = []
                                 Attributes = []
                                 LiteralFields = []
                                 InstanceFields = []
+                                StaticFields = []
+                                Properties = []
                                 Methods = methods
                             }
                         | TypedMethod _
                         | TypedLiteralField _
+                        | TypedNestedModule _
                         | TypedTypeAbbreviation _
                         | TypedObjectType _
                         | TypedStructType _ -> None
@@ -7276,13 +14487,14 @@ type internal CompilerService() =
 
             let rec objectExpressions =
                 function
-                | (TypedObjectExpression(_, _, constructorArguments, _, _, _, _, _, body, _) as expression) -> [
+                | (TypedObjectExpression(_, _, constructorArguments, members, _) as expression) -> [
                     yield expression
 
                     for argument in constructorArguments do
                         yield! objectExpressions argument
 
-                    yield! objectExpressions body
+                    for memberDeclaration in members do
+                        yield! objectExpressions memberDeclaration.Body
                   ]
                 | TypedLet(_, _, _, _, value, body, _, _) ->
                     objectExpressions value
@@ -7308,6 +14520,13 @@ type internal CompilerService() =
                     objectExpressions condition
                     @ objectExpressions ifTrue
                     @ objectExpressions ifFalse
+                | TypedTryWith(body, _, _, _, handler, _, _, _, _, _) ->
+                    objectExpressions body
+                    @ objectExpressions handler
+                | TypedNullMatch(input, _, _, _, ifNull, ifNotNull, _, _, _, _) ->
+                    objectExpressions input
+                    @ objectExpressions ifNull
+                    @ objectExpressions ifNotNull
                 | TypedTypeTestMatch(input, _, _, _, ifMatched, ifNotMatched, _, _, _, _) ->
                     objectExpressions input
                     @ objectExpressions ifMatched
@@ -7315,6 +14534,8 @@ type internal CompilerService() =
                 | TypedSequential expressions ->
                     expressions
                     |> List.collect (fun (expression, _, _) -> objectExpressions expression)
+                | TypedDelegateLambda expression ->
+                    objectExpressions expression.LambdaBody
                 | TypedIntegerLiteral _
                 | TypedStringLiteral _
                 | TypedNullLiteral
@@ -7323,8 +14544,82 @@ type internal CompilerService() =
                 | TypedParameterReference _
                 | TypedLocalReference _
                 | TypedAddressOf _
+                | TypedDefaultValue _
                 | TypedBoundInstanceMethod _
                 | TypedUnitLambda _
+                | TypedValueTaskBind _
+                | TypedValueTaskApply _
+                | TypedValueTaskZip _
+                | TypedValueTaskOfUnit _
+                | TypedResumableCode _
+                | TypedResumableTryFinally _
+                | TypedTraitCall _ -> []
+
+            let rec delegateLambdaExpressions =
+                function
+                | TypedDelegateLambda expression ->
+                    expression
+                    :: delegateLambdaExpressions expression.LambdaBody
+                | TypedLet(_, _, _, _, value, body, _, _) ->
+                    delegateLambdaExpressions value
+                    @ delegateLambdaExpressions body
+                | TypedLocalAssignment(_, _, value)
+                | TypedBooleanNegation(value, _)
+                | TypedUpcast(_, _, _, value) -> delegateLambdaExpressions value
+                | TypedStaticMethodCall(_, _, arguments)
+                | TypedObjectConstruction(_, arguments) ->
+                    arguments
+                    |> List.collect delegateLambdaExpressions
+                | TypedFunctionApplication(_, _, _, functionExpression, argumentExpression) ->
+                    delegateLambdaExpressions functionExpression
+                    @ delegateLambdaExpressions argumentExpression
+                | TypedInstanceFieldGet(receiver, _) -> delegateLambdaExpressions receiver
+                | TypedInstanceMethodCall(_, receiver, arguments) ->
+                    delegateLambdaExpressions receiver
+                    @ (arguments
+                       |> List.collect delegateLambdaExpressions)
+                | TypedConditional(condition, ifTrue, ifFalse, _, _, _) ->
+                    delegateLambdaExpressions condition
+                    @ delegateLambdaExpressions ifTrue
+                    @ delegateLambdaExpressions ifFalse
+                | TypedTryWith(body, _, _, _, handler, _, _, _, _, _) ->
+                    delegateLambdaExpressions body
+                    @ delegateLambdaExpressions handler
+                | TypedNullMatch(input, _, _, _, ifNull, ifNotNull, _, _, _, _) ->
+                    delegateLambdaExpressions input
+                    @ delegateLambdaExpressions ifNull
+                    @ delegateLambdaExpressions ifNotNull
+                | TypedTypeTestMatch(input, _, _, _, ifMatched, ifNotMatched, _, _, _, _) ->
+                    delegateLambdaExpressions input
+                    @ delegateLambdaExpressions ifMatched
+                    @ delegateLambdaExpressions ifNotMatched
+                | TypedSequential expressions ->
+                    expressions
+                    |> List.collect (fun (expression, _, _) ->
+                        delegateLambdaExpressions expression
+                    )
+                | TypedObjectExpression(_, _, constructorArguments, members, _) ->
+                    (constructorArguments
+                     |> List.collect delegateLambdaExpressions)
+                    @ (members
+                       |> List.collect (fun memberDeclaration ->
+                           delegateLambdaExpressions memberDeclaration.Body
+                       ))
+                | TypedIntegerLiteral _
+                | TypedStringLiteral _
+                | TypedNullLiteral
+                | TypedUnitLiteral
+                | TypedReceiverReference
+                | TypedParameterReference _
+                | TypedLocalReference _
+                | TypedAddressOf _
+                | TypedDefaultValue _
+                | TypedBoundInstanceMethod _
+                | TypedUnitLambda _
+                | TypedValueTaskBind _
+                | TypedValueTaskApply _
+                | TypedValueTaskZip _
+                | TypedValueTaskOfUnit _
                 | TypedResumableCode _
                 | TypedResumableTryFinally _
                 | TypedTraitCall _ -> []
@@ -7410,6 +14705,8 @@ type internal CompilerService() =
                                     ]
                                     LiteralFields = []
                                     InstanceFields = []
+                                    StaticFields = []
+                                    Properties = []
                                     Methods = methods
                                 }
                             | OrdinaryTypedObjectType ->
@@ -7529,12 +14826,15 @@ type internal CompilerService() =
                                     ]
                                     LiteralFields = []
                                     InstanceFields = []
+                                    StaticFields = []
+                                    Properties = []
                                     Methods =
                                         constructor
                                         :: methods
                                 }
                         | TypedMethod _
                         | TypedLiteralField _
+                        | TypedNestedModule _
                         | TypedTypeAbbreviation _
                         | TypedStaticType _
                         | TypedStructType _ -> None
@@ -7570,6 +14870,7 @@ type internal CompilerService() =
                                     typeDeclaration.StableId, objectMethodDeclaration.Method
                                 )
                             | TypedLiteralField _
+                            | TypedNestedModule _
                             | TypedTypeAbbreviation _
                             | TypedStructType _ -> []
                         )
@@ -7583,19 +14884,11 @@ type internal CompilerService() =
                             | TypedObjectExpression(typeReference,
                                                     baseType,
                                                     constructorArguments,
-                                                    isOverride,
-                                                    receiverName,
-                                                    memberName,
-                                                    memberParameters,
-                                                    memberReturnType,
-                                                    memberBody,
+                                                    members,
                                                     range) ->
                                 if not (List.isEmpty constructorArguments) then
                                     invalidOp
                                         "object-expression constructor arguments reached symbolic lowering"
-
-                                if not isOverride then
-                                    invalidOp "an object-expression member must be an override"
 
                                 let constructorStableId =
                                     objectExpressionConstructorStableId typeReference
@@ -7649,43 +14942,51 @@ type internal CompilerService() =
                                     Range = range
                                 }
 
-                                let overrideStableId =
-                                    typeReference.DeclarationId
-                                    + "/method:"
-                                    + memberName
+                                let overrideMethods =
+                                    members
+                                    |> List.map (fun memberDeclaration ->
+                                        if not memberDeclaration.IsOverride then
+                                            invalidOp
+                                                "an object-expression member must be an override"
 
-                                let overrideDeclaration = {
-                                    StableId = overrideStableId
-                                    Name = memberName
-                                    IsPublic = true
-                                    GenericParameters = []
-                                    Constraints = []
-                                    Attributes = []
-                                    Parameters = memberParameters
-                                    ReturnType = memberReturnType
-                                    Body = memberBody
-                                    ExportFingerprint =
-                                        Fingerprint.parts [
+                                        let overrideStableId =
+                                            typeReference.DeclarationId
+                                            + "/method:"
+                                            + memberDeclaration.Name
+
+                                        let overrideDeclaration = {
+                                            StableId = overrideStableId
+                                            Name = memberDeclaration.Name
+                                            IsPublic = true
+                                            GenericParameters = []
+                                            Constraints = []
+                                            Attributes = []
+                                            Parameters = memberDeclaration.Parameters
+                                            ReturnType = memberDeclaration.ReturnType
+                                            Body = memberDeclaration.Body
+                                            ExportFingerprint =
+                                                Fingerprint.parts [
+                                                    overrideStableId
+                                                    "override"
+                                                    memberDeclaration.ReceiverName
+                                                    yield!
+                                                        memberDeclaration.Parameters
+                                                        |> List.map TypeIdentity.parameter
+                                                    TypeIdentity.cliType
+                                                        memberDeclaration.ReturnType
+                                                    TypeIdentity.inlineBody memberDeclaration.Body
+                                                ]
+                                            Range = memberDeclaration.BodyRange
+                                        }
+
+                                        methodFragment
+                                            ObjectExpressionOverride
+                                            documentIndex
+                                            typed.SourceChecksum
                                             overrideStableId
-                                            "override"
-                                            receiverName
-                                            yield!
-                                                memberParameters
-                                                |> List.map TypeIdentity.parameter
-                                            TypeIdentity.cliType memberReturnType
-                                            TypeIdentity.inlineBody memberBody
-                                        ]
-                                    Range = range
-                                }
-
-                                let overrideMethod =
-                                    methodFragment
-                                        ObjectExpressionOverride
-                                        documentIndex
-                                        typed.SourceChecksum
-                                        overrideStableId
-                                        (methodImplementationHash overrideDeclaration)
-                                        overrideDeclaration
+                                            (methodImplementationHash overrideDeclaration)
+                                            overrideDeclaration
+                                    )
 
                                 {
                                     SchemaVersion = querySchema
@@ -7699,10 +15000,9 @@ type internal CompilerService() =
                                     Attributes = []
                                     LiteralFields = []
                                     InstanceFields = []
-                                    Methods = [
-                                        constructor
-                                        overrideMethod
-                                    ]
+                                    StaticFields = []
+                                    Properties = []
+                                    Methods = constructor :: overrideMethods
                                 }
                             | _ ->
                                 invalidOp
@@ -7749,15 +15049,23 @@ type internal CompilerService() =
                                     | TypedInstanceFieldGet _
                                     | TypedStaticMethodCall _
                                     | TypedObjectConstruction _
+                                    | TypedDefaultValue _
                                     | TypedFunctionApplication _
                                     | TypedInstanceMethodCall _
                                     | TypedBoundInstanceMethod _
                                     | TypedUnitLambda _
+                                    | TypedDelegateLambda _
+                                    | TypedValueTaskBind _
+                                    | TypedValueTaskApply _
+                                    | TypedValueTaskZip _
+                                    | TypedValueTaskOfUnit _
                                     | TypedConditional _
                                     | TypedUpcast _
                                     | TypedSequential _
                                     | TypedLocalAssignment _
                                     | TypedBooleanNegation _
+                                    | TypedTryWith _
+                                    | TypedNullMatch _
                                     | TypedTypeTestMatch _
                                     | TypedObjectExpression _
                                     | TypedTraitCall _ -> None
@@ -7944,6 +15252,8 @@ type internal CompilerService() =
                                                     ]
                                             }
                                         ]
+                                        StaticFields = []
+                                        Properties = []
                                         Methods = [
                                             constructor
                                             invoke
@@ -7953,6 +15263,7 @@ type internal CompilerService() =
                             )
                         | TypedMethod _
                         | TypedLiteralField _
+                        | TypedNestedModule _
                         | TypedTypeAbbreviation _
                         | TypedStaticType _
                         | TypedStructType _ -> []
@@ -8120,6 +15431,8 @@ type internal CompilerService() =
                                                     ]
                                             }
                                         ]
+                                        StaticFields = []
+                                        Properties = []
                                         Methods = [
                                             constructor
                                             invoke
@@ -8138,13 +15451,21 @@ type internal CompilerService() =
                                 | TypedInstanceFieldGet _
                                 | TypedStaticMethodCall _
                                 | TypedObjectConstruction _
+                                | TypedDefaultValue _
                                 | TypedFunctionApplication _
                                 | TypedInstanceMethodCall _
                                 | TypedUnitLambda _
+                                | TypedDelegateLambda _
+                                | TypedValueTaskBind _
+                                | TypedValueTaskApply _
+                                | TypedValueTaskZip _
+                                | TypedValueTaskOfUnit _
                                 | TypedConditional _
                                 | TypedUpcast _
                                 | TypedSequential _
                                 | TypedBooleanNegation _
+                                | TypedTryWith _
+                                | TypedNullMatch _
                                 | TypedTypeTestMatch _
                                 | TypedResumableCode _
                                 | TypedResumableTryFinally _
@@ -8153,6 +15474,7 @@ type internal CompilerService() =
                             )
                         | TypedMethod _
                         | TypedLiteralField _
+                        | TypedNestedModule _
                         | TypedTypeAbbreviation _
                         | TypedStaticType _
                         | TypedStructType _ -> []
@@ -8308,6 +15630,8 @@ type internal CompilerService() =
                                                     ]
                                             }
                                         ]
+                                        StaticFields = []
+                                        Properties = []
                                         Methods = [
                                             constructor
                                             invoke
@@ -8326,13 +15650,21 @@ type internal CompilerService() =
                                 | TypedInstanceFieldGet _
                                 | TypedStaticMethodCall _
                                 | TypedObjectConstruction _
+                                | TypedDefaultValue _
                                 | TypedFunctionApplication _
                                 | TypedInstanceMethodCall _
                                 | TypedBoundInstanceMethod _
+                                | TypedDelegateLambda _
+                                | TypedValueTaskBind _
+                                | TypedValueTaskApply _
+                                | TypedValueTaskZip _
+                                | TypedValueTaskOfUnit _
                                 | TypedConditional _
                                 | TypedUpcast _
                                 | TypedSequential _
                                 | TypedBooleanNegation _
+                                | TypedTryWith _
+                                | TypedNullMatch _
                                 | TypedTypeTestMatch _
                                 | TypedResumableCode _
                                 | TypedResumableTryFinally _
@@ -8341,12 +15673,176 @@ type internal CompilerService() =
                             )
                         | TypedMethod _
                         | TypedLiteralField _
+                        | TypedNestedModule _
                         | TypedTypeAbbreviation _
                         | TypedStaticType _
                         | TypedStructType _ -> []
                     )
                 )
                 |> List.collect id
+
+            let delegateLambdaClosureTypes =
+                modulesWithContentHashes
+                |> List.collect (fun (typed, declarationsWithContentHashes) ->
+                    let documentIndex = typed.DocumentIndex
+
+                    let moduleTypeStableId =
+                        moduleStableId
+                        + "/type:"
+                        + typed.StableId
+
+                    let isNested = typed.ContainerKind = ModuleSource
+
+                    let declarationMethods =
+                        function
+                        | TypedMethod methodDeclaration -> [ methodDeclaration ]
+                        | TypedStaticType typeDeclaration -> typeDeclaration.Methods
+                        | TypedObjectType typeDeclaration ->
+                            typeDeclaration.Methods
+                            |> List.map _.Method
+                        | TypedLiteralField _
+                        | TypedNestedModule _
+                        | TypedTypeAbbreviation _
+                        | TypedStructType _ -> []
+
+                    declarationsWithContentHashes
+                    |> List.collect (fun (declaration, _) ->
+                        declaration
+                        |> declarationMethods
+                        |> List.collect (fun methodDeclaration ->
+                            methodDeclaration.Body
+                            |> delegateLambdaExpressions
+                            |> List.map (fun expression ->
+                                let closureStableId =
+                                    match expression.ClosureType with
+                                    | CliNamedType typeReference
+                                    | CliGenericType(typeReference, _) ->
+                                        typeReference.DeclarationId
+                                    | _ ->
+                                        invalidOp
+                                            "a delegate lambda closure must be a named CLI type"
+
+                                let constructorStableId =
+                                    closureStableId
+                                    + "/constructor"
+
+                                let invokeStableId =
+                                    closureStableId
+                                    + "/method:Invoke"
+
+                                let objectConstructor = {
+                                    DeclaringType =
+                                        CoreDeclaringType {
+                                            Namespace = "System"
+                                            Name = "Object"
+                                        }
+                                    Name = ".ctor"
+                                    GenericArity = 0
+                                    IsInstance = true
+                                    ParameterTypes = []
+                                    ReturnType = CliVoid
+                                    TargetStableId = None
+                                }
+
+                                let constructor = {
+                                    SchemaVersion = querySchema
+                                    StableId = constructorStableId
+                                    Name = ".ctor"
+                                    Kind = ClosureConstructor
+                                    GenericParameters = []
+                                    Constraints = []
+                                    GenericParameterConstraints = []
+                                    Attributes = []
+                                    Parameters = []
+                                    Locals = []
+                                    ReturnType = CliVoid
+                                    Instructions = [
+                                        LoadArgument 0
+                                        CallMethod objectConstructor
+                                        Return
+                                    ]
+                                    EmitDefaultSequencePoint = true
+                                    MaxStack = 8
+                                    DependencyIds = [ objectConstructor.DependencyId ]
+                                    ContentHash =
+                                        Fingerprint.parts [
+                                            constructorStableId
+                                            objectConstructor.StableId
+                                        ]
+                                    DocumentIndex = documentIndex
+                                    DocumentChecksum = typed.SourceChecksum
+                                    Range = expression.LambdaRange
+                                }
+
+                                let invokeParameters: TypedParameter list =
+                                    (expression.LambdaParameterNames,
+                                     expression.LambdaParameterTypes)
+                                    ||> List.map2 (fun name parameterType -> ({
+                                        Name = name
+                                        Type =
+                                            methodTypeParametersToTypeParameters
+                                                parameterType
+                                        Attributes = []
+                                    }: TypedParameter))
+
+                                let invokeBody =
+                                    expression.LambdaBody
+                                    |> methodExpressionTypesToTypeParameters
+
+                                let invokeDeclaration: TypedMethodDeclaration = {
+                                    StableId = invokeStableId
+                                    Name = "Invoke"
+                                    IsPublic = false
+                                    GenericParameters = []
+                                    Constraints = []
+                                    Attributes = []
+                                    Parameters = invokeParameters
+                                    ReturnType =
+                                        methodTypeParametersToTypeParameters
+                                            expression.LambdaReturnType
+                                    Body = invokeBody
+                                    ExportFingerprint =
+                                        Fingerprint.parts [
+                                            invokeStableId
+                                            TypeIdentity.inlineBody invokeBody
+                                        ]
+                                    Range = expression.LambdaRange
+                                }
+
+                                let invoke =
+                                    methodFragment
+                                        ClosureInvoke
+                                        documentIndex
+                                        typed.SourceChecksum
+                                        invokeStableId
+                                        (methodImplementationHash invokeDeclaration)
+                                        invokeDeclaration
+
+                                {
+                                    SchemaVersion = querySchema
+                                    StableId = closureStableId
+                                    Namespace =
+                                        if isNested then String.Empty else typed.Namespace
+                                    Name = expression.ClosureName
+                                    IsPublic = false
+                                    EnclosingTypeStableId =
+                                        if isNested then Some moduleTypeStableId else None
+                                    Kind = ClosureContainer
+                                    GenericParameters = methodDeclaration.GenericParameters
+                                    Attributes = []
+                                    LiteralFields = []
+                                    InstanceFields = []
+                                    StaticFields = []
+                                    Properties = []
+                                    Methods = [
+                                        constructor
+                                        invoke
+                                    ]
+                                }
+                            )
+                        )
+                    )
+                )
 
             let structTypes =
                 modulesWithContentHashes
@@ -8395,10 +15891,13 @@ type internal CompilerService() =
                                 Attributes = attributes
                                 LiteralFields = []
                                 InstanceFields = fields
+                                StaticFields = []
+                                Properties = []
                                 Methods = []
                             }
                         | TypedMethod _
                         | TypedLiteralField _
+                        | TypedNestedModule _
                         | TypedTypeAbbreviation _
                         | TypedStaticType _
                         | TypedObjectType _ -> None
@@ -8407,6 +15906,11 @@ type internal CompilerService() =
 
             let types =
                 moduleTypes
+                @ nestedModuleTypes
+                @ valueTaskBindHelperTypes
+                @ valueTaskApplyHelperTypes
+                @ valueTaskZipHelperTypes
+                @ valueTaskOfUnitHelperTypes
                 @ staticTypes
                 @ objectTypes
                 @ objectExpressionTypes
@@ -8414,6 +15918,7 @@ type internal CompilerService() =
                 @ closureTypes
                 @ boundMemberClosureTypes
                 @ unitLambdaClosureTypes
+                @ delegateLambdaClosureTypes
 
             let symbolic: SymbolicAssembly = {
                 SchemaVersion = querySchema

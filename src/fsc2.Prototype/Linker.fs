@@ -303,7 +303,22 @@ module internal Linker =
             Attributes =
                 MethodAttributes.Public
                 ||| MethodAttributes.Static
+          }
+        | ModuleValueGetter -> {
+            IsInstance = false
+            Attributes =
+                MethodAttributes.Public
+                ||| MethodAttributes.Static
                 ||| MethodAttributes.HideBySig
+                ||| MethodAttributes.SpecialName
+          }
+        | StaticConstructor -> {
+            IsInstance = false
+            Attributes =
+                MethodAttributes.Private
+                ||| MethodAttributes.Static
+                ||| MethodAttributes.SpecialName
+                ||| MethodAttributes.RTSpecialName
           }
         | TypeExtensionMember
         | StaticTypeExtensionMember -> {
@@ -316,6 +331,12 @@ module internal Linker =
             IsInstance = false
             Attributes =
                 MethodAttributes.Public
+                ||| MethodAttributes.Static
+          }
+        | InternalStaticInlineMemberStub -> {
+            IsInstance = false
+            Attributes =
+                MethodAttributes.Assembly
                 ||| MethodAttributes.Static
           }
         | InstanceConstructor -> {
@@ -404,6 +425,19 @@ module internal Linker =
         encodeCliType resolveTypeReference (BlobEncoder(signature).FieldSignature()) fieldType
         signature
 
+    let private encodePropertySignature resolveTypeReference propertyType =
+        let signature = BlobBuilder()
+
+        BlobEncoder(signature)
+            .PropertySignature(false)
+            .Parameters(
+                0,
+                (fun encoder -> encodeReturnType resolveTypeReference encoder propertyType),
+                (fun _ -> ())
+            )
+
+        signature
+
     let private encodeLocalType resolveTypeReference (encoder: LocalVariableTypeEncoder) =
         function
         | CliVoid -> invalidOp "a local variable cannot have type void"
@@ -457,6 +491,7 @@ module internal Linker =
         let instructions = InstructionEncoder(code, controlFlow)
         let sequencePoints = ResizeArray<int * SourceRange option>()
         let labels = Dictionary<int, LabelHandle>()
+        let catchRegions = ResizeArray<int * int * int * int * CliType>()
 
         let resolveLabel label =
             match labels.TryGetValue(label) with
@@ -515,10 +550,23 @@ module internal Linker =
             | MarkLabel label -> instructions.MarkLabel(resolveLabel label)
             | BranchIfFalse label -> instructions.Branch(ILOpCode.Brfalse, resolveLabel label)
             | Branch label -> instructions.Branch(ILOpCode.Br, resolveLabel label)
+            | Leave label -> instructions.Branch(ILOpCode.Leave, resolveLabel label)
+            | DefineCatchRegion(tryStart,
+                                tryEnd,
+                                handlerStart,
+                                handlerEnd,
+                                catchType) ->
+                catchRegions.Add(tryStart, tryEnd, handlerStart, handlerEnd, catchType)
             | Nop -> instructions.OpCode(ILOpCode.Nop)
             | CompareEqual -> instructions.OpCode(ILOpCode.Ceq)
             | Box cliType ->
                 instructions.OpCode(ILOpCode.Box)
+                instructions.Token(resolveDeclaringType (CliDeclaringType cliType))
+            | UnboxAny cliType ->
+                instructions.OpCode(ILOpCode.Unbox_any)
+                instructions.Token(resolveDeclaringType (CliDeclaringType cliType))
+            | CastClass cliType ->
+                instructions.OpCode(ILOpCode.Castclass)
                 instructions.Token(resolveDeclaringType (CliDeclaringType cliType))
             | IsInstance cliType ->
                 instructions.OpCode(ILOpCode.Isinst)
@@ -534,6 +582,9 @@ module internal Linker =
             | LoadLocal index -> instructions.LoadLocal(index)
             | LoadLocalAddress index -> instructions.LoadLocalAddress(index)
             | StoreLocal index -> instructions.StoreLocal(index)
+            | InitializeObject cliType ->
+                instructions.OpCode(ILOpCode.Initobj)
+                instructions.Token(resolveDeclaringType (CliDeclaringType cliType))
             | LoadField fieldReference ->
                 instructions.OpCode(ILOpCode.Ldfld)
                 instructions.Token(addFieldReference fieldReference)
@@ -542,6 +593,12 @@ module internal Linker =
                 instructions.Token(addFieldReference fieldReference)
             | StoreField fieldReference ->
                 instructions.OpCode(ILOpCode.Stfld)
+                instructions.Token(addFieldReference fieldReference)
+            | LoadStaticField fieldReference ->
+                instructions.OpCode(ILOpCode.Ldsfld)
+                instructions.Token(addFieldReference fieldReference)
+            | StoreStaticField fieldReference ->
+                instructions.OpCode(ILOpCode.Stsfld)
                 instructions.Token(addFieldReference fieldReference)
             | CallMethod methodReference ->
                 instructions.OpCode(ILOpCode.Call)
@@ -561,6 +618,15 @@ module internal Linker =
             | Pop -> instructions.OpCode(ILOpCode.Pop)
             | Throw -> instructions.OpCode(ILOpCode.Throw)
             | Return -> instructions.OpCode(ILOpCode.Ret)
+
+        for tryStart, tryEnd, handlerStart, handlerEnd, catchType in catchRegions do
+            controlFlow.AddCatchRegion(
+                resolveLabel tryStart,
+                resolveLabel tryEnd,
+                resolveLabel handlerStart,
+                resolveLabel handlerEnd,
+                resolveDeclaringType (CliDeclaringType catchType)
+            )
 
         let codeSize = code.Count
 
@@ -618,6 +684,10 @@ module internal Linker =
         | AutoOpenAttribute -> {
             Namespace = "Microsoft.FSharp.Core"
             Name = "AutoOpenAttribute"
+          }
+        | RequireQualifiedAccessAttribute -> {
+            Namespace = "Microsoft.FSharp.Core"
+            Name = "RequireQualifiedAccessAttribute"
           }
         | StructAttribute -> {
             Namespace = "Microsoft.FSharp.Core"
@@ -719,6 +789,16 @@ module internal Linker =
         | points ->
             let sequencePoints = BlobBuilder()
 
+            let pointSummary =
+                points
+                |> List.map (fun (offset, range) ->
+                    match range with
+                    | Some range ->
+                        $"{offset}@{range.Start.Line}:{range.Start.Column}"
+                    | None -> $"{offset}@hidden"
+                )
+                |> String.concat ", "
+
             let localSignatureRow =
                 if localSignature.IsNil then
                     0
@@ -739,7 +819,8 @@ module internal Linker =
                     && offset
                        <= previousOffset
                 then
-                    invalidOp "sequence-point offsets must be strictly increasing"
+                    invalidOp
+                        $"sequence-point offsets must be strictly increasing in '{methodFragment.Name}': {previousOffset} then {offset} ({pointSummary})"
 
                 let offsetDelta =
                     if index = 0 then
@@ -912,6 +993,16 @@ module internal Linker =
                                     <> attribute.SchemaVersion
                                 ))
                         ))
+                    || (typeFragment.StaticFields
+                        |> List.exists (fun fieldFragment ->
+                            symbolic.SchemaVersion
+                            <> fieldFragment.SchemaVersion
+                        ))
+                    || (typeFragment.Properties
+                        |> List.exists (fun propertyFragment ->
+                            symbolic.SchemaVersion
+                            <> propertyFragment.SchemaVersion
+                        ))
                     || (typeFragment.Methods
                         |> List.exists (fun methodFragment ->
                             symbolic.SchemaVersion
@@ -973,6 +1064,17 @@ module internal Linker =
                                     String.IsNullOrWhiteSpace(attribute.StableId)
                                 ))
                         ))
+                    || (typeFragment.StaticFields
+                        |> List.exists (fun fieldFragment ->
+                            String.IsNullOrWhiteSpace(fieldFragment.StableId)
+                            || String.IsNullOrWhiteSpace(fieldFragment.Name)
+                        ))
+                    || (typeFragment.Properties
+                        |> List.exists (fun propertyFragment ->
+                            String.IsNullOrWhiteSpace(propertyFragment.StableId)
+                            || String.IsNullOrWhiteSpace(propertyFragment.Name)
+                            || String.IsNullOrWhiteSpace(propertyFragment.GetterStableId)
+                        ))
                     || (typeFragment.Methods
                         |> List.exists (fun methodFragment ->
                             String.IsNullOrWhiteSpace(methodFragment.StableId)
@@ -1011,6 +1113,24 @@ module internal Linker =
                 ))
         then
             invalidOp "the symbolic type graph has duplicate or missing nesting identities"
+
+        let methodStableIds =
+            HashSet<string>(
+                methodFragments
+                |> List.map _.StableId,
+                StringComparer.Ordinal
+            )
+
+        if
+            methodStableIds.Count
+            <> methodFragments.Length
+            || (typeFragments
+                |> List.collect _.Properties
+                |> List.exists (fun propertyFragment ->
+                    not (methodStableIds.Contains(propertyFragment.GetterStableId))
+                ))
+        then
+            invalidOp "the symbolic method graph has duplicate or missing property-getter identities"
 
         if
             invocation.DebugDocumentPaths.Length
@@ -1365,15 +1485,9 @@ module internal Linker =
             let attributes =
                 match typeFragment.Kind with
                 | ModuleContainer ->
-                    if List.isEmpty typeFragment.Methods then
-                        visibility
-                        ||| TypeAttributes.Abstract
-                        ||| TypeAttributes.Sealed
-                    else
-                        visibility
-                        ||| TypeAttributes.Abstract
-                        ||| TypeAttributes.Sealed
-                        ||| TypeAttributes.BeforeFieldInit
+                    visibility
+                    ||| TypeAttributes.Abstract
+                    ||| TypeAttributes.Sealed
                 | ExtensionModuleContainer ->
                     visibility
                     ||| TypeAttributes.Abstract
@@ -1445,6 +1559,7 @@ module internal Linker =
             nextFieldRow <-
                 nextFieldRow
                 + typeFragment.LiteralFields.Length
+                + typeFragment.StaticFields.Length
                 + typeFragment.InstanceFields.Length
 
         for typeFragment in typeFragments do
@@ -1543,6 +1658,26 @@ module internal Linker =
                 metadata.AddConstant(field, fieldFragment.Value)
                 |> ignore
 
+            for fieldFragment in typeFragment.StaticFields do
+                let field =
+                    metadata.AddFieldDefinition(
+                        FieldAttributes.Private
+                        ||| FieldAttributes.Static
+                        ||| FieldAttributes.InitOnly,
+                        metadata.GetOrAddString(fieldFragment.Name),
+                        fieldFragment.Type
+                        |> encodeFieldSignature resolveCliTypeReference
+                        |> metadata.GetOrAddBlob
+                    )
+
+                fieldDefinitionEntities.Add(
+                    fieldFragment.StableId,
+                    MetadataTokens.EntityHandle(
+                        TableIndex.Field,
+                        metadata.GetRowCount(TableIndex.Field)
+                    )
+                )
+
             for fieldFragment in typeFragment.InstanceFields do
                 let field =
                     metadata.AddFieldDefinition(
@@ -1569,6 +1704,7 @@ module internal Linker =
                     addKnownCustomAttribute parent attribute
 
         let mutable nextParameterRow = 1
+        let methodDefinitionHandles = Dictionary<string, MethodDefinitionHandle>(StringComparer.Ordinal)
 
         for methodFragment, bodyOffset, _, _, _ in encodedMethods do
             let attributes = (methodKindEncoding methodFragment.Kind).Attributes
@@ -1585,6 +1721,8 @@ module internal Linker =
                     bodyOffset,
                     MetadataTokens.ParameterHandle(nextParameterRow)
                 )
+
+            methodDefinitionHandles.Add(methodFragment.StableId, methodDefinition)
 
             let parent =
                 MetadataTokens.EntityHandle(
@@ -1617,6 +1755,36 @@ module internal Linker =
                     nextParameterRow
                     + 1
             )
+
+        let mutable nextPropertyRow = 1
+
+        for typeFragment in typeFragments do
+            if not (List.isEmpty typeFragment.Properties) then
+                metadata.AddPropertyMap(
+                    typeDefinitionHandles.[typeFragment.StableId],
+                    MetadataTokens.PropertyDefinitionHandle(nextPropertyRow)
+                )
+
+                for propertyFragment in typeFragment.Properties do
+                    let property =
+                        metadata.AddProperty(
+                            PropertyAttributes.None,
+                            metadata.GetOrAddString(propertyFragment.Name),
+                            propertyFragment.Type
+                            |> encodePropertySignature resolveCliTypeReference
+                            |> metadata.GetOrAddBlob
+                        )
+
+                    metadata.AddMethodSemantics(
+                        MetadataTokens.EntityHandle(
+                            TableIndex.Property,
+                            MetadataTokens.GetRowNumber(property)
+                        ),
+                        MethodSemanticsAttributes.Getter,
+                        methodDefinitionHandles.[propertyFragment.GetterStableId]
+                    )
+
+                    nextPropertyRow <- nextPropertyRow + 1
 
         let pdbMetadata = MetadataBuilder()
 

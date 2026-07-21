@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 56
+    let Query = 73
 
 /// PROTOTYPE model for issue #8. These types deliberately contain no SRM
 /// handles, tokens, offsets, RVAs, or final artifact identities.
@@ -179,14 +179,20 @@ type internal ParsedMatchPattern =
         targetType: ParsedTypeExpression *
         bindingName: string *
         range: SourceRange
+    | ParsedNullPattern of range: SourceRange
     | ParsedNamedPattern of name: string * range: SourceRange
 
     member this.Range =
         match this with
         | ParsedTypeTestPattern(_, _, range)
+        | ParsedNullPattern range
         | ParsedNamedPattern(_, range) -> range
 
     override _.ToString() = "ParsedMatchPattern"
+
+type internal ComputationReturnKind =
+    | ComputationReturn
+    | ComputationReturnFrom
 
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
 type internal ParsedExpression =
@@ -199,6 +205,10 @@ type internal ParsedExpression =
     | AddressOfExpression of rootName: string * memberPath: string list
     | UnitApplication of functionName: string
     | MemberCall of receiverName: string * memberName: string * arguments: ParsedExpression list
+    | StaticTypeMemberCall of
+        receiverType: ParsedTypeExpression *
+        memberName: string *
+        arguments: ParsedExpression list
     | GenericMemberCall of
         receiverName: string *
         memberName: string *
@@ -226,6 +236,15 @@ type internal ParsedExpression =
     | SequentialValueExpression of (ParsedExpression * SourceRange) list
     | LocalAssignment of name: string * value: ParsedExpression
     | BooleanNegationExpression of expression: ParsedExpression * range: SourceRange
+    | TryWithExpression of
+        body: ParsedExpression *
+        bindingName: string *
+        handler: ParsedExpression *
+        tryRange: SourceRange *
+        withRange: SourceRange *
+        bodyRange: SourceRange *
+        handlerRange: SourceRange *
+        range: SourceRange
     | MatchExpression of
         input: ParsedExpression *
         clauses: (ParsedMatchPattern * ParsedExpression * SourceRange) list *
@@ -241,23 +260,40 @@ type internal ParsedExpression =
     | LambdaExpression of
         parameterName: string *
         parameterType: ParsedTypeExpression option *
-        body: ParsedExpression
-    | UnitLambdaExpression of body: ParsedExpression
+        body: ParsedExpression *
+        range: SourceRange
+    | UnitLambdaExpression of body: ParsedExpression * range: SourceRange
+    | TupleExpression of elements: ParsedExpression list * range: SourceRange
+    | StructTupleExpression of elements: ParsedExpression list * range: SourceRange
     | TypeConstruction of
         constructedType: ParsedTypeExpression *
         arguments: ParsedExpression list *
         argumentRange: SourceRange
+    | BindReturnFromComputation of
+        builderName: string *
+        bindings: (string * ParsedExpression) list *
+        returnKind: ComputationReturnKind *
+        returnFrom: ParsedExpression *
+        range: SourceRange
     | ObjectExpression of
         baseType: ParsedTypeExpression *
         constructorArguments: ParsedExpression list *
-        isOverride: bool *
-        receiverName: string *
-        memberName: string *
-        memberParameters: string list *
-        memberBody: ParsedExpression *
+        members: ParsedObjectExpressionMember list *
         range: SourceRange
 
     override _.ToString() = "ParsedExpression"
+
+and internal ParsedObjectExpressionMember = {
+    IsOverride: bool
+    ReceiverName: string
+    Name: string
+    ParameterNames: string list
+    Body: ParsedExpression
+    BodyRange: SourceRange
+    Range: SourceRange
+} with
+
+    override _.ToString() = "ParsedObjectExpressionMember"
 
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
 type internal ParsedTypeConstraint =
@@ -305,6 +341,15 @@ type internal ParsedLiteralFieldDeclaration = {
 
     override _.ToString() = "ParsedLiteralFieldDeclaration"
 
+type internal ParsedModuleValueDeclaration = {
+    Name: string
+    Body: ParsedExpression
+    BodyRange: SourceRange
+    Range: SourceRange
+} with
+
+    override _.ToString() = "ParsedModuleValueDeclaration"
+
 type internal ParsedParameter = {
     Attributes: ParsedAttribute list
     Name: string
@@ -329,7 +374,21 @@ type internal ParsedStaticMethodDeclaration = {
 
     override _.ToString() = "ParsedStaticMethodDeclaration"
 
+type internal ParsedNestedModuleDeclaration = {
+    Name: string
+    ModulePath: string list
+    Attributes: ParsedAttribute list
+    OpenedNamespaces: string list
+    Values: ParsedModuleValueDeclaration list
+    Methods: ParsedStaticMethodDeclaration list
+    Modules: ParsedNestedModuleDeclaration list
+    Range: SourceRange
+} with
+
+    override _.ToString() = "ParsedNestedModuleDeclaration"
+
 type internal ParsedStaticTypeDeclaration = {
+    IsPublic: bool
     Name: string
     Methods: ParsedStaticMethodDeclaration list
     Range: SourceRange
@@ -424,6 +483,7 @@ type internal ParsedTypeAbbreviationDeclaration = {
 type internal ParsedDeclaration =
     | ParsedMethod of ParsedMethodDeclaration
     | ParsedLiteralField of ParsedLiteralFieldDeclaration
+    | ParsedNestedModule of ParsedNestedModuleDeclaration
     | ParsedTypeAbbreviation of ParsedTypeAbbreviationDeclaration
     | ParsedStaticType of ParsedStaticTypeDeclaration
     | ParsedObjectType of ParsedObjectTypeDeclaration
@@ -479,7 +539,8 @@ module internal ParsedDeclaration =
                 + declaration.Name
             )
         | ParsedMethod _
-        | ParsedLiteralField _ -> None
+        | ParsedLiteralField _
+        | ParsedNestedModule _ -> None
 
     let isTypeDeclaration declaration =
         tryTypeIdentity String.Empty declaration
@@ -709,7 +770,7 @@ type internal TypedResumableTryFinallyExpression = {
     override _.ToString() = "TypedResumableTryFinallyExpression"
 
 type internal TypedStaticMethodCallTarget = {
-    DeclaringType: CliTypeReference
+    DeclaringType: CliType
     StableId: string
     Name: string
     GenericArity: int
@@ -768,6 +829,7 @@ type internal TypedUnitLambdaExpression = {
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
 type internal KnownAttributeKind =
     | AutoOpenAttribute
+    | RequireQualifiedAccessAttribute
     | StructAttribute
     | NoComparisonAttribute
     | NoEqualityAttribute
@@ -836,6 +898,7 @@ type internal TypedExpression =
     | TypedObjectConstruction of
         target: TypedObjectConstructionTarget *
         arguments: TypedExpression list
+    | TypedDefaultValue of valueType: CliType * localIndex: int
     | TypedFunctionApplication of
         functionType: CliType *
         domainType: CliType *
@@ -848,6 +911,11 @@ type internal TypedExpression =
         arguments: TypedExpression list
     | TypedBoundInstanceMethod of TypedBoundInstanceMethodExpression
     | TypedUnitLambda of TypedUnitLambdaExpression
+    | TypedDelegateLambda of TypedDelegateLambdaExpression
+    | TypedValueTaskBind of TypedValueTaskBindExpression
+    | TypedValueTaskApply of TypedValueTaskApplyExpression
+    | TypedValueTaskZip of TypedValueTaskZipExpression
+    | TypedValueTaskOfUnit of TypedValueTaskOfUnitExpression
     | TypedConditional of
         condition: TypedExpression *
         ifTrue: TypedExpression *
@@ -862,6 +930,28 @@ type internal TypedExpression =
         expression: TypedExpression
     | TypedSequential of (TypedExpression * CliType * SourceRange) list
     | TypedBooleanNegation of expression: TypedExpression * range: SourceRange
+    | TypedTryWith of
+        body: TypedExpression *
+        handlerLocalIndex: int *
+        handlerName: string *
+        catchType: CliType *
+        handler: TypedExpression *
+        tryRange: SourceRange *
+        withRange: SourceRange *
+        bodyRange: SourceRange *
+        handlerRange: SourceRange *
+        range: SourceRange
+    | TypedNullMatch of
+        input: TypedExpression *
+        inputType: CliType *
+        localIndex: int *
+        bindingName: string *
+        ifNull: TypedExpression *
+        ifNotNull: TypedExpression *
+        matchHeaderRange: SourceRange *
+        ifNullRange: SourceRange *
+        ifNotNullRange: SourceRange *
+        range: SourceRange
     | TypedTypeTestMatch of
         input: TypedExpression *
         targetType: CliType *
@@ -879,12 +969,7 @@ type internal TypedExpression =
         typeReference: CliTypeReference *
         baseType: CliType *
         constructorArguments: TypedExpression list *
-        isOverride: bool *
-        receiverName: string *
-        memberName: string *
-        memberParameters: TypedParameter list *
-        memberReturnType: CliType *
-        memberBody: TypedExpression *
+        members: TypedObjectExpressionMember list *
         range: SourceRange
     | TypedTraitCall of
         receiverName: string *
@@ -892,6 +977,131 @@ type internal TypedExpression =
         arguments: TypedCallArgument list
 
     override _.ToString() = "TypedExpression"
+
+and internal TypedDelegateLambdaExpression = {
+    DelegateType: CliType
+    ClosureType: CliType
+    ClosureName: string
+    LambdaParameterNames: string list
+    LambdaParameterTypes: CliType list
+    LambdaReturnType: CliType
+    LambdaBody: TypedExpression
+    LambdaSourceLine: int
+    LambdaRange: SourceRange
+    ConstructionRange: SourceRange
+} with
+
+    override _.ToString() = "TypedDelegateLambdaExpression"
+
+and internal TypedValueTaskBindExpression = {
+    BuilderName: string
+    ReturnKind: ComputationReturnKind
+    BinderParameterIndex: int
+    SourceParameterIndex: int
+    InputType: CliType
+    OutputType: CliType
+    BinderType: CliType
+    InputValueTaskType: CliType
+    OutputValueTaskType: CliType
+    TaskTypeReference: CliTypeReference
+    TaskAwaiterTypeReference: CliTypeReference
+    FuncTypeReference: CliTypeReference
+    CancellationTokenType: CliType
+    TaskContinuationOptionsType: CliType
+    TaskSchedulerType: CliType
+    TaskExtensionsTypeReference: CliTypeReference
+    NonGenericTaskTypeReference: CliTypeReference
+    OperationCanceledExceptionType: CliType
+    ExceptionType: CliType
+    Range: SourceRange
+} with
+
+    override _.ToString() = "TypedValueTaskBindExpression"
+
+and internal TypedValueTaskApplyExpression = {
+    BuilderName: string
+    ApplicableParameterIndex: int
+    InputParameterIndex: int
+    InputType: CliType
+    OutputType: CliType
+    ApplierType: CliType
+    ApplicableValueTaskType: CliType
+    InputValueTaskType: CliType
+    OutputValueTaskType: CliType
+    TaskTypeReference: CliTypeReference
+    TaskAwaiterTypeReference: CliTypeReference
+    FuncTypeReference: CliTypeReference
+    CancellationTokenType: CliType
+    TaskContinuationOptionsType: CliType
+    TaskSchedulerType: CliType
+    TaskExtensionsTypeReference: CliTypeReference
+    NonGenericTaskTypeReference: CliTypeReference
+    OperationCanceledExceptionType: CliType
+    ExceptionType: CliType
+    Range: SourceRange
+} with
+
+    override _.ToString() = "TypedValueTaskApplyExpression"
+
+and internal TypedValueTaskZipExpression = {
+    BuilderName: string
+    LeftParameterIndex: int
+    RightParameterIndex: int
+    LeftType: CliType
+    RightType: CliType
+    TupleType: CliType
+    LeftValueTaskType: CliType
+    RightValueTaskType: CliType
+    OutputValueTaskType: CliType
+    TupleTypeReference: CliTypeReference
+    TaskTypeReference: CliTypeReference
+    TaskAwaiterTypeReference: CliTypeReference
+    FuncTypeReference: CliTypeReference
+    CancellationTokenType: CliType
+    TaskContinuationOptionsType: CliType
+    TaskSchedulerType: CliType
+    TaskExtensionsTypeReference: CliTypeReference
+    NonGenericTaskTypeReference: CliTypeReference
+    OperationCanceledExceptionType: CliType
+    ExceptionType: CliType
+    Range: SourceRange
+} with
+
+    override _.ToString() = "TypedValueTaskZipExpression"
+
+and internal TypedValueTaskOfUnitExpression = {
+    BuilderName: string
+    SourceParameterIndex: int
+    SourceValueTaskType: CliType
+    UnitType: CliType
+    OutputValueTaskType: CliType
+    TaskTypeReference: CliTypeReference
+    NonGenericTaskTypeReference: CliTypeReference
+    NonGenericTaskAwaiterTypeReference: CliTypeReference
+    FuncTypeReference: CliTypeReference
+    CancellationTokenType: CliType
+    TaskContinuationOptionsType: CliType
+    TaskSchedulerType: CliType
+    TaskExtensionsTypeReference: CliTypeReference
+    OperationCanceledExceptionType: CliType
+    ExceptionType: CliType
+    Range: SourceRange
+} with
+
+    override _.ToString() = "TypedValueTaskOfUnitExpression"
+
+and internal TypedObjectExpressionMember = {
+    IsOverride: bool
+    ReceiverName: string
+    Name: string
+    Parameters: TypedParameter list
+    ReturnType: CliType
+    Body: TypedExpression
+    BodyRange: SourceRange
+    Range: SourceRange
+} with
+
+    override _.ToString() = "TypedObjectExpressionMember"
 
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
 type internal TypedTypeExpression =
@@ -1008,6 +1218,7 @@ type internal TypedStructTypeDeclaration = {
 
 type internal TypedStaticTypeDeclaration = {
     StableId: string
+    IsPublic: bool
     Name: string
     Methods: TypedMethodDeclaration list
     ExportFingerprint: string
@@ -1029,9 +1240,41 @@ type internal TypedObjectTypeDeclaration = {
 
     override _.ToString() = "TypedObjectTypeDeclaration"
 
+type internal TypedModuleValueInitializer =
+    | TypedModuleValueConstruction of TypedObjectConstructionTarget
+    | TypedModuleValueAlias of targetStableId: string
+
+    override _.ToString() = "TypedModuleValueInitializer"
+
+type internal TypedModuleValueDeclaration = {
+    StableId: string
+    Name: string
+    Type: CliType
+    Initializer: TypedModuleValueInitializer
+    ExportFingerprint: string
+    Range: SourceRange
+} with
+
+    override _.ToString() = "TypedModuleValueDeclaration"
+
+type internal TypedNestedModuleDeclaration = {
+    StableId: string
+    Name: string
+    CompiledName: string
+    Attributes: TypedCustomAttribute list
+    Values: TypedModuleValueDeclaration list
+    Methods: TypedMethodDeclaration list
+    Modules: TypedNestedModuleDeclaration list
+    ExportFingerprint: string
+    Range: SourceRange
+} with
+
+    override _.ToString() = "TypedNestedModuleDeclaration"
+
 type internal TypedDeclaration =
     | TypedMethod of TypedMethodDeclaration
     | TypedLiteralField of TypedLiteralFieldDeclaration
+    | TypedNestedModule of TypedNestedModuleDeclaration
     | TypedTypeAbbreviation of TypedTypeAbbreviationDeclaration
     | TypedStaticType of TypedStaticTypeDeclaration
     | TypedObjectType of TypedObjectTypeDeclaration
@@ -1041,6 +1284,7 @@ type internal TypedDeclaration =
         match this with
         | TypedMethod declaration -> declaration.StableId
         | TypedLiteralField declaration -> declaration.StableId
+        | TypedNestedModule declaration -> declaration.StableId
         | TypedTypeAbbreviation declaration -> declaration.StableId
         | TypedStaticType declaration -> declaration.StableId
         | TypedObjectType declaration -> declaration.StableId
@@ -1050,6 +1294,7 @@ type internal TypedDeclaration =
         match this with
         | TypedMethod declaration -> declaration.ExportFingerprint
         | TypedLiteralField declaration -> declaration.ExportFingerprint
+        | TypedNestedModule declaration -> declaration.ExportFingerprint
         | TypedTypeAbbreviation declaration -> declaration.ExportFingerprint
         | TypedStaticType declaration -> declaration.ExportFingerprint
         | TypedObjectType declaration -> declaration.ExportFingerprint
@@ -1114,8 +1359,17 @@ type internal SymbolicInstruction =
     | MarkLabel of int
     | BranchIfFalse of int
     | Branch of int
+    | Leave of int
+    | DefineCatchRegion of
+        tryStart: int *
+        tryEnd: int *
+        handlerStart: int *
+        handlerEnd: int *
+        catchType: CliType
     | Nop
     | Box of CliType
+    | UnboxAny of CliType
+    | CastClass of CliType
     | IsInstance of CliType
     | CompareEqual
     | LoadInt32 of int
@@ -1126,9 +1380,12 @@ type internal SymbolicInstruction =
     | LoadLocal of int
     | LoadLocalAddress of int
     | StoreLocal of int
+    | InitializeObject of CliType
     | LoadField of SymbolicFieldReference
     | LoadFieldAddress of SymbolicFieldReference
     | StoreField of SymbolicFieldReference
+    | LoadStaticField of SymbolicFieldReference
+    | StoreStaticField of SymbolicFieldReference
     | CallMethod of SymbolicMethodReference
     | CallVirtualMethod of SymbolicMethodReference
     | CallGenericMethod of methodReference: SymbolicMethodReference * genericArguments: CliType list
@@ -1143,9 +1400,12 @@ type internal SymbolicInstruction =
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
 type internal SymbolicMethodKind =
     | ModuleFunction
+    | ModuleValueGetter
+    | StaticConstructor
     | TypeExtensionMember
     | StaticTypeExtensionMember
     | StaticInlineMemberStub
+    | InternalStaticInlineMemberStub
     | InstanceConstructor
     | InstanceInlineMember
     | InternalInstanceInlineMember
@@ -1226,6 +1486,27 @@ type internal SymbolicInstanceFieldFragment = {
 
     override _.ToString() = "SymbolicInstanceFieldFragment"
 
+type internal SymbolicStaticFieldFragment = {
+    SchemaVersion: int
+    StableId: string
+    Name: string
+    Type: CliType
+    ContentHash: string
+} with
+
+    override _.ToString() = "SymbolicStaticFieldFragment"
+
+type internal SymbolicPropertyFragment = {
+    SchemaVersion: int
+    StableId: string
+    Name: string
+    Type: CliType
+    GetterStableId: string
+    ContentHash: string
+} with
+
+    override _.ToString() = "SymbolicPropertyFragment"
+
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
 type internal SymbolicTypeKind =
     | ModuleContainer
@@ -1250,6 +1531,8 @@ type internal SymbolicTypeFragment = {
     Attributes: SymbolicCustomAttributeFragment list
     LiteralFields: SymbolicLiteralFieldFragment list
     InstanceFields: SymbolicInstanceFieldFragment list
+    StaticFields: SymbolicStaticFieldFragment list
+    Properties: SymbolicPropertyFragment list
     Methods: SymbolicMethodFragment list
 } with
 

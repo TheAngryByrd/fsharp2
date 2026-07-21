@@ -20,6 +20,7 @@ module internal Frontend =
         | InheritKeyword
         | NewKeyword
         | OverrideKeyword
+        | TryKeyword
         | MatchKeyword
         | AsKeyword
         | WithKeyword
@@ -46,6 +47,8 @@ module internal Frontend =
         | RightParenthesis
         | LeftBrace
         | RightBrace
+        | LeftBracket
+        | RightBracket
         | Colon
         | TypeTest
         | Subtype
@@ -389,6 +392,7 @@ module internal Frontend =
                 | "inherit" -> add InheritKeyword start
                 | "new" -> add NewKeyword start
                 | "override" -> add OverrideKeyword start
+                | "try" -> add TryKeyword start
                 | "match" -> add MatchKeyword start
                 | "as" -> add AsKeyword start
                 | "with" -> add WithKeyword start
@@ -526,6 +530,8 @@ module internal Frontend =
                     | ')' -> add RightParenthesis start
                     | '{' -> add LeftBrace start
                     | '}' -> add RightBrace start
+                    | '[' -> add LeftBracket start
+                    | ']' -> add RightBracket start
                     | ':' -> add Colon start
                     | ',' -> add Comma start
                     | ';' -> add Semicolon start
@@ -898,6 +904,26 @@ module internal Frontend =
 
                 let rec parsePostfixMemberCalls expression expressionRange =
                     match (current ()).Kind with
+                    | Dot when
+                        index + 1 < input.Length
+                        && input.[index + 1].Kind = LeftBracket
+                        ->
+                        parseResult {
+                            let! _ = expected Dot "expected '.'"
+                            let! _ = expected LeftBracket "expected '[' after '.'"
+                            let! argument, _ = parseExpression ()
+                            let! closeToken = expected RightBracket "expected ']'"
+
+                            let range = {
+                                Start = expressionRange.Start
+                                End = closeToken.Range.End
+                            }
+
+                            return!
+                                parsePostfixMemberCalls
+                                    (ExpressionMemberCall(expression, "get_Item", [ argument ]))
+                                    range
+                        }
                     | Dot ->
                         parseResult {
                             let! _ = expected Dot "expected '.'"
@@ -921,10 +947,27 @@ module internal Frontend =
                                     range
                         }
                     | PipeRight ->
-                        consume ()
-                        |> ignore
+                        let pipeToken = consume ()
 
                         match (current ()).Kind with
+                        | Identifier "ignore" ->
+                            let ignoreToken = consume ()
+
+                            let range = {
+                                Start = expressionRange.Start
+                                End = ignoreToken.Range.End
+                            }
+
+                            parsePostfixMemberCalls
+                                (SequentialValueExpression [
+                                    expression, expressionRange
+                                    UnitLiteral,
+                                    {
+                                        Start = pipeToken.Range.Start
+                                        End = ignoreToken.Range.End
+                                    }
+                                ])
+                                range
                         | Identifier _ when
                             index + 1 < input.Length
                             && input.[index + 1].Kind = LessThan
@@ -967,6 +1010,11 @@ module internal Frontend =
 
                             return!
                                 match (current ()).Kind with
+                                | Dot when
+                                    index + 1 < input.Length
+                                    && input.[index + 1].Kind = LeftBracket
+                                    ->
+                                    Ok(List.rev members)
                                 | Dot -> loop members
                                 | _ -> Ok(List.rev members)
                         }
@@ -975,6 +1023,100 @@ module internal Frontend =
                     |> Result.map (fun members -> rootName, members)
 
                 match expressionToken.Kind with
+                | TryKeyword ->
+                    parseResult {
+                        let sequenceExpression expressions =
+                            let expressions = List.rev expressions
+
+                            match expressions with
+                            | [ expression, range ] -> expression, range
+                            | _ ->
+                                let _, firstRange = List.head expressions
+                                let _, lastRange = List.last expressions
+
+                                SequentialValueExpression expressions,
+                                {
+                                    Start = firstRange.Start
+                                    End = lastRange.End
+                                }
+
+                        let! tryToken = expected TryKeyword "expected 'try'"
+                        let bodyIndent = (current ()).Range.Start.Column
+                        let! firstBody, firstBodyRange = parseExpression ()
+
+                        let rec parseBody expressions =
+                            let token = current ()
+
+                            match token.Kind with
+                            | WithKeyword -> Ok(sequenceExpression expressions)
+                            | RightParenthesis
+                            | RightBrace
+                            | EndOfFile
+                            | MemberKeyword
+                            | StaticKeyword
+                            | AttributeStart
+                            | TypeKeyword
+                            | AndKeyword
+                            | ElseKeyword -> Ok(sequenceExpression expressions)
+                            | _ when token.Range.Start.Column >= bodyIndent ->
+                                parseExpression ()
+                                |> Result.bind (fun expression ->
+                                    parseBody (expression :: expressions)
+                                )
+                            | _ -> Ok(sequenceExpression expressions)
+
+                        let! body, bodyRange = parseBody [ firstBody, firstBodyRange ]
+                        let! withToken = expected WithKeyword "expected 'with' after a try body"
+
+                        let! bindingName, _ =
+                            identifier "expected an exception binding after 'with'"
+
+                        let! _ = expected Arrow "expected '->' after an exception binding"
+                        let handlerIndent = (current ()).Range.Start.Column
+                        let! firstHandler, firstHandlerRange = parseExpression ()
+
+                        let rec parseHandler expressions =
+                            let token = current ()
+
+                            match token.Kind with
+                            | RightParenthesis
+                            | RightBrace
+                            | EndOfFile
+                            | MemberKeyword
+                            | StaticKeyword
+                            | AttributeStart
+                            | TypeKeyword
+                            | AndKeyword
+                            | ElseKeyword
+                            | Bar -> Ok(sequenceExpression expressions)
+                            | _ when token.Range.Start.Column >= handlerIndent ->
+                                parseExpression ()
+                                |> Result.bind (fun expression ->
+                                    parseHandler (expression :: expressions)
+                                )
+                            | _ -> Ok(sequenceExpression expressions)
+
+                        let! handler, handlerRange =
+                            parseHandler [ firstHandler, firstHandlerRange ]
+
+                        let range = {
+                            Start = tryToken.Range.Start
+                            End = handlerRange.End
+                        }
+
+                        return
+                            TryWithExpression(
+                                body,
+                                bindingName,
+                                handler,
+                                tryToken.Range,
+                                withToken.Range,
+                                bodyRange,
+                                handlerRange,
+                                range
+                            ),
+                            range
+                    }
                 | MatchKeyword ->
                     parseResult {
                         let sequenceExpression expressions =
@@ -1033,6 +1175,9 @@ module internal Frontend =
                                                     }
                                                 )
                                         }
+                                    | NullKeyword ->
+                                        let token = consume ()
+                                        Ok(ParsedNullPattern token.Range)
                                     | Identifier name ->
                                         let token = consume ()
                                         Ok(ParsedNamedPattern(name, token.Range))
@@ -1127,78 +1272,123 @@ module internal Frontend =
 
                         let! _ = expected WithKeyword "expected 'with' in an object expression"
 
-                        let! isOverride =
-                            match (current ()).Kind with
-                            | OverrideKeyword ->
-                                consume ()
-                                |> ignore
+                        let parseMember () =
+                            parseResult {
+                                let memberStartToken = current ()
 
-                                Ok true
-                            | MemberKeyword ->
-                                consume ()
-                                |> ignore
+                                let! isOverride =
+                                    match memberStartToken.Kind with
+                                    | OverrideKeyword ->
+                                        consume ()
+                                        |> ignore
 
-                                Ok false
-                            | _ ->
-                                Error(
-                                    prototypeDiagnostic
-                                        source.Path
-                                        (current ()).Range
-                                        "expected 'override' or 'member' in an object expression"
-                                )
+                                        Ok true
+                                    | MemberKeyword ->
+                                        consume ()
+                                        |> ignore
 
-                        let! receiverName, _ =
-                            identifier "expected an object-expression member receiver"
+                                        Ok false
+                                    | _ ->
+                                        Error(
+                                            prototypeDiagnostic
+                                                source.Path
+                                                memberStartToken.Range
+                                                "expected 'override' or 'member' in an object expression"
+                                        )
 
-                        let! _ = expected Dot "expected '.' after an object-expression receiver"
+                                let! receiverName, _ =
+                                    identifier "expected an object-expression member receiver"
 
-                        let! memberName, _ = identifier "expected an object-expression member name"
+                                let! _ =
+                                    expected Dot "expected '.' after an object-expression receiver"
 
-                        let! _ =
-                            expected
-                                LeftParenthesis
-                                "expected '(' after an object-expression member"
+                                let! memberName, _ =
+                                    identifier "expected an object-expression member name"
 
-                        let rec parseMemberParameters parameters =
-                            match (current ()).Kind with
-                            | RightParenthesis -> Ok(List.rev parameters)
-                            | Identifier _ ->
-                                parseResult {
-                                    let! parameterName, _ =
-                                        identifier "expected an object-expression parameter"
+                                let! _ =
+                                    expected
+                                        LeftParenthesis
+                                        "expected '(' after an object-expression member"
 
-                                    return!
-                                        match (current ()).Kind with
-                                        | Comma ->
-                                            consume ()
-                                            |> ignore
+                                let rec parseMemberParameters parameters =
+                                    match (current ()).Kind with
+                                    | RightParenthesis -> Ok(List.rev parameters)
+                                    | Identifier _ ->
+                                        parseResult {
+                                            let! parameterName, _ =
+                                                identifier "expected an object-expression parameter"
 
-                                            parseMemberParameters (parameterName :: parameters)
-                                        | RightParenthesis ->
-                                            Ok(List.rev (parameterName :: parameters))
-                                        | _ ->
-                                            Error(
-                                                prototypeDiagnostic
-                                                    source.Path
-                                                    (current ()).Range
-                                                    "expected ',' or ')' after an object-expression parameter"
-                                            )
+                                            return!
+                                                match (current ()).Kind with
+                                                | Comma ->
+                                                    consume ()
+                                                    |> ignore
+
+                                                    parseMemberParameters (
+                                                        parameterName
+                                                        :: parameters
+                                                    )
+                                                | RightParenthesis ->
+                                                    Ok(List.rev (parameterName :: parameters))
+                                                | _ ->
+                                                    Error(
+                                                        prototypeDiagnostic
+                                                            source.Path
+                                                            (current ()).Range
+                                                            "expected ',' or ')' after an object-expression parameter"
+                                                    )
+                                        }
+                                    | _ ->
+                                        Error(
+                                            prototypeDiagnostic
+                                                source.Path
+                                                (current ()).Range
+                                                "expected an object-expression parameter"
+                                        )
+
+                                let! memberParameters = parseMemberParameters []
+                                let! _ = expected RightParenthesis "expected ')'"
+
+                                let! _ =
+                                    expected
+                                        Equals
+                                        "expected '=' before an object-expression member body"
+
+                                let! memberBody, memberBodyRange = parseExpression ()
+
+                                return {
+                                    IsOverride = isOverride
+                                    ReceiverName = receiverName
+                                    Name = memberName
+                                    ParameterNames = memberParameters
+                                    Body = memberBody
+                                    BodyRange = memberBodyRange
+                                    Range = {
+                                        Start = memberStartToken.Range.Start
+                                        End = memberBodyRange.End
+                                    }
                                 }
-                            | _ ->
-                                Error(
-                                    prototypeDiagnostic
-                                        source.Path
-                                        (current ()).Range
-                                        "expected an object-expression parameter"
-                                )
+                            }
 
-                        let! memberParameters = parseMemberParameters []
-                        let! _ = expected RightParenthesis "expected ')'"
+                        let rec parseMembers members =
+                            parseMember ()
+                            |> Result.bind (fun memberDeclaration ->
+                                let members = memberDeclaration :: members
 
-                        let! _ =
-                            expected Equals "expected '=' before an object-expression member body"
+                                match (current ()).Kind with
+                                | OverrideKeyword
+                                | MemberKeyword -> parseMembers members
+                                | RightBrace -> Ok(List.rev members)
+                                | _ ->
+                                    Error(
+                                        prototypeDiagnostic
+                                            source.Path
+                                            (current ()).Range
+                                            "expected another member or '}' after an object-expression member"
+                                    )
+                            )
 
-                        let! memberBody, _ = parseExpression ()
+                        let! members = parseMembers []
 
                         let! closeToken =
                             expected RightBrace "expected '}' after an object expression"
@@ -1212,15 +1402,25 @@ module internal Frontend =
                             ObjectExpression(
                                 baseType,
                                 constructorArguments,
-                                isOverride,
-                                receiverName,
-                                memberName,
-                                memberParameters,
-                                memberBody,
+                                members,
                                 range
                             ),
                             range
                     }
+                | LeftParenthesis when
+                    index + 1 < input.Length
+                    && input.[index + 1].Kind = RightParenthesis
+                    ->
+                    let openToken = consume ()
+                    let closeToken = consume ()
+
+                    Ok(
+                        UnitLiteral,
+                        {
+                            Start = openToken.Range.Start
+                            End = closeToken.Range.End
+                        }
+                    )
                 | LeftParenthesis ->
                     parseResult {
                         let! _ = expected LeftParenthesis "expected '('"
@@ -1308,7 +1508,49 @@ module internal Frontend =
                                 }
 
                         let! ifToken = expected IfKeyword "expected 'if'"
-                        let! condition, _ = parseExpression ()
+                        let! firstCondition, firstConditionRange = parseExpression ()
+
+                        let rec parseConjunction condition conditionRange =
+                            match (current ()).Kind with
+                            | Ampersand when
+                                index + 1 < input.Length
+                                && input.[index + 1].Kind = Ampersand
+                                ->
+                                let firstAmpersand = consume ()
+                                let secondAmpersand = consume ()
+
+                                parseExpression ()
+                                |> Result.bind (fun (right, rightRange) ->
+                                    let operatorRange = {
+                                        Start = firstAmpersand.Range.Start
+                                        End = secondAmpersand.Range.End
+                                    }
+
+                                    let syntheticFalseRange = {
+                                        Start = operatorRange.End
+                                        End = operatorRange.End
+                                    }
+
+                                    let range = {
+                                        Start = conditionRange.Start
+                                        End = rightRange.End
+                                    }
+
+                                    parseConjunction
+                                        (ConditionalExpression(
+                                            condition,
+                                            right,
+                                            BooleanLiteral false,
+                                            conditionRange,
+                                            rightRange,
+                                            syntheticFalseRange
+                                        ))
+                                        range
+                                )
+                            | _ -> Ok(condition, conditionRange)
+
+                        let! condition, _ =
+                            parseConjunction firstCondition firstConditionRange
 
                         let! thenToken =
                             expected ThenKeyword "expected 'then' after an if condition"
@@ -1505,7 +1747,7 @@ module internal Frontend =
                     parseResult {
                         let! funToken = expected FunKeyword "expected 'fun'"
 
-                        let! parameter =
+                        let parseParameter () =
                             match (current ()).Kind with
                             | LeftParenthesis when
                                 index + 1 < input.Length
@@ -1540,6 +1782,20 @@ module internal Frontend =
                                         (current ()).Range
                                         "expected a lambda parameter"
                                 )
+
+                        let rec parseParameters parameters =
+                            parseResult {
+                                let! parameter = parseParameter ()
+                                let parameters = parameter :: parameters
+
+                                return!
+                                    match (current ()).Kind with
+                                    | Identifier _
+                                    | LeftParenthesis -> parseParameters parameters
+                                    | _ -> Ok(List.rev parameters)
+                            }
+
+                        let! parameters = parseParameters []
 
                         let! _ = expected Arrow "expected '->'"
 
@@ -1578,14 +1834,229 @@ module internal Frontend =
 
                         let! body, bodyRange = parseBody [] None
 
+                        let lambdaRange = {
+                            Start = funToken.Range.Start
+                            End = bodyRange.End
+                        }
+
+                        let lambda =
+                            (parameters, body)
+                            ||> List.foldBack (fun parameter body ->
+                                match parameter with
+                                | Some(parameterName, parameterType) ->
+                                    LambdaExpression(
+                                        parameterName,
+                                        parameterType,
+                                        body,
+                                        lambdaRange
+                                    )
+                                | None -> UnitLambdaExpression(body, lambdaRange)
+                            )
+
+                        return lambda, lambdaRange
+                    }
+                | Identifier builderName when
+                    index + 1 < input.Length
+                    && input.[index + 1].Kind = LeftBrace
+                    ->
+                    parseResult {
+                        let builderToken = consume ()
+                        let! _ = expected LeftBrace "expected '{' after a computation builder"
+
+                        let rec parseBindings bindings =
+                            parseResult {
+                                let! _ = expected LetKeyword "expected 'let!' in the computation"
+                                let! _ = expected Bang "expected '!' after 'let'"
+
+                                let! bindingName, _ =
+                                    identifier "expected a computation binding name"
+
+                                let! _ =
+                                    expected Equals "expected '=' after a computation binding"
+
+                                let! inputExpression, _ = parseExpression ()
+
+                                let bindings =
+                                    (bindingName, inputExpression)
+                                    :: bindings
+
+                                match (current ()).Kind with
+                                | LetKeyword -> return! parseBindings bindings
+                                | Identifier "return" -> return List.rev bindings
+                                | _ ->
+                                    return!
+                                        Error(
+                                            prototypeDiagnostic
+                                                source.Path
+                                                (current ()).Range
+                                                "expected 'let!' or 'return' after the computation binding"
+                                        )
+                            }
+
+                        let! bindings =
+                            match (current ()).Kind with
+                            | Identifier "return" -> Ok []
+                            | _ -> parseBindings []
+
+                        let! returnName, returnToken =
+                            identifier "expected 'return!' after the computation binding"
+
+                        let! _ =
+                            if returnName = "return" then
+                                Ok returnToken
+                            else
+                                Error(
+                                    prototypeDiagnostic
+                                        source.Path
+                                        returnToken.Range
+                                        "expected 'return!' after the computation binding"
+                                )
+
+                        let returnKind =
+                            if (current ()).Kind = Bang then
+                                consume ()
+                                |> ignore
+
+                                ComputationReturnFrom
+                            else
+                                ComputationReturn
+
+                        let! firstName, firstToken =
+                            identifier "expected an expression after 'return'"
+
+                        let firstExpression = ValueReference firstName
+
+                        let! returnExpression, _ =
+                            match (current ()).Kind with
+                            | Comma ->
+                                parseResult {
+                                    consume ()
+                                    |> ignore
+
+                                    let! secondExpression, secondRange = parseExpression ()
+
+                                    let tupleRange = {
+                                        Start = firstToken.Range.Start
+                                        End = secondRange.End
+                                    }
+
+                                    return
+                                        TupleExpression(
+                                            [ firstExpression; secondExpression ],
+                                            tupleRange
+                                        ),
+                                        tupleRange
+                                }
+                            | RightBrace -> Ok(firstExpression, firstToken.Range)
+                            | _ ->
+                                parseExpression ()
+                                |> Result.map (fun (argumentExpression, argumentRange) ->
+                                    FunctionApplication(
+                                        firstExpression,
+                                        argumentExpression
+                                    ),
+                                    {
+                                        Start = firstToken.Range.Start
+                                        End = argumentRange.End
+                                    }
+                                )
+
+                        let! closeToken = expected RightBrace "expected '}' after the computation"
+
                         return
-                            (match parameter with
-                             | Some(parameterName, parameterType) ->
-                                 LambdaExpression(parameterName, parameterType, body)
-                             | None -> UnitLambdaExpression body),
+                            BindReturnFromComputation(
+                                builderName,
+                                bindings,
+                                returnKind,
+                                returnExpression,
+                                {
+                                    Start = builderToken.Range.Start
+                                    End = closeToken.Range.End
+                                }
+                            ),
                             {
-                                Start = funToken.Range.Start
-                                End = bodyRange.End
+                                Start = builderToken.Range.Start
+                                End = closeToken.Range.End
+                            }
+                    }
+                | Identifier "struct" when
+                    index + 1 < input.Length
+                    && input.[index + 1].Kind = LeftParenthesis
+                    ->
+                    parseResult {
+                        let structToken = consume ()
+                        let! _ = expected LeftParenthesis "expected '(' after 'struct'"
+                        let! elements = parseCallArguments ()
+                        let! closeToken = expected RightParenthesis "expected ')'"
+
+                        let range = {
+                            Start = structToken.Range.Start
+                            End = closeToken.Range.End
+                        }
+
+                        return!
+                            if elements.Length < 2 then
+                                Error(
+                                    prototypeDiagnostic
+                                        source.Path
+                                        range
+                                        "a struct tuple requires at least two elements"
+                                )
+                            else
+                                Ok(StructTupleExpression(elements, range), range)
+                    }
+                | Identifier "isNull" ->
+                    parseResult {
+                        let isNullToken = consume ()
+                        let! argument, argumentRange = parseExpression ()
+
+                        return
+                            MemberCall(
+                                "Object",
+                                "__fsharp2_isNull",
+                                [
+                                    argument
+                                    NullLiteral
+                                ]
+                            ),
+                            {
+                                Start = isNullToken.Range.Start
+                                End = argumentRange.End
+                            }
+                    }
+                | Identifier typeName when
+                    index + 1 < input.Length
+                    && input.[index + 1].Kind = LeftParenthesis
+                    && not (String.IsNullOrEmpty typeName)
+                    && Char.IsUpper typeName.[0]
+                    ->
+                    parseResult {
+                        let typeToken = consume ()
+                        let! openToken = expected LeftParenthesis "expected '('"
+                        let! arguments = parseCallArguments ()
+                        let! closeToken = expected RightParenthesis "expected ')'"
+
+                        let constructedType =
+                            ParsedNamedType(
+                                {
+                                    Namespace = String.Empty
+                                    Name = typeName
+                                },
+                                typeToken.Range
+                            )
+
+                        return
+                            TypeConstruction(
+                                constructedType,
+                                arguments,
+                                {
+                                    Start = openToken.Range.Start
+                                    End = closeToken.Range.End
+                                }
+                            ),
+                            {
+                                Start = typeToken.Range.Start
+                                End = closeToken.Range.End
                             }
                     }
                 | Identifier functionName when
@@ -1605,27 +2076,117 @@ module internal Frontend =
                                 End = closeToken.Range.End
                             }
                     }
+                | Identifier typeName when
+                    index + 1 < input.Length
+                    && (match input.[index + 1].Kind with
+                        | Identifier _ -> true
+                        | _ -> false)
+                    && not (String.IsNullOrEmpty typeName)
+                    && Char.IsUpper typeName.[0]
+                    ->
+                    parseResult {
+                        let typeToken = consume ()
+                        let! argument, argumentRange = parseExpression ()
+
+                        let constructedType =
+                            ParsedNamedType(
+                                {
+                                    Namespace = String.Empty
+                                    Name = typeName
+                                },
+                                typeToken.Range
+                            )
+
+                        return
+                            TypeConstruction(
+                                constructedType,
+                                [ argument ],
+                                argumentRange
+                            ),
+                            {
+                                Start = typeToken.Range.Start
+                                End = argumentRange.End
+                            }
+                    }
                 | Identifier _ when
                     index + 1 < input.Length
                     && input.[index + 1].Kind = LessThan
                     ->
                     parseResult {
                         let! constructedType = parseTypeExpression ()
-                        let! openToken = expected LeftParenthesis "expected '('"
-                        let! arguments = parseCallArguments ()
-                        let! closeToken = expected RightParenthesis "expected ')'"
 
-                        let argumentRange = {
-                            Start = openToken.Range.Start
-                            End = closeToken.Range.End
-                        }
+                        return!
+                            match (current ()).Kind with
+                            | LeftParenthesis ->
+                                parseResult {
+                                    let! openToken = expected LeftParenthesis "expected '('"
+                                    let! arguments = parseCallArguments ()
+                                    let! closeToken = expected RightParenthesis "expected ')'"
 
-                        return
-                            TypeConstruction(constructedType, arguments, argumentRange),
-                            {
-                                Start = expressionToken.Range.Start
-                                End = closeToken.Range.End
-                            }
+                                    let argumentRange = {
+                                        Start = openToken.Range.Start
+                                        End = closeToken.Range.End
+                                    }
+
+                                    return
+                                        TypeConstruction(
+                                            constructedType,
+                                            arguments,
+                                            argumentRange
+                                        ),
+                                        {
+                                            Start = expressionToken.Range.Start
+                                            End = closeToken.Range.End
+                                        }
+                                }
+                            | Dot ->
+                                parseResult {
+                                    let! _ = expected Dot "expected '.'"
+
+                                    let! memberName, _ =
+                                        identifier "expected a static member name"
+
+                                    let! _ =
+                                        expected
+                                            LeftParenthesis
+                                            "expected '(' after a static member name"
+
+                                    let! arguments = parseCallArguments ()
+                                    let! closeToken = expected RightParenthesis "expected ')'"
+
+                                    return
+                                        StaticTypeMemberCall(
+                                            constructedType,
+                                            memberName,
+                                            arguments
+                                        ),
+                                        {
+                                            Start = expressionToken.Range.Start
+                                            End = closeToken.Range.End
+                                        }
+                                }
+                            | Identifier _ ->
+                                parseResult {
+                                    let! argument, argumentRange = parseExpression ()
+
+                                    return
+                                        TypeConstruction(
+                                            constructedType,
+                                            [ argument ],
+                                            argumentRange
+                                        ),
+                                        {
+                                            Start = expressionToken.Range.Start
+                                            End = argumentRange.End
+                                        }
+                                }
+                            | _ ->
+                                Error(
+                                    prototypeDiagnostic
+                                        source.Path
+                                        (current ()).Range
+                                        "expected a constructor argument, '(', or '.' after a constructed generic type"
+                                )
                     }
                 | NewKeyword ->
                     parseResult {
@@ -1755,14 +2316,14 @@ module internal Frontend =
                                 }
                             | _ when memberPath.Length = 1 ->
                                 let memberToken = input.[index - 1]
+                                let range = {
+                                    Start = expressionToken.Range.Start
+                                    End = memberToken.Range.End
+                                }
 
-                                Ok(
-                                    BoundInstanceMember(receiverName, memberPath.Head),
-                                    {
-                                        Start = expressionToken.Range.Start
-                                        End = memberToken.Range.End
-                                    }
-                                )
+                                parsePostfixMemberCalls
+                                    (BoundInstanceMember(receiverName, memberPath.Head))
+                                    range
                             | _ ->
                                 let memberToken = input.[index - 1]
 
@@ -1774,13 +2335,10 @@ module internal Frontend =
                                         )
                                         (ValueReference receiverName)
 
-                                Ok(
-                                    expression,
-                                    {
-                                        Start = expressionToken.Range.Start
-                                        End = memberToken.Range.End
-                                    }
-                                )
+                                parsePostfixMemberCalls expression {
+                                    Start = expressionToken.Range.Start
+                                    End = memberToken.Range.End
+                                }
                     }
                 | Identifier value ->
                     consume ()
@@ -2275,6 +2833,13 @@ module internal Frontend =
                             | AttributeStart -> parseDeclarationAttributes ()
                             | _ -> Ok []
 
+                        let wrappedParameterStart =
+                            match (current ()).Kind with
+                            | LeftParenthesis ->
+                                let token = consume ()
+                                Some token.Range.Start
+                            | _ -> None
+
                         let! parameterName, parameterToken = identifier "expected a parameter name"
 
                         let! parameterType =
@@ -2286,13 +2851,24 @@ module internal Frontend =
                                 parseTypeExpression ()
                             | _ -> Ok(ParsedWildcardType parameterToken.Range)
 
+                        let! parameterEnd =
+                            match wrappedParameterStart with
+                            | Some _ ->
+                                expected
+                                    RightParenthesis
+                                    "expected ')' after a wrapped parameter"
+                                |> Result.map (fun token -> token.Range.End)
+                            | None -> Ok parameterType.Range.End
+
                         return {
                             Attributes = attributes
                             Name = parameterName
                             Type = parameterType
                             Range = {
-                                Start = parameterToken.Range.Start
-                                End = parameterType.Range.End
+                                Start =
+                                    wrappedParameterStart
+                                    |> Option.defaultValue parameterToken.Range.Start
+                                End = parameterEnd
                             }
                         }
                     }
@@ -2527,6 +3103,15 @@ module internal Frontend =
                                         "expected 'type' or 'and'"
                                 )
 
+                        let isPublic =
+                            match (current ()).Kind with
+                            | InternalKeyword ->
+                                consume ()
+                                |> ignore
+
+                                false
+                            | _ -> true
+
                         let declarationNameToken = current ()
 
                         let! declaredTypeName =
@@ -2758,9 +3343,44 @@ module internal Frontend =
                                         }
                                     | _ -> Ok([], [])
 
-                                let! _ = expected LeftParenthesis "expected '('"
-                                let! parameters = parseParameters []
-                                let! _ = expected RightParenthesis "expected ')'"
+                                let! parameters =
+                                    match (current ()).Kind with
+                                    | LeftParenthesis ->
+                                        parseResult {
+                                            let! _ = expected LeftParenthesis "expected '('"
+                                            let! parameters = parseParameters []
+                                            let! _ = expected RightParenthesis "expected ')'"
+                                            return parameters
+                                        }
+                                    | Identifier _ ->
+                                        let rec parseCurriedParameters parameters =
+                                            match (current ()).Kind with
+                                            | Identifier _ ->
+                                                parseParameter ()
+                                                |> Result.bind (fun parameter ->
+                                                    parseCurriedParameters (
+                                                        parameter
+                                                        :: parameters
+                                                    )
+                                                )
+                                            | Equals
+                                            | Colon -> Ok(List.rev parameters)
+                                            | _ ->
+                                                Error(
+                                                    prototypeDiagnostic
+                                                        source.Path
+                                                        (current ()).Range
+                                                        "expected a curried parameter or '='"
+                                                )
+
+                                        parseCurriedParameters []
+                                    | _ ->
+                                        Error(
+                                            prototypeDiagnostic
+                                                source.Path
+                                                (current ()).Range
+                                                "expected a static member parameter"
+                                        )
 
                                 let! returnType =
                                     match allowDeclaredReturnType, (current ()).Kind with
@@ -3093,6 +3713,7 @@ module internal Frontend =
                                         | Some lastMethod ->
                                             Ok(
                                                 ParsedStaticType {
+                                                    IsPublic = isPublic
                                                     Name = declarationName
                                                     Methods = methods
                                                     Range = {
@@ -3225,6 +3846,292 @@ module internal Frontend =
                                 )
                     }
 
+                let rec parseNestedModule parentPath attributes =
+                    parseResult {
+                        let! moduleToken = expected ModuleKeyword "expected 'module'"
+                        let! moduleName, moduleNameToken = identifier "expected a module name"
+                        let! _ = expected Equals "expected '='"
+                        let modulePath = parentPath @ [ moduleName ]
+                        let! openedNamespaces = parseOpenNamespaces []
+
+                        let parseModuleBinding () =
+                            parseResult {
+                                let! letToken = expected LetKeyword "expected 'let'"
+
+                                let isInline =
+                                    match (current ()).Kind with
+                                    | InlineKeyword ->
+                                        consume ()
+                                        |> ignore
+
+                                        true
+                                    | _ -> false
+
+                                let! bindingName, _ = identifier "expected a module binding name"
+
+                                return!
+                                    match (current ()).Kind with
+                                    | LeftParenthesis ->
+                                        parseResult {
+                                            let rec parseParameterGroups parameters =
+                                                parseResult {
+                                                    let! _ = expected LeftParenthesis "expected '('"
+                                                    let! group = parseParameters []
+                                                    let! _ = expected RightParenthesis "expected ')'"
+
+                                                    let parameters = parameters @ group
+
+                                                    return!
+                                                        match (current ()).Kind with
+                                                        | LeftParenthesis ->
+                                                            parseParameterGroups parameters
+                                                        | _ -> Ok parameters
+                                                }
+
+                                            let! parameters = parseParameterGroups []
+
+                                            let! returnType =
+                                                match (current ()).Kind with
+                                                | Colon ->
+                                                    consume ()
+                                                    |> ignore
+
+                                                    parseTypeExpression ()
+                                                    |> Result.map Some
+                                                | _ -> Ok None
+
+                                            let! _ = expected Equals "expected '='"
+                                            let! body, bodyRange = parseExpression ()
+
+                                            return
+                                                Choice2Of2 {
+                                                    Attributes = []
+                                                    IsInline = isInline
+                                                    Name = bindingName
+                                                    TypeParameters = []
+                                                    Constraints = []
+                                                    Parameters = parameters
+                                                    ReturnType = returnType
+                                                    Body = body
+                                                    BodyRange = bodyRange
+                                                    Range = {
+                                                        Start = letToken.Range.Start
+                                                        End = bodyRange.End
+                                                    }
+                                                }
+                                        }
+                                    | _ when isInline ->
+                                        Error(
+                                            prototypeDiagnostic
+                                                source.Path
+                                                (current ()).Range
+                                                "an inline module binding must declare a parameter list"
+                                        )
+                                    | _ ->
+                                        parseResult {
+                                            let! _ = expected Equals "expected '='"
+                                            let! body, bodyRange = parseExpression ()
+
+                                            return
+                                                Choice1Of2 {
+                                                    Name = bindingName
+                                                    Body = body
+                                                    BodyRange = bodyRange
+                                                    Range = {
+                                                        Start = letToken.Range.Start
+                                                        End = bodyRange.End
+                                                    }
+                                                }
+                                        }
+                            }
+
+                        let rec parseModuleBindings
+                            openedNamespaces
+                            values
+                            methods
+                            (modules: ParsedNestedModuleDeclaration list)
+                            lastRange
+                            =
+                            match (current ()).Kind with
+                            | LetKeyword when
+                                (current ()).Range.Start.Column
+                                > moduleToken.Range.Start.Column
+                                ->
+                                parseResult {
+                                    let! binding = parseModuleBinding ()
+
+                                    return!
+                                        match binding with
+                                        | Choice1Of2 value ->
+                                            parseModuleBindings
+                                                openedNamespaces
+                                                (value :: values)
+                                                methods
+                                                modules
+                                                (Some value.Range)
+                                        | Choice2Of2 methodDeclaration ->
+                                            parseModuleBindings
+                                                openedNamespaces
+                                                values
+                                                (methodDeclaration :: methods)
+                                                modules
+                                                (Some methodDeclaration.Range)
+                                }
+                            | OpenKeyword when
+                                (current ()).Range.Start.Column
+                                > moduleToken.Range.Start.Column
+                                ->
+                                parseResult {
+                                    let! additionalNamespaces = parseOpenNamespaces []
+
+                                    return!
+                                        parseModuleBindings
+                                            (openedNamespaces @ additionalNamespaces)
+                                            values
+                                            methods
+                                            modules
+                                            lastRange
+                                }
+                            | AttributeStart when
+                                (current ()).Range.Start.Column
+                                > moduleToken.Range.Start.Column
+                                ->
+                                parseResult {
+                                    let! nestedAttributes = parseDeclarationAttributes ()
+
+                                    let! (nestedModule: ParsedNestedModuleDeclaration) =
+                                        match (current ()).Kind with
+                                        | ModuleKeyword ->
+                                            parseNestedModule modulePath nestedAttributes
+                                        | _ ->
+                                            Error(
+                                                prototypeDiagnostic
+                                                    source.Path
+                                                    (current ()).Range
+                                                    "expected a nested module after the declaration attributes"
+                                            )
+
+                                    return!
+                                        parseModuleBindings
+                                            openedNamespaces
+                                            values
+                                            methods
+                                            (nestedModule :: modules)
+                                            (Some nestedModule.Range)
+                                }
+                            | ModuleKeyword when
+                                (current ()).Range.Start.Column
+                                > moduleToken.Range.Start.Column
+                                ->
+                                parseResult {
+                                    let! (nestedModule: ParsedNestedModuleDeclaration) =
+                                        parseNestedModule modulePath []
+
+                                    return!
+                                        parseModuleBindings
+                                            openedNamespaces
+                                            values
+                                            methods
+                                            (nestedModule :: modules)
+                                            (Some nestedModule.Range)
+                                }
+                            | EndOfFile ->
+                                Ok(
+                                    openedNamespaces,
+                                    List.rev values,
+                                    List.rev methods,
+                                    List.rev modules,
+                                    lastRange
+                                )
+                            | _ when
+                                (current ()).Range.Start.Column
+                                <= moduleToken.Range.Start.Column
+                                ->
+                                Ok(
+                                    openedNamespaces,
+                                    List.rev values,
+                                    List.rev methods,
+                                    List.rev modules,
+                                    lastRange
+                                )
+                            | _ ->
+                                Error(
+                                    prototypeDiagnostic
+                                        source.Path
+                                        (current ()).Range
+                                        "expected a nested-module binding declaration"
+                                )
+
+                        let! openedNamespaces, values, methods, modules, lastRange =
+                            parseModuleBindings openedNamespaces [] [] [] None
+
+                        return!
+                            match lastRange with
+                            | Some lastRange ->
+                                Ok(
+                                    {
+                                        Name = moduleName
+                                        ModulePath = modulePath
+                                        Attributes = attributes
+                                        OpenedNamespaces = openedNamespaces
+                                        Values = values
+                                        Methods = methods
+                                        Modules = modules
+                                        Range = {
+                                            Start = moduleToken.Range.Start
+                                            End = lastRange.End
+                                        }
+                                    } : ParsedNestedModuleDeclaration
+                                )
+                            | None ->
+                                Error(
+                                    prototypeDiagnostic
+                                        source.Path
+                                        moduleNameToken.Range
+                                        "a nested module must declare a value, function, or module"
+                                )
+                    }
+
+                let moduleBodyStartsTypeExtension () =
+                    let rec afterHeader tokenIndex =
+                        if tokenIndex >= input.Length then
+                            None
+                        elif input.[tokenIndex].Kind = Equals then
+                            Some(tokenIndex + 1)
+                        else
+                            afterHeader (tokenIndex + 1)
+
+                    match afterHeader index with
+                    | Some bodyIndex when
+                        bodyIndex < input.Length
+                        && input.[bodyIndex].Kind = TypeKeyword
+                        ->
+                        let rec findWith tokenIndex =
+                            if tokenIndex >= input.Length then
+                                false
+                            else
+                                match input.[tokenIndex].Kind with
+                                | WithKeyword -> true
+                                | Equals
+                                | LeftParenthesis
+                                | LetKeyword
+                                | MemberKeyword
+                                | StaticKeyword
+                                | ModuleKeyword
+                                | NamespaceKeyword
+                                | EndOfFile -> false
+                                | _ -> findWith (tokenIndex + 1)
+
+                        findWith (bodyIndex + 1)
+                    | _ -> false
+
+                let parseNestedOrExtensionModule attributes =
+                    if moduleBodyStartsTypeExtension () then
+                        parseExtensionModule attributes
+                    else
+                        parseNestedModule [] attributes
+                        |> Result.map ParsedNestedModule
+
                 let canStartTypeDeclaration declarations token =
                     match token with
                     | TypeKeyword -> true
@@ -3280,7 +4187,7 @@ module internal Frontend =
                         }
                     | ModuleKeyword ->
                         parseResult {
-                            let! declaration = parseExtensionModule []
+                            let! declaration = parseNestedOrExtensionModule []
 
                             return!
                                 parseModuleDeclarations (
@@ -3296,7 +4203,7 @@ module internal Frontend =
                                 match (current ()).Kind with
                                 | token when canStartTypeDeclaration declarations token ->
                                     parseTypeDeclaration attributes
-                                | ModuleKeyword -> parseExtensionModule attributes
+                                | ModuleKeyword -> parseNestedOrExtensionModule attributes
                                 | _ ->
                                     Error(
                                         prototypeDiagnostic

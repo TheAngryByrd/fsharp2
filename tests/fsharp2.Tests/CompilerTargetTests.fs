@@ -8,11 +8,41 @@ open System.Reflection.Metadata
 open System.Reflection.Metadata.Ecma335
 open System.Reflection.PortableExecutable
 open System.Runtime.InteropServices
+open System.Runtime.Loader
 open System.Security.Cryptography
 open System.Text
 open Expecto
 
 module CompilerTargetTests =
+    type private AssemblyLoadScope(assemblyPath: string, dependencyPaths: string list) =
+        let loadContext =
+            new AssemblyLoadContext($"fsharp2-test-{Guid.NewGuid():N}", isCollectible = true)
+
+        let loadAssembly path =
+            use stream = new MemoryStream(File.ReadAllBytes(path), writable = false)
+            loadContext.LoadFromStream(stream)
+
+        do
+            loadContext.add_Resolving (fun _ assemblyName ->
+                dependencyPaths
+                |> List.tryFind (fun path ->
+                    String.Equals(
+                        Path.GetFileNameWithoutExtension(path),
+                        assemblyName.Name,
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                )
+                |> Option.map loadAssembly
+                |> Option.defaultValue null
+            )
+
+        let assembly = loadAssembly assemblyPath
+
+        member _.Assembly = assembly
+
+        interface IDisposable with
+            member _.Dispose() = loadContext.Unload()
+
     type private InvocationResult = {
         ExitCode: int
         StandardOutput: string
@@ -4080,6 +4110,112 @@ module CompilerTargetTests =
 
                     Expect.equal fsharp2Behavior 42 "Identity should return its argument"
 
+            testCase "emits an internal static helper type"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen System.Reflection\nopen System.Runtime.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\ntype internal Awaiter =\n    static member inline IsCompleted<'Awaiter\n        when 'Awaiter: (member get_IsCompleted: unit -> bool)>\n        (awaiter: 'Awaiter) =\n        awaiter.get_IsCompleted ()\n"
+
+                withObjectMemberDifferential "fsharp2-internal-static-helper" sourceText "Zero"
+                <| fun oracleOutputPath outputPath ->
+                    let inspect assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let helperType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.Awaiter",
+                                throwOnError = true
+                            )
+
+                        let helperMethod =
+                            helperType.GetMethod(
+                                "IsCompleted",
+                                BindingFlags.Public
+                                ||| BindingFlags.NonPublic
+                                ||| BindingFlags.Static
+                            )
+
+                        helperType.Attributes, helperType.IsNotPublic, helperMethod.Attributes
+
+                    let oracleShape = inspect oracleOutputPath
+                    let fsharp2Shape = inspect outputPath
+
+                    Expect.equal
+                        fsharp2Shape
+                        oracleShape
+                        "the internal helper should match the Compatibility Oracle"
+
+                    let _, isNotPublic, _ = fsharp2Shape
+                    Expect.isTrue isNotPublic "the helper type should be assembly-internal"
+
+            testCase "emits and executes an inferred curried static member"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.AsyncEx\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\ntype internal Async =\n    static member inline map f x =\n        x\n"
+
+                withObjectMemberDifferential "fsharp2-curried-static-member" sourceText "Zero"
+                <| fun oracleOutputPath outputPath ->
+                    let inspect assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let helperType =
+                            emittedAssembly.GetType("IcedTasks.AsyncEx.Async", throwOnError = true)
+
+                        let helperMethod =
+                            helperType.GetMethod(
+                                "map",
+                                BindingFlags.Public
+                                ||| BindingFlags.NonPublic
+                                ||| BindingFlags.Static
+                            )
+
+                        helperMethod.Attributes,
+                        helperMethod.GetGenericArguments().Length,
+                        (helperMethod.GetParameters()
+                         |> Array.map (fun parameter -> parameter.ParameterType.ToString())
+                         |> Array.toList),
+                        helperMethod.ReturnType.ToString()
+
+                    let oracleShape = inspect oracleOutputPath
+                    let fsharp2Shape = inspect outputPath
+
+                    Expect.equal
+                        fsharp2Shape
+                        oracleShape
+                        "the curried static member should match the Compatibility Oracle"
+
+                    let invokeMap assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let helperMethod =
+                            emittedAssembly
+                                .GetType("IcedTasks.AsyncEx.Async", throwOnError = true)
+                                .GetMethod(
+                                    "map",
+                                    BindingFlags.Public
+                                    ||| BindingFlags.NonPublic
+                                    ||| BindingFlags.Static
+                                )
+                                .MakeGenericMethod(typeof<int>, typeof<int>)
+
+                        helperMethod.Invoke(
+                            null,
+                            [|
+                                box 0
+                                box 42
+                            |]
+                        )
+                        :?> int
+
+                    let oracleBehavior = invokeMap oracleOutputPath
+                    let fsharp2Behavior = invokeMap outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the curried static member should behave like the Compatibility Oracle"
+
+                    Expect.equal fsharp2Behavior 42 "the member should return its second argument"
+
             testCase "executes a static object member with a parenthesized function type"
             <| fun _ ->
                 let sourceText =
@@ -4263,6 +4399,47 @@ module CompilerTargetTests =
                         "the emitted static call should behave like the Compatibility Oracle"
 
                     Expect.equal fsharp2Behavior 42 "Alias should return the helper result"
+
+            testCase "calls a static member on a constructed generic type"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen System.Runtime.CompilerServices\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Create<'T>() : AsyncValueTaskMethodBuilder<'T> =\n            AsyncValueTaskMethodBuilder<'T>.Create()\n"
+
+                withObjectMemberDifferential
+                    "fsharp2-constructed-generic-static-call"
+                    sourceText
+                    "Create"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeCreate assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        builderType
+                            .GetMethod("Create")
+                            .MakeGenericMethod(typeof<int>)
+                            .Invoke(null, null)
+                            .GetType()
+
+                    let oracleType = invokeCreate oracleOutputPath
+                    let fsharp2Type = invokeCreate outputPath
+
+                    let expectedType =
+                        typeof<System.Runtime.CompilerServices.AsyncValueTaskMethodBuilder<int>>
+
+                    Expect.equal
+                        fsharp2Type
+                        oracleType
+                        "the constructed-type static call should behave like the Compatibility Oracle"
+
+                    Expect.equal
+                        fsharp2Type
+                        expectedType
+                        "Create should return the requested generic method builder"
 
             testCase "executes a grouped FSharp function application"
             <| fun _ ->
@@ -4472,6 +4649,39 @@ module CompilerTargetTests =
 
                     Expect.isTrue fsharp2Behavior "Run should return the resumption delegate"
 
+            testCase "reads an indexed chained instance property"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen System\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline First(error: AggregateException) : Exception =\n            error.InnerExceptions.[0]\n"
+
+                withObjectMemberDifferential "fsharp2-indexed-chained-property" sourceText "First"
+                <| fun oracleOutputPath outputPath ->
+                    let expected: Exception = InvalidOperationException("first")
+                    let aggregate = AggregateException([| expected |])
+
+                    let invokeFirst assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        builderType.GetMethod("First").Invoke(null, [| box aggregate |])
+                        :?> Exception
+
+                    let oracleBehavior = invokeFirst oracleOutputPath
+                    let fsharp2Behavior = invokeFirst outputPath
+
+                    Expect.isTrue
+                        (Object.ReferenceEquals(fsharp2Behavior, oracleBehavior))
+                        "the indexed property should return the same exception as the Compatibility Oracle"
+
+                    Expect.isTrue
+                        (Object.ReferenceEquals(fsharp2Behavior, expected))
+                        "First should return the exception at index zero"
+
             testCase "reads a nested IcedTasks state-machine field"
             <| fun _ ->
                 let sourceText =
@@ -4517,6 +4727,158 @@ module CompilerTargetTests =
 
                     Expect.equal fsharp2Behavior 42 "Read should return the nested Result field"
 
+            testCase "executes a try-with expression"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Run(value: ResumptionDynamicInfo<int>, fallback: ResumptionFunc<int>) : ResumptionFunc<int> =\n            let mutable savedExn = null\n            let mutable result = fallback\n            try\n                result <- value.ResumptionFunc\n            with exn ->\n                savedExn <- exn\n                result <- fallback\n            result\n"
+
+                withObjectMemberDifferential "fsharp2-try-with" sourceText "Run"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeRun assemblyPath value fallback =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        builderType
+                            .GetMethod("Run")
+                            .Invoke(
+                                null,
+                                [|
+                                    box value
+                                    box fallback
+                                |]
+                            )
+                        :?> Microsoft.FSharp.Core.CompilerServices.ResumptionFunc<int>
+
+                    let initial =
+                        Microsoft.FSharp.Core.CompilerServices.ResumptionFunc<int>(fun _ -> true)
+
+                    let fallback =
+                        Microsoft.FSharp.Core.CompilerServices.ResumptionFunc<int>(fun _ -> false)
+
+                    let value =
+                        { new Microsoft.FSharp.Core.CompilerServices.ResumptionDynamicInfo<int>(initial) with
+                            override _.MoveNext(_) = ()
+                            override _.SetStateMachine(_, _) = ()
+                        }
+
+                    let nullValue =
+                        Unchecked.defaultof<
+                            Microsoft.FSharp.Core.CompilerServices.ResumptionDynamicInfo<int>
+                         >
+
+                    let behavior assemblyPath =
+                        let ordinary = invokeRun assemblyPath value fallback
+                        let caught = invokeRun assemblyPath nullValue fallback
+
+                        Object.ReferenceEquals(ordinary, initial),
+                        Object.ReferenceEquals(caught, fallback)
+
+                    let oracleBehavior = behavior oracleOutputPath
+                    let fsharp2Behavior = behavior outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the exception handler should behave like the Compatibility Oracle"
+
+                    Expect.equal
+                        fsharp2Behavior
+                        (true, true)
+                        "Run should distinguish ordinary completion from a caught exception"
+
+            testCase "executes a null-pattern match"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Select(value: System.Exception, fallback: System.Exception) : System.Exception =\n            match value with\n            | null -> fallback\n            | exn -> exn\n"
+
+                withObjectMemberDifferential "fsharp2-null-pattern-match" sourceText "Select"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeSelect assemblyPath value fallback =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        builderType
+                            .GetMethod("Select")
+                            .Invoke(
+                                null,
+                                [|
+                                    box value
+                                    box fallback
+                                |]
+                            )
+
+                    let value = InvalidOperationException()
+                    let fallback = FormatException()
+                    let nullValue = Unchecked.defaultof<Exception>
+
+                    let behavior assemblyPath =
+                        Object.ReferenceEquals(invokeSelect assemblyPath value fallback, value),
+                        Object.ReferenceEquals(
+                            invokeSelect assemblyPath nullValue fallback,
+                            fallback
+                        )
+
+                    let oracleBehavior = behavior oracleOutputPath
+                    let fsharp2Behavior = behavior outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the null-pattern match should behave like the Compatibility Oracle"
+
+                    Expect.equal
+                        fsharp2Behavior
+                        (true, true)
+                        "Select should preserve the value or choose the null fallback"
+
+            testCase "executes a unit-valued null-pattern match"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Observe(value: System.Exception) : unit =\n            match value with\n            | null -> ()\n            | exn -> ()\n"
+
+                withObjectMemberDifferential "fsharp2-null-pattern-unit" sourceText "Observe"
+                <| fun oracleOutputPath outputPath ->
+                    let behavior assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        let observe = builderType.GetMethod("Observe")
+                        let nullResult = observe.Invoke(null, [| null |])
+
+                        let valueResult =
+                            observe.Invoke(null, [| box (InvalidOperationException()) |])
+
+                        Object.ReferenceEquals(nullResult, null),
+                        Object.ReferenceEquals(valueResult, null)
+
+                    let oracleBehavior = behavior oracleOutputPath
+                    let fsharp2Behavior = behavior outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the unit-valued null match should behave like the Compatibility Oracle"
+
+                    Expect.equal
+                        fsharp2Behavior
+                        (true, true)
+                        "Observe should return unit for both null-match arms"
+
             testCase "executes an if-then-else expression"
             <| fun _ ->
                 let sourceText =
@@ -4547,6 +4909,89 @@ module CompilerTargetTests =
                         "the emitted conditional should behave like the Compatibility Oracle"
 
                     Expect.equal fsharp2Behavior (0, 42) "Choose should select one branch"
+
+            testCase "executes a multiline Boolean conjunction"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Choose(first: bool, second: bool) : int =\n            if\n                first\n                && second\n            then\n                42\n            else\n                0\n"
+
+                withObjectMemberDifferential
+                    "fsharp2-multiline-boolean-conjunction"
+                    sourceText
+                    "Choose"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeChoose assemblyPath first second =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        builderType
+                            .GetMethod("Choose")
+                            .Invoke(
+                                null,
+                                [|
+                                    box first
+                                    box second
+                                |]
+                            )
+                        :?> int
+
+                    let behavior assemblyPath =
+                        invokeChoose assemblyPath false false,
+                        invokeChoose assemblyPath false true,
+                        invokeChoose assemblyPath true false,
+                        invokeChoose assemblyPath true true
+
+                    let oracleBehavior = behavior oracleOutputPath
+                    let fsharp2Behavior = behavior outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the multiline Boolean conjunction should behave like the Compatibility Oracle"
+
+                    Expect.equal
+                        fsharp2Behavior
+                        (0, 0, 0, 42)
+                        "Choose should require both conditions"
+
+            testCase "executes an ungrouped isNull intrinsic application"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen System\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline IsMissing(value: System.Object) : bool =\n            isNull value\n"
+
+                withObjectMemberDifferential "fsharp2-ungrouped-is-null" sourceText "IsMissing"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeIsMissing assemblyPath value =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        builderType.GetMethod("IsMissing").Invoke(null, [| value |]) :?> bool
+
+                    let behavior assemblyPath =
+                        invokeIsMissing assemblyPath null, invokeIsMissing assemblyPath (obj ())
+
+                    let oracleBehavior = behavior oracleOutputPath
+                    let fsharp2Behavior = behavior outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "isNull should behave like the Compatibility Oracle"
+
+                    Expect.equal
+                        fsharp2Behavior
+                        (true, false)
+                        "isNull should distinguish null from an object"
 
             testCase "executes Boolean negation"
             <| fun _ ->
@@ -4782,6 +5227,2145 @@ module CompilerTargetTests =
                         "the bound instance member should behave like the Compatibility Oracle"
 
                     Expect.equal fsharp2Behavior 42 "the bound Zero member should remain callable"
+
+            testCase "emits and executes a two-parameter FSharp delegate lambda"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen System.Runtime.CompilerServices\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Make() : SetStateMachineMethodImpl<int> =\n            SetStateMachineMethodImpl<int>(fun sm state -> ())\n"
+
+                withObjectMemberDifferential
+                    "fsharp2-two-parameter-delegate-lambda"
+                    sourceText
+                    "Make"
+                <| fun oracleOutputPath outputPath ->
+                    let invokeMake assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        let callback = builderType.GetMethod("Make").Invoke(null, null)
+
+                        let stateMachine =
+                            { new System.Runtime.CompilerServices.IAsyncStateMachine with
+                                member _.MoveNext() = ()
+                                member _.SetStateMachine(_) = ()
+                            }
+
+                        let arguments = [|
+                            box
+                                Unchecked.defaultof<
+                                    Microsoft.FSharp.Core.CompilerServices.ResumableStateMachine<int>
+                                 >
+                            box stateMachine
+                        |]
+
+                        let result =
+                            callback.GetType().GetMethod("Invoke").Invoke(callback, arguments)
+
+                        Object.ReferenceEquals(result, null)
+
+                    let oracleBehavior = invokeMake oracleOutputPath
+                    let fsharp2Behavior = invokeMake outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the two-parameter delegate should behave like the Compatibility Oracle"
+
+                    Expect.isTrue fsharp2Behavior "the delegate should return unit"
+
+            testCase "emits and executes a struct tuple expression"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen Microsoft.FSharp.Core.CompilerServices\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        [<NoEagerConstraintApplication>]\n        static member inline Pair(left: int, right: System.String) : System.ValueTuple<int, System.String> =\n            struct (left, right)\n"
+
+                withObjectMemberDifferential "fsharp2-struct-tuple-expression" sourceText "Pair"
+                <| fun oracleOutputPath outputPath ->
+                    let invokePair assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        builderType
+                            .GetMethod("Pair")
+                            .Invoke(
+                                null,
+                                [|
+                                    box 42
+                                    box "right"
+                                |]
+                            )
+                        :?> ValueTuple<int, string>
+
+                    let oracleBehavior = invokePair oracleOutputPath
+                    let fsharp2Behavior = invokePair outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the struct tuple should behave like the Compatibility Oracle"
+
+                    Expect.equal
+                        fsharp2Behavior
+                        (ValueTuple<int, string>(42, "right"))
+                        "the struct tuple should preserve both elements"
+
+            testCase "preserves attributed nested module value bindings"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-nested-module-values",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "ValueTask.fs")
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "namespace IcedTasks.ValueTasks\n\n[<AutoOpen>]\nmodule ValueTasks =\n    type ValueTaskBuilder() =\n        member inline _.Zero() = 0\n\n    [<AutoOpen>]\n    module ValueTaskBuilder =\n        let valueTask = ValueTaskBuilder()\n        let vTask = valueTask\n"
+                    )
+
+                    let oracleOutputPath = Path.Combine(root, "ValueTask-oracle.dll")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root (Path.Combine(root, "oracle.rsp")) [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{oracleOutputPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let outputPath, _ =
+                        compileForExportFingerprint
+                            root
+                            (Path.Combine(root, "fsharp2.rsp"))
+                            sourcePath
+                            "ValueTask-fsharp2"
+                            []
+
+                    let inspect assemblyPath =
+                        let assembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            assembly.GetType(
+                                "IcedTasks.ValueTasks.ValueTasks+ValueTaskBuilder",
+                                throwOnError = true
+                            )
+
+                        let nestedModuleType =
+                            assembly.GetType(
+                                "IcedTasks.ValueTasks.ValueTasks+ValueTaskBuilderModule",
+                                throwOnError = true
+                            )
+
+                        let valueTaskProperty =
+                            nestedModuleType.GetProperty(
+                                "valueTask",
+                                BindingFlags.Public
+                                ||| BindingFlags.Static
+                            )
+
+                        let vTaskProperty =
+                            nestedModuleType.GetProperty(
+                                "vTask",
+                                BindingFlags.Public
+                                ||| BindingFlags.Static
+                            )
+
+                        Expect.isNotNull
+                            valueTaskProperty
+                            "valueTask should be a public module value"
+
+                        Expect.isNotNull vTaskProperty "vTask should be a public module value"
+
+                        let valueTask = valueTaskProperty.GetValue(null)
+                        let repeatedValueTask = valueTaskProperty.GetValue(null)
+                        let vTask = vTaskProperty.GetValue(null)
+
+                        nestedModuleType.Attributes,
+                        valueTaskProperty.PropertyType.FullName,
+                        vTaskProperty.PropertyType.FullName,
+                        builderType.IsInstanceOfType(valueTask),
+                        Object.ReferenceEquals(valueTask, repeatedValueTask),
+                        Object.ReferenceEquals(valueTask, vTask)
+
+                    let oracleShape = inspect oracleOutputPath
+                    let fsharp2Shape = inspect outputPath
+
+                    Expect.equal
+                        fsharp2Shape
+                        oracleShape
+                        "the nested module values should match the Compatibility Oracle"
+
+                    let _, _, _, hasBuilderType, isStable, aliasesValueTask = fsharp2Shape
+                    Expect.isTrue hasBuilderType "valueTask should contain a ValueTaskBuilder"
+                    Expect.isTrue isStable "valueTask should preserve module-value identity"
+                    Expect.isTrue aliasesValueTask "vTask should alias valueTask"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "preserves a require-qualified-access nested module generic inline function"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-nested-module-inline-function",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "ValueTask.fs")
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "namespace IcedTasks.ValueTasks\n\nopen System.Threading.Tasks\n\n[<AutoOpen>]\nmodule ValueTasks =\n    [<RequireQualifiedAccess>]\n    module ValueTask =\n        let inline singleton (item: 'item) : ValueTask<'item> =\n            ValueTask<'item> item\n"
+                    )
+
+                    let oracleOutputPath = Path.Combine(root, "ValueTask-oracle.dll")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root (Path.Combine(root, "oracle.rsp")) [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{oracleOutputPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let outputPath, _ =
+                        compileForExportFingerprint
+                            root
+                            (Path.Combine(root, "fsharp2.rsp"))
+                            sourcePath
+                            "ValueTask-fsharp2"
+                            []
+
+                    let inspect assemblyPath =
+                        let assembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let nestedModuleType =
+                            assembly.GetType(
+                                "IcedTasks.ValueTasks.ValueTasks+ValueTask",
+                                throwOnError = true
+                            )
+
+                        let singleton =
+                            nestedModuleType.GetMethod(
+                                "singleton",
+                                BindingFlags.Public
+                                ||| BindingFlags.Static
+                            )
+
+                        Expect.isNotNull singleton "singleton should be a public module function"
+
+                        let genericParameter =
+                            singleton.GetGenericArguments()
+                            |> Array.exactlyOne
+
+                        let parameter =
+                            singleton.GetParameters()
+                            |> Array.exactlyOne
+
+                        let returnTypeArgument =
+                            singleton.ReturnType.GetGenericArguments()
+                            |> Array.exactlyOne
+
+                        let behavior =
+                            singleton.MakeGenericMethod(typeof<int>).Invoke(null, [| box 42 |])
+                            :?> System.Threading.Tasks.ValueTask<int>
+
+                        nestedModuleType.Attributes,
+                        (nestedModuleType.GetCustomAttributesData()
+                         |> Seq.map (fun attribute -> attribute.AttributeType.FullName)
+                         |> Seq.sort
+                         |> Seq.toList),
+                        singleton.Attributes,
+                        genericParameter.Name,
+                        genericParameter.GenericParameterAttributes,
+                        parameter.Name,
+                        parameter.ParameterType.IsGenericParameter,
+                        parameter.ParameterType.GenericParameterPosition,
+                        singleton.ReturnType.GetGenericTypeDefinition().FullName,
+                        returnTypeArgument.IsGenericParameter,
+                        returnTypeArgument.GenericParameterPosition,
+                        behavior.IsCompletedSuccessfully,
+                        behavior.Result
+
+                    let oracleShape = inspect oracleOutputPath
+                    let fsharp2Shape = inspect outputPath
+
+                    Expect.equal
+                        fsharp2Shape
+                        oracleShape
+                        "the qualified nested-module function should match the Compatibility Oracle"
+
+                    let (_,
+                         attributes,
+                         _,
+                         genericName,
+                         _,
+                         parameterName,
+                         _,
+                         _,
+                         returnType,
+                         _,
+                         _,
+                         completed,
+                         result) =
+                        fsharp2Shape
+
+                    Expect.contains
+                        attributes
+                        "Microsoft.FSharp.Core.RequireQualifiedAccessAttribute"
+                        "the nested module should require qualified access"
+
+                    Expect.equal
+                        genericName
+                        "item"
+                        "the inferred method type parameter should retain its name"
+
+                    Expect.equal
+                        parameterName
+                        "item"
+                        "the method parameter should retain its source name"
+
+                    Expect.equal
+                        returnType
+                        "System.Threading.Tasks.ValueTask`1"
+                        "singleton should return ValueTask<'item>"
+
+                    Expect.isTrue
+                        completed
+                        "the constructed ValueTask should complete synchronously"
+
+                    Expect.equal result 42 "singleton should preserve its item"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "preserves a nested module inside an IcedTasks builder module"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.PoolingValueTasks\n\n[<AutoOpen>]\nmodule PoolingValueTasks =\n    open System.Threading.Tasks\n\n    [<AutoOpen>]\n    module ValueTaskBuilder =\n        [<RequireQualifiedAccess>]\n        module ValueTask =\n            open System.Threading.Tasks\n\n            let inline singleton (item: 'item) : ValueTask<'item> =\n                ValueTask<'item> item\n"
+
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-recursive-nested-module",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "PoolingValueTask.fs")
+                    File.WriteAllText(sourcePath, sourceText)
+
+                    let oracleOutputPath = Path.Combine(root, "PoolingValueTask-oracle.dll")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root (Path.Combine(root, "oracle.rsp")) [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{oracleOutputPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let outputPath, _ =
+                        compileForExportFingerprint
+                            root
+                            (Path.Combine(root, "fsharp2.rsp"))
+                            sourcePath
+                            "PoolingValueTask-fsharp2"
+                            []
+
+                    let inspect assemblyPath =
+                        let assembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderModule =
+                            assembly.GetType(
+                                "IcedTasks.PoolingValueTasks.PoolingValueTasks+ValueTaskBuilder",
+                                throwOnError = true
+                            )
+
+                        let valueTaskModule =
+                            assembly.GetType(
+                                "IcedTasks.PoolingValueTasks.PoolingValueTasks+ValueTaskBuilder+ValueTask",
+                                throwOnError = true
+                            )
+
+                        let singleton =
+                            valueTaskModule.GetMethod(
+                                "singleton",
+                                BindingFlags.Public
+                                ||| BindingFlags.Static
+                            )
+
+                        let result =
+                            singleton.MakeGenericMethod(typeof<int>).Invoke(null, [| box 42 |])
+                            :?> System.Threading.Tasks.ValueTask<int>
+
+                        builderModule.Attributes,
+                        (builderModule.GetCustomAttributesData()
+                         |> Seq.map (fun attribute -> attribute.AttributeType.FullName)
+                         |> Seq.sort
+                         |> Seq.toArray),
+                        valueTaskModule.Attributes,
+                        (valueTaskModule.GetCustomAttributesData()
+                         |> Seq.map (fun attribute -> attribute.AttributeType.FullName)
+                         |> Seq.sort
+                         |> Seq.toArray),
+                        valueTaskModule.DeclaringType.FullName,
+                        singleton.Attributes,
+                        result.IsCompletedSuccessfully,
+                        result.Result
+
+                    let oracleShape = inspect oracleOutputPath
+                    let fsharp2Shape = inspect outputPath
+
+                    Expect.equal
+                        fsharp2Shape
+                        oracleShape
+                        "recursive nested-module metadata and behavior should match the Compatibility Oracle"
+
+                    let (_,
+                         builderAttributes,
+                         _,
+                         valueTaskAttributes,
+                         declaringType,
+                         _,
+                         completed,
+                         result) =
+                        fsharp2Shape
+
+                    Expect.contains
+                        builderAttributes
+                        "Microsoft.FSharp.Core.AutoOpenAttribute"
+                        "the builder module should remain auto-open"
+
+                    Expect.contains
+                        valueTaskAttributes
+                        "Microsoft.FSharp.Core.RequireQualifiedAccessAttribute"
+                        "the helper module should require qualified access"
+
+                    Expect.equal
+                        declaringType
+                        "IcedTasks.PoolingValueTasks.PoolingValueTasks+ValueTaskBuilder"
+                        "the helper module should be nested under the builder module"
+
+                    Expect.isTrue completed "singleton should return a completed ValueTask"
+                    Expect.equal result 42 "singleton should preserve its item"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "preserves attributed curried nested-module function parameters"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.ValueTasks\n\nopen System.Threading.Tasks\n\n[<AutoOpen>]\nmodule ValueTasks =\n    [<RequireQualifiedAccess>]\n    module ValueTask =\n        let inline select\n            ([<InlineIfLambda>] (binder: 'input -> ValueTask<'output>))\n            (cTask: ValueTask<'input>)\n            : ValueTask<'input> =\n            cTask\n"
+
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-nested-module-curried-parameters",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "ValueTask.fs")
+                    File.WriteAllText(sourcePath, sourceText)
+
+                    let oracleOutputPath = Path.Combine(root, "ValueTask-oracle.dll")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root (Path.Combine(root, "oracle.rsp")) [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{oracleOutputPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let outputPath, _ =
+                        compileForExportFingerprint
+                            root
+                            (Path.Combine(root, "fsharp2.rsp"))
+                            sourcePath
+                            "ValueTask-fsharp2"
+                            []
+
+                    let inspect assemblyPath =
+                        let assembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let nestedModuleType =
+                            assembly.GetType(
+                                "IcedTasks.ValueTasks.ValueTasks+ValueTask",
+                                throwOnError = true
+                            )
+
+                        let select =
+                            nestedModuleType.GetMethod(
+                                "select",
+                                BindingFlags.Public
+                                ||| BindingFlags.Static
+                            )
+
+                        Expect.isNotNull select "select should be a public module function"
+
+                        let genericParameters = select.GetGenericArguments()
+                        let parameters = select.GetParameters()
+                        let binderTypeArguments = parameters.[0].ParameterType.GetGenericArguments()
+
+                        let binderRangeTypeArguments = binderTypeArguments.[1].GetGenericArguments()
+
+                        let taskTypeArguments = parameters.[1].ParameterType.GetGenericArguments()
+                        let returnTypeArguments = select.ReturnType.GetGenericArguments()
+
+                        let binder: int -> System.Threading.Tasks.ValueTask<string> =
+                            fun value -> System.Threading.Tasks.ValueTask<string>(string value)
+
+                        let behavior =
+                            select
+                                .MakeGenericMethod(typeof<int>, typeof<string>)
+                                .Invoke(
+                                    null,
+                                    [|
+                                        box binder
+                                        box (System.Threading.Tasks.ValueTask<int>(42))
+                                    |]
+                                )
+                            :?> System.Threading.Tasks.ValueTask<int>
+
+                        nestedModuleType.Attributes,
+                        select.Attributes,
+                        (genericParameters
+                         |> Array.map (fun parameter ->
+                             parameter.Name,
+                             parameter.GenericParameterPosition,
+                             parameter.GenericParameterAttributes
+                         )),
+                        (parameters
+                         |> Array.map (fun parameter ->
+                             parameter.Name,
+                             (parameter.GetCustomAttributesData()
+                              |> Seq.map (fun attribute -> attribute.AttributeType.FullName)
+                              |> Seq.sort
+                              |> Seq.toArray)
+                         )),
+                        parameters.[0].ParameterType.GetGenericTypeDefinition().FullName,
+                        binderTypeArguments.[0].GenericParameterPosition,
+                        binderTypeArguments.[1].GetGenericTypeDefinition().FullName,
+                        binderRangeTypeArguments.[0].GenericParameterPosition,
+                        parameters.[1].ParameterType.GetGenericTypeDefinition().FullName,
+                        taskTypeArguments.[0].GenericParameterPosition,
+                        select.ReturnType.GetGenericTypeDefinition().FullName,
+                        returnTypeArguments.[0].GenericParameterPosition,
+                        behavior.IsCompletedSuccessfully,
+                        behavior.Result
+
+                    let oracleShape = inspect oracleOutputPath
+                    let fsharp2Shape = inspect outputPath
+
+                    Expect.equal
+                        fsharp2Shape
+                        oracleShape
+                        "the attributed curried parameters should match the Compatibility Oracle"
+
+                    let (_,
+                         _,
+                         genericParameters,
+                         parameters,
+                         _,
+                         _,
+                         _,
+                         _,
+                         _,
+                         _,
+                         _,
+                         _,
+                         completed,
+                         result) =
+                        fsharp2Shape
+
+                    Expect.sequenceEqual
+                        (genericParameters
+                         |> Array.map (fun (name, _, _) -> name))
+                        [|
+                            "input"
+                            "output"
+                        |]
+                        "the inferred generic parameter order should follow source use"
+
+                    Expect.contains
+                        (let _, attributes = parameters.[0] in attributes)
+                        "Microsoft.FSharp.Core.InlineIfLambdaAttribute"
+                        "the binder parameter should retain InlineIfLambdaAttribute"
+
+                    Expect.isTrue completed "select should return the completed input ValueTask"
+                    Expect.equal result 42 "select should preserve the input ValueTask result"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "executes a value-task bind computation expression"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-value-task-bind-computation",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let builderSourcePath = Path.Combine(root, "Builder.fs")
+                    let builderOutputPath = Path.Combine(root, "Builder.dll")
+
+                    File.WriteAllText(
+                        builderSourcePath,
+                        "namespace TestBuilders\n\nopen System.Threading.Tasks\n\ntype ValueTaskBuilder() =\n    member _.Bind(source: ValueTask<'T>, continuation: 'T -> ValueTask<'U>) : ValueTask<'U> =\n        ValueTask<'U>(task {\n            let! value = source.AsTask()\n            return! (continuation value).AsTask()\n        })\n\n    member _.ReturnFrom(source: ValueTask<'T>) = source\n    member _.Delay(generator: unit -> ValueTask<'T>) = generator\n    member _.Run(generator: unit -> ValueTask<'T>) = generator()\n\n[<AutoOpen>]\nmodule Builders =\n    let valueTask = ValueTaskBuilder()\n"
+                    )
+
+                    let builderResult =
+                        invokeCompatibilityOracle root (Path.Combine(root, "builder.rsp")) [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{builderOutputPath}"
+                            builderSourcePath
+                        ]
+
+                    Expect.equal
+                        builderResult.ExitCode
+                        0
+                        (builderResult.StandardOutput
+                         + builderResult.StandardError)
+
+                    let sourcePath = Path.Combine(root, "ValueTask.fs")
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "namespace IcedTasks.ValueTasks\n\nopen System.Threading.Tasks\nopen TestBuilders\n\n[<AutoOpen>]\nmodule ValueTasks =\n    [<RequireQualifiedAccess>]\n    module ValueTask =\n        let inline bind\n            ([<InlineIfLambda>] (binder: 'input -> ValueTask<'output>))\n            (cTask: ValueTask<'input>)\n            =\n            valueTask {\n                let! cResult = cTask\n                return! binder cResult\n            }\n"
+                    )
+
+                    let oracleOutputPath = Path.Combine(root, "ValueTask-oracle.dll")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root (Path.Combine(root, "oracle.rsp")) [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--reference:{builderOutputPath}"
+                            $"--out:{oracleOutputPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let outputPath, _ =
+                        compileForExportFingerprint
+                            root
+                            (Path.Combine(root, "fsharp2.rsp"))
+                            sourcePath
+                            "ValueTask-fsharp2"
+                            [ builderOutputPath ]
+
+                    let inspect assemblyPath =
+                        use assemblyScope =
+                            new AssemblyLoadScope(assemblyPath, [ builderOutputPath ])
+
+                        let assembly = assemblyScope.Assembly
+
+                        let nestedModuleType =
+                            assembly.GetType(
+                                "IcedTasks.ValueTasks.ValueTasks+ValueTask",
+                                throwOnError = true
+                            )
+
+                        let bind =
+                            nestedModuleType
+                                .GetMethod(
+                                    "bind",
+                                    BindingFlags.Public
+                                    ||| BindingFlags.Static
+                                )
+                                .MakeGenericMethod(typeof<int>, typeof<string>)
+
+                        let invoke
+                            (binder: int -> System.Threading.Tasks.ValueTask<string>)
+                            (source: System.Threading.Tasks.ValueTask<int>)
+                            =
+                            try
+                                Choice1Of2(
+                                    bind.Invoke(
+                                        null,
+                                        [|
+                                            box binder
+                                            box source
+                                        |]
+                                    )
+                                    :?> System.Threading.Tasks.ValueTask<string>
+                                )
+                            with :? TargetInvocationException as error when
+                                not (isNull error.InnerException) ->
+                                Choice2Of2 error.InnerException
+
+                        let binder: int -> System.Threading.Tasks.ValueTask<string> =
+                            fun value -> System.Threading.Tasks.ValueTask<string>($"{value}!")
+
+                        let completed =
+                            match invoke binder (System.Threading.Tasks.ValueTask<int>(42)) with
+                            | Choice1Of2 result -> result.IsCompletedSuccessfully, result.Result
+                            | Choice2Of2 error -> raise error
+
+                        let delayedSource =
+                            System.Threading.Tasks.TaskCompletionSource<int>(
+                                System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously
+                            )
+
+                        let delayedResult =
+                            match
+                                invoke
+                                    binder
+                                    (System.Threading.Tasks.ValueTask<int>(delayedSource.Task))
+                            with
+                            | Choice1Of2 result -> result
+                            | Choice2Of2 error -> raise error
+
+                        let wasPending = not delayedResult.IsCompleted
+                        delayedSource.SetResult(7)
+
+                        let delayedValue = delayedResult.AsTask().GetAwaiter().GetResult()
+
+                        use cancellation = new Threading.CancellationTokenSource()
+                        cancellation.Cancel()
+
+                        let canceledResult =
+                            match
+                                invoke
+                                    binder
+                                    (System.Threading.Tasks.ValueTask<int>(
+                                        System.Threading.Tasks.Task.FromCanceled<int>(
+                                            cancellation.Token
+                                        )
+                                    ))
+                            with
+                            | Choice1Of2 result -> result.AsTask()
+                            | Choice2Of2 error -> raise error
+
+                        let canceled =
+                            try
+                                canceledResult.GetAwaiter().GetResult()
+                                |> ignore
+
+                                false, false
+                            with :? OperationCanceledException as error ->
+                                canceledResult.IsCanceled,
+                                error.CancellationToken = cancellation.Token
+
+                        let sourceError = InvalidOperationException("source failure")
+
+                        let faultedResult =
+                            match
+                                invoke
+                                    binder
+                                    (System.Threading.Tasks.ValueTask<int>(
+                                        System.Threading.Tasks.Task.FromException<int>(sourceError)
+                                    ))
+                            with
+                            | Choice1Of2 result -> result.AsTask()
+                            | Choice2Of2 error -> raise error
+
+                        let faulted =
+                            try
+                                faultedResult.GetAwaiter().GetResult()
+                                |> ignore
+
+                                false, String.Empty
+                            with error ->
+                                faultedResult.IsFaulted, error.Message
+
+                        let binderError = InvalidOperationException("binder failure")
+
+                        let throwingBinder: int -> System.Threading.Tasks.ValueTask<string> =
+                            fun _ -> raise binderError
+
+                        let binderFailure =
+                            match
+                                invoke throwingBinder (System.Threading.Tasks.ValueTask<int>(42))
+                            with
+                            | Choice2Of2 error -> true, error.Message
+                            | Choice1Of2 result ->
+                                let resultTask = result.AsTask()
+
+                                try
+                                    resultTask.GetAwaiter().GetResult()
+                                    |> ignore
+
+                                    false, String.Empty
+                                with error ->
+                                    resultTask.IsFaulted, error.Message
+
+                        completed, wasPending, delayedValue, canceled, faulted, binderFailure
+
+                    let oracleBehavior = inspect oracleOutputPath
+                    let fsharp2Behavior = inspect outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the value-task bind computation should match the Compatibility Oracle"
+
+                    let completed, wasPending, delayedValue, canceled, faulted, binderFailure =
+                        fsharp2Behavior
+
+                    Expect.equal
+                        completed
+                        (true, "42!")
+                        "the completed path should stay synchronous"
+
+                    Expect.isTrue wasPending "the delayed path should not block the caller"
+
+                    Expect.equal
+                        delayedValue
+                        "7!"
+                        "the delayed path should resume through the binder"
+
+                    Expect.equal
+                        canceled
+                        (true, true)
+                        "cancellation and its token should be preserved"
+
+                    Expect.equal
+                        faulted
+                        (true, "source failure")
+                        "source failures should stay faulted"
+
+                    Expect.equal
+                        binderFailure
+                        (true, "binder failure")
+                        "binder failures should stay faulted"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "executes a value-task map computation expression"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-value-task-map-computation",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let builderSourcePath = Path.Combine(root, "Builder.fs")
+                    let builderOutputPath = Path.Combine(root, "Builder.dll")
+
+                    File.WriteAllText(
+                        builderSourcePath,
+                        "namespace TestBuilders\n\nopen System.Threading.Tasks\n\ntype ValueTaskBuilder() =\n    member _.Bind(source: ValueTask<'T>, continuation: 'T -> ValueTask<'U>) : ValueTask<'U> =\n        ValueTask<'U>(task {\n            let! value = source.AsTask()\n            return! (continuation value).AsTask()\n        })\n\n    member _.Return(value: 'T) = ValueTask<'T>(value)\n    member _.Delay(generator: unit -> ValueTask<'T>) = generator\n    member _.Run(generator: unit -> ValueTask<'T>) = generator()\n\n[<AutoOpen>]\nmodule Builders =\n    let valueTask = ValueTaskBuilder()\n"
+                    )
+
+                    let builderResult =
+                        invokeCompatibilityOracle root (Path.Combine(root, "builder.rsp")) [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{builderOutputPath}"
+                            builderSourcePath
+                        ]
+
+                    Expect.equal
+                        builderResult.ExitCode
+                        0
+                        (builderResult.StandardOutput
+                         + builderResult.StandardError)
+
+                    let sourcePath = Path.Combine(root, "ValueTask.fs")
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "namespace IcedTasks.ValueTasks\n\nopen System.Threading.Tasks\nopen TestBuilders\n\n[<AutoOpen>]\nmodule ValueTasks =\n    [<RequireQualifiedAccess>]\n    module ValueTask =\n        let inline map ([<InlineIfLambda>] mapper: 'input -> 'output) (cTask: ValueTask<'input>) =\n            valueTask {\n                let! cResult = cTask\n                return mapper cResult\n            }\n"
+                    )
+
+                    let oracleOutputPath = Path.Combine(root, "ValueTask-oracle.dll")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root (Path.Combine(root, "oracle.rsp")) [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--reference:{builderOutputPath}"
+                            $"--out:{oracleOutputPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let outputPath, _ =
+                        compileForExportFingerprint
+                            root
+                            (Path.Combine(root, "fsharp2.rsp"))
+                            sourcePath
+                            "ValueTask-fsharp2"
+                            [ builderOutputPath ]
+
+                    let inspect assemblyPath =
+                        use assemblyScope =
+                            new AssemblyLoadScope(assemblyPath, [ builderOutputPath ])
+
+                        let assembly = assemblyScope.Assembly
+
+                        let nestedModuleType =
+                            assembly.GetType(
+                                "IcedTasks.ValueTasks.ValueTasks+ValueTask",
+                                throwOnError = true
+                            )
+
+                        let map =
+                            nestedModuleType
+                                .GetMethod(
+                                    "map",
+                                    BindingFlags.Public
+                                    ||| BindingFlags.Static
+                                )
+                                .MakeGenericMethod(typeof<int>, typeof<string>)
+
+                        let invoke
+                            (mapper: int -> string)
+                            (source: System.Threading.Tasks.ValueTask<int>)
+                            =
+                            try
+                                Choice1Of2(
+                                    map.Invoke(
+                                        null,
+                                        [|
+                                            box mapper
+                                            box source
+                                        |]
+                                    )
+                                    :?> System.Threading.Tasks.ValueTask<string>
+                                )
+                            with :? TargetInvocationException as error when
+                                not (isNull error.InnerException) ->
+                                Choice2Of2 error.InnerException
+
+                        let mapper: int -> string = fun value -> $"{value}!"
+
+                        let completed =
+                            match invoke mapper (System.Threading.Tasks.ValueTask<int>(42)) with
+                            | Choice1Of2 result -> result.IsCompletedSuccessfully, result.Result
+                            | Choice2Of2 error -> raise error
+
+                        let delayedSource =
+                            System.Threading.Tasks.TaskCompletionSource<int>(
+                                System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously
+                            )
+
+                        let delayedResult =
+                            match
+                                invoke
+                                    mapper
+                                    (System.Threading.Tasks.ValueTask<int>(delayedSource.Task))
+                            with
+                            | Choice1Of2 result -> result
+                            | Choice2Of2 error -> raise error
+
+                        let wasPending = not delayedResult.IsCompleted
+                        delayedSource.SetResult(7)
+
+                        let delayedValue = delayedResult.AsTask().GetAwaiter().GetResult()
+
+                        use cancellation = new Threading.CancellationTokenSource()
+                        cancellation.Cancel()
+
+                        let canceledResult =
+                            match
+                                invoke
+                                    mapper
+                                    (System.Threading.Tasks.ValueTask<int>(
+                                        System.Threading.Tasks.Task.FromCanceled<int>(
+                                            cancellation.Token
+                                        )
+                                    ))
+                            with
+                            | Choice1Of2 result -> result.AsTask()
+                            | Choice2Of2 error -> raise error
+
+                        let canceled =
+                            try
+                                canceledResult.GetAwaiter().GetResult()
+                                |> ignore
+
+                                false, false
+                            with :? OperationCanceledException as error ->
+                                canceledResult.IsCanceled,
+                                error.CancellationToken = cancellation.Token
+
+                        let sourceError = InvalidOperationException("source failure")
+
+                        let faultedResult =
+                            match
+                                invoke
+                                    mapper
+                                    (System.Threading.Tasks.ValueTask<int>(
+                                        System.Threading.Tasks.Task.FromException<int>(sourceError)
+                                    ))
+                            with
+                            | Choice1Of2 result -> result.AsTask()
+                            | Choice2Of2 error -> raise error
+
+                        let faulted =
+                            try
+                                faultedResult.GetAwaiter().GetResult()
+                                |> ignore
+
+                                false, String.Empty
+                            with error ->
+                                faultedResult.IsFaulted, error.Message
+
+                        let mapperError = InvalidOperationException("mapper failure")
+                        let throwingMapper: int -> string = fun _ -> raise mapperError
+
+                        let mapperFailure =
+                            match
+                                invoke throwingMapper (System.Threading.Tasks.ValueTask<int>(42))
+                            with
+                            | Choice2Of2 error -> true, error.Message
+                            | Choice1Of2 result ->
+                                let resultTask = result.AsTask()
+
+                                try
+                                    resultTask.GetAwaiter().GetResult()
+                                    |> ignore
+
+                                    false, String.Empty
+                                with error ->
+                                    resultTask.IsFaulted, error.Message
+
+                        completed, wasPending, delayedValue, canceled, faulted, mapperFailure
+
+                    let oracleBehavior = inspect oracleOutputPath
+                    let fsharp2Behavior = inspect outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the value-task map computation should match the Compatibility Oracle"
+
+                    let completed, wasPending, delayedValue, canceled, faulted, mapperFailure =
+                        fsharp2Behavior
+
+                    Expect.equal
+                        completed
+                        (true, "42!")
+                        "the completed map path should stay synchronous"
+
+                    Expect.isTrue wasPending "the delayed map path should not block the caller"
+
+                    Expect.equal
+                        delayedValue
+                        "7!"
+                        "the delayed map path should resume through the mapper"
+
+                    Expect.equal
+                        canceled
+                        (true, true)
+                        "map cancellation and its token should be preserved"
+
+                    Expect.equal
+                        faulted
+                        (true, "source failure")
+                        "map source failures should stay faulted"
+
+                    Expect.equal
+                        mapperFailure
+                        (true, "mapper failure")
+                        "mapper failures should stay faulted"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "executes a two-source value-task apply computation expression"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-value-task-apply-computation",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let builderSourcePath = Path.Combine(root, "Builder.fs")
+                    let builderOutputPath = Path.Combine(root, "Builder.dll")
+
+                    File.WriteAllText(
+                        builderSourcePath,
+                        "namespace TestBuilders\n\nopen System.Threading.Tasks\n\ntype ValueTaskBuilder() =\n    member _.Bind(source: ValueTask<'T>, continuation: 'T -> ValueTask<'U>) : ValueTask<'U> =\n        ValueTask<'U>(task {\n            let! value = source.AsTask()\n            return! (continuation value).AsTask()\n        })\n\n    member _.Return(value: 'T) = ValueTask<'T>(value)\n    member _.Delay(generator: unit -> ValueTask<'T>) = generator\n    member _.Run(generator: unit -> ValueTask<'T>) = generator()\n\n[<AutoOpen>]\nmodule Builders =\n    let valueTask = ValueTaskBuilder()\n"
+                    )
+
+                    let builderResult =
+                        invokeCompatibilityOracle root (Path.Combine(root, "builder.rsp")) [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{builderOutputPath}"
+                            builderSourcePath
+                        ]
+
+                    Expect.equal
+                        builderResult.ExitCode
+                        0
+                        (builderResult.StandardOutput
+                         + builderResult.StandardError)
+
+                    let sourcePath = Path.Combine(root, "ValueTask.fs")
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "namespace IcedTasks.ValueTasks\n\nopen System.Threading.Tasks\nopen TestBuilders\n\n[<AutoOpen>]\nmodule ValueTasks =\n    [<RequireQualifiedAccess>]\n    module ValueTask =\n        let inline apply (applicable: ValueTask<'input -> 'output>) (cTask: ValueTask<'input>) =\n            valueTask {\n                let! applier = applicable\n                let! cResult = cTask\n                return applier cResult\n            }\n"
+                    )
+
+                    let oracleOutputPath = Path.Combine(root, "ValueTask-oracle.dll")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root (Path.Combine(root, "oracle.rsp")) [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--reference:{builderOutputPath}"
+                            $"--out:{oracleOutputPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let outputPath, _ =
+                        compileForExportFingerprint
+                            root
+                            (Path.Combine(root, "fsharp2.rsp"))
+                            sourcePath
+                            "ValueTask-fsharp2"
+                            [ builderOutputPath ]
+
+                    let inspect assemblyPath =
+                        use assemblyScope =
+                            new AssemblyLoadScope(assemblyPath, [ builderOutputPath ])
+
+                        let assembly = assemblyScope.Assembly
+
+                        let nestedModuleType =
+                            assembly.GetType(
+                                "IcedTasks.ValueTasks.ValueTasks+ValueTask",
+                                throwOnError = true
+                            )
+
+                        let apply =
+                            nestedModuleType
+                                .GetMethod(
+                                    "apply",
+                                    BindingFlags.Public
+                                    ||| BindingFlags.Static
+                                )
+                                .MakeGenericMethod(typeof<int>, typeof<string>)
+
+                        let invoke
+                            (applicable: System.Threading.Tasks.ValueTask<int -> string>)
+                            (source: System.Threading.Tasks.ValueTask<int>)
+                            =
+                            try
+                                Choice1Of2(
+                                    apply.Invoke(
+                                        null,
+                                        [|
+                                            box applicable
+                                            box source
+                                        |]
+                                    )
+                                    :?> System.Threading.Tasks.ValueTask<string>
+                                )
+                            with :? TargetInvocationException as error when
+                                not (isNull error.InnerException) ->
+                                Choice2Of2 error.InnerException
+
+                        let applier: int -> string = fun value -> $"{value}!"
+
+                        let completed =
+                            match
+                                invoke
+                                    (System.Threading.Tasks.ValueTask<int -> string>(applier))
+                                    (System.Threading.Tasks.ValueTask<int>(42))
+                            with
+                            | Choice1Of2 result -> result.IsCompletedSuccessfully, result.Result
+                            | Choice2Of2 error -> raise error
+
+                        let delayedApplicable =
+                            System.Threading.Tasks.TaskCompletionSource<int -> string>(
+                                System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously
+                            )
+
+                        let delayedApplicableResult =
+                            match
+                                invoke
+                                    (System.Threading.Tasks.ValueTask<int -> string>(
+                                        delayedApplicable.Task
+                                    ))
+                                    (System.Threading.Tasks.ValueTask<int>(7))
+                            with
+                            | Choice1Of2 result -> result
+                            | Choice2Of2 error -> raise error
+
+                        let firstWasPending = not delayedApplicableResult.IsCompleted
+                        delayedApplicable.SetResult(applier)
+
+                        let delayedApplicableValue =
+                            delayedApplicableResult.AsTask().GetAwaiter().GetResult()
+
+                        let delayedInput =
+                            System.Threading.Tasks.TaskCompletionSource<int>(
+                                System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously
+                            )
+
+                        let delayedInputResult =
+                            match
+                                invoke
+                                    (System.Threading.Tasks.ValueTask<int -> string>(applier))
+                                    (System.Threading.Tasks.ValueTask<int>(delayedInput.Task))
+                            with
+                            | Choice1Of2 result -> result
+                            | Choice2Of2 error -> raise error
+
+                        let secondWasPending = not delayedInputResult.IsCompleted
+                        delayedInput.SetResult(8)
+
+                        let delayedInputValue = delayedInputResult.AsTask().GetAwaiter().GetResult()
+
+                        let cancellationOutcome
+                            (token: Threading.CancellationToken)
+                            applicable
+                            source
+                            =
+                            let result =
+                                match invoke applicable source with
+                                | Choice1Of2 value -> value.AsTask()
+                                | Choice2Of2 error -> raise error
+
+                            try
+                                result.GetAwaiter().GetResult()
+                                |> ignore
+
+                                false, false
+                            with :? OperationCanceledException as error ->
+                                result.IsCanceled, error.CancellationToken = token
+
+                        use firstCancellation = new Threading.CancellationTokenSource()
+                        firstCancellation.Cancel()
+
+                        let firstCanceled =
+                            cancellationOutcome
+                                firstCancellation.Token
+                                (System.Threading.Tasks.ValueTask<int -> string>(
+                                    System.Threading.Tasks.Task.FromCanceled<int -> string>(
+                                        firstCancellation.Token
+                                    )
+                                ))
+                                (System.Threading.Tasks.ValueTask<int>(1))
+
+                        use secondCancellation = new Threading.CancellationTokenSource()
+                        secondCancellation.Cancel()
+
+                        let secondCanceled =
+                            cancellationOutcome
+                                secondCancellation.Token
+                                (System.Threading.Tasks.ValueTask<int -> string>(applier))
+                                (System.Threading.Tasks.ValueTask<int>(
+                                    System.Threading.Tasks.Task.FromCanceled<int>(
+                                        secondCancellation.Token
+                                    )
+                                ))
+
+                        let faultOutcome applicable source =
+                            let result =
+                                match invoke applicable source with
+                                | Choice1Of2 value -> value.AsTask()
+                                | Choice2Of2 error -> raise error
+
+                            try
+                                result.GetAwaiter().GetResult()
+                                |> ignore
+
+                                false, String.Empty
+                            with error ->
+                                result.IsFaulted, error.Message
+
+                        let firstFaulted =
+                            faultOutcome
+                                (System.Threading.Tasks.ValueTask<int -> string>(
+                                    System.Threading.Tasks.Task.FromException<int -> string>(
+                                        InvalidOperationException("applicable failure")
+                                    )
+                                ))
+                                (System.Threading.Tasks.ValueTask<int>(1))
+
+                        let secondFaulted =
+                            faultOutcome
+                                (System.Threading.Tasks.ValueTask<int -> string>(applier))
+                                (System.Threading.Tasks.ValueTask<int>(
+                                    System.Threading.Tasks.Task.FromException<int>(
+                                        InvalidOperationException("input failure")
+                                    )
+                                ))
+
+                        let throwingApplier: int -> string =
+                            fun _ -> raise (InvalidOperationException("applier failure"))
+
+                        let applierFailure =
+                            faultOutcome
+                                (System.Threading.Tasks.ValueTask<int -> string>(throwingApplier))
+                                (System.Threading.Tasks.ValueTask<int>(1))
+
+                        completed,
+                        (firstWasPending, delayedApplicableValue),
+                        (secondWasPending, delayedInputValue),
+                        firstCanceled,
+                        secondCanceled,
+                        firstFaulted,
+                        secondFaulted,
+                        applierFailure
+
+                    let oracleBehavior = inspect oracleOutputPath
+                    let fsharp2Behavior = inspect outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the value-task apply computation should match the Compatibility Oracle"
+
+                    let (completed,
+                         firstDelayed,
+                         secondDelayed,
+                         firstCanceled,
+                         secondCanceled,
+                         firstFaulted,
+                         secondFaulted,
+                         applierFailure) =
+                        fsharp2Behavior
+
+                    Expect.equal completed (true, "42!") "completed apply should stay synchronous"
+                    Expect.equal firstDelayed (true, "7!") "apply should await its first source"
+                    Expect.equal secondDelayed (true, "8!") "apply should await its second source"
+
+                    Expect.equal
+                        firstCanceled
+                        (true, true)
+                        "first-source cancellation should survive"
+
+                    Expect.equal
+                        secondCanceled
+                        (true, true)
+                        "second-source cancellation should survive"
+
+                    Expect.equal
+                        firstFaulted
+                        (true, "applicable failure")
+                        "first-source faults should survive"
+
+                    Expect.equal
+                        secondFaulted
+                        (true, "input failure")
+                        "second-source faults should survive"
+
+                    Expect.equal
+                        applierFailure
+                        (true, "applier failure")
+                        "applier failures should stay faulted"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "executes a two-source value-task zip computation expression"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-value-task-zip-computation",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let builderSourcePath = Path.Combine(root, "Builder.fs")
+                    let builderOutputPath = Path.Combine(root, "Builder.dll")
+
+                    File.WriteAllText(
+                        builderSourcePath,
+                        "namespace TestBuilders\n\nopen System.Threading.Tasks\n\ntype ValueTaskBuilder() =\n    member _.Bind(source: ValueTask<'T>, continuation: 'T -> ValueTask<'U>) : ValueTask<'U> =\n        ValueTask<'U>(task {\n            let! value = source.AsTask()\n            return! (continuation value).AsTask()\n        })\n\n    member _.Return(value: 'T) = ValueTask<'T>(value)\n    member _.Delay(generator: unit -> ValueTask<'T>) = generator\n    member _.Run(generator: unit -> ValueTask<'T>) = generator()\n\n[<AutoOpen>]\nmodule Builders =\n    let valueTask = ValueTaskBuilder()\n"
+                    )
+
+                    let builderResult =
+                        invokeCompatibilityOracle root (Path.Combine(root, "builder.rsp")) [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{builderOutputPath}"
+                            builderSourcePath
+                        ]
+
+                    Expect.equal
+                        builderResult.ExitCode
+                        0
+                        (builderResult.StandardOutput
+                         + builderResult.StandardError)
+
+                    let sourcePath = Path.Combine(root, "ValueTask.fs")
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "namespace IcedTasks.ValueTasks\n\nopen System.Threading.Tasks\nopen TestBuilders\n\n[<AutoOpen>]\nmodule ValueTasks =\n    [<RequireQualifiedAccess>]\n    module ValueTask =\n        let inline zip (left: ValueTask<'left>) (right: ValueTask<'right>) =\n            valueTask {\n                let! r1 = left\n                let! r2 = right\n                return r1, r2\n            }\n"
+                    )
+
+                    let oracleOutputPath = Path.Combine(root, "ValueTask-oracle.dll")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root (Path.Combine(root, "oracle.rsp")) [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--reference:{builderOutputPath}"
+                            $"--out:{oracleOutputPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let outputPath, _ =
+                        compileForExportFingerprint
+                            root
+                            (Path.Combine(root, "fsharp2.rsp"))
+                            sourcePath
+                            "ValueTask-fsharp2"
+                            [ builderOutputPath ]
+
+                    let inspect assemblyPath =
+                        use assemblyScope =
+                            new AssemblyLoadScope(assemblyPath, [ builderOutputPath ])
+
+                        let assembly = assemblyScope.Assembly
+
+                        let nestedModuleType =
+                            assembly.GetType(
+                                "IcedTasks.ValueTasks.ValueTasks+ValueTask",
+                                throwOnError = true
+                            )
+
+                        let zip =
+                            nestedModuleType
+                                .GetMethod(
+                                    "zip",
+                                    BindingFlags.Public
+                                    ||| BindingFlags.Static
+                                )
+                                .MakeGenericMethod(typeof<int>, typeof<string>)
+
+                        let invoke
+                            (left: System.Threading.Tasks.ValueTask<int>)
+                            (right: System.Threading.Tasks.ValueTask<string>)
+                            =
+                            try
+                                Choice1Of2(
+                                    zip.Invoke(
+                                        null,
+                                        [|
+                                            box left
+                                            box right
+                                        |]
+                                    )
+                                    :?> System.Threading.Tasks.ValueTask<int * string>
+                                )
+                            with :? TargetInvocationException as error when
+                                not (isNull error.InnerException) ->
+                                Choice2Of2 error.InnerException
+
+                        let completed =
+                            match
+                                invoke
+                                    (System.Threading.Tasks.ValueTask<int>(42))
+                                    (System.Threading.Tasks.ValueTask<string>("forty-two"))
+                            with
+                            | Choice1Of2 result -> result.IsCompletedSuccessfully, result.Result
+                            | Choice2Of2 error -> raise error
+
+                        let delayedLeft =
+                            System.Threading.Tasks.TaskCompletionSource<int>(
+                                System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously
+                            )
+
+                        let delayedLeftResult =
+                            match
+                                invoke
+                                    (System.Threading.Tasks.ValueTask<int>(delayedLeft.Task))
+                                    (System.Threading.Tasks.ValueTask<string>("seven"))
+                            with
+                            | Choice1Of2 result -> result
+                            | Choice2Of2 error -> raise error
+
+                        let firstWasPending = not delayedLeftResult.IsCompleted
+                        delayedLeft.SetResult(7)
+
+                        let delayedLeftValue = delayedLeftResult.AsTask().GetAwaiter().GetResult()
+
+                        let delayedRight =
+                            System.Threading.Tasks.TaskCompletionSource<string>(
+                                System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously
+                            )
+
+                        let delayedRightResult =
+                            match
+                                invoke
+                                    (System.Threading.Tasks.ValueTask<int>(8))
+                                    (System.Threading.Tasks.ValueTask<string>(delayedRight.Task))
+                            with
+                            | Choice1Of2 result -> result
+                            | Choice2Of2 error -> raise error
+
+                        let secondWasPending = not delayedRightResult.IsCompleted
+                        delayedRight.SetResult("eight")
+
+                        let delayedRightValue = delayedRightResult.AsTask().GetAwaiter().GetResult()
+
+                        let cancellationOutcome (token: Threading.CancellationToken) left right =
+                            let result =
+                                match invoke left right with
+                                | Choice1Of2 value -> value.AsTask()
+                                | Choice2Of2 error -> raise error
+
+                            try
+                                result.GetAwaiter().GetResult()
+                                |> ignore
+
+                                false, false
+                            with :? OperationCanceledException as error ->
+                                result.IsCanceled, error.CancellationToken = token
+
+                        use firstCancellation = new Threading.CancellationTokenSource()
+                        firstCancellation.Cancel()
+
+                        let firstCanceled =
+                            cancellationOutcome
+                                firstCancellation.Token
+                                (System.Threading.Tasks.ValueTask<int>(
+                                    System.Threading.Tasks.Task.FromCanceled<int>(
+                                        firstCancellation.Token
+                                    )
+                                ))
+                                (System.Threading.Tasks.ValueTask<string>("unused"))
+
+                        use secondCancellation = new Threading.CancellationTokenSource()
+                        secondCancellation.Cancel()
+
+                        let secondCanceled =
+                            cancellationOutcome
+                                secondCancellation.Token
+                                (System.Threading.Tasks.ValueTask<int>(1))
+                                (System.Threading.Tasks.ValueTask<string>(
+                                    System.Threading.Tasks.Task.FromCanceled<string>(
+                                        secondCancellation.Token
+                                    )
+                                ))
+
+                        let faultOutcome left right =
+                            let result =
+                                match invoke left right with
+                                | Choice1Of2 value -> value.AsTask()
+                                | Choice2Of2 error -> raise error
+
+                            try
+                                result.GetAwaiter().GetResult()
+                                |> ignore
+
+                                false, String.Empty
+                            with error ->
+                                result.IsFaulted, error.Message
+
+                        let firstFaulted =
+                            faultOutcome
+                                (System.Threading.Tasks.ValueTask<int>(
+                                    System.Threading.Tasks.Task.FromException<int>(
+                                        InvalidOperationException("left failure")
+                                    )
+                                ))
+                                (System.Threading.Tasks.ValueTask<string>("unused"))
+
+                        let secondFaulted =
+                            faultOutcome
+                                (System.Threading.Tasks.ValueTask<int>(1))
+                                (System.Threading.Tasks.ValueTask<string>(
+                                    System.Threading.Tasks.Task.FromException<string>(
+                                        InvalidOperationException("right failure")
+                                    )
+                                ))
+
+                        completed,
+                        (firstWasPending, delayedLeftValue),
+                        (secondWasPending, delayedRightValue),
+                        firstCanceled,
+                        secondCanceled,
+                        firstFaulted,
+                        secondFaulted
+
+                    let oracleBehavior = inspect oracleOutputPath
+                    let fsharp2Behavior = inspect outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the value-task zip computation should match the Compatibility Oracle"
+
+                    let (completed,
+                         firstDelayed,
+                         secondDelayed,
+                         firstCanceled,
+                         secondCanceled,
+                         firstFaulted,
+                         secondFaulted) =
+                        fsharp2Behavior
+
+                    Expect.equal
+                        completed
+                        (true, (42, "forty-two"))
+                        "completed zip should stay synchronous"
+
+                    Expect.equal
+                        firstDelayed
+                        (true, (7, "seven"))
+                        "zip should await its left source"
+
+                    Expect.equal
+                        secondDelayed
+                        (true, (8, "eight"))
+                        "zip should await its right source"
+
+                    Expect.equal firstCanceled (true, true) "left cancellation should survive"
+                    Expect.equal secondCanceled (true, true) "right cancellation should survive"
+                    Expect.equal firstFaulted (true, "left failure") "left faults should survive"
+                    Expect.equal secondFaulted (true, "right failure") "right faults should survive"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "converts a non-generic value task to a unit value task"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-value-task-of-unit-computation",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let builderSourcePath = Path.Combine(root, "Builder.fs")
+                    let builderOutputPath = Path.Combine(root, "Builder.dll")
+
+                    File.WriteAllText(
+                        builderSourcePath,
+                        "namespace TestBuilders\n\nopen System.Threading.Tasks\n\ntype ValueTaskBuilder() =\n    member _.ReturnFrom(source: ValueTask) : ValueTask<unit> =\n        ValueTask<unit>(task {\n            do! source.AsTask()\n            return ()\n        })\n\n    member _.Delay(generator: unit -> ValueTask<unit>) = generator\n    member _.Run(generator: unit -> ValueTask<unit>) = generator()\n\n[<AutoOpen>]\nmodule Builders =\n    let valueTask = ValueTaskBuilder()\n"
+                    )
+
+                    let builderResult =
+                        invokeCompatibilityOracle root (Path.Combine(root, "builder.rsp")) [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{builderOutputPath}"
+                            builderSourcePath
+                        ]
+
+                    Expect.equal
+                        builderResult.ExitCode
+                        0
+                        (builderResult.StandardOutput
+                         + builderResult.StandardError)
+
+                    let sourcePath = Path.Combine(root, "ValueTask.fs")
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "namespace IcedTasks.ValueTasks\n\nopen System.Threading.Tasks\nopen TestBuilders\n\n[<AutoOpen>]\nmodule ValueTasks =\n    [<RequireQualifiedAccess>]\n    module ValueTask =\n        let inline ofUnit (vtask: ValueTask) : ValueTask<unit> =\n            if vtask.IsCompletedSuccessfully then\n                ValueTask<unit>()\n            else\n                valueTask { return! vtask }\n"
+                    )
+
+                    let oracleOutputPath = Path.Combine(root, "ValueTask-oracle.dll")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root (Path.Combine(root, "oracle.rsp")) [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--reference:{builderOutputPath}"
+                            $"--out:{oracleOutputPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let outputPath, _ =
+                        compileForExportFingerprint
+                            root
+                            (Path.Combine(root, "fsharp2.rsp"))
+                            sourcePath
+                            "ValueTask-fsharp2"
+                            [ builderOutputPath ]
+
+                    let inspect assemblyPath =
+                        use assemblyScope =
+                            new AssemblyLoadScope(assemblyPath, [ builderOutputPath ])
+
+                        let assembly = assemblyScope.Assembly
+
+                        let nestedModuleType =
+                            assembly.GetType(
+                                "IcedTasks.ValueTasks.ValueTasks+ValueTask",
+                                throwOnError = true
+                            )
+
+                        let ofUnit =
+                            nestedModuleType.GetMethod(
+                                "ofUnit",
+                                BindingFlags.Public
+                                ||| BindingFlags.Static
+                            )
+
+                        let invoke (source: System.Threading.Tasks.ValueTask) =
+                            try
+                                Choice1Of2(
+                                    ofUnit.Invoke(null, [| box source |])
+                                    :?> System.Threading.Tasks.ValueTask<unit>
+                                )
+                            with :? TargetInvocationException as error when
+                                not (isNull error.InnerException) ->
+                                Choice2Of2 error.InnerException
+
+                        let completed =
+                            match invoke (System.Threading.Tasks.ValueTask()) with
+                            | Choice1Of2 result ->
+                                result.Result
+                                |> ignore
+
+                                result.IsCompletedSuccessfully
+                            | Choice2Of2 error -> raise error
+
+                        let delayed =
+                            System.Threading.Tasks.TaskCompletionSource<int>(
+                                System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously
+                            )
+
+                        let delayedResult =
+                            match
+                                invoke (
+                                    System.Threading.Tasks.ValueTask(
+                                        delayed.Task :> System.Threading.Tasks.Task
+                                    )
+                                )
+                            with
+                            | Choice1Of2 result -> result
+                            | Choice2Of2 error -> raise error
+
+                        let wasPending = not delayedResult.IsCompleted
+                        delayed.SetResult(42)
+
+                        delayedResult.AsTask().GetAwaiter().GetResult()
+                        |> ignore
+
+                        use cancellation = new Threading.CancellationTokenSource()
+                        cancellation.Cancel()
+
+                        let canceledResult =
+                            match
+                                invoke (
+                                    System.Threading.Tasks.ValueTask(
+                                        System.Threading.Tasks.Task.FromCanceled(cancellation.Token)
+                                    )
+                                )
+                            with
+                            | Choice1Of2 result -> result.AsTask()
+                            | Choice2Of2 error -> raise error
+
+                        let canceled =
+                            try
+                                canceledResult.GetAwaiter().GetResult()
+                                |> ignore
+
+                                false, false
+                            with :? OperationCanceledException as error ->
+                                canceledResult.IsCanceled,
+                                error.CancellationToken = cancellation.Token
+
+                        let faultedResult =
+                            match
+                                invoke (
+                                    System.Threading.Tasks.ValueTask(
+                                        System.Threading.Tasks.Task.FromException(
+                                            InvalidOperationException("unit failure")
+                                        )
+                                    )
+                                )
+                            with
+                            | Choice1Of2 result -> result.AsTask()
+                            | Choice2Of2 error -> raise error
+
+                        let faulted =
+                            try
+                                faultedResult.GetAwaiter().GetResult()
+                                |> ignore
+
+                                false, String.Empty
+                            with error ->
+                                faultedResult.IsFaulted, error.Message
+
+                        completed, wasPending, canceled, faulted
+
+                    let oracleBehavior = inspect oracleOutputPath
+                    let fsharp2Behavior = inspect outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the non-generic value-task conversion should match the Compatibility Oracle"
+
+                    let completed, wasPending, canceled, faulted = fsharp2Behavior
+
+                    Expect.isTrue completed "the completed unit path should stay synchronous"
+                    Expect.isTrue wasPending "the incomplete unit path should remain pending"
+                    Expect.equal canceled (true, true) "unit cancellation should retain its token"
+                    Expect.equal faulted (true, "unit failure") "unit faults should survive"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "discards a completed generic value task through the pipeline operator"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-value-task-ignore-pipeline",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "ValueTask.fs")
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "namespace IcedTasks.ValueTasks\n\nopen System.Threading.Tasks\n\n[<AutoOpen>]\nmodule ValueTasks =\n    [<RequireQualifiedAccess>]\n    module ValueTask =\n        let inline toUnit (vtask: ValueTask<'T>) : ValueTask =\n            if vtask.IsCompletedSuccessfully then\n                vtask.Result\n                |> ignore\n\n                ValueTask()\n            else\n                ValueTask(vtask.AsTask())\n"
+                    )
+
+                    let oracleOutputPath = Path.Combine(root, "ValueTask-oracle.dll")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root (Path.Combine(root, "oracle.rsp")) [
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--out:{oracleOutputPath}"
+                            sourcePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let outputPath, _ =
+                        compileForExportFingerprint
+                            root
+                            (Path.Combine(root, "fsharp2.rsp"))
+                            sourcePath
+                            "ValueTask-fsharp2"
+                            []
+
+                    let inspect assemblyPath =
+                        let assembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let nestedModuleType =
+                            assembly.GetType(
+                                "IcedTasks.ValueTasks.ValueTasks+ValueTask",
+                                throwOnError = true
+                            )
+
+                        let toUnit =
+                            nestedModuleType
+                                .GetMethod(
+                                    "toUnit",
+                                    BindingFlags.Public
+                                    ||| BindingFlags.Static
+                                )
+                                .MakeGenericMethod(typeof<int>)
+
+                        let invoke (source: System.Threading.Tasks.ValueTask<int>) =
+                            try
+                                Choice1Of2(
+                                    toUnit.Invoke(null, [| box source |])
+                                    :?> System.Threading.Tasks.ValueTask
+                                )
+                            with :? TargetInvocationException as error when
+                                not (isNull error.InnerException) ->
+                                Choice2Of2 error.InnerException
+
+                        let completed =
+                            match invoke (System.Threading.Tasks.ValueTask<int>(42)) with
+                            | Choice1Of2 result -> result.IsCompletedSuccessfully
+                            | Choice2Of2 error -> raise error
+
+                        let delayed =
+                            System.Threading.Tasks.TaskCompletionSource<int>(
+                                System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously
+                            )
+
+                        let delayedResult =
+                            match invoke (System.Threading.Tasks.ValueTask<int>(delayed.Task)) with
+                            | Choice1Of2 result -> result
+                            | Choice2Of2 error -> raise error
+
+                        let wasPending = not delayedResult.IsCompleted
+                        delayed.SetResult(42)
+                        delayedResult.GetAwaiter().GetResult()
+
+                        let faultedResult =
+                            match
+                                invoke (
+                                    System.Threading.Tasks.ValueTask<int>(
+                                        System.Threading.Tasks.Task.FromException<int>(
+                                            InvalidOperationException("pipeline failure")
+                                        )
+                                    )
+                                )
+                            with
+                            | Choice1Of2 result -> result
+                            | Choice2Of2 error -> raise error
+
+                        let faulted =
+                            try
+                                faultedResult.GetAwaiter().GetResult()
+                                false, String.Empty
+                            with error ->
+                                faultedResult.IsFaulted, error.Message
+
+                        completed, wasPending, faulted
+
+                    let oracleBehavior = inspect oracleOutputPath
+                    let fsharp2Behavior = inspect outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "the value-task ignore pipeline should match the Compatibility Oracle"
+
+                    Expect.equal
+                        fsharp2Behavior
+                        (true, true, (true, "pipeline failure"))
+                        "the completed result should be discarded without changing asynchronous behavior"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "wraps a non-generic task as a value task"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\nopen System.Threading.Tasks\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        static member inline Wrap(task: Task) = ValueTask task\n"
+
+                withObjectMemberDifferential
+                    "fsharp2-non-generic-value-task-construction"
+                    sourceText
+                    "Wrap"
+                <| fun oracleOutputPath outputPath ->
+                    let inspect assemblyPath =
+                        let assembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            assembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        let wrap =
+                            builderType.GetMethod(
+                                "Wrap",
+                                BindingFlags.Public
+                                ||| BindingFlags.Static
+                            )
+
+                        let invoke (task: System.Threading.Tasks.Task) =
+                            wrap.Invoke(null, [| box task |]) :?> System.Threading.Tasks.ValueTask
+
+                        let completedTask = System.Threading.Tasks.Task.CompletedTask
+                        let completed = invoke completedTask
+
+                        let completedBehavior =
+                            completed.IsCompletedSuccessfully,
+                            Object.ReferenceEquals(completed.AsTask(), completedTask)
+
+                        let delayed =
+                            System.Threading.Tasks.TaskCompletionSource<int>(
+                                System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously
+                            )
+
+                        let delayedTask = delayed.Task :> System.Threading.Tasks.Task
+                        let delayedValueTask = invoke delayedTask
+
+                        let delayedBehavior =
+                            not delayedValueTask.IsCompleted,
+                            Object.ReferenceEquals(delayedValueTask.AsTask(), delayedTask)
+
+                        delayed.SetResult(42)
+                        delayedValueTask.GetAwaiter().GetResult()
+
+                        use cancellation = new Threading.CancellationTokenSource()
+                        cancellation.Cancel()
+
+                        let canceled =
+                            invoke (System.Threading.Tasks.Task.FromCanceled(cancellation.Token))
+
+                        let canceledBehavior =
+                            try
+                                canceled.GetAwaiter().GetResult()
+                                false, false
+                            with :? OperationCanceledException as error ->
+                                canceled.IsCanceled, error.CancellationToken = cancellation.Token
+
+                        let faulted =
+                            invoke (
+                                System.Threading.Tasks.Task.FromException(
+                                    InvalidOperationException("wrapped failure")
+                                )
+                            )
+
+                        let faultedBehavior =
+                            try
+                                faulted.GetAwaiter().GetResult()
+                                false, String.Empty
+                            with error ->
+                                faulted.IsFaulted, error.Message
+
+                        completedBehavior, delayedBehavior, canceledBehavior, faultedBehavior
+
+                    let oracleBehavior = inspect oracleOutputPath
+                    let fsharp2Behavior = inspect outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "non-generic ValueTask construction should match the Compatibility Oracle"
+
+                    let completed, delayed, canceled, faulted = fsharp2Behavior
+
+                    Expect.equal completed (true, true) "the completed Task should be retained"
+                    Expect.equal delayed (true, true) "the pending Task should be retained"
+                    Expect.equal canceled (true, true) "cancellation should retain its token"
+                    Expect.equal faulted (true, "wrapped failure") "faults should survive"
 
             testCase "returns a captured unit lambda as an FSharp function"
             <| fun _ ->
@@ -5503,6 +8087,60 @@ module CompilerTargetTests =
                         fsharp2Behavior
                         "object-expression"
                         "the override should provide the object-expression result"
+
+            testCase "emits and executes a multi-member object expression"
+            <| fun _ ->
+                let sourceText =
+                    "namespace IcedTasks.TaskBase\n\n[<AutoOpen>]\nmodule TaskBase =\n    type TaskBuilderBase() =\n        member inline _.Zero() = 0\n\n        static member inline Make() : System.Object =\n            { new System.Object() with\n                override _.ToString() = \"multi-member\"\n                override _.GetHashCode() = 42 }\n"
+
+                withObjectMemberDifferential
+                    "fsharp2-multi-member-object-expression"
+                    sourceText
+                    "Make"
+                <| fun oracleOutputPath outputPath ->
+                    let inspectAndInvoke assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        let builderType =
+                            emittedAssembly.GetType(
+                                "IcedTasks.TaskBase.TaskBase+TaskBuilderBase",
+                                throwOnError = true
+                            )
+
+                        let instance = builderType.GetMethod("Make").Invoke(null, null)
+
+                        let declaredMethods =
+                            instance
+                                .GetType()
+                                .GetMethods(
+                                    BindingFlags.Instance
+                                    ||| BindingFlags.Public
+                                    ||| BindingFlags.NonPublic
+                                    ||| BindingFlags.DeclaredOnly
+                                )
+                            |> Array.sortBy _.Name
+                            |> Array.map (fun methodInfo ->
+                                methodInfo.Name,
+                                methodInfo.Attributes,
+                                methodInfo.ReturnType.FullName,
+                                (methodInfo.GetParameters()
+                                 |> Array.map (fun parameter -> parameter.ParameterType.FullName))
+                            )
+
+                        declaredMethods, instance.ToString(), instance.GetHashCode()
+
+                    let oracleShape = inspectAndInvoke oracleOutputPath
+                    let fsharp2Shape = inspectAndInvoke outputPath
+
+                    Expect.equal
+                        fsharp2Shape
+                        oracleShape
+                        "all object-expression overrides should match the Compatibility Oracle"
+
+                    let _, text, hashCode = fsharp2Shape
+
+                    Expect.equal text "multi-member" "ToString should execute its override"
+                    Expect.equal hashCode 42 "GetHashCode should execute its override"
 
             testCase "emits a parameterized object-expression override"
             <| fun _ ->
@@ -7717,7 +10355,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "56"
+                        "73"
                         "query cache evidence should be versioned"
 
                     Expect.equal
