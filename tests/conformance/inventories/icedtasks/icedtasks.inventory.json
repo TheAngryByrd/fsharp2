@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "inventoryId": "icedtasks.inventory",
+  "family": "icedtasks",
+  "caseIds": [
+    "integration.icedtasks.corecompile"
+  ],
+  "positiveCaseIds": [
+    "integration.icedtasks.corecompile"
+  ],
+  "negativeCaseIds": [],
+  "featureRows": [],
+  "languageVersions": [
+    "default"
+  ],
+  "optionCells": [
+    "debug-optimize-minus-tailcalls-minus-portable-deterministic",
+    "release-optimize-plus-tailcalls-plus-portable-deterministic",
+    "noframework-simpleresolution-fullpaths-flaterrors-consolecolors-minus",
+    "explicit-ordered-references-fsharp-core-identity"
+  ],
+  "artifactKinds": [
+    "implementation-assembly",
+    "reference-assembly",
+    "portable-pdb",
+    "xml-documentation"
+  ],
+  "probeKinds": [
+    "ilverify",
+    "managed-load",
+    "public-api",
+    "metadata",
+    "portable-pdb",
+    "downstream-fsharp",
+    "downstream-csharp",
+    "within-compiler-repeat"
+  ],
+  "review": {
+    "owner": "integration-compatibility",
+    "sourceIssue": "#26",
+    "reviewCondition": "Review when the family case set, required phase set, or compatibility envelope changes."
+  }
+}

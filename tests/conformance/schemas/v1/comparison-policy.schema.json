@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://theangrybyrd.github.io/fsharp2/conformance/schemas/v1/comparison-policy.schema.json",
+  "title": "FSharp2 comparison policy v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "policyId", "policyVersion", "classes", "normalizations", "comparatorVersions"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "policyId": { "const": "fsharp2-comparison-policy" },
+    "policyVersion": { "const": 1 },
+    "classes": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": { "$ref": "#/$defs/class" }
+    },
+    "normalizations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/normalization" }
+    },
+    "comparatorVersions": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/comparator" }
+    }
+  },
+  "$defs": {
+    "class": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "rule"],
+      "properties": {
+        "id": { "enum": ["exact", "normalized", "canonical-semantic", "behavioral", "within-compiler-exact"] },
+        "rule": { "type": "string", "minLength": 1 }
+      }
+    },
+    "normalization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "kind", "rule"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+$" },
+        "version": { "type": "integer", "minimum": 1 },
+        "kind": { "enum": ["path-root", "path-separator", "newline"] },
+        "rule": { "type": "string", "minLength": 1 }
+      }
+    },
+    "comparator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "class"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+$" },
+        "version": { "type": "integer", "minimum": 1 },
+        "class": { "enum": ["exact", "normalized", "canonical-semantic", "behavioral", "within-compiler-exact"] }
+      }
+    }
+  }
+}

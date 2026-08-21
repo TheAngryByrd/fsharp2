@@ -1,0 +1,686 @@
+{
+  "schemaVersion": 1,
+  "caseId": "integration.icedtasks.corecompile",
+  "kind": "integration",
+  "family": "icedtasks",
+  "integrationCorpus": "icedtasks",
+  "polarity": "positive",
+  "title": "IcedTasks CoreCompile integration corpus",
+  "tags": [
+    "integration",
+    "network-materialization"
+  ],
+  "owners": {
+    "owner": "integration-compatibility",
+    "requirements": [
+      "#8",
+      "#26"
+    ]
+  },
+  "envelope": {
+    "state": "unsupported",
+    "compilerContractVersions": [
+      1
+    ],
+    "languageVersions": [
+      "default"
+    ],
+    "targetFrameworks": [
+      "netstandard2.0",
+      "netstandard2.1",
+      "net6.0",
+      "net9.0"
+    ],
+    "exclusions": [
+      {
+        "cell": "default-focused-run",
+        "issue": "#8",
+        "owner": "integration-compatibility",
+        "reviewCondition": "Remove after every pinned target framework passes the complete Compatibility Gate."
+      }
+    ]
+  },
+  "matrix": {
+    "operatingSystems": {
+      "required": [
+        "windows",
+        "linux",
+        "macos"
+      ],
+      "excluded": []
+    },
+    "runtimeIdentifiers": {
+      "required": [
+        "win-x64",
+        "linux-x64",
+        "osx-x64"
+      ],
+      "excluded": []
+    },
+    "cultures": {
+      "required": [
+        "en-US"
+      ],
+      "excluded": []
+    },
+    "configurations": {
+      "required": [
+        "Release"
+      ],
+      "excluded": []
+    },
+    "debugFormats": {
+      "required": [
+        "portable"
+      ],
+      "excluded": []
+    }
+  },
+  "project": {
+    "projectType": "library",
+    "target": "CoreCompile",
+    "assemblyName": "IcedTasks",
+    "properties": [
+      {
+        "name": "TargetFrameworks",
+        "value": "netstandard2.0;netstandard2.1;net6.0;net9.0"
+      },
+      {
+        "name": "Configuration",
+        "value": "Release"
+      },
+      {
+        "name": "DebugType",
+        "value": "portable"
+      },
+      {
+        "name": "Deterministic",
+        "value": true
+      }
+    ],
+    "items": [],
+    "packageInputs": [
+      {
+        "id": "FSharp.Core",
+        "version": "9.0.300"
+      },
+      {
+        "id": "FSharp.Core",
+        "version": "6.0.4"
+      },
+      {
+        "id": "Microsoft.Bcl.AsyncInterfaces",
+        "version": "9.0.10"
+      }
+    ],
+    "outputOwnership": {
+      "compilerOwned": [
+        "implementation-assembly",
+        "portable-pdb",
+        "reference-assembly",
+        "xml-documentation"
+      ],
+      "sdkOwned": [
+        "deps-json"
+      ]
+    }
+  },
+  "sources": [
+    {
+      "order": 0,
+      "stableId": "source.assembly-info",
+      "kind": "implementation",
+      "logicalPath": "/src/IcedTasks/AssemblyInfo.fs",
+      "fixturePath": "src/IcedTasks/AssemblyInfo.fs",
+      "sha256": "sha256:9edf617367d803df05a300da8a02cec3a144e8153175f7704e7d983c501d2fcc",
+      "generation": {
+        "generatorId": "git-tree-v1",
+        "repositoryPath": "src/IcedTasks/AssemblyInfo.fs",
+        "gitBlob": "0a869e1d2c8d639ff9f4aadd2fb1505f6c3e234f",
+        "inputHashes": [
+          "git:ba4e932b71bfde354f0e2561c2519b282fe56ff9",
+          "git:20abf5280d4630db438c7c6f06838105df12c765",
+          "sha256:9edf617367d803df05a300da8a02cec3a144e8153175f7704e7d983c501d2fcc"
+        ]
+      }
+    },
+    {
+      "order": 1,
+      "stableId": "source.nullness",
+      "kind": "implementation",
+      "logicalPath": "/src/IcedTasks/Nullness.fs",
+      "fixturePath": "src/IcedTasks/Nullness.fs",
+      "sha256": "sha256:16a227f9aeec12995b0ce08c4ba2bc06aacb844329f04d0f8f87023f5b43ec54",
+      "generation": {
+        "generatorId": "git-tree-v1",
+        "repositoryPath": "src/IcedTasks/Nullness.fs",
+        "gitBlob": "5cf27d456f2c0bd7354c0228f8c91cf4e3942ea6",
+        "inputHashes": [
+          "git:ba4e932b71bfde354f0e2561c2519b282fe56ff9",
+          "git:20abf5280d4630db438c7c6f06838105df12c765",
+          "sha256:16a227f9aeec12995b0ce08c4ba2bc06aacb844329f04d0f8f87023f5b43ec54"
+        ]
+      }
+    },
+    {
+      "order": 2,
+      "stableId": "source.task-like",
+      "kind": "implementation",
+      "logicalPath": "/src/IcedTasks/TaskLike.fs",
+      "fixturePath": "src/IcedTasks/TaskLike.fs",
+      "sha256": "sha256:dc67fcf7fc4354a70c7e36eddccc396828b9ed36ca0f857ce593e4f1af5f0228",
+      "generation": {
+        "generatorId": "git-tree-v1",
+        "repositoryPath": "src/IcedTasks/TaskLike.fs",
+        "gitBlob": "826857e74f43167a9a6b7128b934d4bfdf79239f",
+        "inputHashes": [
+          "git:ba4e932b71bfde354f0e2561c2519b282fe56ff9",
+          "git:20abf5280d4630db438c7c6f06838105df12c765",
+          "sha256:dc67fcf7fc4354a70c7e36eddccc396828b9ed36ca0f857ce593e4f1af5f0228"
+        ]
+      }
+    },
+    {
+      "order": 3,
+      "stableId": "source.task-builder-base",
+      "kind": "implementation",
+      "logicalPath": "/src/IcedTasks/TaskBuilderBase.fs",
+      "fixturePath": "src/IcedTasks/TaskBuilderBase.fs",
+      "sha256": "sha256:4ea7d39918e6e805546ffa6c3805726490c39ea3424e18f96dbc6e256c75268b",
+      "generation": {
+        "generatorId": "git-tree-v1",
+        "repositoryPath": "src/IcedTasks/TaskBuilderBase.fs",
+        "gitBlob": "aaa9fc2610713689683ee0ab4f5824b3dcbc9677",
+        "inputHashes": [
+          "git:ba4e932b71bfde354f0e2561c2519b282fe56ff9",
+          "git:20abf5280d4630db438c7c6f06838105df12c765",
+          "sha256:4ea7d39918e6e805546ffa6c3805726490c39ea3424e18f96dbc6e256c75268b"
+        ]
+      }
+    },
+    {
+      "order": 4,
+      "stableId": "source.value-task",
+      "kind": "implementation",
+      "logicalPath": "/src/IcedTasks/ValueTask.fs",
+      "fixturePath": "src/IcedTasks/ValueTask.fs",
+      "sha256": "sha256:e3018129d1da5df166fb71fe13555c699dc168adb72f5badad16c14e712d2317",
+      "generation": {
+        "generatorId": "git-tree-v1",
+        "repositoryPath": "src/IcedTasks/ValueTask.fs",
+        "gitBlob": "d24c11235412e1143ab9b6bcb4d5895da9080fcc",
+        "inputHashes": [
+          "git:ba4e932b71bfde354f0e2561c2519b282fe56ff9",
+          "git:20abf5280d4630db438c7c6f06838105df12c765",
+          "sha256:e3018129d1da5df166fb71fe13555c699dc168adb72f5badad16c14e712d2317"
+        ]
+      }
+    },
+    {
+      "order": 5,
+      "stableId": "source.pooling-value-task",
+      "kind": "implementation",
+      "logicalPath": "/src/IcedTasks/PoolingValueTask.fs",
+      "fixturePath": "src/IcedTasks/PoolingValueTask.fs",
+      "sha256": "sha256:1cd21266503fa54f2ac418fb5a33a5b1f07586daf1f35d626052197c645170dc",
+      "generation": {
+        "generatorId": "git-tree-v1",
+        "repositoryPath": "src/IcedTasks/PoolingValueTask.fs",
+        "gitBlob": "9d05b0a1981359c32aa38de9e5f7389368096ada",
+        "inputHashes": [
+          "git:ba4e932b71bfde354f0e2561c2519b282fe56ff9",
+          "git:20abf5280d4630db438c7c6f06838105df12c765",
+          "sha256:1cd21266503fa54f2ac418fb5a33a5b1f07586daf1f35d626052197c645170dc"
+        ]
+      }
+    },
+    {
+      "order": 6,
+      "stableId": "source.value-task-unit",
+      "kind": "implementation",
+      "logicalPath": "/src/IcedTasks/ValueTaskUnit.fs",
+      "fixturePath": "src/IcedTasks/ValueTaskUnit.fs",
+      "sha256": "sha256:e0d1fb7940eeeb1056644e11d2296765cacf6674fe5dc5391ab7d93b342297fa",
+      "generation": {
+        "generatorId": "git-tree-v1",
+        "repositoryPath": "src/IcedTasks/ValueTaskUnit.fs",
+        "gitBlob": "2e8ef1d81e413d1cefb4c6233962b43219bc612f",
+        "inputHashes": [
+          "git:ba4e932b71bfde354f0e2561c2519b282fe56ff9",
+          "git:20abf5280d4630db438c7c6f06838105df12c765",
+          "sha256:e0d1fb7940eeeb1056644e11d2296765cacf6674fe5dc5391ab7d93b342297fa"
+        ]
+      }
+    },
+    {
+      "order": 7,
+      "stableId": "source.task-unit",
+      "kind": "implementation",
+      "logicalPath": "/src/IcedTasks/TaskUnit.fs",
+      "fixturePath": "src/IcedTasks/TaskUnit.fs",
+      "sha256": "sha256:6abe17c1e0f8e83571c260ae8bdd81b74ec25ed57e8cc1e84501c8b9a7fcb2b2",
+      "generation": {
+        "generatorId": "git-tree-v1",
+        "repositoryPath": "src/IcedTasks/TaskUnit.fs",
+        "gitBlob": "e92ba9c164ee25ad1bc7634ce288c2aea8833b54",
+        "inputHashes": [
+          "git:ba4e932b71bfde354f0e2561c2519b282fe56ff9",
+          "git:20abf5280d4630db438c7c6f06838105df12c765",
+          "sha256:6abe17c1e0f8e83571c260ae8bdd81b74ec25ed57e8cc1e84501c8b9a7fcb2b2"
+        ]
+      }
+    },
+    {
+      "order": 8,
+      "stableId": "source.task",
+      "kind": "implementation",
+      "logicalPath": "/src/IcedTasks/Task.fs",
+      "fixturePath": "src/IcedTasks/Task.fs",
+      "sha256": "sha256:5ff58a713af9334e1f60568840303597a0db7fcc9fa54aac0597f8e00bb12b45",
+      "generation": {
+        "generatorId": "git-tree-v1",
+        "repositoryPath": "src/IcedTasks/Task.fs",
+        "gitBlob": "ce46781d6d6c2eb160a6e2fd85a9a9d9e82d763b",
+        "inputHashes": [
+          "git:ba4e932b71bfde354f0e2561c2519b282fe56ff9",
+          "git:20abf5280d4630db438c7c6f06838105df12c765",
+          "sha256:5ff58a713af9334e1f60568840303597a0db7fcc9fa54aac0597f8e00bb12b45"
+        ]
+      }
+    },
+    {
+      "order": 9,
+      "stableId": "source.async-ex",
+      "kind": "implementation",
+      "logicalPath": "/src/IcedTasks/AsyncEx.fs",
+      "fixturePath": "src/IcedTasks/AsyncEx.fs",
+      "sha256": "sha256:cf71cf0faeea9ad7e2bf5377048abb633ffd511ae6feea9a3d64ae7f3be2a606",
+      "generation": {
+        "generatorId": "git-tree-v1",
+        "repositoryPath": "src/IcedTasks/AsyncEx.fs",
+        "gitBlob": "f437ad9bec933e219575cd8bf80a1df81a541f4b",
+        "inputHashes": [
+          "git:ba4e932b71bfde354f0e2561c2519b282fe56ff9",
+          "git:20abf5280d4630db438c7c6f06838105df12c765",
+          "sha256:cf71cf0faeea9ad7e2bf5377048abb633ffd511ae6feea9a3d64ae7f3be2a606"
+        ]
+      }
+    },
+    {
+      "order": 10,
+      "stableId": "source.parallel-async",
+      "kind": "implementation",
+      "logicalPath": "/src/IcedTasks/ParallelAsync.fs",
+      "fixturePath": "src/IcedTasks/ParallelAsync.fs",
+      "sha256": "sha256:0ebf0dd2f086d11e7bc04f42f8d8f8538a0c8bcbb71bf4a468de70c2393c6350",
+      "generation": {
+        "generatorId": "git-tree-v1",
+        "repositoryPath": "src/IcedTasks/ParallelAsync.fs",
+        "gitBlob": "a23e714c0400b937e16222fa77524202a76f0b89",
+        "inputHashes": [
+          "git:ba4e932b71bfde354f0e2561c2519b282fe56ff9",
+          "git:20abf5280d4630db438c7c6f06838105df12c765",
+          "sha256:0ebf0dd2f086d11e7bc04f42f8d8f8538a0c8bcbb71bf4a468de70c2393c6350"
+        ]
+      }
+    },
+    {
+      "order": 11,
+      "stableId": "source.cold-task",
+      "kind": "implementation",
+      "logicalPath": "/src/IcedTasks/ColdTask.fs",
+      "fixturePath": "src/IcedTasks/ColdTask.fs",
+      "sha256": "sha256:e5ba32dc448992337369cd99b865dd62d7a1ee7276c4e4b521d1dbac33d812c9",
+      "generation": {
+        "generatorId": "git-tree-v1",
+        "repositoryPath": "src/IcedTasks/ColdTask.fs",
+        "gitBlob": "7b925206dc5fb30b2cb32adbd70d5137fb4b64a9",
+        "inputHashes": [
+          "git:ba4e932b71bfde354f0e2561c2519b282fe56ff9",
+          "git:20abf5280d4630db438c7c6f06838105df12c765",
+          "sha256:e5ba32dc448992337369cd99b865dd62d7a1ee7276c4e4b521d1dbac33d812c9"
+        ]
+      }
+    },
+    {
+      "order": 12,
+      "stableId": "source.cancellable-task-builder-base",
+      "kind": "implementation",
+      "logicalPath": "/src/IcedTasks/CancellableTaskBuilderBase.fs",
+      "fixturePath": "src/IcedTasks/CancellableTaskBuilderBase.fs",
+      "sha256": "sha256:a5dbfd818122a816b1a38db361749eabaafd47b6bdd88a197eb7843dc6844e74",
+      "generation": {
+        "generatorId": "git-tree-v1",
+        "repositoryPath": "src/IcedTasks/CancellableTaskBuilderBase.fs",
+        "gitBlob": "4461ae08a5ea71e6f0d954e1fe85ace117eca295",
+        "inputHashes": [
+          "git:ba4e932b71bfde354f0e2561c2519b282fe56ff9",
+          "git:20abf5280d4630db438c7c6f06838105df12c765",
+          "sha256:a5dbfd818122a816b1a38db361749eabaafd47b6bdd88a197eb7843dc6844e74"
+        ]
+      }
+    },
+    {
+      "order": 13,
+      "stableId": "source.cancellable-value-task",
+      "kind": "implementation",
+      "logicalPath": "/src/IcedTasks/CancellableValueTask.fs",
+      "fixturePath": "src/IcedTasks/CancellableValueTask.fs",
+      "sha256": "sha256:3287734d3bfa026842b5d1b9a835514a524b9c6327214e22f257d9ab4dcb1fb8",
+      "generation": {
+        "generatorId": "git-tree-v1",
+        "repositoryPath": "src/IcedTasks/CancellableValueTask.fs",
+        "gitBlob": "0f6657c53c49de1ad00479082438464235e352ee",
+        "inputHashes": [
+          "git:ba4e932b71bfde354f0e2561c2519b282fe56ff9",
+          "git:20abf5280d4630db438c7c6f06838105df12c765",
+          "sha256:3287734d3bfa026842b5d1b9a835514a524b9c6327214e22f257d9ab4dcb1fb8"
+        ]
+      }
+    },
+    {
+      "order": 14,
+      "stableId": "source.cancellable-pooling-value-task",
+      "kind": "implementation",
+      "logicalPath": "/src/IcedTasks/CancellablePoolingValueTask.fs",
+      "fixturePath": "src/IcedTasks/CancellablePoolingValueTask.fs",
+      "sha256": "sha256:d3b523745b76925e34258d32bfbbe922f736f71141b9442dda74de314e6d8feb",
+      "generation": {
+        "generatorId": "git-tree-v1",
+        "repositoryPath": "src/IcedTasks/CancellablePoolingValueTask.fs",
+        "gitBlob": "dafa63b502054bc425f826b321c4214af3676c93",
+        "inputHashes": [
+          "git:ba4e932b71bfde354f0e2561c2519b282fe56ff9",
+          "git:20abf5280d4630db438c7c6f06838105df12c765",
+          "sha256:d3b523745b76925e34258d32bfbbe922f736f71141b9442dda74de314e6d8feb"
+        ]
+      }
+    },
+    {
+      "order": 15,
+      "stableId": "source.cancellable-task",
+      "kind": "implementation",
+      "logicalPath": "/src/IcedTasks/CancellableTask.fs",
+      "fixturePath": "src/IcedTasks/CancellableTask.fs",
+      "sha256": "sha256:132421b169b6771afd98e96e0fe7d3845a2bd53df8d3ac6b87b9c1dbe0073035",
+      "generation": {
+        "generatorId": "git-tree-v1",
+        "repositoryPath": "src/IcedTasks/CancellableTask.fs",
+        "gitBlob": "f364943e011c8ee1fac95272facbc9ad14419c73",
+        "inputHashes": [
+          "git:ba4e932b71bfde354f0e2561c2519b282fe56ff9",
+          "git:20abf5280d4630db438c7c6f06838105df12c765",
+          "sha256:132421b169b6771afd98e96e0fe7d3845a2bd53df8d3ac6b87b9c1dbe0073035"
+        ]
+      }
+    },
+    {
+      "order": 16,
+      "stableId": "source.auto-opens",
+      "kind": "implementation",
+      "logicalPath": "/src/IcedTasks/AutoOpens.fs",
+      "fixturePath": "src/IcedTasks/AutoOpens.fs",
+      "sha256": "sha256:957cc0787431f928ea4280d4553bcaa80167052094e2819a0760d129db552de6",
+      "generation": {
+        "generatorId": "git-tree-v1",
+        "repositoryPath": "src/IcedTasks/AutoOpens.fs",
+        "gitBlob": "4cb38f538fe62081f55aaba9efad2062fc773ee9",
+        "inputHashes": [
+          "git:ba4e932b71bfde354f0e2561c2519b282fe56ff9",
+          "git:20abf5280d4630db438c7c6f06838105df12c765",
+          "sha256:957cc0787431f928ea4280d4553bcaa80167052094e2819a0760d129db552de6"
+        ]
+      }
+    }
+  ],
+  "targetReferences": {
+    "closurePath": "expectations/icedtasks/network.closure.json",
+    "comparison": "exact-ordered-closure"
+  },
+  "options": {
+    "semantic": {
+      "languageVersion": "default",
+      "defines": [
+        "TRACE"
+      ],
+      "optimization": "enabled",
+      "tailCalls": "enabled",
+      "checkedArithmetic": false,
+      "targetProfile": "netstandard"
+    },
+    "diagnostic": {
+      "warningLevel": 5,
+      "noWarn": [
+        "FS3513"
+      ],
+      "warnAsError": [],
+      "warnAsWarn": [],
+      "fullPaths": true,
+      "flatErrors": true,
+      "consoleColors": false,
+      "culture": "en-US"
+    },
+    "emission": {
+      "debugFormat": "portable",
+      "deterministic": true,
+      "documentation": true,
+      "referenceAssembly": true,
+      "outputType": "library",
+      "pathMap": [
+        {
+          "name": "physical-root",
+          "value": "/_fsharp2_conformance/root"
+        }
+      ]
+    },
+    "signing": {
+      "mode": "none",
+      "publicSign": false
+    },
+    "resources": {
+      "embedded": [],
+      "linked": [],
+      "native": []
+    },
+    "msbuild": {
+      "noFramework": false,
+      "simpleResolution": false,
+      "explicitReferences": true
+    },
+    "compilerArguments": [
+      "--debug:portable",
+      "--deterministic+",
+      "--optimize+",
+      "--tailcalls+",
+      "--nowarn:3513"
+    ]
+  },
+  "expectedDiagnostics": {
+    "mode": "none",
+    "lockPath": null,
+    "inlineFacts": []
+  },
+  "expectedArtifacts": [
+    {
+      "kind": "implementation-assembly",
+      "logicalIdentity": "output.implementation",
+      "state": "forbidden",
+      "producer": "compiler",
+      "comparisonClass": "canonical-semantic",
+      "validators": [
+        "absent"
+      ],
+      "consumerProbes": []
+    },
+    {
+      "kind": "portable-pdb",
+      "logicalIdentity": "output.portable-pdb",
+      "state": "forbidden",
+      "producer": "compiler",
+      "comparisonClass": "canonical-semantic",
+      "validators": [
+        "absent"
+      ],
+      "consumerProbes": []
+    },
+    {
+      "kind": "reference-assembly",
+      "logicalIdentity": "output.reference",
+      "state": "forbidden",
+      "producer": "compiler",
+      "comparisonClass": "canonical-semantic",
+      "validators": [
+        "absent"
+      ],
+      "consumerProbes": []
+    },
+    {
+      "kind": "xml-documentation",
+      "logicalIdentity": "output.documentation",
+      "state": "forbidden",
+      "producer": "compiler",
+      "comparisonClass": "normalized",
+      "validators": [
+        "absent"
+      ],
+      "consumerProbes": []
+    }
+  ],
+  "phaseExpectations": {
+    "stopPhase": "typed-declarations",
+    "phases": [
+      {
+        "phase": "source",
+        "status": "completed",
+        "fingerprintRequired": true,
+        "traceRequired": true,
+        "observableProofs": [
+          "core-phase"
+        ]
+      },
+      {
+        "phase": "syntax",
+        "status": "completed",
+        "fingerprintRequired": true,
+        "traceRequired": true,
+        "observableProofs": [
+          "core-phase"
+        ]
+      },
+      {
+        "phase": "resolved-symbols",
+        "status": "completed",
+        "fingerprintRequired": true,
+        "traceRequired": true,
+        "observableProofs": [
+          "core-phase"
+        ]
+      },
+      {
+        "phase": "typed-declarations",
+        "status": "unsupported",
+        "fingerprintRequired": true,
+        "traceRequired": true,
+        "observableProofs": [
+          "core-phase"
+        ]
+      },
+      {
+        "phase": "lowered-code",
+        "status": "not-run",
+        "fingerprintRequired": true,
+        "traceRequired": true,
+        "observableProofs": [
+          "core-phase"
+        ]
+      },
+      {
+        "phase": "optimized-code",
+        "status": "not-run",
+        "fingerprintRequired": true,
+        "traceRequired": true,
+        "observableProofs": [
+          "core-phase"
+        ]
+      },
+      {
+        "phase": "symbolic-emission",
+        "status": "not-run",
+        "fingerprintRequired": true,
+        "traceRequired": true,
+        "observableProofs": [
+          "core-phase"
+        ]
+      },
+      {
+        "phase": "final-linking",
+        "status": "not-run",
+        "fingerprintRequired": true,
+        "traceRequired": true,
+        "observableProofs": [
+          "core-phase"
+        ]
+      },
+      {
+        "phase": "load",
+        "status": "not-run",
+        "fingerprintRequired": false,
+        "traceRequired": true,
+        "observableProofs": [
+          "probe-load"
+        ]
+      },
+      {
+        "phase": "execution",
+        "status": "not-run",
+        "fingerprintRequired": false,
+        "traceRequired": true,
+        "observableProofs": [
+          "probe-execution"
+        ]
+      }
+    ]
+  },
+  "probes": [],
+  "comparisons": [
+    {
+      "path": "lanes.compiler-selection",
+      "class": "exact",
+      "comparator": "diagnostic-exact",
+      "rule": "compiler-selection-v1"
+    },
+    {
+      "path": "lanes.paths",
+      "class": "normalized",
+      "comparator": "path-newline-normalized",
+      "rule": "logical-root-v1"
+    },
+    {
+      "path": "observations.artifacts",
+      "class": "exact",
+      "comparator": "diagnostic-exact",
+      "rule": "publication-v1"
+    }
+  ],
+  "cleanup": {
+    "retention": "on-failure",
+    "delete": [
+      "lanes/*/tmp",
+      "lanes/*/service",
+      "lanes/*/cache"
+    ],
+    "retain": [
+      "run-result.json",
+      "comparison.json",
+      "lanes/*/stdout.bin",
+      "lanes/*/stderr.bin"
+    ],
+    "lateFailure": "compare-declared-leftovers"
+  },
+  "timeout": {
+    "evaluationMs": 120000,
+    "compileMs": 600000,
+    "probeMs": 300000,
+    "cleanupMs": 60000
+  }
+}

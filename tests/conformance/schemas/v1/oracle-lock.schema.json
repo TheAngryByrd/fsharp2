@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://theangrybyrd.github.io/fsharp2/conformance/schemas/v1/oracle-lock.schema.json",
+  "title": "FSharp2 Oracle diagnostic lock v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "lockId", "family", "caseId", "caseHash", "oracleIdentity", "streams", "process", "diagnostics", "artifacts", "review"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "lockId": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+$" },
+    "family": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+$" },
+    "caseId": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+$" },
+    "caseHash": { "$ref": "#/$defs/hash" },
+    "oracleIdentity": { "$ref": "#/$defs/oracleIdentity" },
+    "streams": { "$ref": "#/$defs/streams" },
+    "process": { "$ref": "#/$defs/process" },
+    "diagnostics": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/diagnostic" } },
+    "artifacts": { "$ref": "#/$defs/artifacts" },
+    "review": { "$ref": "#/$defs/review" }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "relativePath": { "type": "string", "pattern": "^(?![A-Za-z]:)(?!/)(?!.*\\\\).+$" },
+    "toolIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["logicalPath", "sha256", "productVersion"],
+      "properties": {
+        "logicalPath": { "$ref": "#/$defs/relativePath" },
+        "sha256": { "$ref": "#/$defs/hash" },
+        "productVersion": { "type": "string", "minLength": 1 }
+      }
+    },
+    "oracleIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sdkVersion", "sdkCommit", "compiler", "msbuildTask", "fsharpCore", "culture", "encoding", "optionHash"],
+      "properties": {
+        "sdkVersion": { "const": "10.0.110" },
+        "sdkCommit": { "const": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd" },
+        "compiler": { "$ref": "#/$defs/toolIdentity" },
+        "msbuildTask": { "$ref": "#/$defs/toolIdentity" },
+        "fsharpCore": { "$ref": "#/$defs/toolIdentity" },
+        "culture": { "const": "en-US" },
+        "encoding": { "const": "utf-8" },
+        "optionHash": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "stream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base64", "byteLength", "byteHash", "text", "textHash"],
+      "properties": {
+        "base64": { "type": "string", "contentEncoding": "base64" },
+        "byteLength": { "type": "integer", "minimum": 0 },
+        "byteHash": { "$ref": "#/$defs/hash" },
+        "text": { "type": "string" },
+        "textHash": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "streams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stdout", "stderr"],
+      "properties": {
+        "stdout": { "$ref": "#/$defs/stream" },
+        "stderr": { "$ref": "#/$defs/stream" }
+      }
+    },
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exitCode", "targetResult"],
+      "properties": {
+        "exitCode": { "type": "integer" },
+        "targetResult": { "enum": ["succeeded", "failed"] }
+      }
+    },
+    "range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["startLine", "startColumn", "endLine", "endColumn"],
+      "properties": {
+        "startLine": { "type": "integer", "minimum": 1 },
+        "startColumn": { "type": "integer", "minimum": 0 },
+        "endLine": { "type": "integer", "minimum": 1 },
+        "endColumn": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "code", "subcategory", "originalSeverity", "adjustedSeverity", "message", "logicalSource", "range", "stream", "sequence", "occurrenceCount", "related", "warningLevel", "suppressed", "promoted", "languageGate", "recoveryContext"],
+      "properties": {
+        "identity": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+$" },
+        "code": { "type": "string", "pattern": "^FS[0-9]{4}$" },
+        "subcategory": { "type": "string" },
+        "originalSeverity": { "enum": ["info", "warning", "error"] },
+        "adjustedSeverity": { "enum": ["info", "warning", "error"] },
+        "message": { "type": "string" },
+        "logicalSource": { "type": "string" },
+        "range": { "$ref": "#/$defs/range" },
+        "stream": { "enum": ["stdout", "stderr"] },
+        "sequence": { "type": "integer", "minimum": 0 },
+        "occurrenceCount": { "type": "integer", "minimum": 1 },
+        "related": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "warningLevel": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "suppressed": { "type": "boolean" },
+        "promoted": { "type": "boolean" },
+        "languageGate": { "type": ["string", "null"] },
+        "recoveryContext": { "type": "string" }
+      }
+    },
+    "artifactEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["logicalPath", "state", "sha256"],
+      "properties": {
+        "logicalPath": { "type": "string" },
+        "state": { "enum": ["present", "absent"] },
+        "sha256": { "oneOf": [{ "$ref": "#/$defs/hash" }, { "type": "null" }] }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preRun", "postRun"],
+      "properties": {
+        "preRun": { "type": "array", "items": { "$ref": "#/$defs/artifactEntry" } },
+        "postRun": { "type": "array", "items": { "$ref": "#/$defs/artifactEntry" } }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owner", "sourceIssue", "capturedAt", "expiryCondition"],
+      "properties": {
+        "owner": { "type": "string", "minLength": 1 },
+        "sourceIssue": { "type": "string", "pattern": "^#[0-9]+$" },
+        "capturedAt": { "type": "string", "format": "date-time" },
+        "expiryCondition": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

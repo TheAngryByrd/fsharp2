@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://theangrybyrd.github.io/fsharp2/conformance/schemas/v1/bundle.schema.json",
+  "title": "FSharp2 conformance reproduction bundle v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "bundleId", "runId", "parentRunId", "caseId", "createdAt", "requiredPaths", "files"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "bundleId": { "type": "string", "minLength": 1 },
+    "runId": { "type": "string", "minLength": 1 },
+    "parentRunId": { "type": ["string", "null"] },
+    "caseId": { "type": "string", "minLength": 1 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "requiredPaths": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/relativePath" }
+    },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/file" }
+    }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "relativePath": { "type": "string", "pattern": "^(?![A-Za-z]:)(?!/)(?!.*\\\\).+$" },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "byteLength", "required"],
+      "properties": {
+        "path": { "$ref": "#/$defs/relativePath" },
+        "sha256": { "$ref": "#/$defs/hash" },
+        "byteLength": { "type": "integer", "minimum": 0 },
+        "required": { "type": "boolean" }
+      }
+    }
+  }
+}

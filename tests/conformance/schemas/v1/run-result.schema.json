@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://theangrybyrd.github.io/fsharp2/conformance/schemas/v1/run-result.schema.json",
+  "title": "FSharp2 conformance run result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "identity", "environment", "inputs", "coreEvidence", "lanes", "observations", "comparisons", "verdict"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "identity": { "$ref": "#/$defs/identity" },
+    "environment": { "$ref": "#/$defs/environment" },
+    "inputs": { "$ref": "#/$defs/inputs" },
+    "coreEvidence": { "$ref": "#/$defs/coreEvidence" },
+    "lanes": { "$ref": "#/$defs/lanes" },
+    "observations": { "$ref": "#/$defs/observations" },
+    "comparisons": { "type": "array", "items": { "$ref": "#/$defs/comparison" } },
+    "verdict": { "$ref": "#/$defs/verdict" }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "stringHash": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "sha256"],
+      "properties": {
+        "id": { "type": "string" },
+        "sha256": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runId", "caseId", "attempt", "parentRunId", "recordedAt", "contractHashes"],
+      "properties": {
+        "runId": { "type": "string", "minLength": 1 },
+        "caseId": { "type": "string", "minLength": 1 },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "parentRunId": { "type": ["string", "null"] },
+        "recordedAt": { "type": "string", "format": "date-time" },
+        "contractHashes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/stringHash" } }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operatingSystem", "rid", "architecture", "sdkVersion", "sdkCommit", "tools", "culture", "encoding", "environmentHash"],
+      "properties": {
+        "operatingSystem": { "type": "string" },
+        "rid": { "type": "string" },
+        "architecture": { "type": "string" },
+        "sdkVersion": { "const": "10.0.110" },
+        "sdkCommit": { "const": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd" },
+        "tools": { "type": "array", "items": { "$ref": "#/$defs/stringHash" } },
+        "culture": { "type": "string" },
+        "encoding": { "type": "string" },
+        "environmentHash": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resolvedCaseHash", "sources", "references", "optionsHash", "packageLocks", "materializedHash"],
+      "properties": {
+        "resolvedCaseHash": { "$ref": "#/$defs/hash" },
+        "sources": { "type": "array", "items": { "$ref": "#/$defs/stringHash" } },
+        "references": { "type": "array", "items": { "$ref": "#/$defs/stringHash" } },
+        "optionsHash": { "$ref": "#/$defs/hash" },
+        "packageLocks": { "type": "array", "items": { "$ref": "#/$defs/stringHash" } },
+        "materializedHash": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "phase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase", "status", "inputFingerprint", "outputFingerprint", "traces"],
+      "properties": {
+        "phase": { "type": "string" },
+        "status": { "enum": ["completed", "failed", "unsupported", "not-run"] },
+        "inputFingerprint": { "oneOf": [{ "$ref": "#/$defs/hash" }, { "type": "null" }] },
+        "outputFingerprint": { "oneOf": [{ "$ref": "#/$defs/hash" }, { "type": "null" }] },
+        "traces": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "coreEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "outcome", "diagnostics", "artifacts", "fingerprints", "phases", "traces"],
+      "properties": {
+        "contractVersion": { "type": "integer", "minimum": 1 },
+        "outcome": { "enum": ["succeeded", "failed", "unsupported", "cancelled"] },
+        "diagnostics": { "type": "array", "items": { "type": "string" } },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/stringHash" } },
+        "fingerprints": { "type": "array", "items": { "$ref": "#/$defs/stringHash" } },
+        "phases": { "type": "array", "items": { "$ref": "#/$defs/phase" } },
+        "traces": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "lane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compilerSelection", "rootHash", "evaluationHash", "invocationHash", "processHash", "cleanupHash"],
+      "properties": {
+        "compilerSelection": { "type": "string" },
+        "rootHash": { "$ref": "#/$defs/hash" },
+        "evaluationHash": { "$ref": "#/$defs/hash" },
+        "invocationHash": { "$ref": "#/$defs/hash" },
+        "processHash": { "$ref": "#/$defs/hash" },
+        "cleanupHash": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "lanes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["oracle", "fsharp2"],
+      "properties": {
+        "oracle": { "$ref": "#/$defs/lane" },
+        "fsharp2": { "$ref": "#/$defs/lane" }
+      }
+    },
+    "observations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["diagnostics", "artifacts", "probes", "runtime", "consumer", "il", "metadata", "pdb", "determinism"],
+      "properties": {
+        "diagnostics": { "type": "array", "items": { "$ref": "#/$defs/stringHash" } },
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/stringHash" } },
+        "probes": { "type": "array", "items": { "$ref": "#/$defs/stringHash" } },
+        "runtime": { "type": "array", "items": { "$ref": "#/$defs/stringHash" } },
+        "consumer": { "type": "array", "items": { "$ref": "#/$defs/stringHash" } },
+        "il": { "type": "array", "items": { "$ref": "#/$defs/stringHash" } },
+        "metadata": { "type": "array", "items": { "$ref": "#/$defs/stringHash" } },
+        "pdb": { "type": "array", "items": { "$ref": "#/$defs/stringHash" } },
+        "determinism": { "type": "array", "items": { "$ref": "#/$defs/stringHash" } }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["comparatorId", "version", "class", "rawHashes", "canonicalValues", "rule", "passed", "difference"],
+      "properties": {
+        "comparatorId": { "type": "string" },
+        "version": { "type": "integer", "minimum": 1 },
+        "class": { "enum": ["exact", "normalized", "canonical-semantic", "behavioral", "within-compiler-exact"] },
+        "rawHashes": { "type": "array", "items": { "$ref": "#/$defs/hash" } },
+        "canonicalValues": { "type": "array", "items": { "type": "string" } },
+        "rule": { "type": "string" },
+        "passed": { "type": "boolean" },
+        "difference": { "type": ["string", "null"] }
+      }
+    },
+    "verdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "reasons", "missingEvidence", "bundleHash"],
+      "properties": {
+        "state": { "enum": ["pass", "fail", "unsupported", "infra-error"] },
+        "reasons": { "type": "array", "items": { "type": "string" } },
+        "missingEvidence": { "type": "array", "items": { "type": "string" } },
+        "bundleHash": { "$ref": "#/$defs/hash" }
+      }
+    }
+  }
+}

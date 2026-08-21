@@ -1,0 +1,145 @@
+{
+  "schemaVersion": 1,
+  "manifestId": "fsharp2-conformance",
+  "manifestVersion": 1,
+  "oraclePolicy": {
+    "sdkVersion": "10.0.110",
+    "sdkCommit": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd",
+    "allowedSdkRange": "[10.0.110,10.0.111)",
+    "compiler": {
+      "logicalPath": "sdk/10.0.110/FSharp/fsc.dll",
+      "sha256": "sha256:8cb573be4b7f70886929a572024ab26fc1893cfdd795ef124c58627610ddbf22",
+      "productVersion": "14.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "msbuildTask": {
+      "logicalPath": "sdk/10.0.110/FSharp/FSharp.Build.dll",
+      "sha256": "sha256:ab62157b2111ae5f172e863d086f7035503f83c0bdb9a9efc2e2450891df6e1a",
+      "productVersion": "14.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "fsharpCore": {
+      "logicalPath": "sdk/10.0.110/FSharp/FSharp.Core.dll",
+      "sha256": "sha256:ff83cead5566c9111b69e920c2703e6d8d125305d6ac1ac08692cafee3890968",
+      "productVersion": "10.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "culture": "en-US",
+    "encoding": "utf-8",
+    "refreshRule": "reviewed-servicing-update"
+  },
+  "comparisonPolicy": {
+    "id": "fsharp2-comparison-policy",
+    "version": 1,
+    "path": "comparison-policy.v1.json",
+    "sha256": "sha256:6d12c51357dd838436c87f9d24316653329ea4ab8a49462f1436dbbc846c1d55"
+  },
+  "toolchain": {
+    "id": "dotnet-sdk-10.0.110",
+    "version": 1,
+    "path": "toolchains/dotnet-sdk.json",
+    "sha256": "sha256:811aab151721495953ac4cafdfb55a42191e533901586218dfaec0a849c60ce4"
+  },
+  "coverage": {
+    "languageVersions": [
+      { "id": "preview", "status": "pending", "issue": "#14", "owner": "language-compatibility", "reviewCondition": "Review when the SDK preview grammar is fixed." },
+      { "id": "default", "status": "required" },
+      { "id": "latest", "status": "pending", "issue": "#14", "owner": "language-compatibility", "reviewCondition": "Review after all released language modes pass." },
+      { "id": "latestmajor", "status": "pending", "issue": "#14", "owner": "language-compatibility", "reviewCondition": "Review after all major language modes pass." },
+      { "id": "4.6", "status": "pending", "issue": "#14", "owner": "language-compatibility", "reviewCondition": "Add a language-gate fixture." },
+      { "id": "4.7", "status": "pending", "issue": "#14", "owner": "language-compatibility", "reviewCondition": "Add a language-gate fixture." },
+      { "id": "5.0", "status": "pending", "issue": "#14", "owner": "language-compatibility", "reviewCondition": "Add a language-gate fixture." },
+      { "id": "6.0", "status": "pending", "issue": "#14", "owner": "language-compatibility", "reviewCondition": "Add a language-gate fixture." },
+      { "id": "7.0", "status": "pending", "issue": "#14", "owner": "language-compatibility", "reviewCondition": "Add a language-gate fixture." },
+      { "id": "8.0", "status": "pending", "issue": "#14", "owner": "language-compatibility", "reviewCondition": "Add a language-gate fixture." },
+      { "id": "9.0", "status": "required" },
+      { "id": "10.0", "status": "required" }
+    ],
+    "optionCells": [
+      { "id": "debug-optimize-minus-tailcalls-minus-portable-deterministic", "status": "required" },
+      { "id": "release-optimize-plus-tailcalls-plus-portable-deterministic", "status": "required" },
+      { "id": "noframework-simpleresolution-fullpaths-flaterrors-consolecolors-minus", "status": "required" },
+      { "id": "explicit-ordered-references-fsharp-core-identity", "status": "required" },
+      { "id": "implementation-assembly-request", "status": "required" },
+      { "id": "reference-assembly-request", "status": "required" },
+      { "id": "portable-pdb-request", "status": "required" },
+      { "id": "xml-documentation-request", "status": "required" }
+    ],
+    "targetFrameworks": [
+      { "id": "net10.0", "status": "required" },
+      { "id": "net9.0", "status": "pending", "issue": "#8", "owner": "integration-compatibility", "reviewCondition": "Promote after the integration corpus passes." },
+      { "id": "net6.0", "status": "pending", "issue": "#8", "owner": "integration-compatibility", "reviewCondition": "Promote after the integration corpus passes." },
+      { "id": "netstandard2.1", "status": "pending", "issue": "#8", "owner": "integration-compatibility", "reviewCondition": "Promote after the integration corpus passes." },
+      { "id": "netstandard2.0", "status": "pending", "issue": "#8", "owner": "integration-compatibility", "reviewCondition": "Promote after the integration corpus passes." }
+    ],
+    "configurations": [
+      { "id": "Debug", "status": "required" },
+      { "id": "Release", "status": "required" }
+    ],
+    "artifactKinds": [
+      { "id": "implementation-assembly", "status": "required" },
+      { "id": "reference-assembly", "status": "required" },
+      { "id": "portable-pdb", "status": "required" },
+      { "id": "xml-documentation", "status": "required" },
+      { "id": "embedded-pdb", "status": "pending", "issue": "#39", "owner": "emission-compatibility", "reviewCondition": "Add an embedded PDB case." },
+      { "id": "fsharp-signature-data", "status": "pending", "issue": "#39", "owner": "emission-compatibility", "reviewCondition": "Add an F# signature data case." },
+      { "id": "sourcelink-data", "status": "pending", "issue": "#39", "owner": "emission-compatibility", "reviewCondition": "Add a SourceLink case." },
+      { "id": "managed-resource", "status": "pending", "issue": "#15", "owner": "artifact-compatibility", "reviewCondition": "Add a managed resource case." },
+      { "id": "native-resource", "status": "pending", "issue": "#15", "owner": "artifact-compatibility", "reviewCondition": "Add a native resource case." }
+    ],
+    "probeKinds": [
+      { "id": "ilverify", "status": "required" },
+      { "id": "managed-load", "status": "required" },
+      { "id": "public-api", "status": "required" },
+      { "id": "metadata", "status": "required" },
+      { "id": "portable-pdb", "status": "required" },
+      { "id": "runtime", "status": "required" },
+      { "id": "downstream-fsharp", "status": "required" },
+      { "id": "downstream-csharp", "status": "required" },
+      { "id": "within-compiler-repeat", "status": "required" },
+      { "id": "debugger-dap", "status": "pending", "issue": "#18", "owner": "debugger-compatibility", "reviewCondition": "Promote after the declared driver cells pass." }
+    ],
+    "verdicts": ["pass", "fail", "unsupported", "infra-error"]
+  },
+  "featureRows": [
+    {
+      "id": "bindings.value-and-function",
+      "title": "Value and function bindings",
+      "requiredPolarities": ["positive", "negative"],
+      "requiredPhases": ["source", "syntax", "resolved-symbols", "typed-declarations", "lowered-code", "symbolic-emission", "final-linking", "load", "execution"],
+      "envelope": "supported"
+    },
+    {
+      "id": "files.ordered-modules",
+      "title": "Ordered modules",
+      "requiredPolarities": ["positive", "negative"],
+      "requiredPhases": ["source", "syntax", "resolved-symbols", "typed-declarations", "symbolic-emission", "final-linking", "load", "execution"],
+      "envelope": "supported"
+    },
+    {
+      "id": "signatures.implementation-contract",
+      "title": "Signature and implementation contract",
+      "requiredPolarities": ["positive", "negative"],
+      "requiredPhases": ["source", "syntax", "resolved-symbols", "typed-declarations", "load", "execution"],
+      "envelope": "unsupported"
+    },
+    {
+      "id": "generics.inferred-function",
+      "title": "Inferred generic function",
+      "requiredPolarities": ["positive", "negative"],
+      "requiredPhases": ["source", "syntax", "resolved-symbols", "typed-declarations", "lowered-code", "symbolic-emission", "final-linking", "load", "execution"],
+      "envelope": "supported"
+    }
+  ],
+  "integrationCorpora": [
+    {
+      "id": "icedtasks",
+      "displayName": "IcedTasks Compatibility Corpus",
+      "repository": "https://github.com/TheAngryByrd/IcedTasks.git",
+      "commit": "ba4e932b71bfde354f0e2561c2519b282fe56ff9",
+      "tree": "20abf5280d4630db438c7c6f06838105df12c765",
+      "project": "src/IcedTasks/IcedTasks.fsproj",
+      "configuration": "Release",
+      "targetFrameworks": ["netstandard2.0", "netstandard2.1", "net6.0", "net9.0"],
+      "defaultFocused": false,
+      "tags": ["integration", "network-materialization"]
+    }
+  ]
+}

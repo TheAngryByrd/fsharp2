@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 1,
+  "lockId": "files.ordered-modules-negative",
+  "family": "files",
+  "caseId": "language.files.ordered-modules-negative",
+  "caseHash": "sha256:272ed08c672bfeb9585c7dc7d5f81b2d5b4ba8ec394be5b6573a5a23bb343824",
+  "oracleIdentity": {
+    "sdkVersion": "10.0.110",
+    "sdkCommit": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd",
+    "compiler": {
+      "logicalPath": "sdk/10.0.110/FSharp/fsc.dll",
+      "sha256": "sha256:8cb573be4b7f70886929a572024ab26fc1893cfdd795ef124c58627610ddbf22",
+      "productVersion": "14.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "msbuildTask": {
+      "logicalPath": "sdk/10.0.110/FSharp/FSharp.Build.dll",
+      "sha256": "sha256:ab62157b2111ae5f172e863d086f7035503f83c0bdb9a9efc2e2450891df6e1a",
+      "productVersion": "14.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "fsharpCore": {
+      "logicalPath": "sdk/10.0.110/FSharp/FSharp.Core.dll",
+      "sha256": "sha256:ff83cead5566c9111b69e920c2703e6d8d125305d6ac1ac08692cafee3890968",
+      "productVersion": "10.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "culture": "en-US",
+    "encoding": "utf-8",
+    "optionHash": "sha256:60de2312acc6a20a2a641c2587860cc38705089aafdadae9d8063ceff7e08e36"
+  },
+  "streams": {
+    "stdout": {
+      "base64": "",
+      "byteLength": 0,
+      "byteHash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "text": "",
+      "textHash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "stderr": {
+      "base64": "CkM6XFVzZXJzXGppbW15XFJlcG9zaXRvcmllc1xwdWJsaWNcVGhlQW5ncnlCeXJkXGZzaGFycDJcdGVzdHNcY29uZm9ybWFuY2VcZml4dHVyZXNcbGFuZ3VhZ2UuZmlsZXMub3JkZXJlZC1tb2R1bGVzLW5lZ2F0aXZlXFByb2dyYW0uZnMoNSwxOCk6IGVycm9yIEZTMDAzOTogVGhlIHZhbHVlLCBuYW1lc3BhY2UsIHR5cGUgb3IgbW9kdWxlICdGaXJzdCcgaXMgbm90IGRlZmluZWQuIE1heWJlIHlvdSB3YW50IG9uZSBvZiB0aGUgZm9sbG93aW5nOh0gICBmc3QdICAgTGlzdB0gICBsaXN0DQo=",
+      "byteLength": 278,
+      "byteHash": "sha256:292ad58dc49c43e23b3660aa2468f70d825b02d163442966788143a97bf2a319",
+      "text": "\nC:\\Users\\jimmy\\Repositories\\public\\TheAngryByrd\\fsharp2\\tests\\conformance\\fixtures\\language.files.ordered-modules-negative\\Program.fs(5,18): error FS0039: The value, namespace, type or module 'First' is not defined. Maybe you want one of the following:\u001d   fst\u001d   List\u001d   list\r\n",
+      "textHash": "sha256:292ad58dc49c43e23b3660aa2468f70d825b02d163442966788143a97bf2a319"
+    }
+  },
+  "process": {
+    "exitCode": 1,
+    "targetResult": "failed"
+  },
+  "diagnostics": [
+    {
+      "identity": "diagnostic.fs0039.0",
+      "code": "FS0039",
+      "subcategory": "resolution",
+      "message": "The value, namespace, type or module 'First' is not defined. Maybe you want one of the following:\u001d   fst\u001d   List\u001d   list",
+      "logicalSource": "/src/Program.fs",
+      "range": {
+        "startLine": 5,
+        "startColumn": 18,
+        "endLine": 5,
+        "endColumn": 23
+      },
+      "recoveryContext": "source-order",
+      "originalSeverity": "error",
+      "adjustedSeverity": "error",
+      "stream": "stderr",
+      "sequence": 0,
+      "occurrenceCount": 1,
+      "related": [],
+      "warningLevel": 5,
+      "suppressed": false,
+      "promoted": false,
+      "languageGate": null
+    }
+  ],
+  "artifacts": {
+    "preRun": [
+      {
+        "logicalPath": "/output/case.dll",
+        "state": "absent",
+        "sha256": null
+      },
+      {
+        "logicalPath": "/output/case.pdb",
+        "state": "absent",
+        "sha256": null
+      }
+    ],
+    "postRun": [
+      {
+        "logicalPath": "/output/case.dll",
+        "state": "absent",
+        "sha256": null
+      },
+      {
+        "logicalPath": "/output/case.pdb",
+        "state": "absent",
+        "sha256": null
+      }
+    ]
+  },
+  "review": {
+    "owner": "compiler-compatibility",
+    "sourceIssue": "#26",
+    "capturedAt": "2026-08-21T09:47:00Z",
+    "expiryCondition": "Refresh when the case hash, Oracle SDK identity, options, culture, or encoding changes."
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "inventoryId": "generics.inventory",
+  "family": "generics",
+  "caseIds": [
+    "language.generics.inferred-function-positive",
+    "language.generics.inferred-function-negative"
+  ],
+  "positiveCaseIds": [
+    "language.generics.inferred-function-positive"
+  ],
+  "negativeCaseIds": [
+    "language.generics.inferred-function-negative"
+  ],
+  "featureRows": [
+    "generics.inferred-function"
+  ],
+  "languageVersions": [
+    "default",
+    "9.0",
+    "10.0"
+  ],
+  "optionCells": [
+    "debug-optimize-minus-tailcalls-minus-portable-deterministic",
+    "release-optimize-plus-tailcalls-plus-portable-deterministic",
+    "noframework-simpleresolution-fullpaths-flaterrors-consolecolors-minus",
+    "explicit-ordered-references-fsharp-core-identity"
+  ],
+  "artifactKinds": [
+    "implementation-assembly",
+    "portable-pdb"
+  ],
+  "probeKinds": [
+    "ilverify",
+    "managed-load",
+    "public-api",
+    "metadata",
+    "portable-pdb",
+    "runtime",
+    "within-compiler-repeat"
+  ],
+  "review": {
+    "owner": "compiler-compatibility",
+    "sourceIssue": "#26",
+    "reviewCondition": "Review when the family case set, required phase set, or compatibility envelope changes."
+  }
+}

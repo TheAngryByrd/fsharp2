@@ -1,0 +1,402 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://theangrybyrd.github.io/fsharp2/conformance/schemas/v1/case.schema.json",
+  "title": "FSharp2 conformance case v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "caseId",
+    "kind",
+    "family",
+    "polarity",
+    "title",
+    "tags",
+    "owners",
+    "envelope",
+    "matrix",
+    "project",
+    "sources",
+    "targetReferences",
+    "options",
+    "expectedDiagnostics",
+    "expectedArtifacts",
+    "phaseExpectations",
+    "probes",
+    "comparisons",
+    "cleanup",
+    "timeout"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "caseId": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+$" },
+    "kind": { "enum": ["language", "integration"] },
+    "family": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+$" },
+    "featureRow": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+$" },
+    "integrationCorpus": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+$" },
+    "polarity": { "enum": ["positive", "negative"] },
+    "title": { "type": "string", "minLength": 1 },
+    "tags": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "owners": { "$ref": "#/$defs/owners" },
+    "envelope": { "$ref": "#/$defs/envelope" },
+    "matrix": { "$ref": "#/$defs/matrix" },
+    "project": { "$ref": "#/$defs/project" },
+    "sources": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/source" } },
+    "targetReferences": { "$ref": "#/$defs/targetReferences" },
+    "options": { "$ref": "#/$defs/options" },
+    "expectedDiagnostics": { "$ref": "#/$defs/expectedDiagnostics" },
+    "expectedArtifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } },
+    "phaseExpectations": { "$ref": "#/$defs/phaseExpectations" },
+    "probes": { "type": "array", "items": { "$ref": "#/$defs/probe" } },
+    "comparisons": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/comparison" } },
+    "cleanup": { "$ref": "#/$defs/cleanup" },
+    "timeout": { "$ref": "#/$defs/timeout" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "language" } } },
+      "then": { "required": ["featureRow"], "not": { "required": ["integrationCorpus"] } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "integration" } } },
+      "then": { "required": ["integrationCorpus"], "not": { "required": ["featureRow"] } }
+    }
+  ],
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "relativePath": { "type": "string", "pattern": "^(?![A-Za-z]:)(?!/)(?!.*\\\\).+$" },
+    "logicalPath": { "type": "string", "pattern": "^/[^\\\\]+$" },
+    "keyValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "value": { "type": ["string", "boolean", "integer"] }
+      }
+    },
+    "owners": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owner", "requirements"],
+      "properties": {
+        "owner": { "type": "string", "minLength": 1 },
+        "requirements": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string" } }
+      }
+    },
+    "exclusion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cell", "issue", "owner", "reviewCondition"],
+      "properties": {
+        "cell": { "type": "string", "minLength": 1 },
+        "issue": { "type": "string", "pattern": "^#[0-9]+$" },
+        "owner": { "type": "string", "minLength": 1 },
+        "reviewCondition": { "type": "string", "minLength": 1 }
+      }
+    },
+    "envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "compilerContractVersions", "languageVersions", "targetFrameworks", "exclusions"],
+      "properties": {
+        "state": { "enum": ["supported", "unsupported"] },
+        "compilerContractVersions": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "integer", "minimum": 1 } },
+        "languageVersions": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string" } },
+        "targetFrameworks": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string" } },
+        "exclusions": { "type": "array", "items": { "$ref": "#/$defs/exclusion" } }
+      }
+    },
+    "requiredExcludedSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "excluded"],
+      "properties": {
+        "required": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "excluded": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
+      }
+    },
+    "matrix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operatingSystems", "runtimeIdentifiers", "cultures", "configurations", "debugFormats"],
+      "properties": {
+        "operatingSystems": { "$ref": "#/$defs/requiredExcludedSet" },
+        "runtimeIdentifiers": { "$ref": "#/$defs/requiredExcludedSet" },
+        "cultures": { "$ref": "#/$defs/requiredExcludedSet" },
+        "configurations": { "$ref": "#/$defs/requiredExcludedSet" },
+        "debugFormats": { "$ref": "#/$defs/requiredExcludedSet" }
+      }
+    },
+    "projectItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["itemType", "include", "metadata"],
+      "properties": {
+        "itemType": { "type": "string", "minLength": 1 },
+        "include": { "type": "string", "minLength": 1 },
+        "metadata": { "type": "array", "items": { "$ref": "#/$defs/keyValue" } }
+      }
+    },
+    "packageInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "outputOwnership": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compilerOwned", "sdkOwned"],
+      "properties": {
+        "compilerOwned": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "sdkOwned": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
+      }
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectType", "target", "assemblyName", "properties", "items", "packageInputs", "outputOwnership"],
+      "properties": {
+        "projectType": { "enum": ["exe", "library"] },
+        "target": { "const": "CoreCompile" },
+        "assemblyName": { "type": "string", "minLength": 1 },
+        "properties": { "type": "array", "items": { "$ref": "#/$defs/keyValue" } },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/projectItem" } },
+        "packageInputs": { "type": "array", "items": { "$ref": "#/$defs/packageInput" } },
+        "outputOwnership": { "$ref": "#/$defs/outputOwnership" }
+      }
+    },
+    "generation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["generatorId", "repositoryPath", "gitBlob", "inputHashes"],
+      "properties": {
+        "generatorId": { "const": "git-tree-v1" },
+        "repositoryPath": { "$ref": "#/$defs/relativePath" },
+        "gitBlob": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "inputHashes": { "type": "array", "minItems": 2, "items": { "type": "string", "pattern": "^(sha256:[0-9a-f]{64}|git:[0-9a-f]{40})$" } }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["order", "stableId", "kind", "logicalPath", "fixturePath", "sha256"],
+      "properties": {
+        "order": { "type": "integer", "minimum": 0 },
+        "stableId": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+$" },
+        "kind": { "enum": ["implementation", "signature", "generated"] },
+        "logicalPath": { "$ref": "#/$defs/logicalPath" },
+        "fixturePath": { "$ref": "#/$defs/relativePath" },
+        "sha256": { "$ref": "#/$defs/hash" },
+        "implements": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+$" },
+        "generation": { "$ref": "#/$defs/generation" }
+      }
+    },
+    "targetReferences": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["closurePath", "comparison"],
+      "properties": {
+        "closurePath": { "$ref": "#/$defs/relativePath" },
+        "comparison": { "const": "exact-ordered-closure" }
+      }
+    },
+    "semanticOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["languageVersion", "defines", "optimization", "tailCalls", "checkedArithmetic", "targetProfile"],
+      "properties": {
+        "languageVersion": { "type": "string" },
+        "defines": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "optimization": { "enum": ["enabled", "disabled"] },
+        "tailCalls": { "enum": ["enabled", "disabled"] },
+        "checkedArithmetic": { "type": "boolean" },
+        "targetProfile": { "enum": ["netcore", "mscorlib", "netstandard"] }
+      }
+    },
+    "diagnosticOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["warningLevel", "noWarn", "warnAsError", "warnAsWarn", "fullPaths", "flatErrors", "consoleColors", "culture"],
+      "properties": {
+        "warningLevel": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "noWarn": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "warnAsError": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "warnAsWarn": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "fullPaths": { "type": "boolean" },
+        "flatErrors": { "type": "boolean" },
+        "consoleColors": { "type": "boolean" },
+        "culture": { "type": "string" }
+      }
+    },
+    "emissionOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["debugFormat", "deterministic", "documentation", "referenceAssembly", "outputType", "pathMap"],
+      "properties": {
+        "debugFormat": { "enum": ["portable", "embedded", "none"] },
+        "deterministic": { "type": "boolean" },
+        "documentation": { "type": "boolean" },
+        "referenceAssembly": { "type": "boolean" },
+        "outputType": { "enum": ["exe", "library"] },
+        "pathMap": { "type": "array", "items": { "$ref": "#/$defs/keyValue" } }
+      }
+    },
+    "signingOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "publicSign"],
+      "properties": {
+        "mode": { "enum": ["none", "delay", "full"] },
+        "keyFile": { "$ref": "#/$defs/relativePath" },
+        "publicSign": { "type": "boolean" }
+      }
+    },
+    "resourceOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["embedded", "linked", "native"],
+      "properties": {
+        "embedded": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "linked": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "native": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
+      }
+    },
+    "msbuildOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["noFramework", "simpleResolution", "explicitReferences"],
+      "properties": {
+        "noFramework": { "type": "boolean" },
+        "simpleResolution": { "type": "boolean" },
+        "explicitReferences": { "type": "boolean" }
+      }
+    },
+    "options": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["semantic", "diagnostic", "emission", "signing", "resources", "msbuild", "compilerArguments"],
+      "properties": {
+        "semantic": { "$ref": "#/$defs/semanticOptions" },
+        "diagnostic": { "$ref": "#/$defs/diagnosticOptions" },
+        "emission": { "$ref": "#/$defs/emissionOptions" },
+        "signing": { "$ref": "#/$defs/signingOptions" },
+        "resources": { "$ref": "#/$defs/resourceOptions" },
+        "msbuild": { "$ref": "#/$defs/msbuildOptions" },
+        "compilerArguments": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "diagnosticFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "severity", "message", "source", "startLine", "startColumn", "endLine", "endColumn", "stream", "sequence"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^FS[0-9]{4}$" },
+        "severity": { "enum": ["info", "warning", "error"] },
+        "message": { "type": "string" },
+        "source": { "type": "string" },
+        "startLine": { "type": "integer", "minimum": 1 },
+        "startColumn": { "type": "integer", "minimum": 0 },
+        "endLine": { "type": "integer", "minimum": 1 },
+        "endColumn": { "type": "integer", "minimum": 0 },
+        "stream": { "enum": ["stdout", "stderr"] },
+        "sequence": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "expectedDiagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "lockPath", "inlineFacts"],
+      "properties": {
+        "mode": { "enum": ["none", "inline", "oracle-lock"] },
+        "lockPath": { "type": ["string", "null"], "pattern": "^(?![A-Za-z]:)(?!/)(?!.*\\\\).+$" },
+        "inlineFacts": { "type": "array", "items": { "$ref": "#/$defs/diagnosticFact" } }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "logicalIdentity", "state", "producer", "comparisonClass", "validators", "consumerProbes"],
+      "properties": {
+        "kind": { "enum": ["implementation-assembly", "reference-assembly", "portable-pdb", "embedded-pdb", "xml-documentation", "fsharp-signature-data", "sourcelink-data", "managed-resource", "native-resource"] },
+        "logicalIdentity": { "type": "string", "minLength": 1 },
+        "state": { "enum": ["required", "forbidden", "retained-after-failure"] },
+        "producer": { "enum": ["compiler", "sdk"] },
+        "comparisonClass": { "enum": ["exact", "normalized", "canonical-semantic", "behavioral", "within-compiler-exact"] },
+        "validators": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "consumerProbes": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
+      }
+    },
+    "phase": { "enum": ["source", "syntax", "resolved-symbols", "typed-declarations", "lowered-code", "optimized-code", "symbolic-emission", "final-linking", "load", "execution"] },
+    "phaseExpectation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phase", "status", "fingerprintRequired", "traceRequired", "observableProofs"],
+      "properties": {
+        "phase": { "$ref": "#/$defs/phase" },
+        "status": { "enum": ["completed", "failed", "unsupported", "not-run"] },
+        "fingerprintRequired": { "type": "boolean" },
+        "traceRequired": { "type": "boolean" },
+        "observableProofs": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string" } }
+      }
+    },
+    "phaseExpectations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stopPhase", "phases"],
+      "properties": {
+        "stopPhase": { "oneOf": [{ "$ref": "#/$defs/phase" }, { "type": "null" }] },
+        "phases": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/phaseExpectation" } }
+      }
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "required", "configuration"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+$" },
+        "kind": { "enum": ["ilverify", "managed-load", "public-api", "metadata", "portable-pdb", "runtime", "downstream-fsharp", "downstream-csharp", "debugger-dap", "within-compiler-repeat"] },
+        "required": { "type": "boolean" },
+        "configuration": { "type": "array", "items": { "$ref": "#/$defs/keyValue" } }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "class", "comparator", "rule"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "class": { "enum": ["exact", "normalized", "canonical-semantic", "behavioral", "within-compiler-exact"] },
+        "comparator": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+$" },
+        "rule": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+$" }
+      }
+    },
+    "cleanup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["retention", "delete", "retain", "lateFailure"],
+      "properties": {
+        "retention": { "enum": ["none", "on-failure", "always"] },
+        "delete": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "retain": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+        "lateFailure": { "enum": ["delete-successful-artifacts", "retain-prior-success", "compare-declared-leftovers"] }
+      }
+    },
+    "timeout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evaluationMs", "compileMs", "probeMs", "cleanupMs"],
+      "properties": {
+        "evaluationMs": { "type": "integer", "minimum": 1 },
+        "compileMs": { "type": "integer", "minimum": 1 },
+        "probeMs": { "type": "integer", "minimum": 1 },
+        "cleanupMs": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

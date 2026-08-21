@@ -1,0 +1,219 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://theangrybyrd.github.io/fsharp2/conformance/schemas/v1/manifest.schema.json",
+  "title": "FSharp2 conformance manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "manifestId",
+    "manifestVersion",
+    "oraclePolicy",
+    "comparisonPolicy",
+    "toolchain",
+    "coverage",
+    "featureRows",
+    "integrationCorpora"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "manifestId": { "const": "fsharp2-conformance" },
+    "manifestVersion": { "type": "integer", "minimum": 1 },
+    "oraclePolicy": { "$ref": "#/$defs/oraclePolicy" },
+    "comparisonPolicy": { "$ref": "#/$defs/documentReference" },
+    "toolchain": { "$ref": "#/$defs/documentReference" },
+    "coverage": { "$ref": "#/$defs/coverage" },
+    "featureRows": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/featureRow" }
+    },
+    "integrationCorpora": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/integrationCorpus" }
+    }
+  },
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "relativePath": {
+      "type": "string",
+      "pattern": "^(?![A-Za-z]:)(?!/)(?!.*\\\\).+$"
+    },
+    "documentReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "path", "sha256"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "integer", "minimum": 1 },
+        "path": { "$ref": "#/$defs/relativePath" },
+        "sha256": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "toolIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["logicalPath", "sha256", "productVersion"],
+      "properties": {
+        "logicalPath": { "$ref": "#/$defs/relativePath" },
+        "sha256": { "$ref": "#/$defs/hash" },
+        "productVersion": { "type": "string", "minLength": 1 }
+      }
+    },
+    "oraclePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sdkVersion",
+        "sdkCommit",
+        "allowedSdkRange",
+        "compiler",
+        "msbuildTask",
+        "fsharpCore",
+        "culture",
+        "encoding",
+        "refreshRule"
+      ],
+      "properties": {
+        "sdkVersion": { "const": "10.0.110" },
+        "sdkCommit": { "const": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd" },
+        "allowedSdkRange": { "const": "[10.0.110,10.0.111)" },
+        "compiler": { "$ref": "#/$defs/toolIdentity" },
+        "msbuildTask": { "$ref": "#/$defs/toolIdentity" },
+        "fsharpCore": { "$ref": "#/$defs/toolIdentity" },
+        "culture": { "const": "en-US" },
+        "encoding": { "const": "utf-8" },
+        "refreshRule": { "const": "reviewed-servicing-update" }
+      }
+    },
+    "statusEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["required", "excluded", "pending"] },
+        "issue": { "type": "string", "pattern": "^#[0-9]+$" },
+        "owner": { "type": "string", "minLength": 1 },
+        "reviewCondition": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "enum": ["excluded", "pending"] } } },
+          "then": { "required": ["issue", "owner", "reviewCondition"] }
+        }
+      ]
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "languageVersions",
+        "optionCells",
+        "targetFrameworks",
+        "configurations",
+        "artifactKinds",
+        "probeKinds",
+        "verdicts"
+      ],
+      "properties": {
+        "languageVersions": { "type": "array", "items": { "$ref": "#/$defs/statusEntry" } },
+        "optionCells": { "type": "array", "items": { "$ref": "#/$defs/statusEntry" } },
+        "targetFrameworks": { "type": "array", "items": { "$ref": "#/$defs/statusEntry" } },
+        "configurations": { "type": "array", "items": { "$ref": "#/$defs/statusEntry" } },
+        "artifactKinds": { "type": "array", "items": { "$ref": "#/$defs/statusEntry" } },
+        "probeKinds": { "type": "array", "items": { "$ref": "#/$defs/statusEntry" } },
+        "verdicts": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["pass", "fail", "unsupported", "infra-error"] },
+          "contains": { "const": "infra-error" }
+        }
+      }
+    },
+    "featureRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "requiredPolarities", "requiredPhases", "envelope"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+$" },
+        "title": { "type": "string", "minLength": 1 },
+        "requiredPolarities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["positive", "negative"] },
+          "allOf": [
+            { "contains": { "const": "positive" } },
+            { "contains": { "const": "negative" } }
+          ]
+        },
+        "requiredPhases": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/phase" }
+        },
+        "envelope": { "enum": ["supported", "unsupported"] }
+      }
+    },
+    "phase": {
+      "enum": [
+        "source",
+        "syntax",
+        "resolved-symbols",
+        "typed-declarations",
+        "lowered-code",
+        "optimized-code",
+        "symbolic-emission",
+        "final-linking",
+        "load",
+        "execution"
+      ]
+    },
+    "integrationCorpus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "displayName",
+        "repository",
+        "commit",
+        "tree",
+        "project",
+        "configuration",
+        "targetFrameworks",
+        "defaultFocused",
+        "tags"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+$" },
+        "displayName": { "type": "string", "minLength": 1 },
+        "repository": { "type": "string", "format": "uri" },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "tree": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "project": { "$ref": "#/$defs/relativePath" },
+        "configuration": { "enum": ["Debug", "Release"] },
+        "targetFrameworks": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "defaultFocused": { "const": false },
+        "tags": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string" } }
+      }
+    },
+    "toolchainDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "toolchainId", "sdkVersion", "sdkCommit", "selectionMode", "multilevelLookup"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "toolchainId": { "const": "dotnet-sdk-10.0.110" },
+        "sdkVersion": { "const": "10.0.110" },
+        "sdkCommit": { "const": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd" },
+        "selectionMode": { "const": "explicit-root" },
+        "multilevelLookup": { "const": false }
+      }
+    }
+  }
+}

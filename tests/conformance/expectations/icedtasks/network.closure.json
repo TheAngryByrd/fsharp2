@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "closureId": "icedtasks-network-closure",
+  "family": "icedtasks",
+  "targetFramework": "network-materialized",
+  "references": [
+    {
+      "order": 0,
+      "stableId": "reference.netstandard",
+      "logicalPath": "/references/netstandard.dll",
+      "sha256": "sha256:f9078068add6f69455772c526a69a134ae520199eb1c5513f7d80a871fc09851",
+      "assemblyName": "netstandard",
+      "version": "2.1.0.0",
+      "culture": "",
+      "publicKeyToken": "cc7b13ffcd2ddd51",
+      "evaluatedItemSource": "ReferencePath"
+    },
+    {
+      "order": 1,
+      "stableId": "reference.system-runtime",
+      "logicalPath": "/references/System.Runtime.dll",
+      "sha256": "sha256:11e8fdc3cc3833689890cb3b1147b255dba12f53a88736bc0c9bf45afdb8ba11",
+      "assemblyName": "System.Runtime",
+      "version": "10.0.0.0",
+      "culture": "",
+      "publicKeyToken": "b03f5f7f11d50a3a",
+      "evaluatedItemSource": "ReferencePath"
+    },
+    {
+      "order": 2,
+      "stableId": "reference.fsharp-core",
+      "logicalPath": "/references/FSharp.Core.dll",
+      "sha256": "sha256:ff83cead5566c9111b69e920c2703e6d8d125305d6ac1ac08692cafee3890968",
+      "assemblyName": "FSharp.Core",
+      "version": "10.0.0.0",
+      "culture": "",
+      "publicKeyToken": "b03f5f7f11d50a3a",
+      "evaluatedItemSource": "ReferencePath"
+    }
+  ],
+  "comparison": "exact-ordered-closure",
+  "review": {
+    "owner": "compiler-compatibility",
+    "sourceIssue": "#26",
+    "refreshCondition": "Refresh when SDK 10.0.110 or the evaluated ReferencePath order changes."
+  }
+}

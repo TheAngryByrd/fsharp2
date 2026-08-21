@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 1,
+  "lockId": "generics.inferred-function-negative",
+  "family": "generics",
+  "caseId": "language.generics.inferred-function-negative",
+  "caseHash": "sha256:a657600e3902a19f01f4a11864e39e9ac0997a755985b5c33c24fe184dc86f89",
+  "oracleIdentity": {
+    "sdkVersion": "10.0.110",
+    "sdkCommit": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd",
+    "compiler": {
+      "logicalPath": "sdk/10.0.110/FSharp/fsc.dll",
+      "sha256": "sha256:8cb573be4b7f70886929a572024ab26fc1893cfdd795ef124c58627610ddbf22",
+      "productVersion": "14.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "msbuildTask": {
+      "logicalPath": "sdk/10.0.110/FSharp/FSharp.Build.dll",
+      "sha256": "sha256:ab62157b2111ae5f172e863d086f7035503f83c0bdb9a9efc2e2450891df6e1a",
+      "productVersion": "14.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "fsharpCore": {
+      "logicalPath": "sdk/10.0.110/FSharp/FSharp.Core.dll",
+      "sha256": "sha256:ff83cead5566c9111b69e920c2703e6d8d125305d6ac1ac08692cafee3890968",
+      "productVersion": "10.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "culture": "en-US",
+    "encoding": "utf-8",
+    "optionHash": "sha256:60de2312acc6a20a2a641c2587860cc38705089aafdadae9d8063ceff7e08e36"
+  },
+  "streams": {
+    "stdout": {
+      "base64": "",
+      "byteLength": 0,
+      "byteHash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "text": "",
+      "textHash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "stderr": {
+      "base64": "CkM6XFVzZXJzXGppbW15XFJlcG9zaXRvcmllc1xwdWJsaWNcVGhlQW5ncnlCeXJkXGZzaGFycDJcdGVzdHNcY29uZm9ybWFuY2VcZml4dHVyZXNcbGFuZ3VhZ2UuZ2VuZXJpY3MuaW5mZXJyZWQtZnVuY3Rpb24tbmVnYXRpdmVcUHJvZ3JhbS5mcyg1LDI2KTogZXJyb3IgRlMwMDAxOiBUaGlzIGV4cHJlc3Npb24gd2FzIGV4cGVjdGVkIHRvIGhhdmUgdHlwZR0gICAgJ2ludCcgICAgHWJ1dCBoZXJlIGhhcyB0eXBlHSAgICAnc3RyaW5nJw0K",
+      "byteLength": 249,
+      "byteHash": "sha256:903b3b3507f78a303a7c6b0483624104f780624539be5ebec0fb5e0842fe0f12",
+      "text": "\nC:\\Users\\jimmy\\Repositories\\public\\TheAngryByrd\\fsharp2\\tests\\conformance\\fixtures\\language.generics.inferred-function-negative\\Program.fs(5,26): error FS0001: This expression was expected to have type\u001d    'int'    \u001dbut here has type\u001d    'string'\r\n",
+      "textHash": "sha256:903b3b3507f78a303a7c6b0483624104f780624539be5ebec0fb5e0842fe0f12"
+    }
+  },
+  "process": {
+    "exitCode": 1,
+    "targetResult": "failed"
+  },
+  "diagnostics": [
+    {
+      "identity": "diagnostic.fs0001.0",
+      "code": "FS0001",
+      "subcategory": "typecheck",
+      "message": "This expression was expected to have type\u001d    'int'    \u001dbut here has type\u001d    'string'",
+      "logicalSource": "/src/Program.fs",
+      "range": {
+        "startLine": 5,
+        "startColumn": 26,
+        "endLine": 5,
+        "endColumn": 37
+      },
+      "recoveryContext": "generic-return-type",
+      "originalSeverity": "error",
+      "adjustedSeverity": "error",
+      "stream": "stderr",
+      "sequence": 0,
+      "occurrenceCount": 1,
+      "related": [],
+      "warningLevel": 5,
+      "suppressed": false,
+      "promoted": false,
+      "languageGate": null
+    }
+  ],
+  "artifacts": {
+    "preRun": [
+      {
+        "logicalPath": "/output/case.dll",
+        "state": "absent",
+        "sha256": null
+      },
+      {
+        "logicalPath": "/output/case.pdb",
+        "state": "absent",
+        "sha256": null
+      }
+    ],
+    "postRun": [
+      {
+        "logicalPath": "/output/case.dll",
+        "state": "absent",
+        "sha256": null
+      },
+      {
+        "logicalPath": "/output/case.pdb",
+        "state": "absent",
+        "sha256": null
+      }
+    ]
+  },
+  "review": {
+    "owner": "compiler-compatibility",
+    "sourceIssue": "#26",
+    "capturedAt": "2026-08-21T09:47:00Z",
+    "expiryCondition": "Refresh when the case hash, Oracle SDK identity, options, culture, or encoding changes."
+  }
+}

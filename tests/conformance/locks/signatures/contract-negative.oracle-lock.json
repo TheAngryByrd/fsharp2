@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 1,
+  "lockId": "signatures.contract-negative",
+  "family": "signatures",
+  "caseId": "language.signatures.contract-negative",
+  "caseHash": "sha256:56e940656cb857ccefddf32d5714d5598a4fc456903dafce6f7f79e6dcb0ee4e",
+  "oracleIdentity": {
+    "sdkVersion": "10.0.110",
+    "sdkCommit": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd",
+    "compiler": {
+      "logicalPath": "sdk/10.0.110/FSharp/fsc.dll",
+      "sha256": "sha256:8cb573be4b7f70886929a572024ab26fc1893cfdd795ef124c58627610ddbf22",
+      "productVersion": "14.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "msbuildTask": {
+      "logicalPath": "sdk/10.0.110/FSharp/FSharp.Build.dll",
+      "sha256": "sha256:ab62157b2111ae5f172e863d086f7035503f83c0bdb9a9efc2e2450891df6e1a",
+      "productVersion": "14.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "fsharpCore": {
+      "logicalPath": "sdk/10.0.110/FSharp/FSharp.Core.dll",
+      "sha256": "sha256:ff83cead5566c9111b69e920c2703e6d8d125305d6ac1ac08692cafee3890968",
+      "productVersion": "10.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "culture": "en-US",
+    "encoding": "utf-8",
+    "optionHash": "sha256:734c11396c4166a04f43e8b247bd3c57a60024049a015053a9a57c18bda9f5ca"
+  },
+  "streams": {
+    "stdout": {
+      "base64": "",
+      "byteLength": 0,
+      "byteHash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "text": "",
+      "textHash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "stderr": {
+      "base64": "CkM6XFVzZXJzXGppbW15XFJlcG9zaXRvcmllc1xwdWJsaWNcVGhlQW5ncnlCeXJkXGZzaGFycDJcdGVzdHNcY29uZm9ybWFuY2VcZml4dHVyZXNcbGFuZ3VhZ2Uuc2lnbmF0dXJlcy5jb250cmFjdC1uZWdhdGl2ZVxQdWJsaWNBcGkuZnMoNCw5KTogZXJyb3IgRlMwMDM0OiBNb2R1bGUgJ1NpZ25hdHVyZUNvbnRyYWN0LlB1YmxpY0FwaScgY29udGFpbnMdICAgIHZhbCBhbnN3ZXI6IHVuaXQgLT4gc3RyaW5nICAgIB1idXQgaXRzIHNpZ25hdHVyZSBzcGVjaWZpZXMdICAgIHZhbCBhbnN3ZXI6IHVuaXQgLT4gaW50ICAgIB1UaGUgdHlwZXMgZGlmZmVyDQo=",
+      "byteLength": 314,
+      "byteHash": "sha256:a2320efecfed713a744033b1af94f0b1e4010ae772ceb912b693b142e694eb76",
+      "text": "\nC:\\Users\\jimmy\\Repositories\\public\\TheAngryByrd\\fsharp2\\tests\\conformance\\fixtures\\language.signatures.contract-negative\\PublicApi.fs(4,9): error FS0034: Module 'SignatureContract.PublicApi' contains\u001d    val answer: unit -> string    \u001dbut its signature specifies\u001d    val answer: unit -> int    \u001dThe types differ\r\n",
+      "textHash": "sha256:a2320efecfed713a744033b1af94f0b1e4010ae772ceb912b693b142e694eb76"
+    }
+  },
+  "process": {
+    "exitCode": 1,
+    "targetResult": "failed"
+  },
+  "diagnostics": [
+    {
+      "identity": "diagnostic.fs0034.0",
+      "code": "FS0034",
+      "subcategory": "signature-check",
+      "message": "Module 'SignatureContract.PublicApi' contains\u001d    val answer: unit -> string    \u001dbut its signature specifies\u001d    val answer: unit -> int    \u001dThe types differ",
+      "logicalSource": "/src/PublicApi.fs",
+      "range": {
+        "startLine": 4,
+        "startColumn": 9,
+        "endLine": 4,
+        "endColumn": 15
+      },
+      "recoveryContext": "signature-implementation",
+      "originalSeverity": "error",
+      "adjustedSeverity": "error",
+      "stream": "stderr",
+      "sequence": 0,
+      "occurrenceCount": 1,
+      "related": [],
+      "warningLevel": 5,
+      "suppressed": false,
+      "promoted": false,
+      "languageGate": null
+    }
+  ],
+  "artifacts": {
+    "preRun": [
+      {
+        "logicalPath": "/output/case.dll",
+        "state": "absent",
+        "sha256": null
+      },
+      {
+        "logicalPath": "/output/case.pdb",
+        "state": "absent",
+        "sha256": null
+      }
+    ],
+    "postRun": [
+      {
+        "logicalPath": "/output/case.dll",
+        "state": "absent",
+        "sha256": null
+      },
+      {
+        "logicalPath": "/output/case.pdb",
+        "state": "absent",
+        "sha256": null
+      }
+    ]
+  },
+  "review": {
+    "owner": "compiler-compatibility",
+    "sourceIssue": "#26",
+    "capturedAt": "2026-08-21T09:47:00Z",
+    "expiryCondition": "Refresh when the case hash, Oracle SDK identity, options, culture, or encoding changes."
+  }
+}

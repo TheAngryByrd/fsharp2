@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "inventoryId": "bindings.inventory",
+  "family": "bindings",
+  "caseIds": [
+    "language.bindings.value-function-positive",
+    "language.bindings.value-function-parse-negative",
+    "language.bindings.value-function-type-negative"
+  ],
+  "positiveCaseIds": [
+    "language.bindings.value-function-positive"
+  ],
+  "negativeCaseIds": [
+    "language.bindings.value-function-parse-negative",
+    "language.bindings.value-function-type-negative"
+  ],
+  "featureRows": [
+    "bindings.value-and-function"
+  ],
+  "languageVersions": [
+    "default",
+    "9.0",
+    "10.0"
+  ],
+  "optionCells": [
+    "debug-optimize-minus-tailcalls-minus-portable-deterministic",
+    "release-optimize-plus-tailcalls-plus-portable-deterministic",
+    "noframework-simpleresolution-fullpaths-flaterrors-consolecolors-minus",
+    "explicit-ordered-references-fsharp-core-identity"
+  ],
+  "artifactKinds": [
+    "implementation-assembly",
+    "portable-pdb"
+  ],
+  "probeKinds": [
+    "ilverify",
+    "managed-load",
+    "public-api",
+    "metadata",
+    "portable-pdb",
+    "runtime",
+    "within-compiler-repeat"
+  ],
+  "review": {
+    "owner": "compiler-compatibility",
+    "sourceIssue": "#26",
+    "reviewCondition": "Review when the family case set, required phase set, or compatibility envelope changes."
+  }
+}

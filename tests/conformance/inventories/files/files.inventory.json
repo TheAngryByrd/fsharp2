@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "inventoryId": "files.inventory",
+  "family": "files",
+  "caseIds": [
+    "language.files.ordered-modules-positive",
+    "language.files.ordered-modules-negative"
+  ],
+  "positiveCaseIds": [
+    "language.files.ordered-modules-positive"
+  ],
+  "negativeCaseIds": [
+    "language.files.ordered-modules-negative"
+  ],
+  "featureRows": [
+    "files.ordered-modules"
+  ],
+  "languageVersions": [
+    "default",
+    "9.0",
+    "10.0"
+  ],
+  "optionCells": [
+    "debug-optimize-minus-tailcalls-minus-portable-deterministic",
+    "release-optimize-plus-tailcalls-plus-portable-deterministic",
+    "noframework-simpleresolution-fullpaths-flaterrors-consolecolors-minus",
+    "explicit-ordered-references-fsharp-core-identity"
+  ],
+  "artifactKinds": [
+    "implementation-assembly",
+    "portable-pdb"
+  ],
+  "probeKinds": [
+    "ilverify",
+    "managed-load",
+    "public-api",
+    "metadata",
+    "portable-pdb",
+    "runtime",
+    "within-compiler-repeat"
+  ],
+  "review": {
+    "owner": "compiler-compatibility",
+    "sourceIssue": "#26",
+    "reviewCondition": "Review when the family case set, required phase set, or compatibility envelope changes."
+  }
+}

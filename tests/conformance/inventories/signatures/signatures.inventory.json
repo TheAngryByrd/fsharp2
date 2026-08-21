@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "inventoryId": "signatures.inventory",
+  "family": "signatures",
+  "caseIds": [
+    "language.signatures.contract-positive",
+    "language.signatures.contract-negative"
+  ],
+  "positiveCaseIds": [
+    "language.signatures.contract-positive"
+  ],
+  "negativeCaseIds": [
+    "language.signatures.contract-negative"
+  ],
+  "featureRows": [
+    "signatures.implementation-contract"
+  ],
+  "languageVersions": [
+    "default",
+    "9.0",
+    "10.0"
+  ],
+  "optionCells": [
+    "debug-optimize-minus-tailcalls-minus-portable-deterministic",
+    "release-optimize-plus-tailcalls-plus-portable-deterministic",
+    "noframework-simpleresolution-fullpaths-flaterrors-consolecolors-minus",
+    "explicit-ordered-references-fsharp-core-identity"
+  ],
+  "artifactKinds": [
+    "implementation-assembly",
+    "reference-assembly",
+    "portable-pdb",
+    "xml-documentation"
+  ],
+  "probeKinds": [
+    "ilverify",
+    "managed-load",
+    "public-api",
+    "metadata",
+    "portable-pdb",
+    "downstream-fsharp",
+    "downstream-csharp",
+    "within-compiler-repeat"
+  ],
+  "review": {
+    "owner": "compiler-compatibility",
+    "sourceIssue": "#26",
+    "reviewCondition": "Review when the family case set, required phase set, or compatibility envelope changes."
+  }
+}

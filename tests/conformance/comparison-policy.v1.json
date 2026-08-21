@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "policyId": "fsharp2-comparison-policy",
+  "policyVersion": 1,
+  "classes": [
+    {
+      "id": "exact",
+      "rule": "Compare decoded values without policy normalization."
+    },
+    {
+      "id": "normalized",
+      "rule": "Apply one recorded normalization rule and compare the result exactly."
+    },
+    {
+      "id": "canonical-semantic",
+      "rule": "Compare decoded semantic identities without physical token or row order."
+    },
+    {
+      "id": "behavioral",
+      "rule": "Compare declared load, execution, exception, resource, or debugger observations."
+    },
+    {
+      "id": "within-compiler-exact",
+      "rule": "Compare one compiler artifact byte-for-byte with its deterministic repeat."
+    }
+  ],
+  "normalizations": [
+    {
+      "id": "logical-root-v1",
+      "version": 1,
+      "kind": "path-root",
+      "rule": "Replace one recorded physical lane root with /_fsharp2_conformance/root."
+    },
+    {
+      "id": "path-separator-v1",
+      "version": 1,
+      "kind": "path-separator",
+      "rule": "Replace the recorded platform separator with a forward slash."
+    },
+    {
+      "id": "newline-lf-v1",
+      "version": 1,
+      "kind": "newline",
+      "rule": "Replace CRLF with LF without changing other text."
+    }
+  ],
+  "comparatorVersions": [
+    { "id": "diagnostic-exact", "version": 1, "class": "exact" },
+    { "id": "path-newline-normalized", "version": 1, "class": "normalized" },
+    { "id": "managed-metadata-semantic", "version": 1, "class": "canonical-semantic" },
+    { "id": "portable-pdb-semantic", "version": 1, "class": "canonical-semantic" },
+    { "id": "runtime-behavior", "version": 1, "class": "behavioral" },
+    { "id": "artifact-repeat", "version": 1, "class": "within-compiler-exact" }
+  ]
+}
