@@ -702,6 +702,13 @@ type private CheckedSourceType = {
     Methods: TypedMethodDeclaration list
 }
 
+type private CheckedSourceModuleMethod = {
+    Namespace: string
+    ModuleName: string
+    ModuleStableId: string
+    Declaration: TypedMethodDeclaration
+}
+
 type private CheckedSourceStruct = {
     Namespace: string
     Declaration: TypedStructTypeDeclaration
@@ -1333,8 +1340,9 @@ type internal CompilerService() =
 
             let checkedSourceTypes = ResizeArray<CheckedSourceType>()
             let checkedSourceStructs = ResizeArray<CheckedSourceStruct>()
+            let checkedSourceModuleMethods = ResizeArray<CheckedSourceModuleMethod>()
 
-            let addCheckedDeclaration namespaceName =
+            let addCheckedDeclaration namespaceName moduleName moduleStableId =
                 function
                 | TypedStaticType declaration ->
                     checkedSourceTypes.Add {
@@ -1363,14 +1371,24 @@ type internal CompilerService() =
                         Namespace = namespaceName
                         Declaration = declaration
                     }
-                | TypedMethod _
+                | TypedMethod declaration ->
+                    checkedSourceModuleMethods.Add {
+                        Namespace = namespaceName
+                        ModuleName = moduleName
+                        ModuleStableId = moduleStableId
+                        Declaration = declaration
+                    }
                 | TypedLiteralField _
                 | TypedNestedModule _
                 | TypedTypeAbbreviation _ -> ()
 
             for precedingModule in precedingModules do
                 for declaration in precedingModule.Declarations do
-                    addCheckedDeclaration precedingModule.Namespace declaration
+                    addCheckedDeclaration
+                        precedingModule.Namespace
+                        precedingModule.Name
+                        precedingModule.StableId
+                        declaration
 
             let typeAbbreviations =
                 parsed.Declarations
@@ -2691,6 +2709,78 @@ type internal CompilerService() =
 
             let rec typeDeclaration =
                 function
+                | ParsedMethod({ Kind = ParsedMethodKind.EntryPoint parameterName } as declaration) ->
+                    let syntheticObjectType =
+                        ParsedObjectType {
+                            Container = OrdinaryObjectType
+                            Name = parsed.Name
+                            BaseType = None
+                            Methods = [
+                                ParsedStaticObjectMethod {
+                                    Attributes = []
+                                    IsEntryPoint = true
+                                    IsInline = false
+                                    IsPublic = true
+                                    Name = declaration.Name
+                                    TypeParameters = []
+                                    Constraints = []
+                                    ArgumentCounts = [ 1 ]
+                                    Parameters = [
+                                        {
+                                            Attributes = []
+                                            Name = parameterName
+                                            Type = ParsedWildcardType declaration.Range
+                                            Range = declaration.Range
+                                        }
+                                    ]
+                                    ReturnType = None
+                                    Body = declaration.Body
+                                    BodyRange = declaration.BodyRange
+                                    Range = declaration.Range
+                                }
+                            ]
+                            ConstructorRange = declaration.Range
+                            Range = declaration.Range
+                        }
+
+                    typeDeclaration syntheticObjectType
+                    |> Result.bind (fun typedDeclaration ->
+                        match typedDeclaration with
+                        | TypedObjectType {
+                                              Methods = [
+                                                  TypedStaticObjectMethod(
+                                                      {
+                                                          ReturnType = CliInt32
+                                                      } as typedMethod
+                                                  )
+                                              ]
+                                          } ->
+                            Ok(
+                                TypedMethod {
+                                    typedMethod with
+                                        StableId =
+                                            typedMethod.StableId
+                                            + "/entry-point"
+                                        ExportFingerprint =
+                                            Fingerprint.parts [
+                                                typedMethod.ExportFingerprint
+                                                "entry-point"
+                                            ]
+                                }
+                            )
+                        | TypedObjectType {
+                                              Methods = [
+                                                  TypedStaticObjectMethod _
+                                              ]
+                                          } ->
+                            diagnostic
+                                declaration.BodyRange
+                                "an entry-point body must return an integer exit code"
+                        | _ ->
+                            diagnostic
+                                declaration.Range
+                                "the shared static-member checker returned an invalid entry point"
+                    )
                 | ParsedMethod declaration ->
                     match declaration.DeclaredType, declaration.Body with
                     | Some ParsedInt32, StringLiteral _ ->
@@ -2732,7 +2822,7 @@ type internal CompilerService() =
                                 Body = TypedIntegerLiteral value
                                 EmitHiddenEntrySequencePoint = false
                                 ExportFingerprint = exportFingerprint
-                                Range = declaration.Range
+                                Range = declaration.BodyRange
                             }
                         )
                     | None, StringLiteral _ ->
@@ -4539,7 +4629,17 @@ type internal CompilerService() =
                                 "constraints on static object members are not yet supported"
                         else
                             let inferredParameterTypes =
-                                inferObjectMethodParameterTypes methodDeclaration.Body
+                                let inferred =
+                                    inferObjectMethodParameterTypes methodDeclaration.Body
+
+                                if methodDeclaration.IsEntryPoint then
+                                    match methodDeclaration.Parameters with
+                                    | [ parameter ] ->
+                                        inferred
+                                        |> Map.add parameter.Name (CliArray CliString)
+                                    | _ -> inferred
+                                else
+                                    inferred
 
                             let usedTypeParameterNames =
                                 HashSet<string>(
@@ -5047,6 +5147,140 @@ type internal CompilerService() =
                                         && actualMember = expectedMember
                                     | _ -> false
 
+                                let visibleSourceModuleMethods name =
+                                    let visibleScopes =
+                                        parsed.OpenedNamespaces
+                                        |> Set.ofList
+
+                                    checkedSourceModuleMethods
+                                    |> Seq.filter (fun sourceMethod ->
+                                        let qualifiedModuleName =
+                                            if String.IsNullOrEmpty(sourceMethod.Namespace) then
+                                                sourceMethod.ModuleName
+                                            else
+                                                sourceMethod.Namespace
+                                                + "."
+                                                + sourceMethod.ModuleName
+
+                                        sourceMethod.Declaration.Name = name
+                                        && (sourceMethod.ModuleStableId = parsed.StableId
+                                            || visibleScopes.Contains(sourceMethod.ModuleName)
+                                            || visibleScopes.Contains(qualifiedModuleName))
+                                    )
+                                    |> List.ofSeq
+
+                                let hasVisibleSourceModuleMethod name =
+                                    visibleSourceModuleMethods name
+                                    |> List.isEmpty
+                                    |> not
+
+                                let resolveSourceModuleMethod name argumentTypes expectedReturnType range =
+                                    let candidates =
+                                        visibleSourceModuleMethods name
+                                        |> Seq.choose (fun sourceMethod ->
+                                            tryInferStaticMethod
+                                                {
+                                                    Namespace = sourceMethod.Namespace
+                                                    Name = sourceMethod.ModuleName
+                                                    StableId = sourceMethod.ModuleStableId
+                                                    Methods = [ sourceMethod.Declaration ]
+                                                }
+                                                sourceMethod.Declaration
+                                                argumentTypes
+                                                expectedReturnType
+                                                (constraintWitnesses
+                                                 |> Seq.toList)
+                                        )
+                                        |> Seq.distinctBy (fun (target, genericArguments, returnType, _) ->
+                                            target.StableId, genericArguments, returnType
+                                        )
+                                        |> List.ofSeq
+
+                                    match candidates with
+                                    | [] -> None
+                                    | [ target, genericArguments, returnType, appliedConstraints ] ->
+                                        for appliedConstraint in appliedConstraints do
+                                            if not (constraintWitnesses.Contains(appliedConstraint)) then
+                                                constraintWitnesses.Add(appliedConstraint)
+
+                                        Some(Ok(target, genericArguments, returnType))
+                                    | _ ->
+                                        Some(
+                                            diagnostic
+                                                range
+                                                $"the callable value '{name}' is ambiguous"
+                                        )
+
+                                let tryFormattedArgumentTypes (formatText: string) =
+                                    let rec skipSpecifierOptions index =
+                                        if
+                                            index < formatText.Length
+                                            && (Char.IsDigit(formatText[index])
+                                                || "-+0 #.".Contains(formatText[index]))
+                                        then
+                                            skipSpecifierOptions (
+                                                index
+                                                + 1
+                                            )
+                                        else
+                                            index
+
+                                    let rec scan index argumentTypes =
+                                        if index >= formatText.Length then
+                                            Some(List.rev argumentTypes)
+                                        elif formatText[index] <> '%' then
+                                            scan
+                                                (index
+                                                 + 1)
+                                                argumentTypes
+                                        elif index + 1 >= formatText.Length then
+                                            None
+                                        elif formatText[index + 1] = '%' then
+                                            scan
+                                                (index
+                                                 + 2)
+                                                argumentTypes
+                                        else
+                                            let specifierIndex =
+                                                skipSpecifierOptions (
+                                                    index
+                                                    + 1
+                                                )
+
+                                            if specifierIndex >= formatText.Length then
+                                                None
+                                            else
+                                                match formatText[specifierIndex] with
+                                                | 'd'
+                                                | 'i' ->
+                                                    scan
+                                                        (specifierIndex
+                                                         + 1)
+                                                        (Some CliInt32
+                                                         :: argumentTypes)
+                                                | 's' ->
+                                                    scan
+                                                        (specifierIndex
+                                                         + 1)
+                                                        (Some CliString
+                                                         :: argumentTypes)
+                                                | 'b' ->
+                                                    scan
+                                                        (specifierIndex
+                                                         + 1)
+                                                        (Some CliBoolean
+                                                         :: argumentTypes)
+                                                | 'A'
+                                                | 'O' ->
+                                                    scan
+                                                        (specifierIndex
+                                                         + 1)
+                                                        (None
+                                                         :: argumentTypes)
+                                                | _ -> None
+
+                                    scan 0 []
+
                                 let rec typeStaticExpressionFor
                                     (expressionReceiver: (string * CliType) option)
                                     (expressionParameters: TypedParameter list)
@@ -5058,6 +5292,66 @@ type internal CompilerService() =
                                         typeStaticExpressionFor
                                             expressionReceiver
                                             expressionParameters
+
+                                    let isBoundExpressionName name =
+                                        localBindings
+                                        |> Map.containsKey name
+                                        || (expressionParameters
+                                            |> List.exists (fun parameter -> parameter.Name = name))
+                                        || (expressionReceiver
+                                            |> Option.exists (fun (receiverName, _) ->
+                                                receiverName = name
+                                            ))
+
+                                    let (|ImportedFormattedApplication|_|) candidateExpression =
+                                        let rec collect arguments =
+                                            function
+                                            | FunctionApplication(functionExpression, argumentExpression) ->
+                                                collect (argumentExpression :: arguments) functionExpression
+                                            | ValueReference name -> Some(name, arguments)
+                                            | _ -> None
+
+                                        match collect [] candidateExpression with
+                                        | Some(name, StringLiteral formatText :: arguments) when
+                                            not (isBoundExpressionName name)
+                                            && not (hasVisibleSourceModuleMethod name)
+                                            &&
+                                            not (List.isEmpty arguments)
+                                            ->
+                                            let candidates =
+                                                references.SourceMethods(name)
+                                                |> List.choose (fun methodDefinition ->
+                                                    match methodDefinition.ParameterTypes with
+                                                    | [ CliGenericType(formatTypeReference,
+                                                                       (CliMethodTypeParameter 0
+                                                                        :: _
+                                                                        :: _
+                                                                        :: _
+                                                                        :: [] as formatTypeArguments)) ] when
+                                                        formatTypeReference.AssemblyName = "FSharp.Core"
+                                                        && formatTypeReference.TypeName.Namespace
+                                                           = "Microsoft.FSharp.Core"
+                                                        && formatTypeReference.TypeName.Name
+                                                           = "PrintfFormat`4"
+                                                        ->
+                                                        Some(
+                                                            methodDefinition,
+                                                            formatTypeReference,
+                                                            formatTypeArguments
+                                                        )
+                                                    | _ -> None
+                                                )
+
+                                            if List.isEmpty candidates then
+                                                None
+                                            else
+                                                Some(
+                                                    formatText,
+                                                    arguments,
+                                                    tryFormattedArgumentTypes formatText,
+                                                    candidates
+                                                )
+                                        | _ -> None
 
                                     match expression with
                                     | IntegerLiteral value ->
@@ -7077,17 +7371,7 @@ type internal CompilerService() =
                                                     nextLocalIndex
                                                 )
                                     | MemberCall(receiverName, memberName, arguments) when
-                                        (localBindings
-                                         |> Map.containsKey receiverName)
-                                        || (expressionParameters
-                                            |> List.exists (fun parameter ->
-                                                parameter.Name = receiverName
-                                            ))
-                                        || (
-                                            match expressionReceiver with
-                                            | Some(name, _) -> name = receiverName
-                                            | None -> false
-                                        )
+                                        isBoundExpressionName receiverName
                                         ->
                                         typeStaticExpression
                                             localBindings
@@ -8470,6 +8754,191 @@ type internal CompilerService() =
                                                 diagnostic
                                                     argumentRange
                                                     "the object constructor call is ambiguous"
+                                    | ImportedFormattedApplication(formatText,
+                                                                   argumentExpressions,
+                                                                   expectedArgumentTypes,
+                                                                   methodCandidates) ->
+                                        let rec typeArguments completed currentLocalIndex =
+                                            function
+                                            | [] -> Ok(List.rev completed, currentLocalIndex)
+                                            | argumentExpression :: remaining ->
+                                                match
+                                                    typeStaticExpression
+                                                        localBindings
+                                                        currentLocalIndex
+                                                        argumentExpression
+                                                with
+                                                | Error error -> Error error
+                                                | Ok(typedArgument, argumentType, nextArgumentLocalIndex) ->
+                                                    typeArguments
+                                                        ((typedArgument, argumentType)
+                                                         :: completed)
+                                                        nextArgumentLocalIndex
+                                                        remaining
+
+                                        match typeArguments [] nextLocalIndex argumentExpressions with
+                                        | Error error -> Error error
+                                        | Ok(typedArguments, nextArgumentLocalIndex) ->
+                                            let formatMatchesArguments =
+                                                match expectedArgumentTypes with
+                                                | Some expectedTypes when
+                                                    expectedTypes.Length = typedArguments.Length
+                                                    ->
+                                                    List.forall2
+                                                        (fun expectedType (_, actualType) ->
+                                                            expectedType
+                                                            |> Option.forall ((=) actualType)
+                                                        )
+                                                        expectedTypes
+                                                        typedArguments
+                                                | _ -> false
+
+                                            if not formatMatchesArguments then
+                                                diagnostic
+                                                    methodDeclaration.BodyRange
+                                                    "the format string does not match the argument types"
+                                            else
+                                                let buildCandidate
+                                                    ((methodDefinition: ReferenceMethodDefinition),
+                                                     (formatTypeReference: CliTypeReference),
+                                                     (formatTypeArguments: CliType list))
+                                                    =
+                                                    let resultType = List.last formatTypeArguments
+
+                                                    let callableType =
+                                                        (typedArguments, resultType)
+                                                        ||> List.foldBack (fun (_, argumentType) rangeType ->
+                                                            CliGenericType(
+                                                                fsharpFunctionType,
+                                                                [
+                                                                    argumentType
+                                                                    rangeType
+                                                                ]
+                                                            )
+                                                        )
+
+                                                    let rec applyCallableType =
+                                                        function
+                                                        | CliMethodTypeParameter _ -> callableType
+                                                        | CliGenericType(typeReference, arguments) ->
+                                                            CliGenericType(
+                                                                typeReference,
+                                                                arguments
+                                                                |> List.map applyCallableType
+                                                            )
+                                                        | CliArray elementType ->
+                                                            CliArray(applyCallableType elementType)
+                                                        | CliByRef elementType ->
+                                                            CliByRef(applyCallableType elementType)
+                                                        | cliType -> cliType
+
+                                                    let formattedType =
+                                                        CliGenericType(
+                                                            formatTypeReference,
+                                                            formatTypeArguments
+                                                            |> List.map applyCallableType
+                                                        )
+
+                                                    let constructors =
+                                                        references.Methods(
+                                                            formatTypeReference.DeclarationId,
+                                                            ".ctor",
+                                                            false
+                                                        )
+                                                        |> List.filter (fun constructor ->
+                                                            constructor.GenericArity = 0
+                                                            && constructor.ParameterTypes = [ CliString ]
+                                                        )
+
+                                                    match
+                                                        constructors,
+                                                        tryInferReferenceStaticMethod
+                                                            (CliNamedType
+                                                                methodDefinition.DeclaringType)
+                                                            []
+                                                            methodDefinition
+                                                            [ formattedType ]
+                                                            (Some callableType)
+                                                    with
+                                                    | [ constructor ],
+                                                      Some(target,
+                                                           genericArguments,
+                                                           inferredCallableType) ->
+                                                        let formattedArgument =
+                                                            TypedObjectConstruction(
+                                                                {
+                                                                    DeclaringType = formattedType
+                                                                    StableId = constructor.StableId
+                                                                    ParameterTypes =
+                                                                        constructor.ParameterTypes
+                                                                    ParamArrayElementType = None
+                                                                },
+                                                                [ TypedStringLiteral formatText ]
+                                                            )
+
+                                                        let initialExpression =
+                                                            TypedStaticMethodCall(
+                                                                target,
+                                                                genericArguments,
+                                                                [ formattedArgument ]
+                                                            )
+
+                                                        ((initialExpression,
+                                                          inferredCallableType)
+                                                         |> Some,
+                                                         typedArguments)
+                                                        ||> List.fold (fun state typedArgumentAndType ->
+                                                            let typedArgument, argumentType =
+                                                                typedArgumentAndType
+
+                                                            state
+                                                            |> Option.bind (fun functionExpressionAndType ->
+                                                                let functionExpression, functionType =
+                                                                    functionExpressionAndType
+
+                                                                match functionType with
+                                                                | CliGenericType(functionTypeReference,
+                                                                                 [ domainType
+                                                                                   rangeType ]) when
+                                                                    isFSharpFunctionTypeReference
+                                                                        functionTypeReference
+                                                                    && domainType = argumentType
+                                                                    ->
+                                                                    Some(
+                                                                        TypedFunctionApplication(
+                                                                            functionType,
+                                                                            domainType,
+                                                                            rangeType,
+                                                                            functionExpression,
+                                                                            typedArgument
+                                                                        ),
+                                                                        rangeType
+                                                                    )
+                                                                | _ -> None
+                                                            )
+                                                        )
+                                                    | _ -> None
+
+                                                let candidates =
+                                                    methodCandidates
+                                                    |> List.choose buildCandidate
+                                                    |> List.distinct
+
+                                                match candidates with
+                                                | [ typedExpression, resultType ] ->
+                                                    Ok(
+                                                        typedExpression,
+                                                        resultType,
+                                                        nextArgumentLocalIndex
+                                                    )
+                                                | [] ->
+                                                    diagnostic
+                                                        methodDeclaration.BodyRange
+                                                        "no visible formatted callable matches the argument types"
+                                                | _ ->
+                                                    diagnostic
+                                                        methodDeclaration.BodyRange
+                                                        "the formatted callable application is ambiguous"
                                     | FunctionApplication(functionExpression, argumentExpression) ->
                                         let rec isFunctionArgumentAssignableTo
                                             (visited: Set<string>)
@@ -10308,13 +10777,31 @@ type internal CompilerService() =
                                                                 nextLocalIndex
                                                             )
                                     | UnitApplication functionName ->
-                                        typeStaticExpression
-                                            localBindings
-                                            nextLocalIndex
-                                            (FunctionApplication(
-                                                ValueReference functionName,
-                                                UnitLiteral
-                                            ))
+                                        match
+                                            if isBoundExpressionName functionName then
+                                                None
+                                            else
+                                                resolveSourceModuleMethod
+                                                    functionName
+                                                    []
+                                                    None
+                                                    methodDeclaration.BodyRange
+                                        with
+                                        | Some result ->
+                                            result
+                                            |> Result.map (fun (target, genericArguments, returnType) ->
+                                                TypedStaticMethodCall(target, genericArguments, []),
+                                                returnType,
+                                                nextLocalIndex
+                                            )
+                                        | None ->
+                                            typeStaticExpression
+                                                localBindings
+                                                nextLocalIndex
+                                                (FunctionApplication(
+                                                    ValueReference functionName,
+                                                    UnitLiteral
+                                                ))
                                     | MemberAssignment(rootName, memberPath, value) ->
                                         match List.rev memberPath with
                                         | [] ->
@@ -12521,7 +13008,11 @@ type internal CompilerService() =
                         match typeDeclaration declaration with
                         | Error diagnostic -> Error diagnostic
                         | Ok typedDeclaration ->
-                            addCheckedDeclaration parsed.Namespace typedDeclaration
+                            addCheckedDeclaration
+                                parsed.Namespace
+                                parsed.Name
+                                parsed.StableId
+                                typedDeclaration
 
                             typeDeclarations
                                 (typedDeclaration
@@ -14295,6 +14786,7 @@ type internal CompilerService() =
                     parameterIndex
                     + 1
                 | ModuleFunction
+                | EntryPoint
                 | InternalModuleFunction
                 | ModuleValueGetter
                 | StaticConstructor
@@ -15404,6 +15896,24 @@ type internal CompilerService() =
                         arguments
                         |> List.map (valueExpressionInstructions freshLabel kind)
 
+                    let declaringType =
+                        match target.DeclaringType with
+                        | CliNamedType typeReference when
+                            String.IsNullOrEmpty(typeReference.AssemblyName)
+                            && typeReference.DeclarationId.StartsWith(
+                                "module:",
+                                StringComparison.Ordinal
+                            )
+                            ->
+                            CliNamedType {
+                                typeReference with
+                                    DeclarationId =
+                                        moduleStableId
+                                        + "/type:"
+                                        + typeReference.DeclarationId
+                            }
+                        | cliType -> cliType
+
                     let omittedOptionalArguments =
                         List.replicate
                             (target.ParameterTypes.Length
@@ -15411,7 +15921,7 @@ type internal CompilerService() =
                             LoadNull
 
                     let methodReference = {
-                        DeclaringType = CliDeclaringType target.DeclaringType
+                        DeclaringType = CliDeclaringType declaringType
                         Name = target.Name
                         GenericArity = target.GenericArity
                         IsInstance = false
@@ -17227,7 +17737,14 @@ type internal CompilerService() =
                             match declaration with
                             | TypedMethod methodDeclaration -> [
                                 methodFragment
-                                    (if methodDeclaration.IsPublic then
+                                    (if
+                                         methodDeclaration.StableId.EndsWith(
+                                             "/entry-point",
+                                             StringComparison.Ordinal
+                                         )
+                                     then
+                                         EntryPoint
+                                     elif methodDeclaration.IsPublic then
                                          ModuleFunction
                                      else
                                          InternalModuleFunction)

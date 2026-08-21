@@ -281,7 +281,10 @@ type Compiler() =
                                 CompilationPhase.FinalLinking
                                 "emission.deterministic=false"
                         )
-                    elif request.EmissionOptions.HighEntropyVirtualAddress then
+                    elif
+                        request.EmissionOptions.HighEntropyVirtualAddress
+                        && request.EmissionOptions.Target = CompilationTarget.Library
+                    then
                         Some(
                             unsupportedFailure
                                 "FSC2C2202"

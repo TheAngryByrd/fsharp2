@@ -15,7 +15,7 @@ module internal ServiceHost =
     let private ProtocolMagic = 0x46533250
 
     [<Literal>]
-    let private ProtocolVersion = 8
+    let private ProtocolVersion = 9
 
     [<Literal>]
     let private CompileCommand = 1uy
@@ -42,6 +42,19 @@ module internal ServiceHost =
         | 2uy -> PublicSign
         | 3uy -> FullSign
         | _ -> raise (InvalidDataException("invalid strong-name mode"))
+
+    let private writeCompilationTarget (writer: BinaryWriter) target =
+        writer.Write(
+            match target with
+            | CompilationTarget.Library -> 0uy
+            | CompilationTarget.Executable -> 1uy
+        )
+
+    let private readCompilationTarget (reader: BinaryReader) =
+        match reader.ReadByte() with
+        | 0uy -> CompilationTarget.Library
+        | 1uy -> CompilationTarget.Executable
+        | _ -> raise (InvalidDataException("invalid compilation target"))
 
     let private writeStrings (writer: BinaryWriter) (values: string list) =
         writer.Write(values.Length)
@@ -85,6 +98,7 @@ module internal ServiceHost =
         writeBytes writer invocation.NativeResourceData
         writeStrongNameMode writer invocation.StrongNameMode
         writeBytes writer invocation.StrongNameKey
+        writeCompilationTarget writer invocation.Target
         writer.Write(invocation.AssemblyPath)
         writer.Write(invocation.PdbPath)
         writeOptionalString writer invocation.ReferenceAssemblyPath
@@ -140,6 +154,7 @@ module internal ServiceHost =
         let nativeResourceData = readBytes reader
         let strongNameMode = readStrongNameMode reader
         let strongNameKey = readBytes reader
+        let target = readCompilationTarget reader
         let assemblyPath = reader.ReadString()
         let pdbPath = reader.ReadString()
         let referenceAssemblyPath = readOptionalString reader
@@ -182,6 +197,7 @@ module internal ServiceHost =
             raise (InvalidDataException("source path/text cardinality mismatch"))
 
         {
+            Target = target
             AssemblyPath = assemblyPath
             PdbPath = pdbPath
             ReferenceAssemblyPath = referenceAssemblyPath

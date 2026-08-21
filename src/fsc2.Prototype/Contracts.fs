@@ -225,7 +225,13 @@ type DiagnosticOptions = {
 
     override _.ToString() = "DiagnosticOptions"
 
+[<RequireQualifiedAccess>]
+type CompilationTarget =
+    | Library
+    | Executable
+
 type EmissionOptions = {
+    Target: CompilationTarget
     Deterministic: bool
     HighEntropyVirtualAddress: bool
     DebugFormat: DebugFormat
@@ -243,9 +249,31 @@ type EmissionOptions = {
             debugDocumentPaths,
             sourceLinkJson
         ) =
+        EmissionOptions.Create(
+            CompilationTarget.Library,
+            deterministic,
+            highEntropyVirtualAddress,
+            debugFormat,
+            embeddedSourceIdentities,
+            debugDocumentPaths,
+            sourceLinkJson
+        )
+
+    static member Create
+        (
+            target,
+            deterministic,
+            highEntropyVirtualAddress,
+            debugFormat,
+            embeddedSourceIdentities,
+            debugDocumentPaths,
+            sourceLinkJson
+        ) =
+        let target = ContractValidation.reference "target" target
         let debugFormat = ContractValidation.reference "debugFormat" debugFormat
 
         {
+            Target = target
             Deterministic = deterministic
             HighEntropyVirtualAddress = highEntropyVirtualAddress
             DebugFormat = debugFormat

@@ -54,6 +54,7 @@ type internal StrongNameMode =
         | SigningMode.FullSign -> FullSign
 
 type internal CompilerInvocation = {
+    Target: CompilationTarget
     AssemblyPath: string
     PdbPath: string
     ReferenceAssemblyPath: string option
@@ -352,9 +353,15 @@ type internal ParsedMethodConstraint =
 
     override _.ToString() = "ParsedMethodConstraint"
 
+[<RequireQualifiedAccess>]
+type internal ParsedMethodKind =
+    | Regular
+    | EntryPoint of parameterName: string
+
 type internal ParsedMethodDeclaration = {
     Name: string
     IsUnitFunction: bool
+    Kind: ParsedMethodKind
     DeclaredType: ParsedType option
     Body: ParsedExpression
     BodyRange: SourceRange
@@ -392,6 +399,7 @@ type internal ParsedParameter = {
 
 type internal ParsedStaticMethodDeclaration = {
     Attributes: ParsedAttribute list
+    IsEntryPoint: bool
     IsInline: bool
     IsPublic: bool
     Name: string
@@ -1636,6 +1644,7 @@ type internal LoweredOperation =
 type internal LoweredMethodKind =
     | ModuleFunction
     | InternalModuleFunction
+    | EntryPoint
     | ModuleValueGetter
     | StaticConstructor
     | TypeExtensionMember

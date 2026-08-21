@@ -1131,6 +1131,18 @@ module CompilerTargetTests =
                         (File.Exists pdbPath)
                         "fsc2 should emit the requested portable PDB"
 
+                    use implementationStream = File.OpenRead(outputPath)
+                    use implementation = new PEReader(implementationStream)
+
+                    Expect.isTrue
+                        implementation.PEHeaders.IsDll
+                        "library output should retain the DLL image characteristic"
+
+                    Expect.equal
+                        implementation.PEHeaders.CorHeader.EntryPointTokenOrRelativeVirtualAddress
+                        0
+                        "library output should not declare a managed entry point"
+
                     use pdbStream = File.OpenRead(pdbPath)
                     use pdbProvider = MetadataReaderProvider.FromPortablePdbStream(pdbStream)
                     let pdb = pdbProvider.GetMetadataReader()
@@ -1164,8 +1176,8 @@ module CompilerTargetTests =
 
                     Expect.equal
                         sequencePoints.[0].StartColumn
-                        5
-                        "the sequence point should begin at the declaration name"
+                        17
+                        "the sequence point should begin at the method body"
 
                     Expect.equal
                         sequencePoints.[0].EndLine
@@ -1185,6 +1197,374 @@ module CompilerTargetTests =
                         "42"
                         "a downstream process should execute the emitted method"
                 finally
+                    Directory.Delete(root, true)
+
+            testCase "emits and runs a managed executable entry point"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-executable-target",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "Program.fs")
+                    let outputPath = Path.Combine(root, "Program.dll")
+                    let pdbPath = Path.Combine(root, "Program.pdb")
+                    let responsePath = Path.Combine(root, "compile.rsp")
+                    let runtimeConfigPath = Path.Combine(root, "Program.runtimeconfig.json")
+
+                    let fsharpCorePath =
+                        typeof<Microsoft.FSharp.Core.EntryPointAttribute>.Assembly.Location
+
+                    let systemRuntimePath = Assembly.Load("System.Runtime").Location
+                    let systemConsolePath = typeof<Console>.Assembly.Location
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "module Program\n\nlet answer () = 42\n\n[<EntryPoint>]\nlet main _ =\n    printfn \"%d\" (answer ())\n    0\n"
+                    )
+
+                    File.WriteAllLines(
+                        responsePath,
+                        [|
+                            "--target:exe"
+                            "--highentropyva+"
+                            "--deterministic+"
+                            "--debug:portable"
+                            $"--reference:{fsharpCorePath}"
+                            $"--reference:{systemRuntimePath}"
+                            $"--reference:{systemConsolePath}"
+                            $"--out:{outputPath}"
+                            $"--pdb:{pdbPath}"
+                            sourcePath
+                        |]
+                    )
+
+                    let result = invokeFsc2 root responsePath
+
+                    Expect.equal
+                        result.ExitCode
+                        0
+                        (result.StandardOutput
+                         + result.StandardError)
+
+                    use implementationStream = File.OpenRead(outputPath)
+                    use implementation = new PEReader(implementationStream)
+
+                    Expect.isTrue
+                        implementation.PEHeaders.IsExe
+                        "executable output should have an executable image header"
+
+                    Expect.isFalse
+                        implementation.PEHeaders.IsDll
+                        "executable output should not have the DLL image characteristic"
+
+                    Expect.isTrue
+                        (implementation.PEHeaders.PEHeader.DllCharacteristics.HasFlag(
+                            DllCharacteristics.HighEntropyVirtualAddressSpace
+                        ))
+                        "executable output should support high-entropy virtual addresses"
+
+                    Expect.notEqual
+                        implementation.PEHeaders.CorHeader.EntryPointTokenOrRelativeVirtualAddress
+                        0
+                        "executable output should declare a managed entry point"
+
+                    use pdbStream = File.OpenRead(pdbPath)
+                    use pdbProvider = MetadataReaderProvider.FromPortablePdbStream(pdbStream)
+                    let pdb = pdbProvider.GetMetadataReader()
+
+                    Expect.equal
+                        pdb.DebugMetadataHeader.EntryPoint
+                        (MetadataTokens.MethodDefinitionHandle(
+                            implementation.PEHeaders.CorHeader.EntryPointTokenOrRelativeVirtualAddress
+                            &&& 0x00FFFFFF
+                        ))
+                        "the portable PDB should identify the managed entry point"
+
+                    let sequencePointRanges =
+                        pdb.MethodDebugInformation
+                        |> Seq.collect (fun handle ->
+                            pdb.GetMethodDebugInformation(handle).GetSequencePoints()
+                        )
+                        |> Seq.filter (fun point -> not point.IsHidden)
+                        |> Seq.map (fun point ->
+                            $"{point.StartLine}:{point.StartColumn}-{point.EndLine}:{point.EndColumn}"
+                        )
+                        |> Seq.toArray
+
+                    Expect.sequenceEqual
+                        sequencePointRanges
+                        [|
+                            "3:17-3:19"
+                            "7:5-7:29"
+                            "8:5-8:6"
+                        |]
+                        "executable sequence points should match the Compatibility Oracle"
+
+                    File.WriteAllText(
+                        runtimeConfigPath,
+                        "{\"runtimeOptions\":{\"tfm\":\"net10.0\",\"framework\":{\"name\":\"Microsoft.NETCore.App\",\"version\":\"10.0.0\"}}}"
+                    )
+
+                    File.Copy(fsharpCorePath, Path.Combine(root, "FSharp.Core.dll"))
+                    let execution = invokeProcess root 30_000 "dotnet" [ outputPath ]
+
+                    Expect.equal
+                        execution.ExitCode
+                        0
+                        (execution.StandardOutput
+                         + execution.StandardError)
+
+                    Expect.equal
+                        execution.StandardOutput
+                        ("42"
+                         + Environment.NewLine)
+                        "the managed entry point should preserve stdout"
+
+                    Expect.equal
+                        execution.StandardError
+                        String.Empty
+                        "the managed entry point should not write stderr"
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "module Program\n\nlet answer () = 42\n\n[<EntryPoint>]\nlet main _ =\n    printfn \"%s\" (answer ())\n    0\n"
+                    )
+
+                    let formatMismatch = invokeFsc2 root responsePath
+
+                    Expect.equal formatMismatch.ExitCode 1 "the invalid format call should fail"
+
+                    Expect.stringContains
+                        (formatMismatch.StandardOutput
+                         + formatMismatch.StandardError)
+                        "FSC2P1001: the format string does not match the argument types"
+                        "formatted callable typing should validate the format string"
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "module Program\n\nlet answer () = 42\n\n[<EntryPoint>]\nlet main printfn =\n    printfn \"%d\" (answer ())\n    0\n"
+                    )
+
+                    let shadowedFormattedCallable = invokeFsc2 root responsePath
+
+                    Expect.equal
+                        shadowedFormattedCallable.ExitCode
+                        1
+                        "an entry-point parameter should shadow an imported formatted callable"
+
+                    Expect.stringContains
+                        (shadowedFormattedCallable.StandardOutput
+                         + shadowedFormattedCallable.StandardError)
+                        "FSC2P1001: this expression is not an F# function"
+                        "formatted callable lookup should preserve parameter shadowing"
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "module Program\n\nlet printfn () = 42\n\n[<EntryPoint>]\nlet main _ =\n    printfn \"%d\" (printfn ())\n    0\n"
+                    )
+
+                    let shadowedImportedCallable = invokeFsc2 root responsePath
+
+                    Expect.equal
+                        shadowedImportedCallable.ExitCode
+                        1
+                        "a prior module method should shadow an imported formatted callable"
+
+                    Expect.stringContains
+                        (shadowedImportedCallable.StandardOutput
+                         + shadowedImportedCallable.StandardError)
+                        "FSC2P1001: the value 'printfn' is not a static-member parameter, receiver, or local binding"
+                        "formatted callable lookup should preserve module shadowing"
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "module Program\n\nlet answer () = 42\n\n[<EntryPoint>]\nlet main answer = answer ()\n"
+                    )
+
+                    let shadowedModuleMethod = invokeFsc2 root responsePath
+
+                    Expect.equal
+                        shadowedModuleMethod.ExitCode
+                        1
+                        "an entry-point parameter should shadow a prior module method"
+
+                    Expect.stringContains
+                        (shadowedModuleMethod.StandardOutput
+                         + shadowedModuleMethod.StandardError)
+                        "FSC2P1001: this expression is not an F# function"
+                        "module method lookup should preserve parameter shadowing"
+
+                    File.WriteAllText(sourcePath, "module Program\n\nlet answer () = 42\n")
+                    let missingEntryPoint = invokeFsc2 root responsePath
+
+                    Expect.equal
+                        missingEntryPoint.ExitCode
+                        1
+                        "an executable without an entry point should fail"
+
+                    Expect.stringContains
+                        (missingEntryPoint.StandardOutput
+                         + missingEntryPoint.StandardError)
+                        "FSC2P1001: An executable compilation requires one entry point."
+                        "missing entry points should produce a compiler diagnostic"
+
+                    let secondSourcePath = Path.Combine(root, "SecondProgram.fs")
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "module FirstProgram\n\n[<EntryPoint>]\nlet main _ = 0\n"
+                    )
+
+                    File.WriteAllText(
+                        secondSourcePath,
+                        "module SecondProgram\n\n[<EntryPoint>]\nlet main _ = 0\n"
+                    )
+
+                    File.WriteAllLines(
+                        responsePath,
+                        [|
+                            "--target:exe"
+                            "--highentropyva+"
+                            "--deterministic+"
+                            "--debug:portable"
+                            $"--reference:{fsharpCorePath}"
+                            $"--reference:{systemRuntimePath}"
+                            $"--reference:{systemConsolePath}"
+                            $"--out:{outputPath}"
+                            $"--pdb:{pdbPath}"
+                            sourcePath
+                            secondSourcePath
+                        |]
+                    )
+
+                    let duplicateEntryPoints = invokeFsc2 root responsePath
+
+                    Expect.equal
+                        duplicateEntryPoints.ExitCode
+                        1
+                        "an executable with multiple entry points should fail"
+
+                    Expect.stringContains
+                        (duplicateEntryPoints.StandardOutput
+                         + duplicateEntryPoints.StandardError)
+                        "FSC2P1001: An executable compilation cannot contain more than one entry point."
+                        "multiple entry points should produce a compiler diagnostic"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "retained compiler service preserves executable emission options"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-executable-service",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                let pipeName =
+                    "fsharp2-"
+                    + Guid.NewGuid().ToString("N")
+
+                use service = startCompilerService root pipeName
+
+                try
+                    let sourcePath = Path.Combine(root, "Program.fs")
+                    let outputPath = Path.Combine(root, "Program.dll")
+                    let pdbPath = Path.Combine(root, "Program.pdb")
+                    let responsePath = Path.Combine(root, "compile.rsp")
+                    let tracePath = Path.Combine(root, "compile.trace")
+
+                    let fsharpCorePath =
+                        typeof<Microsoft.FSharp.Core.EntryPointAttribute>.Assembly.Location
+
+                    let systemRuntimePath = Assembly.Load("System.Runtime").Location
+
+                    File.WriteAllText(
+                        sourcePath,
+                        "module Program\n\n[<EntryPoint>]\nlet main _ = 0\n"
+                    )
+
+                    File.WriteAllLines(
+                        responsePath,
+                        [|
+                            $"--fsharp2-server:{pipeName}"
+                            "--target:exe"
+                            "--highentropyva+"
+                            "--deterministic+"
+                            "--debug:portable"
+                            $"--fsharp2-trace:{tracePath}"
+                            $"--reference:{fsharpCorePath}"
+                            $"--reference:{systemRuntimePath}"
+                            $"--out:{outputPath}"
+                            $"--pdb:{pdbPath}"
+                            sourcePath
+                        |]
+                    )
+
+                    let baselineResult = invokeFsc2 root responsePath
+
+                    Expect.equal
+                        baselineResult.ExitCode
+                        0
+                        (baselineResult.StandardOutput
+                         + baselineResult.StandardError)
+
+                    let baselineTrace = readTrace tracePath
+
+                    let replayResult = invokeFsc2 root responsePath
+
+                    Expect.equal
+                        replayResult.ExitCode
+                        0
+                        (replayResult.StandardOutput
+                         + replayResult.StandardError)
+
+                    let replayTrace = readTrace tracePath
+
+                    Expect.notEqual
+                        baselineTrace.["servicePid"]
+                        (Environment.ProcessId.ToString())
+                        "the executable request should run outside the compiler client process"
+
+                    Expect.equal
+                        replayTrace.["servicePid"]
+                        baselineTrace.["servicePid"]
+                        "executable requests should use the same retained compiler service"
+
+                    use implementationStream = File.OpenRead(outputPath)
+                    use implementation = new PEReader(implementationStream)
+
+                    Expect.isTrue
+                        implementation.PEHeaders.IsExe
+                        "the retained service should preserve the executable target"
+
+                    Expect.isTrue
+                        (implementation.PEHeaders.PEHeader.DllCharacteristics.HasFlag(
+                            DllCharacteristics.HighEntropyVirtualAddressSpace
+                        ))
+                        "the retained service should preserve high-entropy virtual addresses"
+
+                    Expect.notEqual
+                        implementation.PEHeaders.CorHeader.EntryPointTokenOrRelativeVirtualAddress
+                        0
+                        "the retained service should preserve the managed entry point"
+                finally
+                    if not service.HasExited then
+                        service.Kill(true)
+
+                        service.WaitForExit(10_000)
+                        |> ignore
+
                     Directory.Delete(root, true)
 
             testCase "uses the invocation define set when selecting conditional source"

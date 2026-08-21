@@ -221,6 +221,9 @@ module CompilerContractTests =
         let sourceBytes = Text.Encoding.UTF8.GetBytes(sourceText)
         let referenceImage = File.ReadAllBytes(Assembly.Load("System.Runtime").Location)
 
+        let fsharpCoreImage =
+            File.ReadAllBytes(typeof<Microsoft.FSharp.Core.EntryPointAttribute>.Assembly.Location)
+
         CompilationRequest.Create(
             CompilerContract.Version,
             StableIdentity.create "request:tracer",
@@ -239,6 +242,12 @@ module CompilerContractTests =
                     "System.Runtime.dll",
                     referenceImage,
                     fingerprint referenceImage
+                )
+                TargetReferenceSnapshot.Create(
+                    StableIdentity.create "reference:FSharp.Core",
+                    "FSharp.Core.dll",
+                    fsharpCoreImage,
+                    fingerprint fsharpCoreImage
                 )
             |],
             semanticOptions,

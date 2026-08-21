@@ -207,7 +207,7 @@ module internal CommandLine =
             let mutable fullPaths = false
             let mutable flatErrors = false
             let mutable utf8Output = false
-            let mutable targetIsLibrary = false
+            let mutable target: CompilationTarget option = None
             let mutable serverName: string option = None
             let mutable tracePath: string option = None
             let mutable managedResource: ManagedResourceInput option = None
@@ -430,7 +430,14 @@ module internal CommandLine =
                                                         StringComparison.OrdinalIgnoreCase
                                                     )
                                                     ->
-                                                    targetIsLibrary <- true
+                                                    target <- Some CompilationTarget.Library
+                                                | None when
+                                                    argument.Equals(
+                                                        "--target:exe",
+                                                        StringComparison.OrdinalIgnoreCase
+                                                    )
+                                                    ->
+                                                    target <- Some CompilationTarget.Executable
                                                 | None when
                                                     argument.Equals(
                                                         "--deterministic+",
@@ -496,8 +503,8 @@ module internal CommandLine =
                     "unsupported prototype option: "
                     + String.Join(", ", unsupported)
                 )
-            elif not targetIsLibrary then
-                Error("the prototype supports only --target:library")
+            elif target.IsNone then
+                Error("the prototype requires --target:library or --target:exe")
             elif not deterministic then
                 Error("the prototype requires --deterministic+")
             elif not portablePdb then
@@ -531,6 +538,7 @@ module internal CommandLine =
                         | Some path -> FullSign, File.ReadAllBytes(path)
 
                     Ok {
+                        Target = target.Value
                         AssemblyPath = output
                         PdbPath = pdb
                         ReferenceAssemblyPath = referenceAssemblyPath

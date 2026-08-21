@@ -314,7 +314,8 @@ module internal Linker =
 
     let private methodKindEncoding =
         function
-        | ModuleFunction -> {
+        | ModuleFunction
+        | EntryPoint -> {
             IsInstance = false
             Attributes =
                 MethodAttributes.Public
@@ -2077,13 +2078,25 @@ module internal Linker =
             )
             |> ignore
 
+        let entryPoint =
+            match request.EmissionOptions.Target with
+            | CompilationTarget.Library -> Unchecked.defaultof<MethodDefinitionHandle>
+            | CompilationTarget.Executable ->
+                match
+                    methodFragments
+                    |> List.filter (fun methodFragment -> methodFragment.Kind = EntryPoint)
+                with
+                | [ methodFragment ] -> methodDefinitionHandles[methodFragment.StableId]
+                | [] -> invalidOp "an executable compilation requires one entry point"
+                | _ -> invalidOp "an executable compilation has more than one entry point"
+
         let mutable pdbDigest = Array.empty<byte>
 
         let pdbBuilder =
             PortablePdbBuilder(
                 pdbMetadata,
                 metadata.GetRowCounts(),
-                Unchecked.defaultof<MethodDefinitionHandle>,
+                entryPoint,
                 (fun blobs -> contentId (fun digest -> pdbDigest <- digest) blobs)
             )
 
@@ -2118,15 +2131,51 @@ module internal Linker =
         let deterministicIdProvider =
             Func<IEnumerable<Blob>, BlobContentId>(fun blobs -> contentId ignore blobs)
 
+        let peHeader =
+            match request.EmissionOptions.Target with
+            | CompilationTarget.Library -> PEHeaderBuilder.CreateLibraryHeader()
+            | CompilationTarget.Executable ->
+                let executableHeader = PEHeaderBuilder.CreateExecutableHeader()
+
+                if request.EmissionOptions.HighEntropyVirtualAddress then
+                    PEHeaderBuilder(
+                        machine = executableHeader.Machine,
+                        sectionAlignment = executableHeader.SectionAlignment,
+                        fileAlignment = executableHeader.FileAlignment,
+                        imageBase = executableHeader.ImageBase,
+                        majorLinkerVersion = executableHeader.MajorLinkerVersion,
+                        minorLinkerVersion = executableHeader.MinorLinkerVersion,
+                        majorOperatingSystemVersion =
+                            executableHeader.MajorOperatingSystemVersion,
+                        minorOperatingSystemVersion =
+                            executableHeader.MinorOperatingSystemVersion,
+                        majorImageVersion = executableHeader.MajorImageVersion,
+                        minorImageVersion = executableHeader.MinorImageVersion,
+                        majorSubsystemVersion = executableHeader.MajorSubsystemVersion,
+                        minorSubsystemVersion = executableHeader.MinorSubsystemVersion,
+                        subsystem = executableHeader.Subsystem,
+                        dllCharacteristics =
+                            (executableHeader.DllCharacteristics
+                             ||| DllCharacteristics.HighEntropyVirtualAddressSpace),
+                        imageCharacteristics = executableHeader.ImageCharacteristics,
+                        sizeOfStackReserve = executableHeader.SizeOfStackReserve,
+                        sizeOfStackCommit = executableHeader.SizeOfStackCommit,
+                        sizeOfHeapReserve = executableHeader.SizeOfHeapReserve,
+                        sizeOfHeapCommit = executableHeader.SizeOfHeapCommit
+                    )
+                else
+                    executableHeader
+
         let peBuilder =
             ManagedPEBuilder(
-                PEHeaderBuilder.CreateLibraryHeader(),
+                peHeader,
                 metadataRoot,
                 ilStream,
                 managedResources = managedResources,
                 nativeResources = nativeResources,
                 debugDirectoryBuilder = debugDirectory,
                 strongNameSignatureSize = strongName.SignatureSize,
+                entryPoint = entryPoint,
                 flags = StrongName.corFlags strongName,
                 deterministicIdProvider = deterministicIdProvider
             )

@@ -51,6 +51,7 @@ type internal ReferenceMethodDefinition = {
     DeclaringType: CliTypeReference
     StableId: string
     Name: string
+    SourceName: string
     IsStatic: bool
     GenericArity: int
     MetadataParameterNames: string list
@@ -190,13 +191,51 @@ type private ReferenceSignatureTypeProvider(types: Dictionary<TypeNameArity, Res
                 (metadata.GetString(definition.Name))
             |> Option.map CliNamedType
 
-        member _.GetTypeFromReference(metadata, handle, _) =
+        member _.GetTypeFromReference(metadata, handle, rawTypeKind) =
             let reference = metadata.GetTypeReference(handle)
+            let namespaceName = metadata.GetString(reference.Namespace)
+            let metadataName = metadata.GetString(reference.Name)
 
-            tryResolve
-                (metadata.GetString(reference.Namespace))
-                (metadata.GetString(reference.Name))
-            |> Option.map CliNamedType
+            match tryResolve namespaceName metadataName with
+            | Some typeReference -> Some(CliNamedType typeReference)
+            | None ->
+                let rec referencedAssemblyName (scope: EntityHandle) =
+                    match scope.Kind with
+                    | HandleKind.AssemblyReference ->
+                        scope
+                        |> AssemblyReferenceHandle.op_Explicit
+                        |> metadata.GetAssemblyReference
+                        |> _.Name
+                        |> metadata.GetString
+                    | HandleKind.TypeReference ->
+                        scope
+                        |> TypeReferenceHandle.op_Explicit
+                        |> metadata.GetTypeReference
+                        |> _.ResolutionScope
+                        |> referencedAssemblyName
+                    | _ -> String.Empty
+
+                let name, genericArity = ReferenceTypeName.parseMetadataName metadataName
+                let assemblyName = referencedAssemblyName reference.ResolutionScope
+                let typeName = {
+                    Namespace = namespaceName
+                    Name = name
+                }
+
+                Some(
+                    CliNamedType {
+                        DeclarationId =
+                            String.concat "|" [
+                                "referenced-type"
+                                assemblyName
+                                ReferenceTypeName.fullName typeName
+                                genericArity.ToString()
+                            ]
+                        AssemblyName = assemblyName
+                        TypeName = typeName
+                        IsValueType = (rawTypeKind = byte SignatureTypeKind.ValueType)
+                    }
+                )
 
         member _.GetTypeFromSpecification(metadata, context, handle, _) =
             metadata.GetTypeSpecification(handle).DecodeSignature(this, context)
@@ -210,9 +249,11 @@ type internal ReferenceTypeIndex
         types: Dictionary<TypeNameArity, ResolvedTypeName>,
         typesBySimpleName: Dictionary<TypeNameArity, ResolvedTypeName list>,
         fsharpDelegateDeclarationIds: HashSet<string>,
+        autoOpenTypeDeclarationIds: HashSet<string>,
         typeLocations: Dictionary<string, ReferenceTypeLocation list>
     ) =
     let methodCache = Dictionary<string, ReferenceMethodDefinition list>()
+    let sourceMethodCache = Dictionary<string, ReferenceMethodDefinition list>()
     let fieldCache = Dictionary<string, ReferenceFieldDefinition list>()
     let baseTypeCache = Dictionary<string, CliType option>()
     let interfaceCache = Dictionary<string, CliType list>()
@@ -388,6 +429,24 @@ type internal ReferenceTypeIndex
 
             let isParamArrayParameter = hasCustomAttribute "System" "ParamArrayAttribute"
 
+            let methodSourceName (methodDefinition: MethodDefinition) methodName =
+                methodDefinition.GetCustomAttributes()
+                |> Seq.tryPick (fun handle ->
+                    let attribute = metadata.GetCustomAttribute(handle)
+
+                    match customAttributeTypeName attribute with
+                    | Some("Microsoft.FSharp.Core", "CompilationSourceNameAttribute") ->
+                        let mutable reader = metadata.GetBlobReader(attribute.Value)
+
+                        if reader.ReadUInt16() = 1us then
+                            reader.ReadSerializedString()
+                            |> Option.ofObj
+                        else
+                            None
+                    | _ -> None
+                )
+                |> Option.defaultValue methodName
+
             let typeDefinition =
                 location.TypeRow
                 |> MetadataTokens.TypeDefinitionHandle
@@ -397,6 +456,7 @@ type internal ReferenceTypeIndex
             |> Seq.choose (fun methodHandle ->
                 let methodDefinition = metadata.GetMethodDefinition(methodHandle)
                 let methodName = metadata.GetString(methodDefinition.Name)
+                let sourceName = methodSourceName methodDefinition methodName
 
                 let access =
                     methodDefinition.Attributes
@@ -408,8 +468,8 @@ type internal ReferenceTypeIndex
                     <> enum 0
 
                 if
-                    methodName
-                    <> name
+                    (methodName <> name
+                     && sourceName <> name)
                     || access
                        <> MethodAttributes.Public
                     || methodIsStatic
@@ -491,6 +551,7 @@ type internal ReferenceTypeIndex
                             DeclaringType = location.DeclaringType
                             StableId = stableId
                             Name = methodName
+                            SourceName = sourceName
                             IsStatic = methodIsStatic
                             GenericArity = genericArity
                             MetadataParameterNames =
@@ -589,6 +650,24 @@ type internal ReferenceTypeIndex
                 | false, _ ->
                     let candidates = loadMethods declarationId name isStatic
                     methodCache.Add(key, candidates)
+                    candidates
+            )
+
+    member _.SourceMethods(name: string) =
+        lock
+            sourceMethodCache
+            (fun () ->
+                match sourceMethodCache.TryGetValue(name) with
+                | true, candidates -> candidates
+                | false, _ ->
+                    let candidates =
+                        autoOpenTypeDeclarationIds
+                        |> Seq.collect (fun declarationId -> loadMethods declarationId name true)
+                        |> Seq.distinctBy _.StableId
+                        |> Seq.sortBy _.StableId
+                        |> List.ofSeq
+
+                    sourceMethodCache.Add(name, candidates)
                     candidates
             )
 
@@ -742,6 +821,8 @@ type internal ReferenceTypeIndex
         let bySimpleName = Dictionary<TypeNameArity, ResizeArray<ResolvedTypeName>>()
 
         let fsharpDelegateDeclarationIds = HashSet<string>(StringComparer.Ordinal)
+
+        let autoOpenTypeDeclarationIds = HashSet<string>(StringComparer.Ordinal)
 
         let typeLocations = Dictionary<string, ResizeArray<ReferenceTypeLocation>>()
 
@@ -1139,6 +1220,18 @@ type internal ReferenceTypeIndex
                         )
                     | _ -> false
 
+                let isAutoOpenType (definition: TypeDefinition) =
+                    definition.GetCustomAttributes()
+                    |> Seq.exists (fun handle ->
+                        handle
+                        |> metadata.GetCustomAttribute
+                        |> customAttributeTypeName
+                        |> Option.exists (fun attributeType ->
+                            attributeType.Namespace = "Microsoft.FSharp.Core"
+                            && attributeType.Name = "AutoOpenAttribute"
+                        )
+                    )
+
                 let rec metadataTypeName handle =
                     let definition = metadata.GetTypeDefinition(handle)
                     let metadataName = metadata.GetString(definition.Name)
@@ -1192,6 +1285,10 @@ type internal ReferenceTypeIndex
                     match types.TryGetValue(key) with
                     | false, _ -> ()
                     | true, resolved ->
+                        if isAutoOpenType definition then
+                            autoOpenTypeDeclarationIds.Add(resolved.DeclarationId)
+                            |> ignore
+
                         let location = {
                             ReferenceIdentity = reference.StableId.Value
                             ReferenceImage = reference.PeImage
@@ -1258,6 +1355,7 @@ type internal ReferenceTypeIndex
                     types,
                     frozenBySimpleName,
                     fsharpDelegateDeclarationIds,
+                    autoOpenTypeDeclarationIds,
                     frozenTypeLocations
                 )
             )

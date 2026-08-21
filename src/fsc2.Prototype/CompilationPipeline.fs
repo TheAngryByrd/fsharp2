@@ -134,6 +134,7 @@ module internal CompilationPipeline =
                 List.toArray invocation.WarningsAsErrors
             ),
             EmissionOptions.Create(
+                invocation.Target,
                 invocation.Deterministic,
                 invocation.HighEntropyVA,
                 (if invocation.PortablePdb then
@@ -188,15 +189,38 @@ module internal CompilationPipeline =
                 | OptimizationMode.Disabled ->
                     try
                         let symbolic = SymbolicEmission.emit query.LoweredCompilation
-                        let linkStarted = Stopwatch.GetTimestamp()
-                        let artifacts = Linker.link request symbolic
 
-                        Ok {
-                            Query = query
-                            SymbolicAssembly = symbolic
-                            Artifacts = artifacts
-                            LinkElapsedMicroseconds = elapsedMicroseconds linkStarted
-                        }
+                        let entryPointCount =
+                            symbolic.Module.Types
+                            |> List.collect _.Methods
+                            |> List.filter (fun methodFragment ->
+                                methodFragment.Kind = EntryPoint
+                            )
+                            |> List.length
+
+                        match request.EmissionOptions.Target, entryPointCount with
+                        | CompilationTarget.Executable, 0 ->
+                            Error(
+                                diagnostic
+                                    "FSC2P1001"
+                                    "An executable compilation requires one entry point."
+                            )
+                        | CompilationTarget.Executable, count when count > 1 ->
+                            Error(
+                                diagnostic
+                                    "FSC2P1001"
+                                    "An executable compilation cannot contain more than one entry point."
+                            )
+                        | _ ->
+                            let linkStarted = Stopwatch.GetTimestamp()
+                            let artifacts = Linker.link request symbolic
+
+                            Ok {
+                                Query = query
+                                SymbolicAssembly = symbolic
+                                Artifacts = artifacts
+                                LinkElapsedMicroseconds = elapsedMicroseconds linkStarted
+                            }
                     with ex ->
                         Error(diagnostic "FSC2P9999" ex.Message)
 
