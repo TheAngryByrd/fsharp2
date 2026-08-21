@@ -162,6 +162,16 @@ type Compiler() =
         )
         |> ImmutableArray.CreateRange
 
+    let prevalidatedUnsupportedPhaseResults stoppingPhase =
+        phases
+        |> Array.map (fun phase ->
+            if phase = stoppingPhase then
+                phaseResult phase PhaseStatus.Unsupported None None
+            else
+                phaseResult phase PhaseStatus.NotStarted None None
+        )
+        |> ImmutableArray.CreateRange
+
     let unsupportedFailure code message phase identity = {
         Code = code
         Message = message
@@ -321,12 +331,12 @@ type Compiler() =
                     else
                         None
 
-    let unsupportedResult request failure = {
+    let unsupportedResult failure phaseResults = {
         Outcome = CompilationOutcome.Unsupported failure
         Diagnostics = ImmutableArray.Empty
         Artifacts = ImmutableArray.Empty
         Fingerprints = ImmutableArray.Empty
-        PhaseResults = unsupportedPhaseResults request failure.StoppingPhase
+        PhaseResults = phaseResults
         Traces = ImmutableArray.Empty
     }
 
@@ -490,16 +500,23 @@ type Compiler() =
             cancelledResult request
         else
             match tryUnsupportedEnvelope request with
-            | Some failure -> unsupportedResult request failure
+            | Some failure ->
+                unsupportedResult
+                    failure
+                    (prevalidatedUnsupportedPhaseResults failure.StoppingPhase)
             | None ->
                 match CompilationPipeline.compileRequest service request with
                 | Error diagnostic when diagnostic.Code = "FSC2C2002" ->
-                    unsupportedResult request {
+                    let failure = {
                         Code = diagnostic.Code
                         Message = diagnostic.Message
                         StoppingPhase = CompilationPhase.OptimizedCode
                         UnsupportedValueIdentity = "semantic.optimization=enabled"
                     }
+
+                    unsupportedResult
+                        failure
+                        (unsupportedPhaseResults request failure.StoppingPhase)
                 | Error diagnostic ->
                     let failedPhase =
                         if diagnostic.Code = "FS0001" then

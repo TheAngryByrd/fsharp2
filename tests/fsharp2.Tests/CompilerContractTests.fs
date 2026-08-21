@@ -293,14 +293,10 @@ module CompilerContractTests =
         let expectedStatuses =
             contractPhases
             |> Array.mapi (fun index phase ->
-                if index > stoppingIndex then
-                    PhaseStatus.NotStarted
-                elif index = stoppingIndex then
+                if index = stoppingIndex then
                     PhaseStatus.Unsupported
-                elif phase = CompilationPhase.OptimizedCode then
-                    PhaseStatus.Skipped
                 else
-                    PhaseStatus.Completed
+                    PhaseStatus.NotStarted
             )
 
         Expect.sequenceEqual
@@ -308,6 +304,17 @@ module CompilerContractTests =
              |> Seq.map _.Status)
             expectedStatuses
             "The phase statuses must stop at the unsupported value."
+
+        result.PhaseResults
+        |> Seq.iter (fun phase ->
+            Expect.isNone
+                phase.InputFingerprint
+                "A prevalidated phase must not have an input fingerprint."
+
+            Expect.isNone
+                phase.OutputFingerprint
+                "A prevalidated phase must not have an output fingerprint."
+        )
 
         Expect.isEmpty
             result.Diagnostics
