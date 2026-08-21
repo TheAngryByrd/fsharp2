@@ -1111,6 +1111,132 @@ let main _ =
                     CompilationOutcome.Succeeded
                     $"Ordered value and entry-point declarations must compile. Diagnostics:{Environment.NewLine}{diagnostics}"
 
+            testCase "inferred generic top-level functions compile through the public contract"
+            <| fun _ ->
+                let sourceText =
+                    """module Program
+
+let identity value = value
+
+[<EntryPoint>]
+let main _ =
+    let number = identity 42
+    let text = identity "forty-two"
+    printfn "%d,%s" number text
+    0
+"""
+
+                let request =
+                    createRequest
+                        (defaultSemanticOptions ())
+                        (defaultDiagnosticOptions ())
+                        (EmissionOptions.Create(
+                            true,
+                            false,
+                            DebugFormat.Portable,
+                            [||],
+                            [| "Program.fs" |],
+                            [||]
+                        ))
+                        (defaultSigningOptions ())
+                        (emptyResources ())
+                        [|
+                            RequestedArtifact.ImplementationAssembly
+                            RequestedArtifact.PortablePdb
+                        |]
+                        sourceText
+
+                let result = compileRequest request
+
+                let diagnostics =
+                    result.Diagnostics
+                    |> Seq.map (fun diagnostic ->
+                        let range =
+                            diagnostic.Range
+                            |> Option.map (fun range ->
+                                $"{range.Start.Line}:{range.Start.Column}-{range.End.Line}:{range.End.Column}"
+                            )
+                            |> Option.defaultValue "no-range"
+
+                        $"{diagnostic.Code} {range}: {diagnostic.Message}"
+                    )
+                    |> String.concat Environment.NewLine
+
+                Expect.equal
+                    result.Outcome
+                    CompilationOutcome.Succeeded
+                    $"Inferred generic top-level functions must compile. Diagnostics:{Environment.NewLine}{diagnostics}"
+
+                let portablePdb =
+                    result.Artifacts
+                    |> Seq.find (fun artifact -> artifact.Kind = RequestedArtifact.PortablePdb)
+
+                use pdbStream = new MemoryStream(bytes portablePdb.Bytes, false)
+                use pdbProvider = MetadataReaderProvider.FromPortablePdbStream(pdbStream)
+                let pdb = pdbProvider.GetMetadataReader()
+
+                let hasReturnSequencePoint =
+                    pdb.MethodDebugInformation
+                    |> Seq.collect (fun handle ->
+                        pdb.GetMethodDebugInformation(handle).GetSequencePoints()
+                    )
+                    |> Seq.exists (fun point ->
+                        not point.IsHidden
+                        && point.StartLine = 10
+                        && point.StartColumn = 5
+                        && point.EndLine = 10
+                        && point.EndColumn = 6
+                    )
+
+                Expect.isTrue
+                    hasReturnSequencePoint
+                    "The portable PDB must map the final return expression to its source range."
+
+            testCase "inferred generic top-level function mismatches reach type checking"
+            <| fun _ ->
+                let sourceText =
+                    """module Program
+
+let identity value = value
+let number: int = identity 42
+let text: int = identity "forty-two"
+"""
+
+                let result = compile sourceText
+
+                Expect.equal
+                    result.Outcome
+                    CompilationOutcome.Failed
+                    "The incompatible inferred application must fail."
+
+                let diagnostic =
+                    result.Diagnostics
+                    |> Seq.exactlyOne
+
+                Expect.equal
+                    diagnostic.Code
+                    "FS0001"
+                    $"The diagnostic code must match the Oracle. Actual message: {diagnostic.Message}"
+
+                Expect.equal
+                    diagnostic.Message
+                    (String.concat Environment.NewLine [
+                        "This expression was expected to have type"
+                        "    'int'    "
+                        "but here has type"
+                        "    'string'"
+                    ])
+                    "The type mismatch must match the Oracle."
+
+                let range =
+                    diagnostic.Range
+                    |> Option.get
+
+                Expect.equal range.Start.Line 5 "The mismatch must start on line 5."
+                Expect.equal range.Start.Column 26 "The mismatch must start at the string literal."
+                Expect.equal range.End.Line 5 "The mismatch must end on line 5."
+                Expect.equal range.End.Column 37 "The mismatch must include the string literal."
+
             testCase "ordered source modules resolve through the public contract"
             <| fun _ ->
                 let firstText =
@@ -1474,6 +1600,101 @@ let first = 42
                     "FSC2C2001"
                     CompilationPhase.Syntax
                     "semantic.language-version=8.0"
+
+            testCase "signature source inputs stop at Syntax as unsupported"
+            <| fun _ ->
+                let result =
+                    compileSources [|
+                        "source:public-api-signature",
+                        "/src/PublicApi.fsi",
+                        "namespace SignatureContract\n\nmodule PublicApi =\n    val answer: unit -> int\n"
+                        "source:public-api-implementation",
+                        "/src/PublicApi.fs",
+                        "namespace SignatureContract\n\nmodule PublicApi =\n    let answer () = \"text\"\n"
+                    |]
+
+                match result.Outcome with
+                | CompilationOutcome.Unsupported failure ->
+                    Expect.equal failure.Code "FSC2C2004" "The failure code must be stable."
+
+                    Expect.equal
+                        failure.StoppingPhase
+                        CompilationPhase.Syntax
+                        "Signature input must stop at Syntax."
+
+                    Expect.equal
+                        failure.UnsupportedValueIdentity
+                        "source.signature=/src/PublicApi.fsi"
+                        "The signature source identity must be stable."
+                | outcome -> failtestf "Expected an unsupported result, but received %A." outcome
+
+                let phase phase =
+                    result.PhaseResults
+                    |> Seq.find (fun phaseResult -> phaseResult.Phase = phase)
+
+                let sourcePhase = phase CompilationPhase.Source
+                let syntaxPhase = phase CompilationPhase.Syntax
+
+                Expect.equal
+                    sourcePhase.Status
+                    PhaseStatus.Completed
+                    "Source normalization must complete before signature classification."
+
+                Expect.isSome
+                    sourcePhase.InputFingerprint
+                    "The completed Source phase must record its input."
+
+                Expect.isSome
+                    sourcePhase.OutputFingerprint
+                    "The completed Source phase must record its output."
+
+                Expect.equal
+                    syntaxPhase.Status
+                    PhaseStatus.Unsupported
+                    "Syntax must record the unsupported signature boundary."
+
+                Expect.equal
+                    syntaxPhase.InputFingerprint
+                    sourcePhase.OutputFingerprint
+                    "Syntax must consume the normalized Source output."
+
+                Expect.isNone
+                    syntaxPhase.OutputFingerprint
+                    "Unsupported Syntax must not publish output."
+
+                result.PhaseResults
+                |> Seq.filter (fun phaseResult ->
+                    phaseResult.Phase
+                    <> CompilationPhase.Source
+                    && phaseResult.Phase
+                       <> CompilationPhase.Syntax
+                )
+                |> Seq.iter (fun phaseResult ->
+                    Expect.equal
+                        phaseResult.Status
+                        PhaseStatus.NotStarted
+                        $"{phaseResult.Phase} must not run after unsupported Syntax."
+
+                    Expect.isNone
+                        phaseResult.InputFingerprint
+                        $"{phaseResult.Phase} must not record an input."
+
+                    Expect.isNone
+                        phaseResult.OutputFingerprint
+                        $"{phaseResult.Phase} must not record an output."
+                )
+
+                Expect.isEmpty
+                    result.Diagnostics
+                    "Unsupported signature input must be diagnostic-free."
+
+                Expect.isEmpty
+                    result.Artifacts
+                    "Unsupported signature input must publish no artifacts."
+
+                Expect.isEmpty
+                    result.Fingerprints
+                    "Unsupported signature input must publish no artifact fingerprints."
 
             testCase "unsupported target profile stops at ResolvedSymbols"
             <| fun _ ->

@@ -332,7 +332,17 @@ type Compiler() =
                                 $"resources.native-count={count}"
                         )
                     else
-                        None
+                        request.Sources
+                        |> Seq.tryFind (fun source ->
+                            source.LogicalPath.EndsWith(".fsi", StringComparison.OrdinalIgnoreCase)
+                        )
+                        |> Option.map (fun source ->
+                            unsupportedFailure
+                                "FSC2C2004"
+                                $"Signature source '{source.LogicalPath}' is not supported."
+                                CompilationPhase.Syntax
+                                $"source.signature={source.LogicalPath}"
+                        )
 
     let unsupportedResult failure phaseResults = {
         Outcome = CompilationOutcome.Unsupported failure
@@ -504,9 +514,15 @@ type Compiler() =
         else
             match tryUnsupportedEnvelope request with
             | Some failure ->
+                let phaseResults =
+                    if failure.Code = "FSC2C2004" then
+                        unsupportedPhaseResults request failure.StoppingPhase
+                    else
+                        prevalidatedUnsupportedPhaseResults failure.StoppingPhase
+
                 unsupportedResult
                     failure
-                    (prevalidatedUnsupportedPhaseResults failure.StoppingPhase)
+                    phaseResults
             | None ->
                 match CompilationPipeline.compileRequest service request with
                 | Error diagnostic when diagnostic.Code = "FSC2C2002" ->

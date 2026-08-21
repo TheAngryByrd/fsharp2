@@ -357,6 +357,7 @@ type internal ParsedMethodConstraint =
 [<RequireQualifiedAccess>]
 type internal ParsedMethodKind =
     | Regular
+    | RegularFunction of parameterName: string
     | EntryPoint of parameterName: string
 
 type internal ParsedMethodDeclaration = {

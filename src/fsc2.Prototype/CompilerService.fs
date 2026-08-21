@@ -1479,13 +1479,18 @@ type internal CompilerService() =
             | declaration :: remaining ->
                 let unresolvedValue =
                     match declaration with
-                    | ParsedMethod {
-                                       Body = ValueReference name
-                                       BodyRange = range
-                                   } when
+                    | ParsedMethod ({
+                                        Body = ValueReference name
+                                        BodyRange = range
+                                    } as methodDeclaration) when
                         visibleValues
                         |> Map.containsKey name
                         |> not
+                        && (match methodDeclaration.Kind with
+                            | ParsedMethodKind.EntryPoint parameterName
+                            | ParsedMethodKind.RegularFunction parameterName ->
+                                parameterName <> name
+                            | ParsedMethodKind.Regular -> true)
                         ->
                         Some(name, range, $"The value or constructor '{name}' is not defined.")
                     | ParsedMethod methodDeclaration ->
@@ -1496,7 +1501,8 @@ type internal CompilerService() =
 
                         let boundNames =
                             match methodDeclaration.Kind with
-                            | ParsedMethodKind.EntryPoint parameterName ->
+                            | ParsedMethodKind.EntryPoint parameterName
+                            | ParsedMethodKind.RegularFunction parameterName ->
                                 boundNames
                                 |> Set.add parameterName
                             | ParsedMethodKind.Regular -> boundNames
@@ -2990,7 +2996,25 @@ type internal CompilerService() =
 
             let rec typeDeclaration =
                 function
-                | ParsedMethod({ Kind = ParsedMethodKind.EntryPoint parameterName } as declaration) ->
+                | ParsedMethod declaration when
+                    match declaration.Kind, declaration.Body with
+                    | ParsedMethodKind.EntryPoint _, _
+                    | ParsedMethodKind.RegularFunction _, _
+                    | ParsedMethodKind.Regular, FunctionApplication _ -> true
+                    | _ -> false
+                    ->
+                    let isEntryPoint =
+                        match declaration.Kind with
+                        | ParsedMethodKind.EntryPoint _ -> true
+                        | ParsedMethodKind.Regular
+                        | ParsedMethodKind.RegularFunction _ -> false
+
+                    let parameterName =
+                        match declaration.Kind with
+                        | ParsedMethodKind.EntryPoint parameterName
+                        | ParsedMethodKind.RegularFunction parameterName -> Some parameterName
+                        | ParsedMethodKind.Regular -> None
+
                     let syntheticObjectType =
                         ParsedObjectType {
                             Container = OrdinaryObjectType
@@ -2999,21 +3023,27 @@ type internal CompilerService() =
                             Methods = [
                                 ParsedStaticObjectMethod {
                                     Attributes = []
-                                    IsEntryPoint = true
+                                    IsEntryPoint = isEntryPoint
                                     IsInline = false
                                     IsPublic = true
                                     Name = declaration.Name
                                     TypeParameters = []
                                     Constraints = []
-                                    ArgumentCounts = [ 1 ]
-                                    Parameters = [
-                                        {
-                                            Attributes = []
-                                            Name = parameterName
-                                            Type = ParsedWildcardType declaration.Range
-                                            Range = declaration.Range
-                                        }
-                                    ]
+                                    ArgumentCounts =
+                                        match parameterName with
+                                        | Some _ -> [ 1 ]
+                                        | None -> []
+                                    Parameters =
+                                        match parameterName with
+                                        | Some parameterName -> [
+                                            {
+                                                Attributes = []
+                                                Name = parameterName
+                                                Type = ParsedWildcardType declaration.Range
+                                                Range = declaration.Range
+                                            }
+                                          ]
+                                        | None -> []
                                     ReturnType = None
                                     Body = declaration.Body
                                     BodyRange = declaration.BodyRange
@@ -3027,6 +3057,52 @@ type internal CompilerService() =
                     typeDeclaration syntheticObjectType
                     |> Result.bind (fun typedDeclaration ->
                         match typedDeclaration with
+                        | TypedObjectType {
+                                              Methods = [
+                                                  TypedStaticObjectMethod typedMethod
+                                              ]
+                                          } when not isEntryPoint ->
+                            match declaration.DeclaredType, typedMethod.ReturnType with
+                            | None, _
+                            | Some ParsedInt32, CliInt32 -> Ok(TypedMethod typedMethod)
+                            | Some ParsedInt32, CliString ->
+                                let mismatchRange =
+                                    match declaration.Body with
+                                    | FunctionApplication(_, StringLiteral value) ->
+                                        let literalLength =
+                                            value.Length
+                                            + 2
+
+                                        {
+                                            Start = {
+                                                declaration.BodyRange.End with
+                                                    Offset =
+                                                        declaration.BodyRange.End.Offset
+                                                        - literalLength
+                                                    Column =
+                                                        declaration.BodyRange.End.Column
+                                                        - literalLength
+                                            }
+                                            End = declaration.BodyRange.End
+                                        }
+                                    | _ -> declaration.BodyRange
+
+                                Error {
+                                    Code = "FS0001"
+                                    Message =
+                                        String.concat Environment.NewLine [
+                                            "This expression was expected to have type"
+                                            "    'int'    "
+                                            "but here has type"
+                                            "    'string'"
+                                        ]
+                                    Path = Some sourcePath
+                                    Range = Some mismatchRange
+                                }
+                            | Some ParsedInt32, _ ->
+                                diagnostic
+                                    declaration.BodyRange
+                                    "the method body does not match its declared integer type"
                         | TypedObjectType {
                                               Methods = [
                                                   TypedStaticObjectMethod(
@@ -5631,6 +5707,26 @@ type internal CompilerService() =
                                             |> Option.exists (fun (receiverName, _) ->
                                                 receiverName = name
                                             ))
+
+                                    let (|SourceModuleApplication|_|) candidateExpression =
+                                        let rec collect arguments =
+                                            function
+                                            | FunctionApplication(functionExpression,
+                                                                  argumentExpression) ->
+                                                collect
+                                                    (argumentExpression :: arguments)
+                                                    functionExpression
+                                            | ValueReference name when
+                                                not (isBoundExpressionName name)
+                                                && (visibleSourceModuleMethods name
+                                                    |> List.exists (fun sourceMethod ->
+                                                        sourceMethod.Declaration.Parameters.Length = arguments.Length
+                                                    ))
+                                                ->
+                                                Some(name, arguments)
+                                            | _ -> None
+
+                                        collect [] candidateExpression
 
                                     let (|ImportedFormattedApplication|_|) candidateExpression =
                                         let rec collect arguments =
@@ -9083,6 +9179,51 @@ type internal CompilerService() =
                                                 diagnostic
                                                     argumentRange
                                                     "the object constructor call is ambiguous"
+                                    | SourceModuleApplication(name, argumentExpressions) ->
+                                        let rec typeArguments completed currentLocalIndex =
+                                            function
+                                            | [] -> Ok(List.rev completed, currentLocalIndex)
+                                            | argumentExpression :: remaining ->
+                                                match
+                                                    typeStaticExpression
+                                                        localBindings
+                                                        currentLocalIndex
+                                                        argumentExpression
+                                                with
+                                                | Error error -> Error error
+                                                | Ok(typedArgument, argumentType, nextArgumentLocalIndex) ->
+                                                    typeArguments
+                                                        ((typedArgument, argumentType) :: completed)
+                                                        nextArgumentLocalIndex
+                                                        remaining
+
+                                        match typeArguments [] nextLocalIndex argumentExpressions with
+                                        | Error error -> Error error
+                                        | Ok(typedArguments, nextArgumentLocalIndex) ->
+                                            match
+                                                resolveSourceModuleMethod
+                                                    name
+                                                    (typedArguments
+                                                     |> List.map snd)
+                                                    None
+                                                    methodDeclaration.BodyRange
+                                            with
+                                            | Some result ->
+                                                result
+                                                |> Result.map (fun (target, genericArguments, returnType) ->
+                                                    TypedStaticMethodCall(
+                                                        target,
+                                                        genericArguments,
+                                                        typedArguments
+                                                        |> List.map fst
+                                                    ),
+                                                    returnType,
+                                                    nextArgumentLocalIndex
+                                                )
+                                            | None ->
+                                                diagnostic
+                                                    methodDeclaration.BodyRange
+                                                    $"no visible callable value '{name}' matches the argument types"
                                     | ImportedFormattedApplication(formatText,
                                                                    argumentExpressions,
                                                                    expectedArgumentTypes,

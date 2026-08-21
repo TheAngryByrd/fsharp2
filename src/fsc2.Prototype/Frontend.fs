@@ -868,6 +868,18 @@ module internal Frontend =
                             )
                 }
 
+            let unparenthesizedApplicationArguments tokenKind expression =
+                match tokenKind with
+                | LeftParenthesis -> [ expression ]
+                | _ ->
+                    let rec collect arguments =
+                        function
+                        | FunctionApplication(functionExpression, argumentExpression) ->
+                            collect (argumentExpression :: arguments) functionExpression
+                        | argumentExpression -> argumentExpression :: arguments
+
+                    collect [] expression
+
             let rec parseExpression () =
                 let expressionToken = current ()
 
@@ -4289,8 +4301,20 @@ module internal Frontend =
                             then
                                 parseExpression ()
                                 |> Result.bind (fun (nextArgument, nextArgumentRange) ->
+                                    let application =
+                                        (expression,
+                                         unparenthesizedApplicationArguments
+                                             token.Kind
+                                             nextArgument)
+                                        ||> List.fold (fun functionExpression argumentExpression ->
+                                            FunctionApplication(
+                                                functionExpression,
+                                                argumentExpression
+                                            )
+                                        )
+
                                     parseFollowingApplications
-                                        (FunctionApplication(expression, nextArgument))
+                                        application
                                         {
                                             Start = expressionRange.Start
                                             End = nextArgumentRange.End
@@ -4345,8 +4369,20 @@ module internal Frontend =
                             then
                                 parseExpression ()
                                 |> Result.bind (fun (nextArgument, nextArgumentRange) ->
+                                    let application =
+                                        (expression,
+                                         unparenthesizedApplicationArguments
+                                             token.Kind
+                                             nextArgument)
+                                        ||> List.fold (fun functionExpression argumentExpression ->
+                                            FunctionApplication(
+                                                functionExpression,
+                                                argumentExpression
+                                            )
+                                        )
+
                                     parseFollowingApplications
-                                        (FunctionApplication(expression, nextArgument))
+                                        application
                                         {
                                             Start = expressionRange.Start
                                             End = nextArgumentRange.End
@@ -4492,11 +4528,13 @@ module internal Frontend =
                 Declarations = declarations
             }
 
-            let finishDeclaration
+            let rec finishDeclaration
                 moduleName
+                declarations
                 (declarationToken: Token)
                 declarationName
                 isUnitFunction
+                kind
                 declaredType
                 =
                 match expected Equals "expected '='" with
@@ -4505,42 +4543,126 @@ module internal Frontend =
                     match parseExpression () with
                     | Error error -> Error error
                     | Ok(body, bodyRange) ->
-                        match
-                            match (current ()).Kind with
-                            | EndOfFile -> Ok None
-                            | AttributeStart ->
-                                parseEntryPointDeclaration ()
-                                |> Result.map Some
+                        let declarations =
+                            ParsedMethod {
+                                Name = declarationName
+                                IsUnitFunction = isUnitFunction
+                                Kind = kind
+                                DeclaredType = declaredType
+                                Body = body
+                                BodyRange = bodyRange
+                                Range = {
+                                    Start = declarationToken.Range.Start
+                                    End = bodyRange.End
+                                }
+                            }
+                            :: declarations
+
+                        match (current ()).Kind with
+                        | EndOfFile ->
+                            declarations
+                            |> List.rev
+                            |> finishModule moduleName
+                            |> Ok
+                        | AttributeStart ->
+                            parseEntryPointDeclaration ()
+                            |> Result.map (fun entryPoint ->
+                                ParsedMethod entryPoint
+                                :: declarations
+                                |> List.rev
+                                |> finishModule moduleName
+                            )
+                        | LetKeyword -> parseDeclaration moduleName declarations
+                        | _ ->
+                            Error(
+                                prototypeDiagnostic
+                                    source.Path
+                                    (current ()).Range
+                                    "expected a declaration, entry-point declaration, or end of file"
+                            )
+
+            and parseDeclaration moduleName declarations =
+                match expected LetKeyword "expected 'let'" with
+                | Error error -> Error error
+                | Ok letToken ->
+                    let declarationToken = consume ()
+
+                    match declarationToken.Kind with
+                    | Identifier declarationName ->
+                        match (current ()).Kind with
+                        | LeftParenthesis ->
+                            consume ()
+                            |> ignore
+
+                            match expected RightParenthesis "expected ')'" with
+                            | Error error -> Error error
+                            | Ok _ ->
+                                finishDeclaration
+                                    moduleName
+                                    declarations
+                                    letToken
+                                    declarationName
+                                    true
+                                    ParsedMethodKind.Regular
+                                    None
+                        | Colon ->
+                            consume ()
+                            |> ignore
+
+                            let typeToken = consume ()
+
+                            match typeToken.Kind with
+                            | Identifier "int" ->
+                                finishDeclaration
+                                    moduleName
+                                    declarations
+                                    letToken
+                                    declarationName
+                                    false
+                                    ParsedMethodKind.Regular
+                                    (Some ParsedInt32)
                             | _ ->
                                 Error(
                                     prototypeDiagnostic
                                         source.Path
-                                        (current ()).Range
-                                        "expected an entry-point declaration or end of file"
+                                        typeToken.Range
+                                        "expected the type 'int'"
                                 )
-                        with
-                        | Error error -> Error error
-                        | Ok entryPoint ->
-                            Ok(
-                                finishModule moduleName [
-                                    ParsedMethod {
-                                        Name = declarationName
-                                        IsUnitFunction = isUnitFunction
-                                        Kind = ParsedMethodKind.Regular
-                                        DeclaredType = declaredType
-                                        Body = body
-                                        BodyRange = bodyRange
-                                        Range = {
-                                            Start = declarationToken.Range.Start
-                                            End = bodyRange.End
-                                        }
-                                    }
+                        | Equals ->
+                            finishDeclaration
+                                moduleName
+                                declarations
+                                letToken
+                                declarationName
+                                false
+                                ParsedMethodKind.Regular
+                                None
+                        | Identifier parameterName ->
+                            consume ()
+                            |> ignore
 
-                                    match entryPoint with
-                                    | Some entryPoint -> ParsedMethod entryPoint
-                                    | None -> ()
-                                ]
+                            finishDeclaration
+                                moduleName
+                                declarations
+                                letToken
+                                declarationName
+                                false
+                                (ParsedMethodKind.RegularFunction parameterName)
+                                None
+                        | _ ->
+                            Error(
+                                prototypeDiagnostic
+                                    source.Path
+                                    (current ()).Range
+                                    "expected '(', ':', or '='"
                             )
+                    | _ ->
+                        Error(
+                            prototypeDiagnostic
+                                source.Path
+                                declarationToken.Range
+                                "expected a declaration name"
+                        )
 
             let parseModule () =
                 match identifier "expected a module name" with
@@ -4551,70 +4673,7 @@ module internal Frontend =
                         |> Result.map (fun entryPoint ->
                             finishModule moduleName [ ParsedMethod entryPoint ]
                         )
-                    | _ ->
-                        match expected LetKeyword "expected 'let'" with
-                        | Error error -> Error error
-                        | Ok letToken ->
-                            let declarationToken = consume ()
-
-                            match declarationToken.Kind with
-                            | Identifier declarationName ->
-                                match (current ()).Kind with
-                                | LeftParenthesis ->
-                                    consume ()
-                                    |> ignore
-
-                                    match expected RightParenthesis "expected ')'" with
-                                    | Error error -> Error error
-                                    | Ok _ ->
-                                        finishDeclaration
-                                            moduleName
-                                            letToken
-                                            declarationName
-                                            true
-                                            None
-                                | Colon ->
-                                    consume ()
-                                    |> ignore
-
-                                    let typeToken = consume ()
-
-                                    match typeToken.Kind with
-                                    | Identifier "int" ->
-                                        finishDeclaration
-                                            moduleName
-                                            letToken
-                                            declarationName
-                                            false
-                                            (Some ParsedInt32)
-                                    | _ ->
-                                        Error(
-                                            prototypeDiagnostic
-                                                source.Path
-                                                typeToken.Range
-                                                "expected the type 'int'"
-                                        )
-                                | Equals ->
-                                    finishDeclaration
-                                        moduleName
-                                        letToken
-                                        declarationName
-                                        false
-                                        None
-                                | _ ->
-                                    Error(
-                                        prototypeDiagnostic
-                                            source.Path
-                                            (current ()).Range
-                                            "expected '(', ':', or '='"
-                                    )
-                            | _ ->
-                                Error(
-                                    prototypeDiagnostic
-                                        source.Path
-                                        declarationToken.Range
-                                        "expected a declaration name"
-                                )
+                    | _ -> parseDeclaration moduleName []
                 | Error error -> Error error
 
             let parseNamespaceFile () =
