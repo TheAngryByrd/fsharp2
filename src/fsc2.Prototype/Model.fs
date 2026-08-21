@@ -8,25 +8,6 @@ module internal CompilerSchema =
     [<Literal>]
     let Query = 73
 
-/// PROTOTYPE model for issue #8. These types deliberately contain no SRM
-/// handles, tokens, offsets, RVAs, or final artifact identities.
-[<Struct>]
-type internal SourcePosition = {
-    Offset: int
-    Line: int
-    Column: int
-} with
-
-    override _.ToString() = "SourcePosition"
-
-[<Struct>]
-type internal SourceRange = {
-    Start: SourcePosition
-    End: SourcePosition
-} with
-
-    override _.ToString() = "SourceRange"
-
 type internal CompilerDiagnostic = {
     Code: string
     Message: string
@@ -64,6 +45,13 @@ type internal StrongNameMode =
         | DelaySign -> "DelaySign"
         | PublicSign -> "PublicSign"
         | FullSign -> "FullSign"
+
+    static member FromSigningMode(mode: SigningMode) =
+        match mode with
+        | SigningMode.Unsigned -> Unsigned
+        | SigningMode.DelaySign -> DelaySign
+        | SigningMode.PublicSign -> PublicSign
+        | SigningMode.FullSign -> FullSign
 
 type internal CompilerInvocation = {
     AssemblyPath: string
@@ -679,7 +667,7 @@ type internal SymbolicDeclaringType =
 
     override _.ToString() = "SymbolicDeclaringType"
 
-module internal StableIdentity =
+module internal StableIdentityFormatting =
     let qualifiedTypeName (typeName: QualifiedTypeName) =
         if String.IsNullOrEmpty(typeName.Namespace) then
             typeName.Name
@@ -736,6 +724,18 @@ module internal StableIdentity =
         | CliDeclaringType declaringCliType ->
             "cli:"
             + cliType declaringCliType
+
+[<AutoOpen>]
+module internal StableIdentityExtensions =
+    type StableIdentity with
+        static member internal qualifiedTypeName(typeName) =
+            StableIdentityFormatting.qualifiedTypeName typeName
+
+        static member internal cliType(cliType) =
+            StableIdentityFormatting.cliType cliType
+
+        static member internal symbolicDeclaringType(declaringType) =
+            StableIdentityFormatting.symbolicDeclaringType declaringType
 
 type internal SymbolicMethodReference = {
     DeclaringType: SymbolicDeclaringType

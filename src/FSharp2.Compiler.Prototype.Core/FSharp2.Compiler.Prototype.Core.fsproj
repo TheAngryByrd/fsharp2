@@ -2,7 +2,7 @@
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
-    <AssemblyName>FSharp2.Compiler.Prototype.Core</AssemblyName>
+    <AssemblyName>FSharp2.Compiler.Core</AssemblyName>
     <RootNamespace>FSharp2.Compiler</RootNamespace>
     <IsPackable>false</IsPackable>
     <IsAotCompatible>true</IsAotCompatible>
@@ -13,6 +13,7 @@
     <PackageReference Include="FSharp.Core" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="../fsc2.Prototype/Contracts.fs" Link="Contracts.fs" />
     <Compile Include="../fsc2.Prototype/Model.fs" Link="Model.fs" />
     <Compile Include="../fsc2.Prototype/Diagnostics.fs" Link="Diagnostics.fs" />
     <Compile Include="../fsc2.Prototype/CommandLine.fs" Link="CommandLine.fs" />
