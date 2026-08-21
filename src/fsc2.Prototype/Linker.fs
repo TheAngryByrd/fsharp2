@@ -264,6 +264,7 @@ module internal Linker =
         | CliMethodTypeParameter index -> encoder.GenericMethodTypeParameter(index)
         | CliVoid -> invalidOp "void is valid only as a method return type"
         | CliByRef _ -> invalidOp "byref must be encoded by a return or parameter encoder"
+        | CliArray elementType -> encodeCliType resolveTypeReference (encoder.SZArray()) elementType
         | CliNamedType typeReference ->
             encoder.Type(resolveTypeReference typeReference, typeReference.IsValueType)
         | CliGenericType(typeReference, arguments) ->
@@ -302,6 +303,12 @@ module internal Linker =
             IsInstance = false
             Attributes =
                 MethodAttributes.Public
+                ||| MethodAttributes.Static
+          }
+        | InternalModuleFunction -> {
+            IsInstance = false
+            Attributes =
+                MethodAttributes.Assembly
                 ||| MethodAttributes.Static
           }
         | ModuleValueGetter -> {
@@ -480,7 +487,9 @@ module internal Linker =
             methodReference.ReturnType
 
     let private requiredMaxStack (methodFragment: SymbolicMethodFragment) =
-        let body = methodFragment.Instructions |> List.toArray
+        let body =
+            methodFragment.Instructions
+            |> List.toArray
 
         if Array.isEmpty body then
             0
@@ -524,8 +533,7 @@ module internal Linker =
                     methodReference.ParameterTypes.Length
                     + (if methodReference.IsInstance then 1 else 0)
 
-                let produced =
-                    if methodReference.ReturnType = CliVoid then 0 else 1
+                let produced = if methodReference.ReturnType = CliVoid then 0 else 1
 
                 consumed, produced
 
@@ -537,6 +545,8 @@ module internal Linker =
                 | Branch _
                 | Leave _
                 | DefineCatchRegion _
+                | DefineFinallyRegion _
+                | EndFinally
                 | Nop -> 0, 0
                 | BranchIfFalse _
                 | StoreLocal _
@@ -560,20 +570,22 @@ module internal Linker =
                 | LoadLocalAddress _
                 | LoadStaticField _
                 | LoadFunctionPointer _ -> 0, 1
+                | Duplicate -> 1, 2
+                | NewArray _ -> 1, 1
+                | StoreArrayElementReference -> 3, 0
                 | StoreField _ -> 2, 0
                 | CallMethod methodReference
                 | CallVirtualMethod methodReference
                 | CallGenericMethod(methodReference, _) -> callEffect methodReference
                 | NewObject methodReference -> methodReference.ParameterTypes.Length, 1
-                | Return ->
-                    if methodFragment.ReturnType = CliVoid then 0, 0 else 1, 0
+                | Return -> if methodFragment.ReturnType = CliVoid then 0, 0 else 1, 0
 
             enqueue 0 0
 
             for instruction in body do
                 match instruction with
-                | DefineCatchRegion(_, _, handlerStart, _, _) ->
-                    enqueue (labelIndex handlerStart) 1
+                | DefineCatchRegion(_, _, handlerStart, _, _) -> enqueue (labelIndex handlerStart) 1
+                | DefineFinallyRegion(_, _, handlerStart, _) -> enqueue (labelIndex handlerStart) 0
                 | _ -> ()
 
             while pending.Count > 0 do
@@ -585,7 +597,11 @@ module internal Linker =
                     invalidOp
                         $"symbolic IL consumes {consumed} stack values from depth {depth} at instruction {index}"
 
-                let nextDepth = depth - consumed + produced
+                let nextDepth =
+                    depth
+                    - consumed
+                    + produced
+
                 maximum <- max maximum nextDepth
 
                 match instruction with
@@ -595,6 +611,7 @@ module internal Linker =
                 | Branch label -> enqueue (labelIndex label) nextDepth
                 | Leave label -> enqueue (labelIndex label) 0
                 | Throw
+                | EndFinally
                 | Return -> ()
                 | _ -> enqueue (index + 1) nextDepth
 
@@ -614,6 +631,7 @@ module internal Linker =
         let sequencePoints = ResizeArray<int * SourceRange option>()
         let labels = Dictionary<int, LabelHandle>()
         let catchRegions = ResizeArray<int * int * int * int * CliType>()
+        let finallyRegions = ResizeArray<int * int * int * int>()
 
         let resolveLabel label =
             match labels.TryGetValue(label) with
@@ -673,12 +691,10 @@ module internal Linker =
             | BranchIfFalse label -> instructions.Branch(ILOpCode.Brfalse, resolveLabel label)
             | Branch label -> instructions.Branch(ILOpCode.Br, resolveLabel label)
             | Leave label -> instructions.Branch(ILOpCode.Leave, resolveLabel label)
-            | DefineCatchRegion(tryStart,
-                                tryEnd,
-                                handlerStart,
-                                handlerEnd,
-                                catchType) ->
+            | DefineCatchRegion(tryStart, tryEnd, handlerStart, handlerEnd, catchType) ->
                 catchRegions.Add(tryStart, tryEnd, handlerStart, handlerEnd, catchType)
+            | DefineFinallyRegion(tryStart, tryEnd, handlerStart, handlerEnd) ->
+                finallyRegions.Add(tryStart, tryEnd, handlerStart, handlerEnd)
             | Nop -> instructions.OpCode(ILOpCode.Nop)
             | CompareEqual -> instructions.OpCode(ILOpCode.Ceq)
             | Box cliType ->
@@ -704,9 +720,14 @@ module internal Linker =
             | LoadLocal index -> instructions.LoadLocal(index)
             | LoadLocalAddress index -> instructions.LoadLocalAddress(index)
             | StoreLocal index -> instructions.StoreLocal(index)
+            | Duplicate -> instructions.OpCode(ILOpCode.Dup)
             | InitializeObject cliType ->
                 instructions.OpCode(ILOpCode.Initobj)
                 instructions.Token(resolveDeclaringType (CliDeclaringType cliType))
+            | NewArray elementType ->
+                instructions.OpCode(ILOpCode.Newarr)
+                instructions.Token(resolveDeclaringType (CliDeclaringType elementType))
+            | StoreArrayElementReference -> instructions.OpCode(ILOpCode.Stelem_ref)
             | LoadField fieldReference ->
                 instructions.OpCode(ILOpCode.Ldfld)
                 instructions.Token(addFieldReference fieldReference)
@@ -739,6 +760,7 @@ module internal Linker =
                 instructions.Token(addMethodReference methodReference)
             | Pop -> instructions.OpCode(ILOpCode.Pop)
             | Throw -> instructions.OpCode(ILOpCode.Throw)
+            | EndFinally -> instructions.OpCode(ILOpCode.Endfinally)
             | Return -> instructions.OpCode(ILOpCode.Ret)
 
         for tryStart, tryEnd, handlerStart, handlerEnd, catchType in catchRegions do
@@ -748,6 +770,14 @@ module internal Linker =
                 resolveLabel handlerStart,
                 resolveLabel handlerEnd,
                 resolveDeclaringType (CliDeclaringType catchType)
+            )
+
+        for tryStart, tryEnd, handlerStart, handlerEnd in finallyRegions do
+            controlFlow.AddFinallyRegion(
+                resolveLabel tryStart,
+                resolveLabel tryEnd,
+                resolveLabel handlerStart,
+                resolveLabel handlerEnd
             )
 
         let codeSize = code.Count
@@ -839,6 +869,10 @@ module internal Linker =
             Namespace = "Microsoft.FSharp.Core"
             Name = "CompilationMappingAttribute"
           }
+        | CompilationArgumentCountsAttribute -> {
+            Namespace = "Microsoft.FSharp.Core"
+            Name = "CompilationArgumentCountsAttribute"
+          }
 
     let private encodeKnownAttributeConstructorSignature
         (sourceConstructFlags: TypeReferenceHandle)
@@ -860,6 +894,8 @@ module internal Linker =
                             parameter.Boolean()
                         | CompilationMappingAttribute, TypedSourceConstructAttributeArgument _ ->
                             parameter.Type(sourceConstructFlags, true)
+                        | CompilationArgumentCountsAttribute, TypedInt32ArrayAttributeArgument _ ->
+                            parameter.SZArray().Int32()
                         | _ ->
                             invalidOp
                                 "the symbolic custom attribute has an invalid constructor argument"
@@ -875,18 +911,22 @@ module internal Linker =
             .CustomAttributeSignature(
                 (fun fixedArguments ->
                     for argument in attribute.ConstructorArguments do
-                        let scalar = fixedArguments.AddArgument().Scalar()
-
                         match argument with
                         | TypedBooleanAttributeArgument argumentValue ->
-                            scalar.Constant(argumentValue)
+                            fixedArguments.AddArgument().Scalar().Constant(argumentValue)
                         | TypedSourceConstructAttributeArgument sourceConstruct ->
                             let argumentValue =
                                 match sourceConstruct with
                                 | ObjectTypeConstruct -> 3
                                 | ModuleConstruct -> 7
 
-                            scalar.Constant(argumentValue)
+                            fixedArguments.AddArgument().Scalar().Constant(argumentValue)
+                        | TypedInt32ArrayAttributeArgument values ->
+                            let elements =
+                                fixedArguments.AddArgument().Vector().Count(values.Length)
+
+                            for value in values do
+                                elements.AddLiteral().Scalar().Constant(value)
                 ),
                 (fun namedArguments ->
                     namedArguments.Count(0)
@@ -915,8 +955,7 @@ module internal Linker =
                 points
                 |> List.map (fun (offset, range) ->
                     match range with
-                    | Some range ->
-                        $"{offset}@{range.Start.Line}:{range.Start.Column}"
+                    | Some range -> $"{offset}@{range.Start.Line}:{range.Start.Column}"
                     | None -> $"{offset}@hidden"
                 )
                 |> String.concat ", "
@@ -1252,7 +1291,8 @@ module internal Linker =
                     not (methodStableIds.Contains(propertyFragment.GetterStableId))
                 ))
         then
-            invalidOp "the symbolic method graph has duplicate or missing property-getter identities"
+            invalidOp
+                "the symbolic method graph has duplicate or missing property-getter identities"
 
         if
             invocation.DebugDocumentPaths.Length
@@ -1360,17 +1400,36 @@ module internal Linker =
                                 + "' has no symbolic type definition"
                             )
                     else
-                        let handle =
-                            metadata.AddTypeReference(
-                                resolveAssemblyReference typeReference.AssemblyName,
-                                metadata.GetOrAddString(typeReference.TypeName.Namespace),
-                                metadata.GetOrAddString(typeReference.TypeName.Name)
+                        let assemblyReference = resolveAssemblyReference typeReference.AssemblyName
+
+                        let mutable resolutionScope =
+                            MetadataTokens.EntityHandle(
+                                TableIndex.AssemblyRef,
+                                MetadataTokens.GetRowNumber(assemblyReference)
                             )
 
-                        MetadataTokens.EntityHandle(
-                            TableIndex.TypeRef,
-                            MetadataTokens.GetRowNumber(handle)
-                        )
+                        for index, metadataName in
+                            typeReference.TypeName.Name.Split('+')
+                            |> Array.indexed do
+                            let handle =
+                                metadata.AddTypeReference(
+                                    resolutionScope,
+                                    metadata.GetOrAddString(
+                                        if index = 0 then
+                                            typeReference.TypeName.Namespace
+                                        else
+                                            String.Empty
+                                    ),
+                                    metadata.GetOrAddString(metadataName)
+                                )
+
+                            resolutionScope <-
+                                MetadataTokens.EntityHandle(
+                                    TableIndex.TypeRef,
+                                    MetadataTokens.GetRowNumber(handle)
+                                )
+
+                        resolutionScope
 
                 cliTypeReferences.Add(typeReference, entityHandle)
                 entityHandle
@@ -1390,6 +1449,7 @@ module internal Linker =
             match cliType with
             | CliNamedType typeReference -> resolveCliTypeReference typeReference
             | CliGenericType _
+            | CliArray _
             | CliTypeParameter _
             | CliMethodTypeParameter _ ->
                 match cliTypeSpecifications.TryGetValue(cliType) with
@@ -1428,8 +1488,15 @@ module internal Linker =
                 MetadataTokens.EntityHandle(TableIndex.TypeRef, MetadataTokens.GetRowNumber(handle))
             | CliDeclaringType cliType -> resolveCliTypeEntity cliType
 
+        let hasFSharpCoreAssemblyAttribute =
+            symbolic.AssemblyAttributes
+            |> List.exists (fun attribute -> attribute.Kind = AssemblyAutoOpenAttribute)
+
         let fsharpCore =
-            if List.isEmpty customAttributeFragments then
+            if
+                List.isEmpty customAttributeFragments
+                && not hasFSharpCoreAssemblyAttribute
+            then
                 Unchecked.defaultof<AssemblyReferenceHandle>
             elif targetReference.Name = "FSharp.Core" then
                 coreLibrary
@@ -1439,10 +1506,7 @@ module internal Linker =
         let coreTypeEntity typeName =
             let handle = resolveCoreTypeReference typeName
 
-            MetadataTokens.EntityHandle(
-                TableIndex.TypeRef,
-                MetadataTokens.GetRowNumber(handle)
-            )
+            MetadataTokens.EntityHandle(TableIndex.TypeRef, MetadataTokens.GetRowNumber(handle))
 
         let systemObject =
             coreTypeEntity {
@@ -1527,9 +1591,15 @@ module internal Linker =
             )
 
         for attribute in symbolic.AssemblyAttributes do
+            let attributeAssembly =
+                if attribute.Kind = AssemblyAutoOpenAttribute then
+                    fsharpCore
+                else
+                    coreLibrary
+
             let attributeType =
                 metadata.AddTypeReference(
-                    coreLibrary,
+                    attributeAssembly,
                     metadata.GetOrAddString(attribute.AttributeType.Namespace),
                     metadata.GetOrAddString(attribute.AttributeType.Name)
                 )
@@ -1625,7 +1695,10 @@ module internal Linker =
                     ||| TypeAttributes.SequentialLayout
                     ||| TypeAttributes.Sealed
                     ||| enum<TypeAttributes> 0x00002000
-                    ||| TypeAttributes.BeforeFieldInit
+                    ||| (if List.isEmpty typeFragment.Methods then
+                             TypeAttributes.BeforeFieldInit
+                         else
+                             enum<TypeAttributes> 0)
                 | ClosureContainer ->
                     visibility
                     ||| TypeAttributes.Sealed
@@ -1826,7 +1899,9 @@ module internal Linker =
                     addKnownCustomAttribute parent attribute
 
         let mutable nextParameterRow = 1
-        let methodDefinitionHandles = Dictionary<string, MethodDefinitionHandle>(StringComparer.Ordinal)
+
+        let methodDefinitionHandles =
+            Dictionary<string, MethodDefinitionHandle>(StringComparer.Ordinal)
 
         for methodFragment, bodyOffset, _, _, _ in encodedMethods do
             let attributes = (methodKindEncoding methodFragment.Kind).Attributes
@@ -1906,7 +1981,9 @@ module internal Linker =
                         methodDefinitionHandles.[propertyFragment.GetterStableId]
                     )
 
-                    nextPropertyRow <- nextPropertyRow + 1
+                    nextPropertyRow <-
+                        nextPropertyRow
+                        + 1
 
         let pdbMetadata = MetadataBuilder()
 

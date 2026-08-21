@@ -181,12 +181,18 @@ type internal ParsedMatchPattern =
         range: SourceRange
     | ParsedNullPattern of range: SourceRange
     | ParsedNamedPattern of name: string * range: SourceRange
+    | ParsedUnitPattern of range: SourceRange
+    | ParsedTuplePattern of elements: ParsedMatchPattern list * range: SourceRange
+    | ParsedUnionCasePattern of caseName: string * argument: ParsedMatchPattern * range: SourceRange
 
     member this.Range =
         match this with
         | ParsedTypeTestPattern(_, _, range)
         | ParsedNullPattern range
-        | ParsedNamedPattern(_, range) -> range
+        | ParsedNamedPattern(_, range)
+        | ParsedUnitPattern range
+        | ParsedTuplePattern(_, range)
+        | ParsedUnionCasePattern(_, _, range) -> range
 
     override _.ToString() = "ParsedMatchPattern"
 
@@ -202,6 +208,7 @@ type internal ParsedExpression =
     | StringLiteral of string
     | NullLiteral
     | ValueReference of string
+    | NamedCallArgument of name: string * value: ParsedExpression * range: SourceRange
     | AddressOfExpression of rootName: string * memberPath: string list
     | UnitApplication of functionName: string
     | MemberCall of receiverName: string * memberName: string * arguments: ParsedExpression list
@@ -236,10 +243,7 @@ type internal ParsedExpression =
     | SequentialValueExpression of (ParsedExpression * SourceRange) list
     | LocalAssignment of name: string * value: ParsedExpression
     | BooleanNegationExpression of expression: ParsedExpression * range: SourceRange
-    | EqualityExpression of
-        left: ParsedExpression *
-        right: ParsedExpression *
-        range: SourceRange
+    | EqualityExpression of left: ParsedExpression * right: ParsedExpression * range: SourceRange
     | TryWithExpression of
         body: ParsedExpression *
         bindingName: string *
@@ -249,9 +253,21 @@ type internal ParsedExpression =
         bodyRange: SourceRange *
         handlerRange: SourceRange *
         range: SourceRange
+    | TryFinallyExpression of
+        body: ParsedExpression *
+        compensation: ParsedExpression *
+        tryRange: SourceRange *
+        finallyRange: SourceRange *
+        bodyRange: SourceRange *
+        compensationRange: SourceRange *
+        range: SourceRange
     | MatchExpression of
         input: ParsedExpression *
-        clauses: (ParsedMatchPattern * (ParsedExpression * SourceRange) option * ParsedExpression * SourceRange) list *
+        clauses:
+            (ParsedMatchPattern *
+            (ParsedExpression * SourceRange) option *
+            ParsedExpression *
+            SourceRange) list *
         matchHeaderRange: SourceRange *
         range: SourceRange
     | LetExpression of
@@ -262,6 +278,28 @@ type internal ParsedExpression =
         body: ParsedExpression *
         bindingRange: SourceRange *
         bodyRange: SourceRange
+    | ComputationExpression of builderName: string * body: ParsedExpression * range: SourceRange
+    | ComputationBindingExpression of
+        bindingName: string *
+        input: ParsedExpression *
+        body: ParsedExpression *
+        bindingRange: SourceRange *
+        bodyRange: SourceRange
+    | ComputationDoExpression of input: ParsedExpression * range: SourceRange
+    | WhileExpression of
+        condition: ParsedExpression *
+        body: ParsedExpression *
+        conditionRange: SourceRange *
+        bodyRange: SourceRange *
+        range: SourceRange
+    | ForExpression of
+        bindingName: string *
+        sequence: ParsedExpression *
+        body: ParsedExpression *
+        bindingRange: SourceRange *
+        sequenceRange: SourceRange *
+        bodyRange: SourceRange *
+        range: SourceRange
     | LambdaExpression of
         parameterName: string *
         parameterType: ParsedTypeExpression option *
@@ -367,9 +405,11 @@ type internal ParsedParameter = {
 type internal ParsedStaticMethodDeclaration = {
     Attributes: ParsedAttribute list
     IsInline: bool
+    IsPublic: bool
     Name: string
     TypeParameters: string list
     Constraints: ParsedMethodConstraint list
+    ArgumentCounts: int list
     Parameters: ParsedParameter list
     ReturnType: ParsedTypeExpression option
     Body: ParsedExpression
@@ -378,19 +418,6 @@ type internal ParsedStaticMethodDeclaration = {
 } with
 
     override _.ToString() = "ParsedStaticMethodDeclaration"
-
-type internal ParsedNestedModuleDeclaration = {
-    Name: string
-    ModulePath: string list
-    Attributes: ParsedAttribute list
-    OpenedNamespaces: string list
-    Values: ParsedModuleValueDeclaration list
-    Methods: ParsedStaticMethodDeclaration list
-    Modules: ParsedNestedModuleDeclaration list
-    Range: SourceRange
-} with
-
-    override _.ToString() = "ParsedNestedModuleDeclaration"
 
 type internal ParsedStaticTypeDeclaration = {
     IsPublic: bool
@@ -450,6 +477,20 @@ type internal ParsedObjectTypeDeclaration = {
 
     override _.ToString() = "ParsedObjectTypeDeclaration"
 
+type internal ParsedNestedModuleDeclaration = {
+    Name: string
+    ModulePath: string list
+    Attributes: ParsedAttribute list
+    OpenedNamespaces: string list
+    Values: ParsedModuleValueDeclaration list
+    Methods: ParsedStaticMethodDeclaration list
+    Extensions: ParsedObjectTypeDeclaration list
+    Modules: ParsedNestedModuleDeclaration list
+    Range: SourceRange
+} with
+
+    override _.ToString() = "ParsedNestedModuleDeclaration"
+
 type internal ParsedFieldDeclaration = {
     Name: string
     IsMutable: bool
@@ -465,6 +506,7 @@ type internal ParsedStructTypeDeclaration = {
     TypeParameters: string list
     Attributes: ParsedAttribute list
     Fields: ParsedFieldDeclaration list
+    Methods: ParsedObjectMethodDeclaration list
     Range: SourceRange
 } with
 
@@ -569,6 +611,7 @@ type internal AssemblyAttributeKind =
     | AssemblyMetadataAttribute
     | AssemblyFileVersionAttribute
     | AssemblyInformationalVersionAttribute
+    | AssemblyAutoOpenAttribute
 
     override _.ToString() = "AssemblyAttributeKind"
 
@@ -623,6 +666,7 @@ type internal CliType =
     | CliTypeParameter of int
     | CliMethodTypeParameter of int
     | CliByRef of CliType
+    | CliArray of elementType: CliType
     | CliNamedType of CliTypeReference
     | CliGenericType of genericType: CliTypeReference * arguments: CliType list
 
@@ -660,6 +704,9 @@ module internal StableIdentity =
             + index.ToString(CultureInfo.InvariantCulture)
         | CliByRef elementType ->
             "byref:"
+            + cliType elementType
+        | CliArray elementType ->
+            "array:"
             + cliType elementType
         | CliNamedType typeReference ->
             String.concat "|" [
@@ -792,6 +839,7 @@ type internal TypedObjectConstructionTarget = {
     DeclaringType: CliType
     StableId: string
     ParameterTypes: CliType list
+    ParamArrayElementType: CliType option
 } with
 
     override _.ToString() = "TypedObjectConstructionTarget"
@@ -845,6 +893,7 @@ type internal KnownAttributeKind =
     | InlineIfLambdaAttribute
     | NoEagerConstraintApplicationAttribute
     | CompilationMappingAttribute
+    | CompilationArgumentCountsAttribute
 
     override _.ToString() = "KnownAttributeKind"
 
@@ -859,6 +908,7 @@ type internal SourceConstructKind =
 type internal TypedAttributeArgument =
     | TypedBooleanAttributeArgument of bool
     | TypedSourceConstructAttributeArgument of SourceConstructKind
+    | TypedInt32ArrayAttributeArgument of int list
 
     override _.ToString() = "TypedAttributeArgument"
 
@@ -924,6 +974,10 @@ type internal TypedExpression =
     | TypedValueTaskBind of TypedValueTaskBindExpression
     | TypedValueTaskApply of TypedValueTaskApplyExpression
     | TypedValueTaskZip of TypedValueTaskZipExpression
+    | TypedColdTaskParallelZip of TypedColdTaskParallelZipExpression
+    | TypedTaskTryFinally of TypedTaskTryFinallyExpression
+    | TypedAsyncWhile of TypedAsyncWhileExpression
+    | TypedCancellableTaskSequential of TypedCancellableTaskSequentialExpression
     | TypedValueTaskOfUnit of TypedValueTaskOfUnitExpression
     | TypedConditional of
         condition: TypedExpression *
@@ -974,6 +1028,7 @@ type internal TypedExpression =
         ifMatchedRange: SourceRange *
         ifNotMatchedRange: SourceRange *
         range: SourceRange
+    | TypedPatternMatch of TypedPatternMatchExpression
     | TypedResumableCode of TypedResumableCodeExpression
     | TypedResumableTryFinally of TypedResumableTryFinallyExpression
     | TypedObjectExpression of
@@ -989,6 +1044,39 @@ type internal TypedExpression =
 
     override _.ToString() = "TypedExpression"
 
+and internal TypedPatternMatchExpression = {
+    Input: TypedExpression
+    InputType: CliType
+    InputLocalIndex: int
+    Clauses: TypedPatternMatchClause list
+    MatchHeaderRange: SourceRange
+    Range: SourceRange
+} with
+
+    override _.ToString() = "TypedPatternMatchExpression"
+
+and internal TypedPatternMatchClause = {
+    Operations: TypedPatternOperation list
+    Body: TypedExpression
+    BodyRange: SourceRange
+} with
+
+    override _.ToString() = "TypedPatternMatchClause"
+
+and internal TypedPatternOperation =
+    | TypedPatternTypeTest of
+        input: TypedExpression *
+        targetType: CliType *
+        localIndex: int *
+        localName: string
+    | TypedPatternBinding of
+        input: TypedExpression *
+        inputType: CliType *
+        localIndex: int *
+        name: string
+
+    override _.ToString() = "TypedPatternOperation"
+
 and internal TypedFunctionLambdaExpression = {
     FunctionType: CliType
     ConverterType: CliType
@@ -1002,6 +1090,7 @@ and internal TypedFunctionLambdaExpression = {
     SourceLine: int
     LambdaRange: SourceRange
     ConstructionRange: SourceRange
+    EmitDefaultConstructionSequencePoint: bool
 } with
 
     override _.ToString() = "TypedFunctionLambdaExpression"
@@ -1106,6 +1195,82 @@ and internal TypedValueTaskZipExpression = {
 } with
 
     override _.ToString() = "TypedValueTaskZipExpression"
+
+and internal TypedColdTaskParallelZipExpression = {
+    Function: TypedFunctionLambdaExpression
+    Zip: TypedValueTaskZipExpression
+} with
+
+    override _.ToString() = "TypedColdTaskParallelZipExpression"
+
+and internal TypedTaskTryFinallyExpression = {
+    WaitParameterIndex: int
+    WorkParameterIndex: int
+    CompensationParameterIndex: int
+    ResultType: CliType
+    NonGenericTaskType: CliType
+    OutputTaskType: CliType
+    CompensationType: CliType
+    TaskTypeReference: CliTypeReference
+    NonGenericTaskTypeReference: CliTypeReference
+    NonGenericTaskAwaiterTypeReference: CliTypeReference
+    TaskAwaiterTypeReference: CliTypeReference
+    FuncTypeReference: CliTypeReference
+    CancellationTokenType: CliType
+    TaskContinuationOptionsType: CliType
+    TaskSchedulerType: CliType
+    TaskExtensionsTypeReference: CliTypeReference
+    OperationCanceledExceptionType: CliType
+    ExceptionType: CliType
+    Range: SourceRange
+} with
+
+    override _.ToString() = "TypedTaskTryFinallyExpression"
+
+and internal TypedAsyncWhileExpression = {
+    GuardParameterIndex: int
+    ComputationParameterIndex: int
+    AsyncTypeReference: CliTypeReference
+    AsyncBuilderTypeReference: CliTypeReference
+    FSharpFunctionTypeReference: CliTypeReference
+    ConverterTypeReference: CliTypeReference
+    ExtraTopLevelOperatorsTypeReference: CliTypeReference
+    UnitType: CliType
+    AsyncBooleanType: CliType
+    AsyncUnitType: CliType
+    Range: SourceRange
+} with
+
+    override _.ToString() = "TypedAsyncWhileExpression"
+
+and internal TypedCancellableTaskSequentialExpression = {
+    SequenceParameterIndex: int
+    ElementType: CliType
+    SequenceType: CliType
+    InputFunctionType: CliType
+    InputTaskType: CliType
+    OutputArrayType: CliType
+    OutputTaskType: CliType
+    OutputFunctionType: CliType
+    CancellationTokenType: CliType
+    UnitType: CliType
+    EnumerableTypeReference: CliTypeReference
+    FSharpFunctionTypeReference: CliTypeReference
+    TaskTypeReference: CliTypeReference
+    AsyncTypeReference: CliTypeReference
+    AsyncModuleTypeReference: CliTypeReference
+    AsyncBuilderTypeReference: CliTypeReference
+    ExtraTopLevelOperatorsTypeReference: CliTypeReference
+    SeqModuleTypeReference: CliTypeReference
+    EnumeratorTypeReference: CliTypeReference
+    ListTypeReference: CliTypeReference
+    OptionTypeReference: CliTypeReference
+    ConverterTypeReference: CliTypeReference
+    Range: SourceRange
+} with
+
+    override _.ToString() =
+        "TypedCancellableTaskSequentialExpression"
 
 and internal TypedValueTaskOfUnitExpression = {
     BuilderName: string
@@ -1249,6 +1414,7 @@ type internal TypedStructTypeDeclaration = {
     GenericParameters: string list
     Attributes: TypedCustomAttribute list
     Fields: TypedFieldDeclaration list
+    Methods: TypedObjectMethodDeclaration list
     ExportFingerprint: string
     Range: SourceRange
 } with
@@ -1303,6 +1469,7 @@ type internal TypedNestedModuleDeclaration = {
     Attributes: TypedCustomAttribute list
     Values: TypedModuleValueDeclaration list
     Methods: TypedMethodDeclaration list
+    Extensions: TypedObjectTypeDeclaration list
     Modules: TypedNestedModuleDeclaration list
     ExportFingerprint: string
     Range: SourceRange
@@ -1405,6 +1572,7 @@ type internal SymbolicInstruction =
         handlerStart: int *
         handlerEnd: int *
         catchType: CliType
+    | DefineFinallyRegion of tryStart: int * tryEnd: int * handlerStart: int * handlerEnd: int
     | Nop
     | Box of CliType
     | UnboxAny of CliType
@@ -1419,7 +1587,10 @@ type internal SymbolicInstruction =
     | LoadLocal of int
     | LoadLocalAddress of int
     | StoreLocal of int
+    | Duplicate
     | InitializeObject of CliType
+    | NewArray of elementType: CliType
+    | StoreArrayElementReference
     | LoadField of SymbolicFieldReference
     | LoadFieldAddress of SymbolicFieldReference
     | StoreField of SymbolicFieldReference
@@ -1432,6 +1603,7 @@ type internal SymbolicInstruction =
     | NewObject of SymbolicMethodReference
     | Pop
     | Throw
+    | EndFinally
     | Return
 
     override _.ToString() = "SymbolicInstruction"
@@ -1439,6 +1611,7 @@ type internal SymbolicInstruction =
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
 type internal SymbolicMethodKind =
     | ModuleFunction
+    | InternalModuleFunction
     | ModuleValueGetter
     | StaticConstructor
     | TypeExtensionMember

@@ -52,8 +52,10 @@ type internal ReferenceMethodDefinition = {
     Name: string
     IsStatic: bool
     GenericArity: int
+    MetadataParameterNames: string list
     ParameterTypes: CliType list
     OptionalParameterCount: int
+    ParamArrayElementType: CliType option
     ReturnType: CliType
 } with
 
@@ -93,7 +95,8 @@ module private ReferenceFieldKey =
             (if isStatic then "static" else "instance")
         ]
 
-type private ReferenceSignatureTypeProvider(types: Dictionary<TypeNameArity, ResolvedTypeName>) as this =
+type private ReferenceSignatureTypeProvider(types: Dictionary<TypeNameArity, ResolvedTypeName>) as this
+    =
     let tryResolve namespaceName metadataName =
         let name, genericArity = ReferenceTypeName.parseMetadataName metadataName
 
@@ -120,7 +123,8 @@ type private ReferenceSignatureTypeProvider(types: Dictionary<TypeNameArity, Res
 
         member _.GetByReferenceType(elementType) =
             elementType
-            |> Option.bind (function
+            |> Option.bind (
+                function
                 | CliVoid -> None
                 | cliType -> Some(CliByRef cliType)
             )
@@ -129,7 +133,10 @@ type private ReferenceSignatureTypeProvider(types: Dictionary<TypeNameArity, Res
 
         member _.GetGenericInstantiation(genericType, typeArguments) =
             match genericType with
-            | Some(CliNamedType typeReference) when typeArguments |> Seq.forall Option.isSome ->
+            | Some(CliNamedType typeReference) when
+                typeArguments
+                |> Seq.forall Option.isSome
+                ->
                 let arguments =
                     typeArguments
                     |> Seq.choose id
@@ -149,8 +156,7 @@ type private ReferenceSignatureTypeProvider(types: Dictionary<TypeNameArity, Res
                 Some(CliGenericType(genericReference, arguments))
             | _ -> None
 
-        member _.GetGenericMethodParameter(_, index) =
-            Some(CliMethodTypeParameter index)
+        member _.GetGenericMethodParameter(_, index) = Some(CliMethodTypeParameter index)
 
         member _.GetGenericTypeParameter(_, index) = Some(CliTypeParameter index)
 
@@ -170,7 +176,9 @@ type private ReferenceSignatureTypeProvider(types: Dictionary<TypeNameArity, Res
             | PrimitiveTypeCode.Void -> Some CliVoid
             | _ -> None
 
-        member _.GetSZArrayType(_) = None
+        member _.GetSZArrayType(elementType) =
+            elementType
+            |> Option.map CliArray
 
         member _.GetTypeFromDefinition(metadata, handle, _) =
             let definition = metadata.GetTypeDefinition(handle)
@@ -205,13 +213,12 @@ type internal ReferenceTypeIndex
     let methodCache = Dictionary<string, ReferenceMethodDefinition list>()
     let fieldCache = Dictionary<string, ReferenceFieldDefinition list>()
     let baseTypeCache = Dictionary<string, CliType option>()
+    let interfaceCache = Dictionary<string, CliType list>()
 
     let loadBaseType declarationId =
         let signatureProvider = ReferenceSignatureTypeProvider(types)
 
-        let provider =
-            signatureProvider
-            :> ISignatureTypeProvider<CliType option, unit>
+        let provider = signatureProvider :> ISignatureTypeProvider<CliType option, unit>
 
         let locations =
             match typeLocations.TryGetValue(declarationId) with
@@ -257,6 +264,57 @@ type internal ReferenceTypeIndex
                 | _ -> None
         )
 
+    let loadInterfaces declarationId =
+        let signatureProvider = ReferenceSignatureTypeProvider(types)
+
+        let provider = signatureProvider :> ISignatureTypeProvider<CliType option, unit>
+
+        let locations =
+            match typeLocations.TryGetValue(declarationId) with
+            | true, candidates -> candidates
+            | false, _ -> []
+
+        locations
+        |> List.collect (fun location ->
+            use metadataStream = File.OpenRead(location.ReferencePath)
+            use pe = new PEReader(metadataStream)
+            let metadata = pe.GetMetadataReader()
+
+            let typeDefinition =
+                location.TypeRow
+                |> MetadataTokens.TypeDefinitionHandle
+                |> metadata.GetTypeDefinition
+
+            typeDefinition.GetInterfaceImplementations()
+            |> Seq.choose (fun implementationHandle ->
+                let handle = metadata.GetInterfaceImplementation(implementationHandle).Interface
+
+                match handle.Kind with
+                | HandleKind.TypeDefinition ->
+                    provider.GetTypeFromDefinition(
+                        metadata,
+                        TypeDefinitionHandle.op_Explicit handle,
+                        0uy
+                    )
+                | HandleKind.TypeReference ->
+                    provider.GetTypeFromReference(
+                        metadata,
+                        TypeReferenceHandle.op_Explicit handle,
+                        0uy
+                    )
+                | HandleKind.TypeSpecification ->
+                    provider.GetTypeFromSpecification(
+                        metadata,
+                        (),
+                        TypeSpecificationHandle.op_Explicit handle,
+                        0uy
+                    )
+                | _ -> None
+            )
+            |> List.ofSeq
+        )
+        |> List.distinct
+
     let loadMethods declarationId name isStatic =
         let signatureProvider = ReferenceSignatureTypeProvider(types)
 
@@ -274,14 +332,16 @@ type internal ReferenceTypeIndex
             let entityTypeName (handle: EntityHandle) =
                 match handle.Kind with
                 | HandleKind.TypeReference ->
-                    let reference = metadata.GetTypeReference(TypeReferenceHandle.op_Explicit handle)
+                    let reference =
+                        metadata.GetTypeReference(TypeReferenceHandle.op_Explicit handle)
 
                     Some(
                         metadata.GetString(reference.Namespace),
                         metadata.GetString(reference.Name)
                     )
                 | HandleKind.TypeDefinition ->
-                    let definition = metadata.GetTypeDefinition(TypeDefinitionHandle.op_Explicit handle)
+                    let definition =
+                        metadata.GetTypeDefinition(TypeDefinitionHandle.op_Explicit handle)
 
                     Some(
                         metadata.GetString(definition.Namespace),
@@ -304,8 +364,7 @@ type internal ReferenceTypeIndex
                             MethodDefinitionHandle.op_Explicit attribute.Constructor
                         )
 
-                    let declaringType =
-                        metadata.GetTypeDefinition(constructor.GetDeclaringType())
+                    let declaringType = metadata.GetTypeDefinition(constructor.GetDeclaringType())
 
                     Some(
                         metadata.GetString(declaringType.Namespace),
@@ -313,17 +372,22 @@ type internal ReferenceTypeIndex
                     )
                 | _ -> None
 
-            let isFSharpOptionalParameter (parameter: Parameter) =
+            let hasCustomAttribute namespaceName typeName (parameter: Parameter) =
                 parameter.GetCustomAttributes()
                 |> Seq.exists (fun handle ->
                     handle
                     |> metadata.GetCustomAttribute
                     |> customAttributeTypeName
-                    |> Option.exists (fun (namespaceName, typeName) ->
-                        namespaceName = "Microsoft.FSharp.Core"
-                        && typeName = "OptionalArgumentAttribute"
+                    |> Option.exists (fun (attributeNamespace, attributeTypeName) ->
+                        attributeNamespace = namespaceName
+                        && attributeTypeName = typeName
                     )
                 )
+
+            let isFSharpOptionalParameter =
+                hasCustomAttribute "Microsoft.FSharp.Core" "OptionalArgumentAttribute"
+
+            let isParamArrayParameter = hasCustomAttribute "System" "ParamArrayAttribute"
 
             let typeDefinition =
                 location.TypeRow
@@ -334,6 +398,7 @@ type internal ReferenceTypeIndex
             |> Seq.choose (fun methodHandle ->
                 let methodDefinition = metadata.GetMethodDefinition(methodHandle)
                 let methodName = metadata.GetString(methodDefinition.Name)
+
                 let access =
                     methodDefinition.Attributes
                     &&& MethodAttributes.MemberAccessMask
@@ -344,14 +409,16 @@ type internal ReferenceTypeIndex
                     <> enum 0
 
                 if
-                    methodName <> name
-                    || access <> MethodAttributes.Public
-                    || methodIsStatic <> isStatic
+                    methodName
+                    <> name
+                    || access
+                       <> MethodAttributes.Public
+                    || methodIsStatic
+                       <> isStatic
                 then
                     None
                 else
-                    let signature =
-                        methodDefinition.DecodeSignature(signatureProvider, ())
+                    let signature = methodDefinition.DecodeSignature(signatureProvider, ())
 
                     if
                         signature.ReturnType.IsNone
@@ -368,25 +435,44 @@ type internal ReferenceTypeIndex
                         let returnType = signature.ReturnType.Value
                         let genericArity = signature.GenericParameterCount
 
-                        let optionalParameters =
-                            Array.create parameterTypes.Length false
+                        let optionalParameters = Array.create parameterTypes.Length false
+
+                        let paramArrayParameters = Array.create parameterTypes.Length false
+
+                        let parameterNames = Array.create parameterTypes.Length String.Empty
 
                         for parameterHandle in methodDefinition.GetParameters() do
                             let parameter = metadata.GetParameter(parameterHandle)
-                            let index = parameter.SequenceNumber - 1
+
+                            let index =
+                                parameter.SequenceNumber
+                                - 1
 
                             if
                                 index >= 0
                                 && index < optionalParameters.Length
                             then
-                                optionalParameters.[index] <-
-                                    isFSharpOptionalParameter parameter
+                                optionalParameters.[index] <- isFSharpOptionalParameter parameter
+
+                                parameterNames.[index] <- metadata.GetString(parameter.Name)
+
+                                paramArrayParameters.[index] <- isParamArrayParameter parameter
 
                         let optionalParameterCount =
                             optionalParameters
                             |> Array.rev
                             |> Seq.takeWhile id
                             |> Seq.length
+
+                        let paramArrayElementType =
+                            match List.tryLast parameterTypes with
+                            | Some(CliArray elementType) when
+                                paramArrayParameters.Length > 0
+                                && paramArrayParameters.[paramArrayParameters.Length
+                                                         - 1]
+                                ->
+                                Some elementType
+                            | _ -> None
 
                         let stableId =
                             String.concat "|" [
@@ -408,8 +494,12 @@ type internal ReferenceTypeIndex
                             Name = methodName
                             IsStatic = methodIsStatic
                             GenericArity = genericArity
+                            MetadataParameterNames =
+                                parameterNames
+                                |> Array.toList
                             ParameterTypes = parameterTypes
                             OptionalParameterCount = optionalParameterCount
+                            ParamArrayElementType = paramArrayElementType
                             ReturnType = returnType
                         }
             )
@@ -441,15 +531,23 @@ type internal ReferenceTypeIndex
             |> Seq.choose (fun fieldHandle ->
                 let fieldDefinition = metadata.GetFieldDefinition(fieldHandle)
                 let fieldName = metadata.GetString(fieldDefinition.Name)
-                let access = fieldDefinition.Attributes &&& FieldAttributes.FieldAccessMask
+
+                let access =
+                    fieldDefinition.Attributes
+                    &&& FieldAttributes.FieldAccessMask
 
                 let fieldIsStatic =
-                    (fieldDefinition.Attributes &&& FieldAttributes.Static) <> enum 0
+                    (fieldDefinition.Attributes
+                     &&& FieldAttributes.Static)
+                    <> enum 0
 
                 if
-                    fieldName <> name
-                    || access <> FieldAttributes.Public
-                    || fieldIsStatic <> isStatic
+                    fieldName
+                    <> name
+                    || access
+                       <> FieldAttributes.Public
+                    || fieldIsStatic
+                       <> isStatic
                 then
                     None
                 else
@@ -485,36 +583,54 @@ type internal ReferenceTypeIndex
     member _.Methods(declarationId: string, name: string, isStatic: bool) =
         let key = ReferenceMethodKey.create declarationId name isStatic
 
-        lock methodCache (fun () ->
-            match methodCache.TryGetValue(key) with
-            | true, candidates -> candidates
-            | false, _ ->
-                let candidates = loadMethods declarationId name isStatic
-                methodCache.Add(key, candidates)
-                candidates
-        )
+        lock
+            methodCache
+            (fun () ->
+                match methodCache.TryGetValue(key) with
+                | true, candidates -> candidates
+                | false, _ ->
+                    let candidates = loadMethods declarationId name isStatic
+                    methodCache.Add(key, candidates)
+                    candidates
+            )
 
     member _.Fields(declarationId: string, name: string, isStatic: bool) =
         let key = ReferenceFieldKey.create declarationId name isStatic
 
-        lock fieldCache (fun () ->
-            match fieldCache.TryGetValue(key) with
-            | true, candidates -> candidates
-            | false, _ ->
-                let candidates = loadFields declarationId name isStatic
-                fieldCache.Add(key, candidates)
-                candidates
-        )
+        lock
+            fieldCache
+            (fun () ->
+                match fieldCache.TryGetValue(key) with
+                | true, candidates -> candidates
+                | false, _ ->
+                    let candidates = loadFields declarationId name isStatic
+                    fieldCache.Add(key, candidates)
+                    candidates
+            )
 
     member _.BaseType(declarationId: string) =
-        lock baseTypeCache (fun () ->
-            match baseTypeCache.TryGetValue(declarationId) with
-            | true, baseType -> baseType
-            | false, _ ->
-                let baseType = loadBaseType declarationId
-                baseTypeCache.Add(declarationId, baseType)
-                baseType
-        )
+        lock
+            baseTypeCache
+            (fun () ->
+                match baseTypeCache.TryGetValue(declarationId) with
+                | true, baseType -> baseType
+                | false, _ ->
+                    let baseType = loadBaseType declarationId
+                    baseTypeCache.Add(declarationId, baseType)
+                    baseType
+            )
+
+    member _.Interfaces(declarationId: string) =
+        lock
+            interfaceCache
+            (fun () ->
+                match interfaceCache.TryGetValue(declarationId) with
+                | true, interfaces -> interfaces
+                | false, _ ->
+                    let interfaces = loadInterfaces declarationId
+                    interfaceCache.Add(declarationId, interfaces)
+                    interfaces
+            )
 
     member _.Resolve
         (
@@ -536,11 +652,22 @@ type internal ReferenceTypeIndex
                     Namespace = "Microsoft.FSharp.Core"
                     Name = "Unit"
                 }
+            | "", "exn" ->
+                Some {
+                    Namespace = "System"
+                    Name = "Exception"
+                }
             | "", "Async"
             | "Microsoft.FSharp.Control", "Async" ->
                 Some {
                     Namespace = "Microsoft.FSharp.Control"
                     Name = "FSharpAsync"
+                }
+            | "", "Choice"
+            | "Microsoft.FSharp.Core", "Choice" ->
+                Some {
+                    Namespace = "Microsoft.FSharp.Core"
+                    Name = "FSharpChoice"
                 }
             | _ -> None
 
@@ -623,7 +750,9 @@ type internal ReferenceTypeIndex
         let typeLocations = Dictionary<string, ResizeArray<ReferenceTypeLocation>>()
 
         let referenceIdentities = ResizeArray<string>()
-        let referenceContentHashes = Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+
+        let referenceContentHashes =
+            Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
 
         let addReferenceIdentity path =
             let normalizedPath = Path.GetFullPath(path)
@@ -639,6 +768,7 @@ type internal ReferenceTypeIndex
                     |> fun value -> value.ToLowerInvariant()
 
                 referenceContentHashes.Add(normalizedPath, contentHash)
+
                 referenceIdentities.Add(
                     normalizedPath
                     + "="
@@ -647,16 +777,15 @@ type internal ReferenceTypeIndex
 
                 contentHash
 
-        let addType
+        let addTypeWithArity
             declarationOwner
             assemblyName
             isValueType
             isFSharpDelegate
             (namespaceName: string)
-            (metadataName: string)
+            (name: string)
+            genericArity
             =
-            let name, genericArity = ReferenceTypeName.parseMetadataName metadataName
-
             if
                 not (String.IsNullOrEmpty(name))
                 && name
@@ -694,6 +823,25 @@ type internal ReferenceTypeIndex
                         let candidates = ResizeArray<ResolvedTypeName>()
                         candidates.Add(resolved)
                         bySimpleName.Add(key, candidates)
+
+        let addType
+            declarationOwner
+            assemblyName
+            isValueType
+            isFSharpDelegate
+            (namespaceName: string)
+            (metadataName: string)
+            =
+            let name, genericArity = ReferenceTypeName.parseMetadataName metadataName
+
+            addTypeWithArity
+                declarationOwner
+                assemblyName
+                isValueType
+                isFSharpDelegate
+                namespaceName
+                name
+                genericArity
 
         let forwardedAssemblyTypes =
             Dictionary<string, Dictionary<string * string, int * bool>>(
@@ -758,7 +906,8 @@ type internal ReferenceTypeIndex
                                 implementationTypeName definition.BaseType
                                 |> Option.exists (fun (namespaceName, typeName) ->
                                     namespaceName = "System"
-                                    && (typeName = "ValueType" || typeName = "Enum")
+                                    && (typeName = "ValueType"
+                                        || typeName = "Enum")
                                 )
 
                             forwardedTypes.TryAdd(
@@ -775,7 +924,10 @@ type internal ReferenceTypeIndex
             (facadeMetadata: MetadataReader)
             (exportedType: ExportedType)
             =
-            if exportedType.Implementation.Kind <> HandleKind.AssemblyReference then
+            if
+                exportedType.Implementation.Kind
+                <> HandleKind.AssemblyReference
+            then
                 ()
             else
                 let assemblyReference =
@@ -783,8 +935,7 @@ type internal ReferenceTypeIndex
                     |> AssemblyReferenceHandle.op_Explicit
                     |> facadeMetadata.GetAssemblyReference
 
-                let implementationAssemblyName =
-                    facadeMetadata.GetString(assemblyReference.Name)
+                let implementationAssemblyName = facadeMetadata.GetString(assemblyReference.Name)
 
                 let implementationPath =
                     Path.Combine(
@@ -801,8 +952,7 @@ type internal ReferenceTypeIndex
                     match forwardedTypes.TryGetValue((namespaceName, metadataName)) with
                     | false, _ -> ()
                     | true, (typeRow, isValueType) ->
-                        let name, genericArity =
-                            ReferenceTypeName.parseMetadataName metadataName
+                        let name, genericArity = ReferenceTypeName.parseMetadataName metadataName
 
                         let typeKey =
                             ReferenceTypeName.typeKey
@@ -822,15 +972,14 @@ type internal ReferenceTypeIndex
 
                             types.[typeKey] <- resolved
 
-                            let simpleKey =
-                                ReferenceTypeName.simpleKey name genericArity
+                            let simpleKey = ReferenceTypeName.simpleKey name genericArity
 
                             match bySimpleName.TryGetValue(simpleKey) with
                             | true, candidates ->
-                                for index = 0 to candidates.Count - 1 do
+                                for index = 0 to candidates.Count
+                                                 - 1 do
                                     if
-                                        candidates.[index].DeclarationId
-                                        = resolved.DeclarationId
+                                        candidates.[index].DeclarationId = resolved.DeclarationId
                                     then
                                         candidates.[index] <- resolved
                             | false, _ -> ()
@@ -988,52 +1137,76 @@ type internal ReferenceTypeIndex
                         )
                     | _ -> false
 
+                let rec metadataTypeName handle =
+                    let definition = metadata.GetTypeDefinition(handle)
+                    let metadataName = metadata.GetString(definition.Name)
+
+                    if definition.IsNested then
+                        let namespaceName, declaringName =
+                            metadataTypeName (definition.GetDeclaringType())
+
+                        namespaceName,
+                        declaringName
+                        + "+"
+                        + metadataName
+                    else
+                        metadata.GetString(definition.Namespace), metadataName
+
+                let indexedTypeName handle =
+                    let definition = metadata.GetTypeDefinition(handle)
+                    let namespaceName, metadataName = metadataTypeName handle
+
+                    if definition.IsNested then
+                        namespaceName,
+                        metadataName,
+                        (definition.GetGenericParameters()
+                         |> Seq.length)
+                    else
+                        let name, genericArity = ReferenceTypeName.parseMetadataName metadataName
+
+                        namespaceName, name, genericArity
+
                 for handle in metadata.TypeDefinitions do
                     let definition = metadata.GetTypeDefinition(handle)
+                    let namespaceName, name, genericArity = indexedTypeName handle
 
-                    if not definition.IsNested then
-                        let namespaceName = metadata.GetString(definition.Namespace)
-                        let metadataName = metadata.GetString(definition.Name)
+                    addTypeWithArity
+                        declarationOwner
+                        assemblyName
+                        (isValueType definition)
+                        (isFSharpDelegate definition)
+                        namespaceName
+                        name
+                        genericArity
 
-                        addType
-                            declarationOwner
-                            assemblyName
-                            (isValueType definition)
-                            (isFSharpDelegate definition)
-                            namespaceName
-                            metadataName
-
-                        let name, genericArity =
-                            ReferenceTypeName.parseMetadataName metadataName
-
-                        let key =
-                            ReferenceTypeName.typeKey
-                                {
-                                    Namespace = namespaceName
-                                    Name = name
-                                }
-                                genericArity
-
-                        match types.TryGetValue(key) with
-                        | false, _ -> ()
-                        | true, resolved ->
-                            let location = {
-                                ReferencePath = path
-                                TypeRow = MetadataTokens.GetRowNumber(handle)
-                                DeclaringType = {
-                                    DeclarationId = resolved.DeclarationId
-                                    AssemblyName = resolved.AssemblyName
-                                    TypeName = resolved.TypeName
-                                    IsValueType = resolved.IsValueType
-                                }
+                    let key =
+                        ReferenceTypeName.typeKey
+                            {
+                                Namespace = namespaceName
+                                Name = name
                             }
+                            genericArity
 
-                            match typeLocations.TryGetValue(resolved.DeclarationId) with
-                            | true, locations -> locations.Add(location)
-                            | false, _ ->
-                                let locations = ResizeArray<ReferenceTypeLocation>()
-                                locations.Add(location)
-                                typeLocations.Add(resolved.DeclarationId, locations)
+                    match types.TryGetValue(key) with
+                    | false, _ -> ()
+                    | true, resolved ->
+                        let location = {
+                            ReferencePath = path
+                            TypeRow = MetadataTokens.GetRowNumber(handle)
+                            DeclaringType = {
+                                DeclarationId = resolved.DeclarationId
+                                AssemblyName = resolved.AssemblyName
+                                TypeName = resolved.TypeName
+                                IsValueType = resolved.IsValueType
+                            }
+                        }
+
+                        match typeLocations.TryGetValue(resolved.DeclarationId) with
+                        | true, locations -> locations.Add(location)
+                        | false, _ ->
+                            let locations = ResizeArray<ReferenceTypeLocation>()
+                            locations.Add(location)
+                            typeLocations.Add(resolved.DeclarationId, locations)
 
                 for handle in metadata.ExportedTypes do
                     let exportedType = metadata.GetExportedType(handle)
