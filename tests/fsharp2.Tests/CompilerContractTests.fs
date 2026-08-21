@@ -1384,6 +1384,39 @@ module CompilerContractTests =
                         DiagnosticSeverity.Error
                         "Diagnostic policy must not suppress or demote an error."
 
+            testCase "pre-cancelled compilation returns Source cancellation and no artifacts"
+            <| fun _ ->
+                let request =
+                    createRequest
+                        (defaultSemanticOptions ())
+                        (defaultDiagnosticOptions ())
+                        (defaultEmissionOptions ())
+                        (defaultSigningOptions ())
+                        (emptyResources ())
+                        defaultRequestedArtifacts
+                        "module Tracer\nlet answer () = 42\n"
+
+                use cancellation = new CancellationTokenSource()
+                cancellation.Cancel()
+                let result = Compiler().Compile(request, cancellation.Token)
+
+                match result.Outcome with
+                | CompilationOutcome.Cancelled observed ->
+                    Expect.equal
+                        observed.RequestIdentity
+                        request.RequestIdentity
+                        "Cancellation must preserve the request identity."
+
+                    Expect.equal
+                        observed.ObservedPhase
+                        CompilationPhase.Source
+                        "Pre-cancellation must stop at Source."
+                | outcome -> failtestf "Expected a cancelled result, but received %A." outcome
+
+                Expect.isEmpty
+                    result.Artifacts
+                    "A cancelled compilation must not contain an artifact."
+
             testCase "direct CLI service and MSBuild routes only through Compiler.Compile"
             <| fun _ ->
                 let coreCalls = methodCalls typeof<Compiler>.Assembly.Location

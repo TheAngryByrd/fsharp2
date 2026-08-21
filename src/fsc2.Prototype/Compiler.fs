@@ -330,6 +330,31 @@ type Compiler() =
         Traces = ImmutableArray.Empty
     }
 
+    let cancelledResult request = {
+        Outcome =
+            CompilationOutcome.Cancelled {
+                RequestIdentity = request.RequestIdentity
+                ObservedPhase = CompilationPhase.Source
+            }
+        Diagnostics = ImmutableArray.Empty
+        Artifacts = ImmutableArray.Empty
+        Fingerprints = ImmutableArray.Empty
+        PhaseResults =
+            phases
+            |> Array.map (fun phase ->
+                if phase = CompilationPhase.Source then
+                    phaseResult
+                        phase
+                        PhaseStatus.Cancelled
+                        (Some request.RequestIdentity.Value)
+                        None
+                else
+                    phaseResult phase PhaseStatus.NotStarted None None
+            )
+            |> ImmutableArray.CreateRange
+        Traces = ImmutableArray.Empty
+    }
+
     let successPhaseResults request compilation compilationArtifacts =
         let source, syntax, resolved, typed, lowered = semanticFingerprints request
 
@@ -461,53 +486,53 @@ type Compiler() =
     }
 
     member _.Compile(request: CompilationRequest, cancellationToken: CancellationToken) =
-        cancellationToken
-        |> ignore
+        if cancellationToken.IsCancellationRequested then
+            cancelledResult request
+        else
+            match tryUnsupportedEnvelope request with
+            | Some failure -> unsupportedResult request failure
+            | None ->
+                match CompilationPipeline.compileRequest service request with
+                | Error diagnostic when diagnostic.Code = "FSC2C2002" ->
+                    unsupportedResult request {
+                        Code = diagnostic.Code
+                        Message = diagnostic.Message
+                        StoppingPhase = CompilationPhase.OptimizedCode
+                        UnsupportedValueIdentity = "semantic.optimization=enabled"
+                    }
+                | Error diagnostic ->
+                    let failedPhase =
+                        if diagnostic.Code = "FS0001" then
+                            CompilationPhase.TypedDeclarations
+                        elif diagnostic.Code = "FS0039" then
+                            CompilationPhase.ResolvedSymbols
+                        else
+                            CompilationPhase.Syntax
 
-        match tryUnsupportedEnvelope request with
-        | Some failure -> unsupportedResult request failure
-        | None ->
-            match CompilationPipeline.compileRequest service request with
-            | Error diagnostic when diagnostic.Code = "FSC2C2002" ->
-                unsupportedResult request {
-                    Code = diagnostic.Code
-                    Message = diagnostic.Message
-                    StoppingPhase = CompilationPhase.OptimizedCode
-                    UnsupportedValueIdentity = "semantic.optimization=enabled"
-                }
-            | Error diagnostic ->
-                let failedPhase =
-                    if diagnostic.Code = "FS0001" then
-                        CompilationPhase.TypedDeclarations
-                    elif diagnostic.Code = "FS0039" then
-                        CompilationPhase.ResolvedSymbols
-                    else
-                        CompilationPhase.Syntax
+                    let diagnostics =
+                        [| failureDiagnostic diagnostic |]
+                        |> DiagnosticPolicy.apply request.DiagnosticOptions
 
-                let diagnostics =
-                    [| failureDiagnostic diagnostic |]
-                    |> DiagnosticPolicy.apply request.DiagnosticOptions
+                    {
+                        Outcome = CompilationOutcome.Failed
+                        Diagnostics = diagnostics
+                        Artifacts = ImmutableArray.Empty
+                        Fingerprints = ImmutableArray.Empty
+                        PhaseResults = failurePhaseResults request failedPhase
+                        Traces = ImmutableArray.Empty
+                    }
+                | Ok compilation ->
+                    let compilationArtifacts = artifacts request compilation.Artifacts
+                    let phaseResults = successPhaseResults request compilation compilationArtifacts
 
-                {
-                    Outcome = CompilationOutcome.Failed
-                    Diagnostics = diagnostics
-                    Artifacts = ImmutableArray.Empty
-                    Fingerprints = ImmutableArray.Empty
-                    PhaseResults = failurePhaseResults request failedPhase
-                    Traces = ImmutableArray.Empty
-                }
-            | Ok compilation ->
-                let compilationArtifacts = artifacts request compilation.Artifacts
-                let phaseResults = successPhaseResults request compilation compilationArtifacts
-
-                {
-                    Outcome = CompilationOutcome.Succeeded
-                    Diagnostics = ImmutableArray.Empty
-                    Artifacts = compilationArtifacts
-                    Fingerprints =
-                        compilationArtifacts
-                        |> Seq.map _.Fingerprint
-                        |> ImmutableArray.CreateRange
-                    PhaseResults = phaseResults
-                    Traces = successTraces compilation
-                }
+                    {
+                        Outcome = CompilationOutcome.Succeeded
+                        Diagnostics = ImmutableArray.Empty
+                        Artifacts = compilationArtifacts
+                        Fingerprints =
+                            compilationArtifacts
+                            |> Seq.map _.Fingerprint
+                            |> ImmutableArray.CreateRange
+                        PhaseResults = phaseResults
+                        Traces = successTraces compilation
+                    }
