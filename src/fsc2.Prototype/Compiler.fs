@@ -56,6 +56,21 @@ type Compiler() =
     let failurePhaseResults request failedPhase =
         let sourceOutput = sourceFingerprint request
         let syntaxOutput = textFingerprint $"syntax|{sourceOutput}"
+
+        let resolvedOutput =
+            [
+                syntaxOutput
+
+                yield!
+                    request.TargetReferences
+                    |> Seq.collect (fun reference -> [
+                        reference.StableId.Value
+                        reference.ContentFingerprint
+                    ])
+            ]
+            |> String.concat "|"
+            |> textFingerprint
+
         let failedIndex = phases |> Array.findIndex ((=) failedPhase)
 
         phases
@@ -68,7 +83,7 @@ type Compiler() =
                     | CompilationPhase.Source -> Some request.RequestIdentity.Value
                     | CompilationPhase.Syntax -> Some sourceOutput
                     | CompilationPhase.ResolvedSymbols -> Some syntaxOutput
-                    | CompilationPhase.TypedDeclarations
+                    | CompilationPhase.TypedDeclarations -> Some resolvedOutput
                     | CompilationPhase.LoweredCode
                     | CompilationPhase.OptimizedCode
                     | CompilationPhase.SymbolicEmission
@@ -89,7 +104,12 @@ type Compiler() =
                         PhaseStatus.Completed
                         (Some sourceOutput)
                         (Some syntaxOutput)
-                | CompilationPhase.ResolvedSymbols
+                | CompilationPhase.ResolvedSymbols ->
+                    phaseResult
+                        phase
+                        PhaseStatus.Completed
+                        (Some syntaxOutput)
+                        (Some resolvedOutput)
                 | CompilationPhase.TypedDeclarations
                 | CompilationPhase.LoweredCode
                 | CompilationPhase.OptimizedCode
@@ -153,7 +173,9 @@ type Compiler() =
         match CompilationPipeline.compileRequest service request with
         | Error diagnostic ->
             let failedPhase =
-                if diagnostic.Code = "FS0039" then
+                if diagnostic.Code = "FS0001" then
+                    CompilationPhase.TypedDeclarations
+                elif diagnostic.Code = "FS0039" then
                     CompilationPhase.ResolvedSymbols
                 else
                     CompilationPhase.Syntax

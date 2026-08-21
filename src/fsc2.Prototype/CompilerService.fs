@@ -25201,32 +25201,55 @@ type internal CompilerService() =
                          :: keys)
                         tail
 
-        let rec checkAll typed keys remaining =
-            match remaining with
-            | [] -> Ok(List.rev typed, List.rev keys)
-            | resolvedModule :: tail ->
-                match check references (List.rev typed) resolvedModule with
-                | Error diagnostic -> Error diagnostic
-                | Ok(typedModule, key) ->
-                    checkAll
-                        (typedModule
-                         :: typed)
-                        (key
-                         :: keys)
-                        tail
+        let checkAll (resolvedCompilation: ResolvedCompilation) =
+            let rec checkModules (typed: TypedModule list) keys remaining =
+                match remaining with
+                | [] -> Ok(List.rev typed, List.rev keys)
+                | resolvedModule :: tail ->
+                    match check references (List.rev typed) resolvedModule with
+                    | Error diagnostic -> Error diagnostic
+                    | Ok(typedModule, key) ->
+                        checkModules
+                            (typedModule
+                             :: typed)
+                            (key
+                             :: keys)
+                            tail
 
-        let rec resolveAll visibleValues resolved remaining =
+            match checkModules [] [] resolvedCompilation.Modules with
+            | Error diagnostic -> Error diagnostic
+            | Ok(typedModules, keys) ->
+                let typedCompilation: TypedCompilation = {
+                    Modules = typedModules
+                    ContentFingerprint =
+                        resolvedCompilation.ContentFingerprint
+                        :: (typedModules
+                            |> List.collect (fun typedModule -> [
+                                typedModule.StableId
+                                typedModule.ExportFingerprint
+                            ]))
+                        |> Fingerprint.parts
+                }
+
+                Ok(
+                    typedCompilation,
+                    keys
+                )
+
+        let rec resolveAll visibleValues (resolved: ResolvedModule list) remaining =
             match remaining with
             | [] ->
                 let modules = List.rev resolved
 
-                Ok {
+                let resolvedCompilation: ResolvedCompilation = {
                     Modules = modules
                     ContentFingerprint =
                         modules
                         |> List.map _.ContentFingerprint
                         |> combine
                 }
+
+                Ok resolvedCompilation
             | (source, documentIndex, parsedModule) :: tail ->
                 match resolve source.Path documentIndex visibleValues parsedModule with
                 | Error diagnostic -> Error diagnostic
@@ -25248,12 +25271,12 @@ type internal CompilerService() =
             match resolveAll Map.empty [] parsedModules with
             | Error diagnostic -> Error diagnostic
             | Ok resolvedCompilation ->
-                match checkAll [] [] resolvedCompilation.Modules with
+                match checkAll resolvedCompilation with
                 | Error diagnostic -> Error diagnostic
-                | Ok(typedModules, checkKeys) ->
+                | Ok(typedCompilation, checkKeys) ->
                     let checkElapsedMicroseconds = elapsedMicroseconds checkStarted
                     let lowerStarted = Stopwatch.GetTimestamp()
-                    let symbolic, lowerKey = lower assemblyName typedModules
+                    let symbolic, lowerKey = lower assemblyName typedCompilation.Modules
                     let lowerElapsedMicroseconds = elapsedMicroseconds lowerStarted
 
                     let contentFingerprint =
@@ -25277,6 +25300,7 @@ type internal CompilerService() =
 
                     Ok {
                         ResolvedCompilation = resolvedCompilation
+                        TypedCompilation = typedCompilation
                         SymbolicAssembly = symbolic
                         QuerySchema = querySchema
                         NodeKind = if sources.Length = 1 then "source" else "project"

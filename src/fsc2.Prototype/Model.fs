@@ -1554,6 +1554,13 @@ type internal TypedModule = {
 
     override _.ToString() = "TypedModule"
 
+type internal TypedCompilation = {
+    Modules: TypedModule list
+    ContentFingerprint: string
+} with
+
+    override _.ToString() = "TypedCompilation"
+
 type internal SymbolicFieldReference = {
     DeclaringType: SymbolicDeclaringType
     Name: string
@@ -1832,6 +1839,7 @@ type internal SymbolicAssembly = {
 
 type internal CompilerQueryResult = {
     ResolvedCompilation: ResolvedCompilation
+    TypedCompilation: TypedCompilation
     SymbolicAssembly: SymbolicAssembly
     QuerySchema: int
     NodeKind: string

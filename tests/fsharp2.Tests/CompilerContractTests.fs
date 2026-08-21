@@ -586,4 +586,45 @@ module CompilerContractTests =
                         $"The {phase} phase must not start."
 
                 Expect.isEmpty result.Artifacts "A failed compilation must not contain an artifact."
+
+            testCase "type mismatch stops at TypedDeclarations"
+            <| fun _ ->
+                let result = compile "module Tracer\nlet answer: int = \"text\"\n"
+
+                Expect.equal result.Outcome CompilationOutcome.Failed "Compilation must fail."
+
+                let diagnostic =
+                    result.Diagnostics
+                    |> Seq.exactlyOne
+
+                Expect.equal diagnostic.Code "FS0001" "The diagnostic code must be FS0001."
+
+                let phaseStatus phase =
+                    result.PhaseResults
+                    |> Seq.find (fun phaseResult -> phaseResult.Phase = phase)
+                    |> _.Status
+
+                Expect.equal
+                    (phaseStatus CompilationPhase.ResolvedSymbols)
+                    PhaseStatus.Completed
+                    "Symbol resolution must complete."
+
+                Expect.equal
+                    (phaseStatus CompilationPhase.TypedDeclarations)
+                    PhaseStatus.Failed
+                    "Type checking must fail."
+
+                for phase in
+                    [
+                        CompilationPhase.LoweredCode
+                        CompilationPhase.OptimizedCode
+                        CompilationPhase.SymbolicEmission
+                        CompilationPhase.FinalLinking
+                    ] do
+                    Expect.equal
+                        (phaseStatus phase)
+                        PhaseStatus.NotStarted
+                        $"The {phase} phase must not start."
+
+                Expect.isEmpty result.Artifacts "A failed compilation must not contain an artifact."
         ]
