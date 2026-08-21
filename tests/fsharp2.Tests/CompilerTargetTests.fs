@@ -1079,7 +1079,7 @@ module CompilerTargetTests =
     [<Tests>]
     let tests =
         testList "Compiler Target Invocation" [
-            testCase "compiles a typed module with source-mapped debug output and executes it"
+            testCase "emits a library with source-mapped debug output and executes it"
             <| fun _ ->
                 let root =
                     Path.Combine(
@@ -1196,6 +1196,61 @@ module CompilerTargetTests =
                         (consumer.StandardOutput.Trim())
                         "42"
                         "a downstream process should execute the emitted method"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "emits an Oracle-compatible value declaration sequence point"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-value-sequence-point",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "First.fs")
+                    let outputPath = Path.Combine(root, "First.dll")
+                    let pdbPath = Path.Combine(root, "First.pdb")
+                    let responsePath = Path.Combine(root, "compile.rsp")
+
+                    File.WriteAllText(sourcePath, "module First\n\nlet first = 42\n")
+
+                    File.WriteAllLines(
+                        responsePath,
+                        [|
+                            "--target:library"
+                            "--deterministic+"
+                            "--debug:portable"
+                            $"--out:{outputPath}"
+                            $"--pdb:{pdbPath}"
+                            sourcePath
+                        |]
+                    )
+
+                    let result = invokeFsc2 root responsePath
+                    Expect.equal result.ExitCode 0 result.StandardError
+
+                    use pdbStream = File.OpenRead(pdbPath)
+                    use pdbProvider = MetadataReaderProvider.FromPortablePdbStream(pdbStream)
+                    let pdb = pdbProvider.GetMetadataReader()
+
+                    let sequencePoint =
+                        pdb
+                            .GetMethodDebugInformation(MetadataTokens.MethodDefinitionHandle(1))
+                            .GetSequencePoints()
+                        |> Seq.exactlyOne
+
+                    let range =
+                        $"{sequencePoint.StartLine}:{sequencePoint.StartColumn}-{sequencePoint.EndLine}:{sequencePoint.EndColumn}"
+
+                    Expect.equal
+                        range
+                        "3:1-3:15"
+                        "A value declaration sequence point must match the Compatibility Oracle."
                 finally
                     Directory.Delete(root, true)
 

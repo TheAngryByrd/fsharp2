@@ -969,7 +969,7 @@ module private InlineExpansion =
                 arguments
                 |> List.map (substitute replacements)
             )
-        | BoundInstanceMember(receiverName, memberName) as expression ->
+        | BoundInstanceMember(receiverName, memberName, _) as expression ->
             match
                 replacements
                 |> Map.tryFind receiverName
@@ -1198,10 +1198,274 @@ type internal CompilerService() =
                 parseCache.Add(key, parsed)
                 Ok(parsed, key)
 
+    let expressionChildren =
+        function
+        | NamedCallArgument(_, value, _) -> [ value ]
+        | MemberCall(_, _, arguments)
+        | StaticTypeMemberCall(_, _, arguments)
+        | GenericMemberCall(_, _, _, arguments)
+        | SequentialExpression arguments
+        | TupleExpression(arguments, _)
+        | StructTupleExpression(arguments, _)
+        | TypeConstruction(_, arguments, _) -> arguments
+        | MemberAssignment(_, _, value)
+        | ExplicitUpcastExpression(value, _)
+        | LocalAssignment(_, value)
+        | BooleanNegationExpression(value, _)
+        | ComputationExpression(_, value, _)
+        | ComputationDoExpression(value, _)
+        | UnitLambdaExpression(value, _) -> [ value ]
+        | FunctionApplication(functionExpression, argumentExpression)
+        | EqualityExpression(functionExpression, argumentExpression, _)
+        | LetExpression(_, _, _, functionExpression, argumentExpression, _, _)
+        | ComputationBindingExpression(_, functionExpression, argumentExpression, _, _)
+        | WhileExpression(functionExpression, argumentExpression, _, _, _) ->
+            [
+                functionExpression
+                argumentExpression
+            ]
+        | ExpressionMemberCall(receiver, _, arguments) -> receiver :: arguments
+        | ExpressionMemberAccess(receiver, _) -> [ receiver ]
+        | ConditionalExpression(condition, ifTrue, ifFalse, _, _, _) ->
+            [
+                condition
+                ifTrue
+                ifFalse
+            ]
+        | SequentialValueExpression expressions -> expressions |> List.map fst
+        | TryWithExpression(body, _, handler, _, _, _, _, _)
+        | TryFinallyExpression(body, handler, _, _, _, _, _) ->
+            [
+                body
+                handler
+            ]
+        | MatchExpression(input, clauses, _, _) ->
+            input
+            :: (clauses
+                |> List.collect (fun (_, guard, body, _) -> [
+                    yield!
+                        guard
+                        |> Option.map fst
+                        |> Option.toList
+
+                    body
+                ]))
+        | ForExpression(_, sequence, body, _, _, _, _) ->
+            [
+                sequence
+                body
+            ]
+        | LambdaExpression(_, _, body, _) -> [ body ]
+        | BindReturnFromComputation(_, bindings, _, returnFrom, _) ->
+            (bindings
+             |> List.map snd)
+            @ [ returnFrom ]
+        | ObjectExpression(_, constructorArguments, members, _) ->
+            constructorArguments
+            @ (members
+               |> List.map _.Body)
+        | IntegerLiteral _
+        | UnitLiteral
+        | BooleanLiteral _
+        | StringLiteral _
+        | NullLiteral
+        | ValueReference _
+        | AddressOfExpression _
+        | UnitApplication _
+        | BoundInstanceMember _ -> []
+
+    let rec matchPatternBindings =
+        function
+        | ParsedTypeTestPattern(_, name, _)
+        | ParsedNamedPattern(name, _) -> Set.singleton name
+        | ParsedTuplePattern(elements, _) ->
+            elements
+            |> List.fold (fun bindings element ->
+                Set.union bindings (matchPatternBindings element)
+            ) Set.empty
+        | ParsedUnionCasePattern(_, argument, _) -> matchPatternBindings argument
+        | ParsedNullPattern _
+        | ParsedUnitPattern _ -> Set.empty
+
+    let rec tryFindLaterModuleReference laterModuleNames boundNames expression =
+        let tryFindWith bindings expressions =
+            expressions
+            |> List.tryPick (tryFindLaterModuleReference laterModuleNames bindings)
+
+        match expression with
+        | BoundInstanceMember(receiverName, _, receiverRange) when
+            laterModuleNames
+            |> Set.contains receiverName
+            && (boundNames
+                |> Set.contains receiverName
+                |> not)
+            ->
+            Some(receiverName, receiverRange)
+        | LetExpression(bindingName, _, _, value, body, _, _) ->
+            match tryFindLaterModuleReference laterModuleNames boundNames value with
+            | Some reference -> Some reference
+            | None ->
+                tryFindLaterModuleReference
+                    laterModuleNames
+                    (boundNames
+                     |> Set.add bindingName)
+                    body
+        | LambdaExpression(parameterName, _, body, _) ->
+            tryFindLaterModuleReference
+                laterModuleNames
+                (boundNames
+                 |> Set.add parameterName)
+                body
+        | ComputationBindingExpression(bindingName, input, body, _, _) ->
+            match tryFindLaterModuleReference laterModuleNames boundNames input with
+            | Some reference -> Some reference
+            | None ->
+                tryFindLaterModuleReference
+                    laterModuleNames
+                    (boundNames
+                     |> Set.add bindingName)
+                    body
+        | ForExpression(bindingName, sequence, body, _, _, _, _) ->
+            match tryFindLaterModuleReference laterModuleNames boundNames sequence with
+            | Some reference -> Some reference
+            | None ->
+                tryFindLaterModuleReference
+                    laterModuleNames
+                    (boundNames
+                     |> Set.add bindingName)
+                    body
+        | TryWithExpression(body, bindingName, handler, _, _, _, _, _) ->
+            match tryFindLaterModuleReference laterModuleNames boundNames body with
+            | Some reference -> Some reference
+            | None ->
+                tryFindLaterModuleReference
+                    laterModuleNames
+                    (boundNames
+                     |> Set.add bindingName)
+                    handler
+        | MatchExpression(input, clauses, _, _) ->
+            match tryFindLaterModuleReference laterModuleNames boundNames input with
+            | Some reference -> Some reference
+            | None ->
+                clauses
+                |> List.tryPick (fun (pattern, guard, body, _) ->
+                    let clauseBindings =
+                        Set.union boundNames (matchPatternBindings pattern)
+
+                    match
+                        guard
+                        |> Option.bind (fun (guardExpression, _) ->
+                            tryFindLaterModuleReference
+                                laterModuleNames
+                                clauseBindings
+                                guardExpression
+                        )
+                    with
+                    | Some reference -> Some reference
+                    | None ->
+                        tryFindLaterModuleReference
+                            laterModuleNames
+                            clauseBindings
+                            body
+                )
+        | BindReturnFromComputation(_, bindings, _, returnFrom, _) ->
+            let rec tryFindBindings currentBindings =
+                function
+                | [] ->
+                    tryFindLaterModuleReference
+                        laterModuleNames
+                        currentBindings
+                        returnFrom
+                | (bindingName, input) :: remaining ->
+                    match
+                        tryFindLaterModuleReference laterModuleNames currentBindings input
+                    with
+                    | Some reference -> Some reference
+                    | None ->
+                        tryFindBindings
+                            (currentBindings
+                             |> Set.add bindingName)
+                            remaining
+
+            tryFindBindings boundNames bindings
+        | ObjectExpression(_, constructorArguments, members, _) ->
+            match tryFindWith boundNames constructorArguments with
+            | Some reference -> Some reference
+            | None ->
+                members
+                |> List.tryPick (fun memberDeclaration ->
+                    let memberBindings =
+                        memberDeclaration.ParameterNames
+                        |> List.fold (fun bindings parameterName ->
+                            bindings
+                            |> Set.add parameterName
+                        ) (boundNames
+                           |> Set.add memberDeclaration.ReceiverName)
+
+                    tryFindLaterModuleReference
+                        laterModuleNames
+                        memberBindings
+                        memberDeclaration.Body
+                )
+        | _ ->
+            expression
+            |> expressionChildren
+            |> tryFindWith boundNames
+
+    let editDistance (left: string) (right: string) =
+        let left = left.ToLowerInvariant()
+        let right = right.ToLowerInvariant()
+        let distances = Array2D.zeroCreate<int> (left.Length + 1) (right.Length + 1)
+
+        for leftIndex = 0 to left.Length do
+            distances.[leftIndex, 0] <- leftIndex
+
+        for rightIndex = 0 to right.Length do
+            distances.[0, rightIndex] <- rightIndex
+
+        for leftIndex = 1 to left.Length do
+            for rightIndex = 1 to right.Length do
+                let substitutionCost =
+                    if left.[leftIndex - 1] = right.[rightIndex - 1] then 0 else 1
+
+                distances.[leftIndex, rightIndex] <-
+                    min
+                        (min
+                            (distances.[leftIndex - 1, rightIndex] + 1)
+                            (distances.[leftIndex, rightIndex - 1] + 1))
+                        (distances.[leftIndex - 1, rightIndex - 1] + substitutionCost)
+
+        distances.[left.Length, right.Length]
+
+    let undefinedModuleMessage (references: ReferenceTypeIndex) (name: string) =
+        let message = $"The value, namespace, type or module '{name}' is not defined."
+        let maximumDistance = max 1 (name.Length / 2)
+
+        let suggestions =
+            references.SourceSuggestionNames
+            |> List.mapi (fun index candidate ->
+                candidate, editDistance name candidate, index
+            )
+            |> List.filter (fun (_, distance, _) -> distance <= maximumDistance)
+            |> List.sortBy (fun (_, distance, index) -> distance, index)
+            |> List.truncate 3
+            |> List.map (fun (candidate, _, _) -> candidate)
+
+        match suggestions with
+        | [] -> message
+        | _ ->
+            message
+            + " Maybe you want one of the following:"
+            + (suggestions
+               |> List.map (fun suggestion -> "\u001d   " + suggestion)
+               |> String.concat String.Empty)
+
     let resolve
+        (references: ReferenceTypeIndex)
         (sourcePath: string)
         (documentIndex: int)
         (precedingValues: Map<string, string>)
+        (laterModuleNames: Set<string>)
         (parsed: ParsedModule)
         =
         let declarationIdentity name suffix =
@@ -1223,8 +1487,25 @@ type internal CompilerService() =
                         |> Map.containsKey name
                         |> not
                         ->
-                        Some(name, range)
-                    | ParsedMethod _
+                        Some(name, range, $"The value or constructor '{name}' is not defined.")
+                    | ParsedMethod methodDeclaration ->
+                        let boundNames =
+                            visibleValues
+                            |> Map.keys
+                            |> Set.ofSeq
+
+                        let boundNames =
+                            match methodDeclaration.Kind with
+                            | ParsedMethodKind.EntryPoint parameterName ->
+                                boundNames
+                                |> Set.add parameterName
+                            | ParsedMethodKind.Regular -> boundNames
+
+                        methodDeclaration.Body
+                        |> tryFindLaterModuleReference laterModuleNames boundNames
+                        |> Option.map (fun (name, range) ->
+                            name, range, undefinedModuleMessage references name
+                        )
                     | ParsedLiteralField _
                     | ParsedNestedModule _
                     | ParsedTypeAbbreviation _
@@ -1233,10 +1514,10 @@ type internal CompilerService() =
                     | ParsedStructType _ -> None
 
                 match unresolvedValue with
-                | Some(name, range) ->
+                | Some(_, range, message) ->
                     Error {
                         Code = "FS0039"
-                        Message = $"The value or constructor '{name}' is not defined."
+                        Message = message
                         Path = Some sourcePath
                         Range = Some range
                     }
@@ -2822,7 +3103,11 @@ type internal CompilerService() =
                                 Body = TypedIntegerLiteral value
                                 EmitHiddenEntrySequencePoint = false
                                 ExportFingerprint = exportFingerprint
-                                Range = declaration.BodyRange
+                                Range =
+                                    if declaration.IsUnitFunction then
+                                        declaration.BodyRange
+                                    else
+                                        declaration.Range
                             }
                         )
                     | None, StringLiteral _ ->
@@ -5174,9 +5459,15 @@ type internal CompilerService() =
                                     |> List.isEmpty
                                     |> not
 
-                                let resolveSourceModuleMethod name argumentTypes expectedReturnType range =
+                                let resolveSourceModuleMethodCandidates
+                                    name
+                                    (methods: seq<CheckedSourceModuleMethod>)
+                                    argumentTypes
+                                    expectedReturnType
+                                    range
+                                    =
                                     let candidates =
-                                        visibleSourceModuleMethods name
+                                        methods
                                         |> Seq.choose (fun sourceMethod ->
                                             tryInferStaticMethod
                                                 {
@@ -5210,6 +5501,44 @@ type internal CompilerService() =
                                                 range
                                                 $"the callable value '{name}' is ambiguous"
                                         )
+
+                                let resolveSourceModuleMethod name argumentTypes expectedReturnType range =
+                                    resolveSourceModuleMethodCandidates
+                                        name
+                                        (visibleSourceModuleMethods name)
+                                        argumentTypes
+                                        expectedReturnType
+                                        range
+
+                                let resolveQualifiedSourceModuleMethod
+                                    moduleName
+                                    name
+                                    argumentTypes
+                                    expectedReturnType
+                                    range
+                                    =
+                                    let methods =
+                                        checkedSourceModuleMethods
+                                        |> Seq.filter (fun sourceMethod ->
+                                            let qualifiedModuleName =
+                                                if String.IsNullOrEmpty(sourceMethod.Namespace) then
+                                                    sourceMethod.ModuleName
+                                                else
+                                                    sourceMethod.Namespace
+                                                    + "."
+                                                    + sourceMethod.ModuleName
+
+                                            sourceMethod.Declaration.Name = name
+                                            && (sourceMethod.ModuleName = moduleName
+                                                || qualifiedModuleName = moduleName)
+                                        )
+
+                                    resolveSourceModuleMethodCandidates
+                                        name
+                                        methods
+                                        argumentTypes
+                                        expectedReturnType
+                                        range
 
                                 let tryFormattedArgumentTypes (formatText: string) =
                                     let rec skipSpecifierOptions index =
@@ -9022,14 +9351,36 @@ type internal CompilerService() =
                                             diagnostic
                                                 methodDeclaration.BodyRange
                                                 "this expression is not an F# function"
-                                    | BoundInstanceMember(receiverName, memberName) ->
-                                        typeStaticExpression
-                                            localBindings
-                                            nextLocalIndex
-                                            (ExpressionMemberAccess(
-                                                ValueReference receiverName,
-                                                memberName
-                                            ))
+                                    | BoundInstanceMember(receiverName, memberName, receiverRange) ->
+                                        match
+                                            if
+                                                isBoundExpressionName receiverName
+                                                || hasVisibleSourceModuleMethod receiverName
+                                            then
+                                                None
+                                            else
+                                                resolveQualifiedSourceModuleMethod
+                                                    receiverName
+                                                    memberName
+                                                    []
+                                                    None
+                                                    receiverRange
+                                        with
+                                        | Some result ->
+                                            result
+                                            |> Result.map (fun (target, genericArguments, returnType) ->
+                                                TypedStaticMethodCall(target, genericArguments, []),
+                                                returnType,
+                                                nextLocalIndex
+                                            )
+                                        | None ->
+                                            typeStaticExpression
+                                                localBindings
+                                                nextLocalIndex
+                                                (ExpressionMemberAccess(
+                                                    ValueReference receiverName,
+                                                    memberName
+                                                ))
                                     | ExpressionMemberAccess(receiver, memberName) ->
                                         match
                                             typeStaticExpression
@@ -12272,7 +12623,7 @@ type internal CompilerService() =
                                                     diagnostic
                                                         methodDeclaration.BodyRange
                                                         $"the instance member call '{memberName}' is ambiguous"
-                                | BoundInstanceMember(receiverName, memberName) ->
+                                | BoundInstanceMember(receiverName, memberName, _) ->
                                     typeBoundInstanceMember receiverName memberName
                                 | ComputationExpression("async",
                                                         LetExpression(keepGoingName,
@@ -25755,7 +26106,11 @@ type internal CompilerService() =
 
                 Ok(typedCompilation, keys)
 
-        let rec resolveAll visibleValues (resolved: ResolvedModule list) remaining =
+        let rec resolveAll
+            visibleValues
+            (resolved: ResolvedModule list)
+            (remaining: (SourceInput * int * ParsedModule) list)
+            =
             match remaining with
             | [] ->
                 let modules = List.rev resolved
@@ -25770,7 +26125,20 @@ type internal CompilerService() =
 
                 Ok resolvedCompilation
             | (source, documentIndex, parsedModule) :: tail ->
-                match resolve source.Path documentIndex visibleValues parsedModule with
+                let laterModuleNames =
+                    tail
+                    |> List.map (fun (_, _, laterModule) -> laterModule.Name)
+                    |> Set.ofList
+
+                match
+                    resolve
+                        references
+                        source.Path
+                        documentIndex
+                        visibleValues
+                        laterModuleNames
+                        parsedModule
+                with
                 | Error diagnostic -> Error diagnostic
                 | Ok resolvedModule ->
                     resolveAll

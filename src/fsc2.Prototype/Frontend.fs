@@ -4233,7 +4233,11 @@ module internal Frontend =
                                 }
 
                                 parsePostfixMemberCalls
-                                    (BoundInstanceMember(receiverName, memberPath.Head))
+                                    (BoundInstanceMember(
+                                        receiverName,
+                                        memberPath.Head,
+                                        expressionToken.Range
+                                    ))
                                     range
                             | _ ->
                                 let memberToken = input.[index - 1]
@@ -4269,9 +4273,19 @@ module internal Frontend =
                             let token = current ()
 
                             if
-                                token.Kind = LeftParenthesis
-                                && (token.Range.Start.Line = expressionRange.End.Line
-                                    || token.Range.Start.Column > expressionToken.Range.Start.Column)
+                                (
+                                    match token.Kind with
+                                    | LeftParenthesis ->
+                                        token.Range.Start.Line = expressionRange.End.Line
+                                        || token.Range.Start.Column
+                                           > expressionToken.Range.Start.Column
+                                    | Identifier _
+                                    | Integer _
+                                    | StringLiteralToken _
+                                    | NullKeyword ->
+                                        token.Range.Start.Line = expressionRange.End.Line
+                                    | _ -> false
+                                )
                             then
                                 parseExpression ()
                                 |> Result.bind (fun (nextArgument, nextArgumentRange) ->
@@ -4315,9 +4329,19 @@ module internal Frontend =
                             let token = current ()
 
                             if
-                                token.Kind = LeftParenthesis
-                                && (token.Range.Start.Line = expressionRange.End.Line
-                                    || token.Range.Start.Column > expressionToken.Range.Start.Column)
+                                (
+                                    match token.Kind with
+                                    | LeftParenthesis ->
+                                        token.Range.Start.Line = expressionRange.End.Line
+                                        || token.Range.Start.Column
+                                           > expressionToken.Range.Start.Column
+                                    | Identifier _
+                                    | Integer _
+                                    | StringLiteralToken _
+                                    | NullKeyword ->
+                                        token.Range.Start.Line = expressionRange.End.Line
+                                    | _ -> false
+                                )
                             then
                                 parseExpression ()
                                 |> Result.bind (fun (nextArgument, nextArgumentRange) ->
@@ -4530,7 +4554,7 @@ module internal Frontend =
                     | _ ->
                         match expected LetKeyword "expected 'let'" with
                         | Error error -> Error error
-                        | Ok _ ->
+                        | Ok letToken ->
                             let declarationToken = consume ()
 
                             match declarationToken.Kind with
@@ -4545,7 +4569,7 @@ module internal Frontend =
                                     | Ok _ ->
                                         finishDeclaration
                                             moduleName
-                                            declarationToken
+                                            letToken
                                             declarationName
                                             true
                                             None
@@ -4559,7 +4583,7 @@ module internal Frontend =
                                     | Identifier "int" ->
                                         finishDeclaration
                                             moduleName
-                                            declarationToken
+                                            letToken
                                             declarationName
                                             false
                                             (Some ParsedInt32)
@@ -4573,7 +4597,7 @@ module internal Frontend =
                                 | Equals ->
                                     finishDeclaration
                                         moduleName
-                                        declarationToken
+                                        letToken
                                         declarationName
                                         false
                                         None

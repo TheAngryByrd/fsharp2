@@ -30,6 +30,62 @@ module CompilerContractTests =
         |> Convert.ToHexString
         |> _.ToLowerInvariant()
 
+    let private referenceTypeAssembly attributes namespaceName typeName =
+        let metadata = MetadataBuilder()
+        let firstField = MetadataTokens.FieldDefinitionHandle(1)
+        let firstMethod = MetadataTokens.MethodDefinitionHandle(1)
+
+        metadata.AddModule(
+            0,
+            metadata.GetOrAddString("SuggestionReference.dll"),
+            metadata.GetOrAddGuid(Guid.NewGuid()),
+            Unchecked.defaultof<GuidHandle>,
+            Unchecked.defaultof<GuidHandle>
+        )
+        |> ignore
+
+        metadata.AddAssembly(
+            metadata.GetOrAddString("SuggestionReference"),
+            System.Version(1, 0, 0, 0),
+            Unchecked.defaultof<StringHandle>,
+            Unchecked.defaultof<BlobHandle>,
+            enum<AssemblyFlags> 0,
+            AssemblyHashAlgorithm.None
+        )
+        |> ignore
+
+        metadata.AddTypeDefinition(
+            TypeAttributes.NotPublic,
+            Unchecked.defaultof<StringHandle>,
+            metadata.GetOrAddString("<Module>"),
+            Unchecked.defaultof<EntityHandle>,
+            firstField,
+            firstMethod
+        )
+        |> ignore
+
+        metadata.AddTypeDefinition(
+            attributes,
+            metadata.GetOrAddString(namespaceName),
+            metadata.GetOrAddString(typeName),
+            Unchecked.defaultof<EntityHandle>,
+            firstField,
+            firstMethod
+        )
+        |> ignore
+
+        let image = BlobBuilder()
+
+        ManagedPEBuilder(
+            PEHeaderBuilder.CreateLibraryHeader(),
+            MetadataRootBuilder(metadata),
+            BlobBuilder()
+        )
+            .Serialize(image)
+        |> ignore
+
+        image.ToArray()
+
     let private metadataTypeName (metadata: MetadataReader) (handle: EntityHandle) =
         let fullName namespaceName name =
             if String.IsNullOrEmpty(namespaceName) then
@@ -351,9 +407,66 @@ module CompilerContractTests =
     let private compile sourceText =
         compileWithOptimization OptimizationMode.Disabled sourceText
 
+    let private compileSourcesWithReferences
+        (sources: (string * string * string) array)
+        (additionalReferences: TargetReferenceSnapshot array)
+        =
+        let _, _, firstSourceText = Array.head sources
+
+        let baseline =
+            createRequest
+                (defaultSemanticOptions ())
+                (defaultDiagnosticOptions ())
+                (EmissionOptions.Create(
+                    true,
+                    false,
+                    DebugFormat.None,
+                    [||],
+                    sources
+                    |> Array.map (fun (_, logicalPath, _) -> logicalPath),
+                    [||]
+                ))
+                (defaultSigningOptions ())
+                (emptyResources ())
+                defaultRequestedArtifacts
+                firstSourceText
+
+        let source stableId logicalPath (text: string) =
+            let content = Text.Encoding.UTF8.GetBytes(text)
+
+            SourceSnapshot.Create(
+                StableIdentity.create stableId,
+                logicalPath,
+                text,
+                fingerprint content
+            )
+
+        CompilationRequest.Create(
+            baseline.ContractVersion,
+            baseline.RequestIdentity,
+            baseline.AssemblyIdentity,
+            sources
+            |> Array.map (fun (stableId, logicalPath, text) -> source stableId logicalPath text),
+            Array.append
+                (baseline.TargetReferences
+                 |> Seq.toArray)
+                additionalReferences,
+            baseline.SemanticOptions,
+            baseline.DiagnosticOptions,
+            baseline.EmissionOptions,
+            baseline.SigningOptions,
+            baseline.Resources,
+            baseline.RequestedArtifacts
+            |> Seq.toArray
+        )
+        |> compileRequest
+
+    let private compileSources sources =
+        compileSourcesWithReferences sources [||]
+
     [<Tests>]
     let tests =
-        testList "Compiler Contract" [
+        testList "CompilerContract" [
             testCase "request normalization defensively copies every collection and byte input"
             <| fun _ ->
                 let sourceIdentity = StableIdentity.create "source:one"
@@ -997,6 +1110,294 @@ let main _ =
                     result.Outcome
                     CompilationOutcome.Succeeded
                     $"Ordered value and entry-point declarations must compile. Diagnostics:{Environment.NewLine}{diagnostics}"
+
+            testCase "ordered source modules resolve through the public contract"
+            <| fun _ ->
+                let firstText =
+                    """module First
+
+let first = 42
+"""
+
+                let programText =
+                    """module Program
+
+[<EntryPoint>]
+let main _ =
+    printfn "%d" First.first
+    0
+"""
+
+                let result =
+                    compileSources [|
+                        "source:first", "First.fs", firstText
+                        "source:program", "Program.fs", programText
+                    |]
+
+                let diagnostics =
+                    result.Diagnostics
+                    |> Seq.map (fun diagnostic -> diagnostic.Message)
+                    |> String.concat Environment.NewLine
+
+                Expect.equal
+                    result.Outcome
+                    CompilationOutcome.Succeeded
+                    $"Ordered source modules must compile. Diagnostics:{Environment.NewLine}{diagnostics}"
+
+            testCase "later source modules are unresolved through the public contract"
+            <| fun _ ->
+                let programText =
+                    """module Program
+
+[<EntryPoint>]
+let main _ =
+    printfn "%d" First.first
+    0
+"""
+
+                let firstText =
+                    """module First
+
+let first = 42
+"""
+
+                let baseline =
+                    createRequest
+                        (defaultSemanticOptions ())
+                        (defaultDiagnosticOptions ())
+                        (EmissionOptions.Create(
+                            true,
+                            false,
+                            DebugFormat.None,
+                            [||],
+                            [|
+                                "Program.fs"
+                                "First.fs"
+                            |],
+                            [||]
+                        ))
+                        (defaultSigningOptions ())
+                        (emptyResources ())
+                        defaultRequestedArtifacts
+                        programText
+
+                let source stableId logicalPath (text: string) =
+                    let content = Text.Encoding.UTF8.GetBytes(text)
+
+                    SourceSnapshot.Create(
+                        StableIdentity.create stableId,
+                        logicalPath,
+                        text,
+                        fingerprint content
+                    )
+
+                let request =
+                    CompilationRequest.Create(
+                        baseline.ContractVersion,
+                        baseline.RequestIdentity,
+                        baseline.AssemblyIdentity,
+                        [|
+                            source "source:program" "Program.fs" programText
+                            source "source:first" "First.fs" firstText
+                        |],
+                        baseline.TargetReferences
+                        |> Seq.toArray,
+                        baseline.SemanticOptions,
+                        baseline.DiagnosticOptions,
+                        baseline.EmissionOptions,
+                        baseline.SigningOptions,
+                        baseline.Resources,
+                        baseline.RequestedArtifacts
+                        |> Seq.toArray
+                    )
+
+                let result = compileRequest request
+                Expect.equal result.Outcome CompilationOutcome.Failed "Compilation must fail."
+
+                let diagnostic =
+                    result.Diagnostics
+                    |> Seq.exactlyOne
+
+                Expect.equal
+                    diagnostic.Code
+                    "FS0039"
+                    "The diagnostic code must match the Compatibility Oracle."
+
+                Expect.equal
+                    diagnostic.Message
+                    "The value, namespace, type or module 'First' is not defined. Maybe you want one of the following:\u001d   fst\u001d   List\u001d   list"
+                    "The diagnostic message must match the Compatibility Oracle."
+
+                Expect.equal
+                    diagnostic.LogicalPath
+                    (Some "Program.fs")
+                    "The diagnostic path must identify Program.fs."
+
+                let range =
+                    diagnostic.Range
+                    |> Option.defaultWith (fun () ->
+                        failtest "The diagnostic must have a source range."
+                    )
+
+                Expect.equal range.Start.Line 5 "The diagnostic must start on the qualified access."
+                Expect.equal range.Start.Column 18 "The diagnostic must start at First."
+                Expect.equal range.End.Line 5 "The diagnostic must end on the qualified access."
+                Expect.equal range.End.Column 23 "The diagnostic must include First."
+
+            testCase "later-module suggestions come from target references"
+            <| fun _ ->
+                let programText =
+                    """module Program
+
+[<EntryPoint>]
+let main _ =
+    printfn "%d" Prinntf.first
+    0
+"""
+
+                let laterModuleText =
+                    """module Prinntf
+
+let first = 42
+"""
+
+                let result =
+                    compileSources [|
+                        "source:program", "Program.fs", programText
+                        "source:prinntf", "Prinntf.fs", laterModuleText
+                    |]
+
+                Expect.equal result.Outcome CompilationOutcome.Failed "Compilation must fail."
+
+                let diagnostic =
+                    result.Diagnostics
+                    |> Seq.exactlyOne
+
+                Expect.equal diagnostic.Code "FS0039" "The later module must be unresolved."
+
+                Expect.stringContains
+                    diagnostic.Message
+                    "printf"
+                    "Suggestions must include a nearby source name from the target references."
+
+            testCase "later-module suggestions exclude inaccessible reference types"
+            <| fun _ ->
+                let programText =
+                    """module Program
+
+[<EntryPoint>]
+let main _ =
+    printfn "%d" HiddenTargte.first
+    0
+"""
+
+                let laterModuleText =
+                    """module HiddenTargte
+
+let first = 42
+"""
+
+                let referenceImage =
+                    referenceTypeAssembly TypeAttributes.NotPublic "Suggestion" "HiddenTargetModule"
+
+                let result =
+                    compileSourcesWithReferences [|
+                        "source:program", "Program.fs", programText
+                        "source:hidden-target", "HiddenTargte.fs", laterModuleText
+                    |] [|
+                        TargetReferenceSnapshot.Create(
+                            StableIdentity.create "reference:suggestion",
+                            "SuggestionReference.dll",
+                            referenceImage,
+                            fingerprint referenceImage
+                        )
+                    |]
+
+                Expect.equal result.Outcome CompilationOutcome.Failed "Compilation must fail."
+
+                let diagnostic =
+                    result.Diagnostics
+                    |> Seq.exactlyOne
+
+                Expect.equal diagnostic.Code "FS0039" "The later module must be unresolved."
+
+                Expect.isFalse
+                    (diagnostic.Message.Contains("\u001d   HiddenTarget", StringComparison.Ordinal))
+                    "Suggestions must exclude inaccessible reference types."
+
+            testCase "bound receivers are not treated as later source modules"
+            <| fun _ ->
+                let programText =
+                    """module Program
+
+[<EntryPoint>]
+let main First =
+    First.Length
+"""
+
+                let laterModuleText =
+                    """module First
+
+let first = 42
+"""
+
+                let result =
+                    compileSources [|
+                        "source:program", "Program.fs", programText
+                        "source:first", "First.fs", laterModuleText
+                    |]
+
+                Expect.equal result.Outcome CompilationOutcome.Failed "Compilation must fail."
+
+                let diagnostic =
+                    result.Diagnostics
+                    |> Seq.exactlyOne
+
+                Expect.notEqual
+                    diagnostic.Code
+                    "FS0039"
+                    "A bound receiver must not be diagnosed as a later source module."
+
+                Expect.stringContains
+                    diagnostic.Message
+                    "no readable field or property 'Length'"
+                    "Typing must continue with the bound receiver."
+
+            testCase "preceding values are not treated as later source modules"
+            <| fun _ ->
+                let programText =
+                    """module Program
+
+let First = "value"
+
+[<EntryPoint>]
+let main _ =
+    printfn "%d" First.Length
+    0
+"""
+
+                let laterModuleText =
+                    """module First
+
+let first = 42
+"""
+
+                let result =
+                    compileSources [|
+                        "source:program", "Program.fs", programText
+                        "source:first", "First.fs", laterModuleText
+                    |]
+
+                Expect.equal result.Outcome CompilationOutcome.Failed "Compilation must fail."
+
+                let diagnostic =
+                    result.Diagnostics
+                    |> Seq.exactlyOne
+
+                Expect.notEqual
+                    diagnostic.Code
+                    "FS0039"
+                    "A preceding value must not be diagnosed as a later source module."
 
             testCase "enabled optimization stops at OptimizedCode"
             <| fun _ ->

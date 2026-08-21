@@ -210,7 +210,8 @@ type internal ParsedExpression =
         memberName: string *
         typeArguments: ParsedTypeExpression list *
         arguments: ParsedExpression list
-    | BoundInstanceMember of receiverName: string * memberName: string
+    | BoundInstanceMember of
+        receiverName: string * memberName: string * receiverRange: SourceRange
     | MemberAssignment of rootName: string * memberPath: string list * value: ParsedExpression
     | SequentialExpression of ParsedExpression list
     | FunctionApplication of
