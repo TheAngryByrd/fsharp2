@@ -88,6 +88,20 @@ module internal Linker =
         Flags: AssemblyFlags
     }
 
+    let hasValidSigningKey (options: SigningOptions) =
+        let key = Seq.toArray options.Key
+
+        try
+            try
+                let plan = StrongName.createPlan (StrongNameMode.FromSigningMode options.Mode) key
+
+                StrongName.clearPlan plan
+                true
+            with _ ->
+                false
+        finally
+            CryptographicOperations.ZeroMemory(key.AsSpan())
+
     let private sha256DocumentHashAlgorithm =
         Guid("8829d00f-11b8-4213-878b-770e8597ac16")
 

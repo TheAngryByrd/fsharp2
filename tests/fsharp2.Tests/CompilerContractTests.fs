@@ -19,43 +19,139 @@ module CompilerContractTests =
         |> Convert.ToHexString
         |> _.ToLowerInvariant()
 
-    let private compileWithOptimization optimization (sourceText: string) =
+    let private contractPhases = [|
+        CompilationPhase.Source
+        CompilationPhase.Syntax
+        CompilationPhase.ResolvedSymbols
+        CompilationPhase.TypedDeclarations
+        CompilationPhase.LoweredCode
+        CompilationPhase.OptimizedCode
+        CompilationPhase.SymbolicEmission
+        CompilationPhase.FinalLinking
+    |]
+
+    let private createRequest
+        semanticOptions
+        diagnosticOptions
+        emissionOptions
+        signingOptions
+        resources
+        requestedArtifacts
+        (sourceText: string)
+        =
         let sourceBytes = Text.Encoding.UTF8.GetBytes(sourceText)
         let referenceImage = File.ReadAllBytes(Assembly.Load("System.Runtime").Location)
 
-        let request =
-            CompilationRequest.Create(
-                CompilerContract.Version,
-                StableIdentity.create "request:tracer",
-                CompilationAssemblyIdentity.Create(
-                    StableIdentity.create "assembly:Tracer",
-                    "Tracer"
-                ),
-                [|
-                    SourceSnapshot.Create(
-                        StableIdentity.create "source:tracer",
-                        "Tracer.fs",
-                        sourceText,
-                        fingerprint sourceBytes
-                    )
-                |],
-                [|
-                    TargetReferenceSnapshot.Create(
-                        StableIdentity.create "reference:System.Runtime",
-                        "System.Runtime.dll",
-                        referenceImage,
-                        fingerprint referenceImage
-                    )
-                |],
-                SemanticOptions.Create([||], None, optimization, false, false, None),
-                DiagnosticOptions.Create(None, [||], false, [||]),
-                EmissionOptions.Create(true, false, DebugFormat.None, [||], [| "Tracer.fs" |], [||]),
-                SigningOptions.Create(SigningMode.Unsigned, [||]),
-                ResourceInputs.Create([||], [||]),
-                [| RequestedArtifact.ImplementationAssembly |]
+        CompilationRequest.Create(
+            CompilerContract.Version,
+            StableIdentity.create "request:tracer",
+            CompilationAssemblyIdentity.Create(StableIdentity.create "assembly:Tracer", "Tracer"),
+            [|
+                SourceSnapshot.Create(
+                    StableIdentity.create "source:tracer",
+                    "Tracer.fs",
+                    sourceText,
+                    fingerprint sourceBytes
+                )
+            |],
+            [|
+                TargetReferenceSnapshot.Create(
+                    StableIdentity.create "reference:System.Runtime",
+                    "System.Runtime.dll",
+                    referenceImage,
+                    fingerprint referenceImage
+                )
+            |],
+            semanticOptions,
+            diagnosticOptions,
+            emissionOptions,
+            signingOptions,
+            resources,
+            requestedArtifacts
+        )
+
+    let private defaultSemanticOptions () =
+        SemanticOptions.Create([||], None, OptimizationMode.Disabled, false, false, None)
+
+    let private defaultDiagnosticOptions () =
+        DiagnosticOptions.Create(None, [||], false, [||])
+
+    let private defaultEmissionOptions () =
+        EmissionOptions.Create(true, false, DebugFormat.None, [||], [| "Tracer.fs" |], [||])
+
+    let private defaultSigningOptions () =
+        SigningOptions.Create(SigningMode.Unsigned, [||])
+
+    let private emptyResources () = ResourceInputs.Create([||], [||])
+
+    let private defaultRequestedArtifacts = [| RequestedArtifact.ImplementationAssembly |]
+
+    let private compileRequest request =
+        Compiler().Compile(request, CancellationToken.None)
+
+    let private assertUnsupported expectedCode expectedPhase expectedIdentity result =
+        match result.Outcome with
+        | CompilationOutcome.Unsupported failure ->
+            Expect.equal failure.Code expectedCode "The failure code must be stable."
+            Expect.equal failure.StoppingPhase expectedPhase "The stopping phase must be exact."
+
+            Expect.equal
+                failure.UnsupportedValueIdentity
+                expectedIdentity
+                "The unsupported value identity must be stable."
+        | outcome -> failtestf "Expected an unsupported result, but received %A." outcome
+
+        Expect.sequenceEqual
+            (result.PhaseResults
+             |> Seq.map _.Phase)
+            contractPhases
+            "Every result must contain the complete contract phase ledger."
+
+        let stoppingIndex =
+            contractPhases
+            |> Array.findIndex ((=) expectedPhase)
+
+        let expectedStatuses =
+            contractPhases
+            |> Array.mapi (fun index phase ->
+                if index > stoppingIndex then
+                    PhaseStatus.NotStarted
+                elif index = stoppingIndex then
+                    PhaseStatus.Unsupported
+                elif phase = CompilationPhase.OptimizedCode then
+                    PhaseStatus.Skipped
+                else
+                    PhaseStatus.Completed
             )
 
-        Compiler().Compile(request, CancellationToken.None)
+        Expect.sequenceEqual
+            (result.PhaseResults
+             |> Seq.map _.Status)
+            expectedStatuses
+            "The phase statuses must stop at the unsupported value."
+
+        Expect.isEmpty
+            result.Diagnostics
+            "A structured unsupported result must not contain diagnostics."
+
+        Expect.isEmpty result.Artifacts "An unsupported compilation must not contain artifacts."
+
+        Expect.isEmpty
+            result.Fingerprints
+            "An unsupported compilation must not contain artifact fingerprints."
+
+    let private compileWithOptimization optimization (sourceText: string) =
+        let request =
+            createRequest
+                (SemanticOptions.Create([||], None, optimization, false, false, None))
+                (defaultDiagnosticOptions ())
+                (defaultEmissionOptions ())
+                (defaultSigningOptions ())
+                (emptyResources ())
+                defaultRequestedArtifacts
+                sourceText
+
+        compileRequest request
 
     let private compile sourceText =
         compileWithOptimization OptimizationMode.Disabled sourceText
@@ -731,4 +827,381 @@ module CompilerContractTests =
                 Expect.isEmpty
                     result.Artifacts
                     "An unsupported compilation must not contain an artifact."
+
+            testCase "unsupported language version stops at Syntax"
+            <| fun _ ->
+                let request =
+                    createRequest
+                        (SemanticOptions.Create(
+                            [||],
+                            Some "8.0",
+                            OptimizationMode.Disabled,
+                            false,
+                            false,
+                            None
+                        ))
+                        (defaultDiagnosticOptions ())
+                        (defaultEmissionOptions ())
+                        (defaultSigningOptions ())
+                        (emptyResources ())
+                        defaultRequestedArtifacts
+                        "module Tracer\nlet answer () = 42\n"
+
+                compileRequest request
+                |> assertUnsupported
+                    "FSC2C2001"
+                    CompilationPhase.Syntax
+                    "semantic.language-version=8.0"
+
+            testCase "unsupported target profile stops at ResolvedSymbols"
+            <| fun _ ->
+                let request =
+                    createRequest
+                        (SemanticOptions.Create(
+                            [||],
+                            None,
+                            OptimizationMode.Disabled,
+                            false,
+                            false,
+                            Some "legacy"
+                        ))
+                        (defaultDiagnosticOptions ())
+                        (defaultEmissionOptions ())
+                        (defaultSigningOptions ())
+                        (emptyResources ())
+                        defaultRequestedArtifacts
+                        "module Tracer\nlet answer () = 42\n"
+
+                compileRequest request
+                |> assertUnsupported
+                    "FSC2C2003"
+                    CompilationPhase.ResolvedSymbols
+                    "semantic.target-profile=legacy"
+
+            testCase "invalid warning level stops at Source"
+            <| fun _ ->
+                for warningLevel in
+                    [
+                        -1
+                        6
+                    ] do
+                    let request =
+                        createRequest
+                            (defaultSemanticOptions ())
+                            (DiagnosticOptions.Create(Some warningLevel, [||], false, [||]))
+                            (defaultEmissionOptions ())
+                            (defaultSigningOptions ())
+                            (emptyResources ())
+                            defaultRequestedArtifacts
+                            "module Tracer\nlet answer () = 42\n"
+
+                    compileRequest request
+                    |> assertUnsupported
+                        "FSC2C2101"
+                        CompilationPhase.Source
+                        $"diagnostics.warning-level={warningLevel}"
+
+            testCase "nondeterministic emission stops at FinalLinking"
+            <| fun _ ->
+                let request =
+                    createRequest
+                        (defaultSemanticOptions ())
+                        (defaultDiagnosticOptions ())
+                        (EmissionOptions.Create(
+                            false,
+                            false,
+                            DebugFormat.None,
+                            [||],
+                            [| "Tracer.fs" |],
+                            [||]
+                        ))
+                        (defaultSigningOptions ())
+                        (emptyResources ())
+                        defaultRequestedArtifacts
+                        "module Tracer\nlet answer () = 42\n"
+
+                compileRequest request
+                |> assertUnsupported
+                    "FSC2C2201"
+                    CompilationPhase.FinalLinking
+                    "emission.deterministic=false"
+
+            testCase "high entropy virtual address stops at FinalLinking"
+            <| fun _ ->
+                let request =
+                    createRequest
+                        (defaultSemanticOptions ())
+                        (defaultDiagnosticOptions ())
+                        (EmissionOptions.Create(
+                            true,
+                            true,
+                            DebugFormat.None,
+                            [||],
+                            [| "Tracer.fs" |],
+                            [||]
+                        ))
+                        (defaultSigningOptions ())
+                        (emptyResources ())
+                        defaultRequestedArtifacts
+                        "module Tracer\nlet answer () = 42\n"
+
+                compileRequest request
+                |> assertUnsupported
+                    "FSC2C2202"
+                    CompilationPhase.FinalLinking
+                    "emission.high-entropy-va=true"
+
+            testCase "portable PDB with no debug format stops at SymbolicEmission"
+            <| fun _ ->
+                let request =
+                    createRequest
+                        (defaultSemanticOptions ())
+                        (defaultDiagnosticOptions ())
+                        (defaultEmissionOptions ())
+                        (defaultSigningOptions ())
+                        (emptyResources ())
+                        [|
+                            RequestedArtifact.ImplementationAssembly
+                            RequestedArtifact.PortablePdb
+                        |]
+                        "module Tracer\nlet answer () = 42\n"
+
+                compileRequest request
+                |> assertUnsupported
+                    "FSC2C2203"
+                    CompilationPhase.SymbolicEmission
+                    "emission.debug-format=none+pdb"
+
+            testCase "embedded source stops at SymbolicEmission"
+            <| fun _ ->
+                let request =
+                    createRequest
+                        (defaultSemanticOptions ())
+                        (defaultDiagnosticOptions ())
+                        (EmissionOptions.Create(
+                            true,
+                            false,
+                            DebugFormat.None,
+                            [|
+                                StableIdentity.create "source:tracer"
+                                StableIdentity.create "source:other"
+                            |],
+                            [| "Tracer.fs" |],
+                            [||]
+                        ))
+                        (defaultSigningOptions ())
+                        (emptyResources ())
+                        defaultRequestedArtifacts
+                        "module Tracer\nlet answer () = 42\n"
+
+                compileRequest request
+                |> assertUnsupported
+                    "FSC2C2204"
+                    CompilationPhase.SymbolicEmission
+                    "emission.embedded-source=source:tracer"
+
+            testCase "debug document count stops at SymbolicEmission"
+            <| fun _ ->
+                for debugDocumentPaths in
+                    [
+                        [||]
+                        [|
+                            "Tracer.fs"
+                            "Other.fs"
+                        |]
+                    ] do
+                    let request =
+                        createRequest
+                            (defaultSemanticOptions ())
+                            (defaultDiagnosticOptions ())
+                            (EmissionOptions.Create(
+                                true,
+                                false,
+                                DebugFormat.None,
+                                [||],
+                                debugDocumentPaths,
+                                [||]
+                            ))
+                            (defaultSigningOptions ())
+                            (emptyResources ())
+                            defaultRequestedArtifacts
+                            "module Tracer\nlet answer () = 42\n"
+
+                    compileRequest request
+                    |> assertUnsupported
+                        "FSC2C2205"
+                        CompilationPhase.SymbolicEmission
+                        $"emission.debug-document-count={debugDocumentPaths.Length}"
+
+            testCase "unsigned mode with a key stops at FinalLinking"
+            <| fun _ ->
+                let request =
+                    createRequest
+                        (defaultSemanticOptions ())
+                        (defaultDiagnosticOptions ())
+                        (defaultEmissionOptions ())
+                        (SigningOptions.Create(SigningMode.Unsigned, [| 1uy |]))
+                        (emptyResources ())
+                        defaultRequestedArtifacts
+                        "module Tracer\nlet answer () = 42\n"
+
+                compileRequest request
+                |> assertUnsupported
+                    "FSC2C2301"
+                    CompilationPhase.FinalLinking
+                    "signing.unsigned-key=present"
+
+            testCase "invalid signing key stops at FinalLinking"
+            <| fun _ ->
+                for mode, key in
+                    [
+                        SigningMode.DelaySign, [||]
+                        SigningMode.PublicSign, [||]
+                        SigningMode.FullSign, [||]
+                        SigningMode.DelaySign, [| 0uy |]
+                        SigningMode.PublicSign, [| 0uy |]
+                        SigningMode.FullSign, [| 0uy |]
+                    ] do
+                    let request =
+                        createRequest
+                            (defaultSemanticOptions ())
+                            (defaultDiagnosticOptions ())
+                            (defaultEmissionOptions ())
+                            (SigningOptions.Create(mode, key))
+                            (emptyResources ())
+                            defaultRequestedArtifacts
+                            "module Tracer\nlet answer () = 42\n"
+
+                    compileRequest request
+                    |> assertUnsupported
+                        "FSC2C2302"
+                        CompilationPhase.FinalLinking
+                        "signing.key=invalid"
+
+            testCase "custom artifact stops as unsupported at Source"
+            <| fun _ ->
+                let request =
+                    createRequest
+                        (defaultSemanticOptions ())
+                        (defaultDiagnosticOptions ())
+                        (defaultEmissionOptions ())
+                        (defaultSigningOptions ())
+                        (emptyResources ())
+                        [| RequestedArtifact.Custom(StableIdentity.create "custom:test") |]
+                        "module Tracer\nlet answer () = 42\n"
+
+                compileRequest request
+                |> assertUnsupported
+                    "FSC2C2401"
+                    CompilationPhase.Source
+                    "artifact.custom=custom:test"
+
+            testCase "multiple managed resources stop at FinalLinking"
+            <| fun _ ->
+                let managedResource index =
+                    let content = [| byte index |]
+
+                    ManagedResourceSnapshot.Create(
+                        StableIdentity.create $"resource:managed:{index}",
+                        $"resource-{index}",
+                        ResourceVisibility.Public,
+                        content,
+                        fingerprint content
+                    )
+
+                let request =
+                    createRequest
+                        (defaultSemanticOptions ())
+                        (defaultDiagnosticOptions ())
+                        (defaultEmissionOptions ())
+                        (defaultSigningOptions ())
+                        (ResourceInputs.Create(
+                            [|
+                                managedResource 1
+                                managedResource 2
+                            |],
+                            [||]
+                        ))
+                        defaultRequestedArtifacts
+                        "module Tracer\nlet answer () = 42\n"
+
+                compileRequest request
+                |> assertUnsupported
+                    "FSC2C2501"
+                    CompilationPhase.FinalLinking
+                    "resources.managed-count=2"
+
+            testCase "multiple native resources stop at FinalLinking"
+            <| fun _ ->
+                let nativeResource index =
+                    let content = [| byte index |]
+
+                    NativeResourceSnapshot.Create(
+                        StableIdentity.create $"resource:native:{index}",
+                        content,
+                        fingerprint content
+                    )
+
+                let request =
+                    createRequest
+                        (defaultSemanticOptions ())
+                        (defaultDiagnosticOptions ())
+                        (defaultEmissionOptions ())
+                        (defaultSigningOptions ())
+                        (ResourceInputs.Create(
+                            [||],
+                            [|
+                                nativeResource 1
+                                nativeResource 2
+                            |]
+                        ))
+                        defaultRequestedArtifacts
+                        "module Tracer\nlet answer () = 42\n"
+
+                compileRequest request
+                |> assertUnsupported
+                    "FSC2C2502"
+                    CompilationPhase.FinalLinking
+                    "resources.native-count=2"
+
+            testCase "diagnostic policy preserves errors for every supported option"
+            <| fun _ ->
+                for warningLevel in
+                    [
+                        None
+                        Some 0
+                        Some 1
+                        Some 2
+                        Some 3
+                        Some 4
+                        Some 5
+                    ] do
+                    let request =
+                        createRequest
+                            (defaultSemanticOptions ())
+                            (DiagnosticOptions.Create(
+                                warningLevel,
+                                [| "FS0001" |],
+                                true,
+                                [| "FS0001" |]
+                            ))
+                            (defaultEmissionOptions ())
+                            (defaultSigningOptions ())
+                            (emptyResources ())
+                            defaultRequestedArtifacts
+                            "module Tracer\nlet answer: int = \"text\"\n"
+
+                    let result = compileRequest request
+                    Expect.equal result.Outcome CompilationOutcome.Failed "Compilation must fail."
+
+                    let diagnostic =
+                        result.Diagnostics
+                        |> Seq.exactlyOne
+
+                    Expect.equal diagnostic.Code "FS0001" "The error code must be preserved."
+
+                    Expect.equal
+                        diagnostic.Severity
+                        DiagnosticSeverity.Error
+                        "Diagnostic policy must not suppress or demote an error."
         ]

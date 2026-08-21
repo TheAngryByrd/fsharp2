@@ -127,36 +127,208 @@ type Compiler() =
         )
         |> ImmutableArray.CreateRange
 
-    let unsupportedOptimizationPhaseResults request =
+    let unsupportedPhaseResults request stoppingPhase =
         let source, syntax, resolved, typed, lowered = semanticFingerprints request
+        let symbolic = textFingerprint $"symbolic|{lowered}"
 
-        [|
-            phaseResult
-                CompilationPhase.Source
-                PhaseStatus.Completed
-                (Some request.RequestIdentity.Value)
-                (Some source)
-            phaseResult CompilationPhase.Syntax PhaseStatus.Completed (Some source) (Some syntax)
-            phaseResult
-                CompilationPhase.ResolvedSymbols
-                PhaseStatus.Completed
-                (Some syntax)
-                (Some resolved)
-            phaseResult
-                CompilationPhase.TypedDeclarations
-                PhaseStatus.Completed
-                (Some resolved)
-                (Some typed)
-            phaseResult
-                CompilationPhase.LoweredCode
-                PhaseStatus.Completed
-                (Some typed)
-                (Some lowered)
-            phaseResult CompilationPhase.OptimizedCode PhaseStatus.Unsupported (Some lowered) None
-            phaseResult CompilationPhase.SymbolicEmission PhaseStatus.NotStarted None None
-            phaseResult CompilationPhase.FinalLinking PhaseStatus.NotStarted None None
-        |]
+        let fingerprints =
+            function
+            | CompilationPhase.Source -> Some request.RequestIdentity.Value, Some source
+            | CompilationPhase.Syntax -> Some source, Some syntax
+            | CompilationPhase.ResolvedSymbols -> Some syntax, Some resolved
+            | CompilationPhase.TypedDeclarations -> Some resolved, Some typed
+            | CompilationPhase.LoweredCode -> Some typed, Some lowered
+            | CompilationPhase.OptimizedCode -> Some lowered, Some lowered
+            | CompilationPhase.SymbolicEmission -> Some lowered, Some symbolic
+            | CompilationPhase.FinalLinking -> Some symbolic, None
+
+        let stoppingIndex =
+            phases
+            |> Array.findIndex ((=) stoppingPhase)
+
+        phases
+        |> Array.mapi (fun index phase ->
+            if index > stoppingIndex then
+                phaseResult phase PhaseStatus.NotStarted None None
+            else
+                let inputFingerprint, outputFingerprint = fingerprints phase
+
+                if index = stoppingIndex then
+                    phaseResult phase PhaseStatus.Unsupported inputFingerprint None
+                elif phase = CompilationPhase.OptimizedCode then
+                    phaseResult phase PhaseStatus.Skipped inputFingerprint outputFingerprint
+                else
+                    phaseResult phase PhaseStatus.Completed inputFingerprint outputFingerprint
+        )
         |> ImmutableArray.CreateRange
+
+    let unsupportedFailure code message phase identity = {
+        Code = code
+        Message = message
+        StoppingPhase = phase
+        UnsupportedValueIdentity = identity
+    }
+
+    let tryUnsupportedEnvelope (request: CompilationRequest) =
+        let customArtifact =
+            request.RequestedArtifacts
+            |> Seq.tryPick (
+                function
+                | RequestedArtifact.Custom identity -> Some identity
+                | _ -> None
+            )
+
+        match request.DiagnosticOptions.WarningLevel, customArtifact with
+        | Some warningLevel, _ when
+            warningLevel < 0
+            || warningLevel > 5
+            ->
+            Some(
+                unsupportedFailure
+                    "FSC2C2101"
+                    $"Warning level '{warningLevel}' is outside the supported range."
+                    CompilationPhase.Source
+                    $"diagnostics.warning-level={warningLevel}"
+            )
+        | _, Some identity ->
+            Some(
+                unsupportedFailure
+                    "FSC2C2401"
+                    $"Custom artifact '{identity.Value}' is not supported."
+                    CompilationPhase.Source
+                    $"artifact.custom={identity.Value}"
+            )
+        | _ ->
+            match request.SemanticOptions.LanguageVersion with
+            | Some languageVersion when
+                languageVersion
+                <> "9.0"
+                ->
+                Some(
+                    unsupportedFailure
+                        "FSC2C2001"
+                        $"Language version '{languageVersion}' is not supported."
+                        CompilationPhase.Syntax
+                        $"semantic.language-version={languageVersion}"
+                )
+            | _ ->
+                match request.SemanticOptions.TargetProfile with
+                | Some targetProfile when
+                    targetProfile
+                    <> "netcore"
+                    ->
+                    Some(
+                        unsupportedFailure
+                            "FSC2C2003"
+                            $"Target profile '{targetProfile}' is not supported."
+                            CompilationPhase.ResolvedSymbols
+                            $"semantic.target-profile={targetProfile}"
+                    )
+                | _ ->
+                    let requestsPortablePdb =
+                        request.RequestedArtifacts
+                        |> Seq.contains RequestedArtifact.PortablePdb
+
+                    if
+                        request.EmissionOptions.DebugFormat = DebugFormat.None
+                        && requestsPortablePdb
+                    then
+                        Some(
+                            unsupportedFailure
+                                "FSC2C2203"
+                                "Portable PDB output requires the portable debug format."
+                                CompilationPhase.SymbolicEmission
+                                "emission.debug-format=none+pdb"
+                        )
+                    elif not request.EmissionOptions.EmbeddedSourceIdentities.IsEmpty then
+                        let identity = request.EmissionOptions.EmbeddedSourceIdentities[0]
+
+                        Some(
+                            unsupportedFailure
+                                "FSC2C2204"
+                                $"Embedded source '{identity.Value}' is not supported."
+                                CompilationPhase.SymbolicEmission
+                                $"emission.embedded-source={identity.Value}"
+                        )
+                    elif
+                        request.EmissionOptions.DebugDocumentPaths.Length
+                        <> request.Sources.Length
+                    then
+                        let count = request.EmissionOptions.DebugDocumentPaths.Length
+
+                        Some(
+                            unsupportedFailure
+                                "FSC2C2205"
+                                $"Debug document count '{count}' does not match the source count."
+                                CompilationPhase.SymbolicEmission
+                                $"emission.debug-document-count={count}"
+                        )
+                    elif not request.EmissionOptions.Deterministic then
+                        Some(
+                            unsupportedFailure
+                                "FSC2C2201"
+                                "Nondeterministic emission is not supported."
+                                CompilationPhase.FinalLinking
+                                "emission.deterministic=false"
+                        )
+                    elif request.EmissionOptions.HighEntropyVirtualAddress then
+                        Some(
+                            unsupportedFailure
+                                "FSC2C2202"
+                                "High-entropy virtual addresses are not supported."
+                                CompilationPhase.FinalLinking
+                                "emission.high-entropy-va=true"
+                        )
+                    elif
+                        request.SigningOptions.Mode = SigningMode.Unsigned
+                        && not request.SigningOptions.Key.IsEmpty
+                    then
+                        Some(
+                            unsupportedFailure
+                                "FSC2C2301"
+                                "Unsigned output must not include a signing key."
+                                CompilationPhase.FinalLinking
+                                "signing.unsigned-key=present"
+                        )
+                    elif not (Linker.hasValidSigningKey request.SigningOptions) then
+                        Some(
+                            unsupportedFailure
+                                "FSC2C2302"
+                                "The signing key is empty or malformed."
+                                CompilationPhase.FinalLinking
+                                "signing.key=invalid"
+                        )
+                    elif request.Resources.Managed.Length > 1 then
+                        let count = request.Resources.Managed.Length
+
+                        Some(
+                            unsupportedFailure
+                                "FSC2C2501"
+                                $"Managed resource count '{count}' is not supported."
+                                CompilationPhase.FinalLinking
+                                $"resources.managed-count={count}"
+                        )
+                    elif request.Resources.Native.Length > 1 then
+                        let count = request.Resources.Native.Length
+
+                        Some(
+                            unsupportedFailure
+                                "FSC2C2502"
+                                $"Native resource count '{count}' is not supported."
+                                CompilationPhase.FinalLinking
+                                $"resources.native-count={count}"
+                        )
+                    else
+                        None
+
+    let unsupportedResult request failure = {
+        Outcome = CompilationOutcome.Unsupported failure
+        Diagnostics = ImmutableArray.Empty
+        Artifacts = ImmutableArray.Empty
+        Fingerprints = ImmutableArray.Empty
+        PhaseResults = unsupportedPhaseResults request failure.StoppingPhase
+        Traces = ImmutableArray.Empty
+    }
 
     let successPhaseResults request compilation compilationArtifacts =
         let source, syntax, resolved, typed, lowered = semanticFingerprints request
@@ -266,50 +438,50 @@ type Compiler() =
         cancellationToken
         |> ignore
 
-        match CompilationPipeline.compileRequest service request with
-        | Error diagnostic when diagnostic.Code = "FSC2C2002" -> {
-            Outcome =
-                CompilationOutcome.Unsupported {
+        match tryUnsupportedEnvelope request with
+        | Some failure -> unsupportedResult request failure
+        | None ->
+            match CompilationPipeline.compileRequest service request with
+            | Error diagnostic when diagnostic.Code = "FSC2C2002" ->
+                unsupportedResult request {
                     Code = diagnostic.Code
                     Message = diagnostic.Message
                     StoppingPhase = CompilationPhase.OptimizedCode
                     UnsupportedValueIdentity = "semantic.optimization=enabled"
                 }
-            Diagnostics = ImmutableArray.Empty
-            Artifacts = ImmutableArray.Empty
-            Fingerprints = ImmutableArray.Empty
-            PhaseResults = unsupportedOptimizationPhaseResults request
-            Traces = ImmutableArray.Empty
-          }
-        | Error diagnostic ->
-            let failedPhase =
-                if diagnostic.Code = "FS0001" then
-                    CompilationPhase.TypedDeclarations
-                elif diagnostic.Code = "FS0039" then
-                    CompilationPhase.ResolvedSymbols
-                else
-                    CompilationPhase.Syntax
+            | Error diagnostic ->
+                let failedPhase =
+                    if diagnostic.Code = "FS0001" then
+                        CompilationPhase.TypedDeclarations
+                    elif diagnostic.Code = "FS0039" then
+                        CompilationPhase.ResolvedSymbols
+                    else
+                        CompilationPhase.Syntax
 
-            {
-                Outcome = CompilationOutcome.Failed
-                Diagnostics = ImmutableArray.Create(failureDiagnostic diagnostic)
-                Artifacts = ImmutableArray.Empty
-                Fingerprints = ImmutableArray.Empty
-                PhaseResults = failurePhaseResults request failedPhase
-                Traces = ImmutableArray.Empty
-            }
-        | Ok compilation ->
-            let compilationArtifacts = artifacts request compilation.Artifacts
-            let phaseResults = successPhaseResults request compilation compilationArtifacts
+                let diagnostics =
+                    [| failureDiagnostic diagnostic |]
+                    |> DiagnosticPolicy.apply request.DiagnosticOptions
 
-            {
-                Outcome = CompilationOutcome.Succeeded
-                Diagnostics = ImmutableArray.Empty
-                Artifacts = compilationArtifacts
-                Fingerprints =
-                    compilationArtifacts
-                    |> Seq.map _.Fingerprint
-                    |> ImmutableArray.CreateRange
-                PhaseResults = phaseResults
-                Traces = ImmutableArray.Empty
-            }
+                {
+                    Outcome = CompilationOutcome.Failed
+                    Diagnostics = diagnostics
+                    Artifacts = ImmutableArray.Empty
+                    Fingerprints = ImmutableArray.Empty
+                    PhaseResults = failurePhaseResults request failedPhase
+                    Traces = ImmutableArray.Empty
+                }
+            | Ok compilation ->
+                let compilationArtifacts = artifacts request compilation.Artifacts
+                let phaseResults = successPhaseResults request compilation compilationArtifacts
+
+                {
+                    Outcome = CompilationOutcome.Succeeded
+                    Diagnostics = ImmutableArray.Empty
+                    Artifacts = compilationArtifacts
+                    Fingerprints =
+                        compilationArtifacts
+                        |> Seq.map _.Fingerprint
+                        |> ImmutableArray.CreateRange
+                    PhaseResults = phaseResults
+                    Traces = ImmutableArray.Empty
+                }

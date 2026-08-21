@@ -1,7 +1,56 @@
 namespace FSharp2.Compiler
 
 open System
+open System.Collections.Immutable
 open System.IO
+
+module internal DiagnosticPolicy =
+    let private canonicalCode (code: string) =
+        let value = code.Trim()
+
+        let numeric =
+            if value.StartsWith("FS", StringComparison.OrdinalIgnoreCase) then
+                value[2..]
+            else
+                value
+
+        match Int32.TryParse(numeric) with
+        | true, number -> number.ToString()
+        | false, _ -> value.ToUpperInvariant()
+
+    let private containsCode codes code =
+        let expected = canonicalCode code
+
+        codes
+        |> Seq.exists (
+            canonicalCode
+            >> ((=) expected)
+        )
+
+    let apply (options: DiagnosticOptions) diagnostics =
+        diagnostics
+        |> Seq.choose (fun diagnostic ->
+            match diagnostic.Severity with
+            | DiagnosticSeverity.Information
+            | DiagnosticSeverity.Error -> Some diagnostic
+            | DiagnosticSeverity.Warning ->
+                if
+                    options.WarningLevel = Some 0
+                    || containsCode options.DisabledWarnings diagnostic.Code
+                then
+                    None
+                elif
+                    options.TreatWarningsAsErrors
+                    || containsCode options.WarningsAsErrors diagnostic.Code
+                then
+                    Some {
+                        diagnostic with
+                            Severity = DiagnosticSeverity.Error
+                    }
+                else
+                    Some diagnostic
+        )
+        |> ImmutableArray.CreateRange
 
 module internal DiagnosticFormatter =
     let private flattenMessage (message: string) =
