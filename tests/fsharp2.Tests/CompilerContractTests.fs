@@ -1,6 +1,10 @@
 namespace fsharp2.Tests
 
 open System
+open System.IO
+open System.Reflection
+open System.Security.Cryptography
+open System.Threading
 open Expecto
 open FSharp2.Compiler
 
@@ -8,6 +12,12 @@ module CompilerContractTests =
     let private bytes (values: seq<byte>) =
         values
         |> Seq.toArray
+
+    let private fingerprint (values: byte array) =
+        values
+        |> SHA256.HashData
+        |> Convert.ToHexString
+        |> _.ToLowerInvariant()
 
     [<Tests>]
     let tests =
@@ -391,4 +401,110 @@ module CompilerContractTests =
                         |> ignore
                     )
                     "An unsupported contract version is invalid."
+
+            testCase "Compiler.Compile uses captured inputs and a path-free assembly identity"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-compiler-contract",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "input.fs")
+                    let referencePath = Path.Combine(root, "target-reference.dll")
+                    let sourceText = "module Tracer\nlet answer () = 42\n"
+                    let referenceImage = File.ReadAllBytes(Assembly.Load("System.Runtime").Location)
+
+                    File.WriteAllText(sourcePath, sourceText)
+                    File.WriteAllBytes(referencePath, referenceImage)
+
+                    let sourceSnapshot =
+                        SourceSnapshot.Create(
+                            StableIdentity.create "source:tracer",
+                            "Tracer.fs",
+                            File.ReadAllText(sourcePath),
+                            fingerprint (Text.Encoding.UTF8.GetBytes(sourceText))
+                        )
+
+                    let referenceSnapshot =
+                        let capturedImage = File.ReadAllBytes(referencePath)
+
+                        TargetReferenceSnapshot.Create(
+                            StableIdentity.create "reference:System.Runtime",
+                            "System.Runtime.dll",
+                            capturedImage,
+                            fingerprint capturedImage
+                        )
+
+                    let request =
+                        CompilationRequest.Create(
+                            CompilerContract.Version,
+                            StableIdentity.create "request:tracer",
+                            CompilationAssemblyIdentity.Create(
+                                StableIdentity.create "assembly:Tracer",
+                                "Tracer"
+                            ),
+                            [| sourceSnapshot |],
+                            [| referenceSnapshot |],
+                            SemanticOptions.Create(
+                                [||],
+                                None,
+                                OptimizationMode.Disabled,
+                                false,
+                                false,
+                                None
+                            ),
+                            DiagnosticOptions.Create(None, [||], false, [||]),
+                            EmissionOptions.Create(
+                                true,
+                                false,
+                                DebugFormat.None,
+                                [||],
+                                [| "Tracer.fs" |],
+                                [||]
+                            ),
+                            SigningOptions.Create(SigningMode.Unsigned, [||]),
+                            ResourceInputs.Create([||], [||]),
+                            [| RequestedArtifact.ImplementationAssembly |]
+                        )
+
+                    File.Delete(sourcePath)
+                    File.WriteAllBytes(referencePath, [| 0uy |])
+
+                    let result = Compiler().Compile(request, CancellationToken.None)
+
+                    Expect.equal
+                        result.Outcome
+                        CompilationOutcome.Succeeded
+                        "Compilation must succeed."
+
+                    let implementation =
+                        result.Artifacts
+                        |> Seq.exactlyOne
+
+                    Expect.equal
+                        implementation.Kind
+                        RequestedArtifact.ImplementationAssembly
+                        "The result must contain the implementation assembly."
+
+                    let emittedAssembly = Assembly.Load(bytes implementation.Bytes)
+
+                    Expect.equal
+                        (emittedAssembly.GetName().Name)
+                        "Tracer"
+                        "The assembly name must be path-free."
+
+                    let answer = emittedAssembly.GetType("Tracer", true).GetMethod("answer")
+
+                    Expect.equal
+                        (answer.Invoke(null, Array.empty<obj>))
+                        (box 42)
+                        "The captured source must execute."
+                finally
+                    Directory.Delete(root, true)
         ]

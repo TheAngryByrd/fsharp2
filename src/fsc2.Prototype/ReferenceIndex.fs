@@ -1,6 +1,7 @@
 namespace FSharp2.Compiler
 
 open System
+open System.Collections.Immutable
 open System.Collections.Generic
 open System.IO
 open System.Reflection
@@ -72,7 +73,8 @@ type internal ReferenceFieldDefinition = {
     override _.ToString() = "ReferenceFieldDefinition"
 
 type private ReferenceTypeLocation = {
-    ReferencePath: string
+    ReferenceIdentity: string
+    ReferenceImage: ImmutableArray<byte>
     TypeRow: int
     DeclaringType: CliTypeReference
 } with
@@ -227,8 +229,7 @@ type internal ReferenceTypeIndex
 
         locations
         |> List.tryPick (fun location ->
-            use metadataStream = File.OpenRead(location.ReferencePath)
-            use pe = new PEReader(metadataStream)
+            use pe = new PEReader(location.ReferenceImage)
             let metadata = pe.GetMetadataReader()
 
             let typeDefinition =
@@ -276,8 +277,7 @@ type internal ReferenceTypeIndex
 
         locations
         |> List.collect (fun location ->
-            use metadataStream = File.OpenRead(location.ReferencePath)
-            use pe = new PEReader(metadataStream)
+            use pe = new PEReader(location.ReferenceImage)
             let metadata = pe.GetMetadataReader()
 
             let typeDefinition =
@@ -325,8 +325,7 @@ type internal ReferenceTypeIndex
 
         locations
         |> List.collect (fun location ->
-            use metadataStream = File.OpenRead(location.ReferencePath)
-            use pe = new PEReader(metadataStream)
+            use pe = new PEReader(location.ReferenceImage)
             let metadata = pe.GetMetadataReader()
 
             let entityTypeName (handle: EntityHandle) =
@@ -518,8 +517,7 @@ type internal ReferenceTypeIndex
 
         locations
         |> List.collect (fun location ->
-            use metadataStream = File.OpenRead(location.ReferencePath)
-            use pe = new PEReader(metadataStream)
+            use pe = new PEReader(location.ReferenceImage)
             let metadata = pe.GetMetadataReader()
 
             let typeDefinition =
@@ -734,12 +732,10 @@ type internal ReferenceTypeIndex
                     $"the type '{ReferenceTypeName.fullName syntaxName}' is not defined by the target references"
                 )
 
-    static member Create(referencePaths: string list) =
-        let normalizedReferencePaths =
-            referencePaths
-            |> List.map Path.GetFullPath
-            |> List.distinct
-            |> List.sortWith (fun left right -> StringComparer.Ordinal.Compare(left, right))
+    static member Create(references: ImmutableArray<TargetReferenceSnapshot>) =
+        let normalizedReferences =
+            references
+            |> List.ofSeq
 
         let types = Dictionary<TypeNameArity, ResolvedTypeName>()
 
@@ -751,26 +747,23 @@ type internal ReferenceTypeIndex
 
         let referenceIdentities = ResizeArray<string>()
 
-        let referenceContentHashes =
-            Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        let referenceContentHashes = Dictionary<string, string>(StringComparer.Ordinal)
 
-        let addReferenceIdentity path =
-            let normalizedPath = Path.GetFullPath(path)
+        let addReferenceIdentity (reference: TargetReferenceSnapshot) =
+            let identity = reference.StableId.Value
 
-            match referenceContentHashes.TryGetValue(normalizedPath) with
+            match referenceContentHashes.TryGetValue(identity) with
             | true, contentHash -> contentHash
             | false, _ ->
-                use fingerprintStream = File.OpenRead(normalizedPath)
-
                 let contentHash =
-                    SHA256.HashData(fingerprintStream)
+                    SHA256.HashData(reference.PeImage.AsSpan())
                     |> Convert.ToHexString
                     |> fun value -> value.ToLowerInvariant()
 
-                referenceContentHashes.Add(normalizedPath, contentHash)
+                referenceContentHashes.Add(identity, contentHash)
 
                 referenceIdentities.Add(
-                    normalizedPath
+                    identity
                     + "="
                     + contentHash
                 )
@@ -845,19 +838,37 @@ type internal ReferenceTypeIndex
 
         let forwardedAssemblyTypes =
             Dictionary<string, Dictionary<string * string, int * bool>>(
-                StringComparer.OrdinalIgnoreCase
+                StringComparer.Ordinal
             )
 
-        let forwardedTypesFor implementationPath =
-            match forwardedAssemblyTypes.TryGetValue(implementationPath) with
+        let referencesByAssemblyName =
+            let result = Dictionary<string, TargetReferenceSnapshot>(StringComparer.OrdinalIgnoreCase)
+
+            for reference in normalizedReferences do
+                use pe = new PEReader(reference.PeImage)
+
+                if pe.HasMetadata then
+                    let metadata = pe.GetMetadataReader()
+
+                    if metadata.IsAssembly then
+                        let definition = metadata.GetAssemblyDefinition()
+
+                        result.TryAdd(metadata.GetString(definition.Name), reference)
+                        |> ignore
+
+            result
+
+        let forwardedTypesFor (implementationReference: TargetReferenceSnapshot) =
+            let identity = implementationReference.StableId.Value
+
+            match forwardedAssemblyTypes.TryGetValue(identity) with
             | true, forwardedTypes -> forwardedTypes
             | false, _ ->
-                addReferenceIdentity implementationPath
+                addReferenceIdentity implementationReference
                 |> ignore
 
                 let forwardedTypes = Dictionary<string * string, int * bool>()
-                use implementationStream = File.OpenRead(implementationPath)
-                use implementationPe = new PEReader(implementationStream)
+                use implementationPe = new PEReader(implementationReference.PeImage)
 
                 if implementationPe.HasMetadata then
                     let implementationMetadata = implementationPe.GetMetadataReader()
@@ -916,11 +927,10 @@ type internal ReferenceTypeIndex
                             )
                             |> ignore
 
-                forwardedAssemblyTypes.Add(implementationPath, forwardedTypes)
+                forwardedAssemblyTypes.Add(identity, forwardedTypes)
                 forwardedTypes
 
         let addForwardedTypeLocation
-            (facadePath: string)
             (facadeMetadata: MetadataReader)
             (exportedType: ExportedType)
             =
@@ -937,17 +947,12 @@ type internal ReferenceTypeIndex
 
                 let implementationAssemblyName = facadeMetadata.GetString(assemblyReference.Name)
 
-                let implementationPath =
-                    Path.Combine(
-                        Path.GetDirectoryName(facadePath),
-                        implementationAssemblyName
-                        + ".dll"
-                    )
-
-                if File.Exists(implementationPath) then
+                match referencesByAssemblyName.TryGetValue(implementationAssemblyName) with
+                | false, _ -> ()
+                | true, implementationReference ->
                     let namespaceName = facadeMetadata.GetString(exportedType.Namespace)
                     let metadataName = facadeMetadata.GetString(exportedType.Name)
-                    let forwardedTypes = forwardedTypesFor implementationPath
+                    let forwardedTypes = forwardedTypesFor implementationReference
 
                     match forwardedTypes.TryGetValue((namespaceName, metadataName)) with
                     | false, _ -> ()
@@ -985,7 +990,8 @@ type internal ReferenceTypeIndex
                             | false, _ -> ()
 
                             let location = {
-                                ReferencePath = implementationPath
+                                ReferenceIdentity = implementationReference.StableId.Value
+                                ReferenceImage = implementationReference.PeImage
                                 TypeRow = typeRow
                                 DeclaringType = {
                                     DeclarationId = resolved.DeclarationId
@@ -1003,14 +1009,13 @@ type internal ReferenceTypeIndex
                                 typeLocations.Add(resolved.DeclarationId, locations)
 
         try
-            for path in normalizedReferencePaths do
-                let contentHash = addReferenceIdentity path
+            for reference in normalizedReferences do
+                let contentHash = addReferenceIdentity reference
 
-                use metadataStream = File.OpenRead(path)
-                use pe = new PEReader(metadataStream)
+                use pe = new PEReader(reference.PeImage)
 
                 if not pe.HasMetadata then
-                    invalidOp $"the reference '{path}' does not contain CLI metadata"
+                    invalidOp $"the reference '{reference.LogicalPath}' does not contain CLI metadata"
 
                 let metadata = pe.GetMetadataReader()
 
@@ -1041,7 +1046,7 @@ type internal ReferenceTypeIndex
                             publicKey
                         ]
                     else
-                        Path.GetFileNameWithoutExtension(path),
+                        Path.GetFileNameWithoutExtension(reference.LogicalPath),
                         "reference-module|"
                         + contentHash
 
@@ -1191,7 +1196,8 @@ type internal ReferenceTypeIndex
                     | false, _ -> ()
                     | true, resolved ->
                         let location = {
-                            ReferencePath = path
+                            ReferenceIdentity = reference.StableId.Value
+                            ReferenceImage = reference.PeImage
                             TypeRow = MetadataTokens.GetRowNumber(handle)
                             DeclaringType = {
                                 DeclarationId = resolved.DeclarationId
@@ -1219,7 +1225,7 @@ type internal ReferenceTypeIndex
                         (metadata.GetString(exportedType.Namespace))
                         (metadata.GetString(exportedType.Name))
 
-                    addForwardedTypeLocation path metadata exportedType
+                    addForwardedTypeLocation metadata exportedType
 
             let fingerprint =
                 referenceIdentities
@@ -1244,8 +1250,10 @@ type internal ReferenceTypeIndex
                 frozenTypeLocations.Add(
                     declarationId,
                     locations
-                    |> Seq.distinctBy (fun location -> location.ReferencePath, location.TypeRow)
-                    |> Seq.sortBy (fun location -> location.ReferencePath, location.TypeRow)
+                    |> Seq.distinctBy (fun location ->
+                        location.ReferenceIdentity, location.TypeRow
+                    )
+                    |> Seq.sortBy (fun location -> location.ReferenceIdentity, location.TypeRow)
                     |> List.ofSeq
                 )
 

@@ -111,39 +111,43 @@ module internal Linker =
                           - 1]
                 )
 
-    let private tryReadTargetReference (expectedName: string) (path: string) =
-        if
-            not (
-                String.Equals(
-                    Path.GetFileNameWithoutExtension(path),
-                    expectedName,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-        then
+    let private tryReadTargetReference
+        (expectedName: string)
+        (reference: TargetReferenceSnapshot)
+        =
+        use pe = new PEReader(reference.PeImage)
+
+        if not pe.HasMetadata then
             None
         else
-            use stream = File.OpenRead(path)
-            use pe = new PEReader(stream)
             let metadata = pe.GetMetadataReader()
-            let definition = metadata.GetAssemblyDefinition()
-            let publicKey = metadata.GetBlobBytes(definition.PublicKey)
 
-            Some {
-                Name = metadata.GetString(definition.Name)
-                Version = definition.Version
-                Culture =
-                    if definition.Culture.IsNil then
-                        String.Empty
-                    else
-                        metadata.GetString(definition.Culture)
-                PublicKeyToken = publicKeyToken publicKey
-                Flags =
-                    enum<AssemblyFlags> (
-                        int definition.Flags
-                        &&& ~~~(int AssemblyFlags.PublicKey)
-                    )
-            }
+            if not metadata.IsAssembly then
+                None
+            else
+                let definition = metadata.GetAssemblyDefinition()
+                let name = metadata.GetString(definition.Name)
+
+                if not (String.Equals(name, expectedName, StringComparison.OrdinalIgnoreCase)) then
+                    None
+                else
+                    let publicKey = metadata.GetBlobBytes(definition.PublicKey)
+
+                    Some {
+                        Name = name
+                        Version = definition.Version
+                        Culture =
+                            if definition.Culture.IsNil then
+                                String.Empty
+                            else
+                                metadata.GetString(definition.Culture)
+                        PublicKeyToken = publicKeyToken publicKey
+                        Flags =
+                            enum<AssemblyFlags> (
+                                int definition.Flags
+                                &&& ~~~(int AssemblyFlags.PublicKey)
+                            )
+                    }
 
     let private defaultSystemRuntimeReference = {
         Name = "System.Runtime"
@@ -179,16 +183,16 @@ module internal Linker =
         )
         |> Option.defaultValue "System.Runtime"
 
-    let private resolveTargetReference invocation symbolic =
+    let private resolveTargetReference (request: CompilationRequest) symbolic =
         let expectedName = targetReferenceName symbolic
 
         match
-            invocation.ReferencePaths
-            |> List.tryPick (tryReadTargetReference expectedName)
+            request.TargetReferences
+            |> Seq.tryPick (tryReadTargetReference expectedName)
         with
         | Some reference -> reference
         | None when
-            List.isEmpty invocation.ReferencePaths
+            request.TargetReferences.IsEmpty
             && expectedName = "System.Runtime"
             ->
             // The original synthetic prototype accepted no explicit reference
@@ -202,10 +206,10 @@ module internal Linker =
                 + "'"
             )
 
-    let private resolveRequiredReference invocation expectedName =
+    let private resolveRequiredReference (request: CompilationRequest) expectedName =
         match
-            invocation.ReferencePaths
-            |> List.tryPick (tryReadTargetReference expectedName)
+            request.TargetReferences
+            |> Seq.tryPick (tryReadTargetReference expectedName)
         with
         | Some reference -> reference
         | None ->
@@ -217,18 +221,18 @@ module internal Linker =
 
     let private addManagedResource
         (metadata: MetadataBuilder)
-        (resource: ManagedResourceInput option)
+        (resource: ManagedResourceSnapshot option)
         =
         match resource with
         | None -> Unchecked.defaultof<BlobBuilder>
         | Some resource ->
             let stream = BlobBuilder()
             let offset = uint32 stream.Count
-            stream.WriteInt32(resource.Data.Length)
-            stream.WriteBytes(resource.Data)
+            stream.WriteInt32(resource.Content.Length)
+            stream.WriteBytes(resource.Content)
 
             let attributes =
-                if resource.IsPublic then
+                if resource.Visibility = ResourceVisibility.Public then
                     ManifestResourceAttributes.Public
                 else
                     ManifestResourceAttributes.Private
@@ -1059,7 +1063,7 @@ module internal Linker =
         |> UTF8Encoding(false).GetBytes
 
     let private linkWithStrongName
-        (invocation: CompilerInvocation)
+        (request: CompilationRequest)
         (symbolic: SymbolicAssembly)
         (strongName: StrongNamePlan)
         =
@@ -1295,7 +1299,7 @@ module internal Linker =
                 "the symbolic method graph has duplicate or missing property-getter identities"
 
         if
-            invocation.DebugDocumentPaths.Length
+            request.EmissionOptions.DebugDocumentPaths.Length
             <> symbolic.Documents.Length
         then
             invalidOp "the symbolic emission graph must contain one debug document per source input"
@@ -1325,7 +1329,7 @@ module internal Linker =
             BlobEncoder(signature).FieldSignature().String()
             signature
 
-        let targetReference = resolveTargetReference invocation symbolic
+        let targetReference = resolveTargetReference request symbolic
 
         let addAssemblyReference (reference: TargetReferenceIdentity) =
             let culture =
@@ -1357,7 +1361,7 @@ module internal Linker =
             | true, handle -> handle
             | false, _ ->
                 let handle =
-                    resolveRequiredReference invocation assemblyName
+                    resolveRequiredReference request assemblyName
                     |> addAssemblyReference
 
                 assemblyReferences.Add(assemblyName, handle)
@@ -1988,7 +1992,7 @@ module internal Linker =
         let pdbMetadata = MetadataBuilder()
 
         let documents =
-            (invocation.DebugDocumentPaths, documentChecksums)
+            (List.ofSeq request.EmissionOptions.DebugDocumentPaths, documentChecksums)
             ||> List.map2 (fun path checksum ->
                 pdbMetadata.AddDocument(
                     pdbMetadata.GetOrAddDocumentName(path),
@@ -2054,11 +2058,11 @@ module internal Linker =
             )
             |> ignore
 
-        if invocation.SourceLinkJson.Length > 0 then
+        if request.EmissionOptions.SourceLinkJson.Length > 0 then
             pdbMetadata.AddCustomDebugInformation(
                 MetadataTokens.EntityHandle(TableIndex.Module, 1),
                 pdbMetadata.GetOrAddGuid(sourceLinkKind),
-                pdbMetadata.GetOrAddBlob(invocation.SourceLinkJson)
+                pdbMetadata.GetOrAddBlob(request.EmissionOptions.SourceLinkJson)
             )
             |> ignore
 
@@ -2086,14 +2090,18 @@ module internal Linker =
         debugDirectory.AddPdbChecksumEntry("SHA256", immutableBytes pdbDigest)
         debugDirectory.AddReproducibleEntry()
 
-        let managedResources = addManagedResource metadata invocation.ManagedResource
+        let managedResources =
+            request.Resources.Managed
+            |> Seq.tryHead
+            |> addManagedResource metadata
+
         let metadataRoot = MetadataRootBuilder(metadata)
 
         let nativeResources =
-            if invocation.NativeResourceData.Length = 0 then
+            if request.Resources.Native.IsEmpty then
                 Unchecked.defaultof<ResourceSectionBuilder>
             else
-                PrototypeNativeResourceSection(invocation.NativeResourceData)
+                PrototypeNativeResourceSection(Seq.toArray request.Resources.Native[0].Content)
                 :> ResourceSectionBuilder
 
         let deterministicIdProvider =
@@ -2130,14 +2138,17 @@ module internal Linker =
             Documentation = documentation symbolic.AssemblyName
         }
 
-    let link (invocation: CompilerInvocation) (symbolic: SymbolicAssembly) =
+    let link (request: CompilationRequest) (symbolic: SymbolicAssembly) =
+        let key = Seq.toArray request.SigningOptions.Key
+
         let strongName =
-            StrongName.createPlan invocation.StrongNameMode invocation.StrongNameKey
+            StrongName.createPlan (StrongNameMode.FromSigningMode request.SigningOptions.Mode) key
 
         try
-            linkWithStrongName invocation symbolic strongName
+            linkWithStrongName request symbolic strongName
         finally
             StrongName.clearPlan strongName
+            CryptographicOperations.ZeroMemory(key.AsSpan())
 
     let publishTransactionally invocation artifacts =
         let nonce = Guid.NewGuid().ToString("N")

@@ -23,6 +23,7 @@
     <Compile Include="../fsc2.Prototype/StrongName.fs" Link="StrongName.fs" />
     <Compile Include="../fsc2.Prototype/Linker.fs" Link="Linker.fs" />
     <Compile Include="../fsc2.Prototype/CompilationPipeline.fs" Link="CompilationPipeline.fs" />
+    <Compile Include="../fsc2.Prototype/Compiler.fs" Link="Compiler.fs" />
     <Compile Include="../fsc2.Prototype/ServiceHost.fs" Link="ServiceHost.fs" />
     <Compile Include="CompilerHost.fs" />
   </ItemGroup>
