@@ -4345,6 +4345,48 @@ module internal Frontend =
                             "expected an expression"
                     )
 
+            let parseEntryPointDeclaration () =
+                parseResult {
+                    let! _ = expected AttributeStart "expected '[<'"
+                    let! attributeName, attributeToken =
+                        identifier "expected an attribute type name"
+
+                    let! _ =
+                        if attributeName = "EntryPoint" then
+                            Ok()
+                        else
+                            Error(
+                                prototypeDiagnostic
+                                    source.Path
+                                    attributeToken.Range
+                                    "expected the 'EntryPoint' attribute"
+                            )
+
+                    let! _ = expected AttributeEnd "expected '>]'"
+                    let! _ = expected LetKeyword "expected 'let'"
+                    let! _, _ = identifier "expected an entry-point declaration name"
+                    let! _, _ = identifier "expected an entry-point parameter"
+                    let! _ = expected Equals "expected '='"
+
+                    let rec parseBody hasExpression =
+                        match (current ()).Kind, hasExpression with
+                        | EndOfFile, true -> Ok()
+                        | EndOfFile, false ->
+                            Error(
+                                prototypeDiagnostic
+                                    source.Path
+                                    (current ()).Range
+                                    "expected an entry-point body"
+                            )
+                        | _ ->
+                            parseResult {
+                                let! _, _ = parseExpression ()
+                                return! parseBody true
+                            }
+
+                    return! parseBody false
+                }
+
             let finishDeclaration
                 moduleName
                 (declarationToken: Token)
@@ -4358,7 +4400,18 @@ module internal Frontend =
                     match parseExpression () with
                     | Error error -> Error error
                     | Ok(body, bodyRange) ->
-                        match expected EndOfFile "expected end of file" with
+                        match
+                            match (current ()).Kind with
+                            | EndOfFile -> Ok()
+                            | AttributeStart -> parseEntryPointDeclaration ()
+                            | _ ->
+                                Error(
+                                    prototypeDiagnostic
+                                        source.Path
+                                        (current ()).Range
+                                        "expected an entry-point declaration or end of file"
+                                )
+                        with
                         | Error error -> Error error
                         | Ok _ ->
                             Ok {

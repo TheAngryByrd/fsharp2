@@ -963,6 +963,32 @@ module CompilerContractTests =
                      |> Seq.map (fun phase -> phase.InputFingerprint, phase.OutputFingerprint))
                     "Phase fingerprints must be stable."
 
+            testCase
+                "ordered value and entry-point declarations compile through the public contract"
+            <| fun _ ->
+                let sourceText =
+                    """module Program
+
+let answer () = 42
+
+[<EntryPoint>]
+let main _ =
+    printfn "%d" (answer ())
+    0
+"""
+
+                let result = compile sourceText
+
+                let diagnostics =
+                    result.Diagnostics
+                    |> Seq.map (fun diagnostic -> diagnostic.Message)
+                    |> String.concat Environment.NewLine
+
+                Expect.equal
+                    result.Outcome
+                    CompilationOutcome.Succeeded
+                    $"Ordered value and entry-point declarations must compile. Diagnostics:{Environment.NewLine}{diagnostics}"
+
             testCase "enabled optimization stops at OptimizedCode"
             <| fun _ ->
                 let result =
