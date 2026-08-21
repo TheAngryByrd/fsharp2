@@ -20,21 +20,29 @@ module internal SymbolicEmission =
         |> _.ToLowerInvariant()
 
     let private contentHash kind stableId loweredHash =
-        fingerprint [ kind; stableId; loweredHash ]
+        fingerprint [
+            kind
+            stableId
+            loweredHash
+        ]
 
-    let private emitAttribute (attribute: LoweredCustomAttribute) : SymbolicCustomAttributeFragment = {
-        SchemaVersion = attribute.SchemaVersion
-        StableId = attribute.StableId
-        Kind = attribute.Kind
-        ConstructorArguments = attribute.ConstructorArguments
-        ContentHash =
-            contentHash "attribute" attribute.StableId attribute.SemanticFingerprint
-    }
+    let private emitAttribute
+        (attribute: LoweredCustomAttribute)
+        : SymbolicCustomAttributeFragment =
+        {
+            SchemaVersion = attribute.SchemaVersion
+            StableId = attribute.StableId
+            Kind = attribute.Kind
+            ConstructorArguments = attribute.ConstructorArguments
+            ContentHash = contentHash "attribute" attribute.StableId attribute.SemanticFingerprint
+        }
 
     let private emitParameter (parameter: LoweredParameter) : SymbolicParameterFragment = {
         Name = parameter.Name
         Type = parameter.Type
-        Attributes = parameter.Attributes |> List.map emitAttribute
+        Attributes =
+            parameter.Attributes
+            |> List.map emitAttribute
     }
 
     let private emitLocal (local: LoweredLocal) : SymbolicLocalFragment = {
@@ -54,9 +62,15 @@ module internal SymbolicEmission =
             GenericParameters = methodDeclaration.GenericParameters
             Constraints = methodDeclaration.Constraints
             GenericParameterConstraints = methodDeclaration.GenericParameterConstraints
-            Attributes = methodDeclaration.Attributes |> List.map emitAttribute
-            Parameters = methodDeclaration.Parameters |> List.map emitParameter
-            Locals = body.Locals |> List.map emitLocal
+            Attributes =
+                methodDeclaration.Attributes
+                |> List.map emitAttribute
+            Parameters =
+                methodDeclaration.Parameters
+                |> List.map emitParameter
+            Locals =
+                body.Locals
+                |> List.map emitLocal
             ReturnType = methodDeclaration.ReturnType
             Instructions = body.ControlFlow
             EmitDefaultSequencePoint = methodDeclaration.EmitDefaultSequencePoint
@@ -80,8 +94,7 @@ module internal SymbolicEmission =
             StableId = field.StableId
             Name = field.Name
             Value = field.Value
-            ContentHash =
-                contentHash "literal-field" field.StableId field.SemanticFingerprint
+            ContentHash = contentHash "literal-field" field.StableId field.SemanticFingerprint
         }
 
     let private emitInstanceField
@@ -92,9 +105,10 @@ module internal SymbolicEmission =
             StableId = field.StableId
             Name = field.Name
             Type = field.Type
-            Attributes = field.Attributes |> List.map emitAttribute
-            ContentHash =
-                contentHash "instance-field" field.StableId field.SemanticFingerprint
+            Attributes =
+                field.Attributes
+                |> List.map emitAttribute
+            ContentHash = contentHash "instance-field" field.StableId field.SemanticFingerprint
         }
 
     let private emitStaticField
@@ -105,8 +119,7 @@ module internal SymbolicEmission =
             StableId = field.StableId
             Name = field.Name
             Type = field.Type
-            ContentHash =
-                contentHash "static-field" field.StableId field.SemanticFingerprint
+            ContentHash = contentHash "static-field" field.StableId field.SemanticFingerprint
         }
 
     let private emitProperty (property: LoweredPropertyDeclaration) : SymbolicPropertyFragment = {
@@ -115,8 +128,7 @@ module internal SymbolicEmission =
         Name = property.Name
         Type = property.Type
         GetterStableId = property.GetterStableId
-        ContentHash =
-            contentHash "property" property.StableId property.SemanticFingerprint
+        ContentHash = contentHash "property" property.StableId property.SemanticFingerprint
     }
 
     let private emitType (typeDeclaration: LoweredTypeDeclaration) : SymbolicTypeFragment = {
@@ -128,12 +140,24 @@ module internal SymbolicEmission =
         EnclosingTypeStableId = typeDeclaration.EnclosingTypeStableId
         Kind = typeDeclaration.Kind
         GenericParameters = typeDeclaration.GenericParameters
-        Attributes = typeDeclaration.Attributes |> List.map emitAttribute
-        LiteralFields = typeDeclaration.LiteralFields |> List.map emitLiteralField
-        InstanceFields = typeDeclaration.InstanceFields |> List.map emitInstanceField
-        StaticFields = typeDeclaration.StaticFields |> List.map emitStaticField
-        Properties = typeDeclaration.Properties |> List.map emitProperty
-        Methods = typeDeclaration.Methods |> List.map emitMethod
+        Attributes =
+            typeDeclaration.Attributes
+            |> List.map emitAttribute
+        LiteralFields =
+            typeDeclaration.LiteralFields
+            |> List.map emitLiteralField
+        InstanceFields =
+            typeDeclaration.InstanceFields
+            |> List.map emitInstanceField
+        StaticFields =
+            typeDeclaration.StaticFields
+            |> List.map emitStaticField
+        Properties =
+            typeDeclaration.Properties
+            |> List.map emitProperty
+        Methods =
+            typeDeclaration.Methods
+            |> List.map emitMethod
     }
 
     let private emitDocument (document: LoweredDocument) : SymbolicDocumentFragment = {
@@ -177,12 +201,11 @@ module internal SymbolicEmission =
             Kind = attribute.Kind
             AttributeType = attribute.AttributeType
             ConstructorArguments = attribute.ConstructorArguments
-            NamedArguments = attribute.NamedArguments |> List.map emitNamedArgument
+            NamedArguments =
+                attribute.NamedArguments
+                |> List.map emitNamedArgument
             ContentHash =
-                contentHash
-                    "assembly-attribute"
-                    attribute.StableId
-                    attribute.SemanticFingerprint
+                contentHash "assembly-attribute" attribute.StableId attribute.SemanticFingerprint
         }
 
     let emit (lowered: LoweredCompilation) : SymbolicAssembly = {
@@ -191,8 +214,12 @@ module internal SymbolicEmission =
         AssemblyName = lowered.AssemblyName
         AssemblyVersion = lowered.AssemblyVersion
         PublicFingerprint = lowered.PublicFingerprint
-        Documents = lowered.Documents |> List.map emitDocument
-        AssemblyAttributes = lowered.AssemblyAttributes |> List.map emitAssemblyAttribute
+        Documents =
+            lowered.Documents
+            |> List.map emitDocument
+        AssemblyAttributes =
+            lowered.AssemblyAttributes
+            |> List.map emitAssemblyAttribute
         Module = {
             SchemaVersion = lowered.Module.SchemaVersion
             StableId = lowered.Module.StableId
@@ -200,6 +227,8 @@ module internal SymbolicEmission =
             TypeAbbreviations =
                 lowered.Module.TypeAbbreviations
                 |> List.map emitTypeAbbreviation
-            Types = lowered.Module.Types |> List.map emitType
+            Types =
+                lowered.Module.Types
+                |> List.map emitType
         }
     }

@@ -2016,16 +2016,15 @@ type internal LoweredModule = {
     Types: LoweredTypeDeclaration list
 } with
 
-    member this.Declarations =
-        [
-            yield!
-                this.TypeAbbreviations
-                |> List.map LoweredTypeAbbreviation
+    member this.Declarations = [
+        yield!
+            this.TypeAbbreviations
+            |> List.map LoweredTypeAbbreviation
 
-            yield!
-                this.Types
-                |> List.map LoweredType
-        ]
+        yield!
+            this.Types
+            |> List.map LoweredType
+    ]
 
     override _.ToString() = "LoweredModule"
 
@@ -2057,15 +2056,24 @@ type internal LoweredCompilation = {
 
                 yield!
                     declaration.LiteralFields
-                    |> List.collect (fun field -> [ field.StableId; field.SemanticFingerprint ])
+                    |> List.collect (fun field -> [
+                        field.StableId
+                        field.SemanticFingerprint
+                    ])
 
                 yield!
                     declaration.InstanceFields
-                    |> List.collect (fun field -> [ field.StableId; field.SemanticFingerprint ])
+                    |> List.collect (fun field -> [
+                        field.StableId
+                        field.SemanticFingerprint
+                    ])
 
                 yield!
                     declaration.StaticFields
-                    |> List.collect (fun field -> [ field.StableId; field.SemanticFingerprint ])
+                    |> List.collect (fun field -> [
+                        field.StableId
+                        field.SemanticFingerprint
+                    ])
 
                 yield!
                     declaration.Properties

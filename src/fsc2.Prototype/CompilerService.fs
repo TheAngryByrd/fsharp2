@@ -1208,7 +1208,10 @@ type internal CompilerService() =
             | declaration :: remaining ->
                 let unresolvedValue =
                     match declaration with
-                    | ParsedMethod { Body = ValueReference name; BodyRange = range } when
+                    | ParsedMethod {
+                                       Body = ValueReference name
+                                       BodyRange = range
+                                   } when
                         visibleValues
                         |> Map.containsKey name
                         |> not
@@ -1237,16 +1240,12 @@ type internal CompilerService() =
                             visibleValues
                             |> Map.add
                                 methodDeclaration.Name
-                                (declarationIdentity
-                                    methodDeclaration.Name
-                                    "/method:")
+                                (declarationIdentity methodDeclaration.Name "/method:")
                         | ParsedLiteralField fieldDeclaration ->
                             visibleValues
                             |> Map.add
                                 fieldDeclaration.Name
-                                (declarationIdentity
-                                    fieldDeclaration.Name
-                                    "/literal-field:")
+                                (declarationIdentity fieldDeclaration.Name "/literal-field:")
                         | ParsedNestedModule _
                         | ParsedTypeAbbreviation _
                         | ParsedStaticType _
@@ -1265,7 +1264,10 @@ type internal CompilerService() =
                     yield!
                         visibleValues
                         |> Map.toList
-                        |> List.collect (fun (name, stableId) -> [ name; stableId ])
+                        |> List.collect (fun (name, stableId) -> [
+                            name
+                            stableId
+                        ])
                 ]
                 |> Fingerprint.parts
 
@@ -17074,8 +17076,7 @@ type internal CompilerService() =
                             |> List.distinctBy (fun local -> local.Name, local.Type)
                         with
                         | [ local ] -> local
-                        | _ ->
-                            invalidOp "one lowered local index cannot describe different locals"
+                        | _ -> invalidOp "one lowered local index cannot describe different locals"
                     )
 
                 let instructions =
@@ -25235,10 +25236,7 @@ type internal CompilerService() =
                         |> Fingerprint.parts
                 }
 
-                Ok(
-                    typedCompilation,
-                    keys
-                )
+                Ok(typedCompilation, keys)
 
         let rec resolveAll visibleValues (resolved: ResolvedModule list) remaining =
             match remaining with
