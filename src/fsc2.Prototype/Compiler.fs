@@ -45,21 +45,13 @@ type Compiler() =
         |> String.concat "|"
         |> textFingerprint
 
-    let phaseResult phase status inputFingerprint outputFingerprint = {
-        Phase = phase
-        Status = status
-        InputFingerprint = inputFingerprint
-        OutputFingerprint = outputFingerprint
-        TraceValues = ImmutableArray.Empty
-    }
+    let semanticFingerprints (request: CompilationRequest) =
+        let source = sourceFingerprint request
+        let syntax = textFingerprint $"syntax|{source}"
 
-    let failurePhaseResults request failedPhase =
-        let sourceOutput = sourceFingerprint request
-        let syntaxOutput = textFingerprint $"syntax|{sourceOutput}"
-
-        let resolvedOutput =
+        let resolved =
             [
-                syntaxOutput
+                syntax
 
                 yield!
                     request.TargetReferences
@@ -70,6 +62,24 @@ type Compiler() =
             ]
             |> String.concat "|"
             |> textFingerprint
+
+        let typed = textFingerprint $"typed|{resolved}"
+
+        let lowered =
+            textFingerprint $"lowered|{typed}|{request.AssemblyIdentity.StableId.Value}"
+
+        source, syntax, resolved, typed, lowered
+
+    let phaseResult phase status inputFingerprint outputFingerprint = {
+        Phase = phase
+        Status = status
+        InputFingerprint = inputFingerprint
+        OutputFingerprint = outputFingerprint
+        TraceValues = ImmutableArray.Empty
+    }
+
+    let failurePhaseResults request failedPhase =
+        let sourceOutput, syntaxOutput, resolvedOutput, _, _ = semanticFingerprints request
 
         let failedIndex = phases |> Array.findIndex ((=) failedPhase)
 
@@ -117,6 +127,102 @@ type Compiler() =
                 | CompilationPhase.FinalLinking ->
                     phaseResult phase PhaseStatus.Completed None None
         )
+        |> ImmutableArray.CreateRange
+
+    let unsupportedOptimizationPhaseResults request =
+        let source, syntax, resolved, typed, lowered = semanticFingerprints request
+
+        [|
+            phaseResult
+                CompilationPhase.Source
+                PhaseStatus.Completed
+                (Some request.RequestIdentity.Value)
+                (Some source)
+            phaseResult
+                CompilationPhase.Syntax
+                PhaseStatus.Completed
+                (Some source)
+                (Some syntax)
+            phaseResult
+                CompilationPhase.ResolvedSymbols
+                PhaseStatus.Completed
+                (Some syntax)
+                (Some resolved)
+            phaseResult
+                CompilationPhase.TypedDeclarations
+                PhaseStatus.Completed
+                (Some resolved)
+                (Some typed)
+            phaseResult
+                CompilationPhase.LoweredCode
+                PhaseStatus.Completed
+                (Some typed)
+                (Some lowered)
+            phaseResult
+                CompilationPhase.OptimizedCode
+                PhaseStatus.Unsupported
+                (Some lowered)
+                None
+            phaseResult CompilationPhase.SymbolicEmission PhaseStatus.NotStarted None None
+            phaseResult CompilationPhase.FinalLinking PhaseStatus.NotStarted None None
+        |]
+        |> ImmutableArray.CreateRange
+
+    let successPhaseResults request compilation compilationArtifacts =
+        let source, syntax, resolved, typed, lowered = semanticFingerprints request
+
+        let symbolic =
+            textFingerprint
+                $"symbolic|{lowered}|{compilation.SymbolicAssembly.PublicFingerprint}"
+
+        let linked =
+            compilationArtifacts
+            |> Seq.map _.Fingerprint
+            |> String.concat "|"
+            |> textFingerprint
+
+        [|
+            phaseResult
+                CompilationPhase.Source
+                PhaseStatus.Completed
+                (Some request.RequestIdentity.Value)
+                (Some source)
+            phaseResult
+                CompilationPhase.Syntax
+                PhaseStatus.Completed
+                (Some source)
+                (Some syntax)
+            phaseResult
+                CompilationPhase.ResolvedSymbols
+                PhaseStatus.Completed
+                (Some syntax)
+                (Some resolved)
+            phaseResult
+                CompilationPhase.TypedDeclarations
+                PhaseStatus.Completed
+                (Some resolved)
+                (Some typed)
+            phaseResult
+                CompilationPhase.LoweredCode
+                PhaseStatus.Completed
+                (Some typed)
+                (Some lowered)
+            phaseResult
+                CompilationPhase.OptimizedCode
+                PhaseStatus.Skipped
+                (Some lowered)
+                (Some lowered)
+            phaseResult
+                CompilationPhase.SymbolicEmission
+                PhaseStatus.Completed
+                (Some lowered)
+                (Some symbolic)
+            phaseResult
+                CompilationPhase.FinalLinking
+                PhaseStatus.Completed
+                (Some symbolic)
+                (Some linked)
+        |]
         |> ImmutableArray.CreateRange
 
     let artifact request kind suffix bytes =
@@ -171,6 +277,21 @@ type Compiler() =
         |> ignore
 
         match CompilationPipeline.compileRequest service request with
+        | Error diagnostic when diagnostic.Code = "FSC2C2002" ->
+            {
+                Outcome =
+                    CompilationOutcome.Unsupported {
+                        Code = diagnostic.Code
+                        Message = diagnostic.Message
+                        StoppingPhase = CompilationPhase.OptimizedCode
+                        UnsupportedValueIdentity = "semantic.optimization=enabled"
+                    }
+                Diagnostics = ImmutableArray.Empty
+                Artifacts = ImmutableArray.Empty
+                Fingerprints = ImmutableArray.Empty
+                PhaseResults = unsupportedOptimizationPhaseResults request
+                Traces = ImmutableArray.Empty
+            }
         | Error diagnostic ->
             let failedPhase =
                 if diagnostic.Code = "FS0001" then
@@ -190,6 +311,7 @@ type Compiler() =
             }
         | Ok compilation ->
             let compilationArtifacts = artifacts request compilation.Artifacts
+            let phaseResults = successPhaseResults request compilation compilationArtifacts
 
             {
                 Outcome = CompilationOutcome.Succeeded
@@ -199,6 +321,6 @@ type Compiler() =
                     compilationArtifacts
                     |> Seq.map _.Fingerprint
                     |> ImmutableArray.CreateRange
-                PhaseResults = ImmutableArray.Empty
+                PhaseResults = phaseResults
                 Traces = ImmutableArray.Empty
             }

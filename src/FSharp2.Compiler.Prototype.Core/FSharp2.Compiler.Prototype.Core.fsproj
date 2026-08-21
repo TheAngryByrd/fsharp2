@@ -20,6 +20,7 @@
     <Compile Include="../fsc2.Prototype/Frontend.fs" Link="Frontend.fs" />
     <Compile Include="../fsc2.Prototype/ReferenceIndex.fs" Link="ReferenceIndex.fs" />
     <Compile Include="../fsc2.Prototype/CompilerService.fs" Link="CompilerService.fs" />
+    <Compile Include="../fsc2.Prototype/SymbolicEmission.fs" Link="SymbolicEmission.fs" />
     <Compile Include="../fsc2.Prototype/StrongName.fs" Link="StrongName.fs" />
     <Compile Include="../fsc2.Prototype/Linker.fs" Link="Linker.fs" />
     <Compile Include="../fsc2.Prototype/CompilationPipeline.fs" Link="CompilationPipeline.fs" />

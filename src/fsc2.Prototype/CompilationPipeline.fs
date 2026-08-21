@@ -8,6 +8,7 @@ open System.Text
 
 type internal CoreCompilation = {
     Query: CompilerQueryResult
+    SymbolicAssembly: SymbolicAssembly
     Artifacts: LinkedArtifacts
     LinkElapsedMicroseconds: int64
 } with
@@ -177,17 +178,27 @@ module internal CompilationPipeline =
             with
             | Error compilerDiagnostic -> Error compilerDiagnostic
             | Ok query ->
-                try
-                    let linkStarted = Stopwatch.GetTimestamp()
-                    let artifacts = Linker.link request query.SymbolicAssembly
+                match request.SemanticOptions.Optimization with
+                | OptimizationMode.Enabled ->
+                    Error(
+                        diagnostic
+                            "FSC2C2002"
+                            "Enabled optimization is not supported by this compiler contract."
+                    )
+                | OptimizationMode.Disabled ->
+                    try
+                        let symbolic = SymbolicEmission.emit query.LoweredCompilation
+                        let linkStarted = Stopwatch.GetTimestamp()
+                        let artifacts = Linker.link request symbolic
 
-                    Ok {
-                        Query = query
-                        Artifacts = artifacts
-                        LinkElapsedMicroseconds = elapsedMicroseconds linkStarted
-                    }
-                with ex ->
-                    Error(diagnostic "FSC2P9999" ex.Message)
+                        Ok {
+                            Query = query
+                            SymbolicAssembly = symbolic
+                            Artifacts = artifacts
+                            LinkElapsedMicroseconds = elapsedMicroseconds linkStarted
+                        }
+                    with ex ->
+                        Error(diagnostic "FSC2P9999" ex.Message)
 
     let private failure started message = {
         ExitCode = 1
@@ -281,8 +292,8 @@ module internal CompilationPipeline =
                     LinkElapsedMicroseconds = compilation.LinkElapsedMicroseconds
                     PublishElapsedMicroseconds = publishElapsedMicroseconds
                     CompileElapsedMicroseconds = elapsedMicroseconds compileStarted
-                    ExportFingerprint = query.SymbolicAssembly.PublicFingerprint
-                    FragmentHash = fragmentHash query.SymbolicAssembly
+                    ExportFingerprint = compilation.SymbolicAssembly.PublicFingerprint
+                    FragmentHash = fragmentHash compilation.SymbolicAssembly
                     Emitted = true
                 }
         with ex ->

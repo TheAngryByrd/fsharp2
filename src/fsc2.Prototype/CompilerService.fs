@@ -1144,7 +1144,7 @@ type internal CompilerService() =
     let querySchema = CompilerSchema.Query
     let parseCache = Dictionary<string, ParsedModule list>(StringComparer.Ordinal)
     let checkCache = Dictionary<string, TypedModule>(StringComparer.Ordinal)
-    let lowerCache = Dictionary<string, SymbolicAssembly>(StringComparer.Ordinal)
+    let lowerCache = Dictionary<string, LoweredCompilation>(StringComparer.Ordinal)
     let lastSuccessfulContent = Dictionary<string, string>(StringComparer.Ordinal)
     let mutable parseHits = 0
     let mutable parseMisses = 0
@@ -12568,7 +12568,9 @@ type internal CompilerService() =
                     checkCache.Add(key, typed)
                     Ok(typed, key)
 
-    let lower (assemblyName: string) (typedModules: TypedModule list) =
+    let lower (assemblyName: string) (typedCompilation: TypedCompilation) =
+        let typedModules = typedCompilation.Modules
+
         let methodImplementationHash (methodDeclaration: TypedMethodDeclaration) =
             Fingerprint.parts [
                 methodDeclaration.StableId
@@ -12795,12 +12797,12 @@ type internal CompilerService() =
             ]
 
         match lowerCache.TryGetValue(key) with
-        | true, symbolic ->
+        | true, lowered ->
             lowerHits <-
                 lowerHits
                 + 1
 
-            symbolic, key
+            lowered, key
         | false, _ ->
             lowerMisses <-
                 lowerMisses
@@ -12849,7 +12851,7 @@ type internal CompilerService() =
                             Name = argument.Name
                             Value = argument.Value
                         })
-                    ContentHash = contentHash
+                    SemanticFingerprint = contentHash
                 })
 
             let typeAbbreviations =
@@ -12867,7 +12869,7 @@ type internal CompilerService() =
                                 Constraints = typeDeclaration.Constraints
                                 TargetType = typeDeclaration.TargetType
                                 AllowsNull = typeDeclaration.AllowsNull
-                                ContentHash = contentHash
+                                SemanticFingerprint = contentHash
                             }
                         | TypedMethod _
                         | TypedLiteralField _
@@ -12883,10 +12885,10 @@ type internal CompilerService() =
                 StableId = attribute.StableId
                 Kind = attribute.Kind
                 ConstructorArguments = attribute.ConstructorArguments
-                ContentHash = attribute.ExportFingerprint
+                SemanticFingerprint = attribute.ExportFingerprint
             }
 
-            let parameterFragment (parameter: TypedParameter) : SymbolicParameterFragment = {
+            let parameterFragment (parameter: TypedParameter) : LoweredParameter = {
                 Name = parameter.Name
                 Type = parameter.Type
                 Attributes =
@@ -12906,7 +12908,7 @@ type internal CompilerService() =
                     StableId = stableId
                     Kind = CompilationMappingAttribute
                     ConstructorArguments = arguments
-                    ContentHash =
+                    SemanticFingerprint =
                         Fingerprint.parts [
                             stableId
                             TypeIdentity.attributeKind CompilationMappingAttribute
@@ -17071,7 +17073,7 @@ type internal CompilerService() =
                         with
                         | [ local ] -> local
                         | _ ->
-                            invalidOp "one symbolic local index cannot describe different locals"
+                            invalidOp "one lowered local index cannot describe different locals"
                     )
 
                 let instructions =
@@ -17177,7 +17179,7 @@ type internal CompilerService() =
                         methodDependencies methodDeclaration
                         @ instructionDependencies
                         |> List.distinct
-                    ContentHash = contentHash
+                    SemanticFingerprint = contentHash
                     DocumentIndex = documentIndex
                     DocumentChecksum = documentChecksum
                     Range = methodDeclaration.Range
@@ -17206,7 +17208,7 @@ type internal CompilerService() =
                                         + fieldDeclaration.StableId
                                     Name = fieldDeclaration.Name
                                     Value = fieldDeclaration.Value
-                                    ContentHash = contentHash
+                                    SemanticFingerprint = contentHash
                                 }
                             | TypedMethod _
                             | TypedNestedModule _
@@ -17455,7 +17457,7 @@ type internal CompilerService() =
                                 StableId = field.TargetStableId.Value
                                 Name = field.Name
                                 Type = value.Type
-                                ContentHash =
+                                SemanticFingerprint =
                                     Fingerprint.parts [
                                         typeContentHash
                                         value.StableId
@@ -17494,7 +17496,7 @@ type internal CompilerService() =
                                 EmitDefaultSequencePoint = true
                                 MaxStack = 1
                                 DependencyIds = [ field.DependencyId ]
-                                ContentHash =
+                                SemanticFingerprint =
                                     Fingerprint.parts [
                                         value.ExportFingerprint
                                         field.StableId
@@ -17663,7 +17665,7 @@ type internal CompilerService() =
                         DependencyIds =
                             initializerDependencies
                             |> List.distinct
-                        ContentHash =
+                        SemanticFingerprint =
                             Fingerprint.parts [
                                 staticConstructorStableId
                                 typeContentHash
@@ -17692,7 +17694,7 @@ type internal CompilerService() =
                             GetterStableId =
                                 value.StableId
                                 + "/getter"
-                            ContentHash = value.ExportFingerprint
+                            SemanticFingerprint = value.ExportFingerprint
                         })
 
                     {
@@ -18020,7 +18022,7 @@ type internal CompilerService() =
                                             @ (cliTypeDependencyIds
                                                 expression.OutputValueTaskType)
                                             |> List.distinct
-                                        ContentHash =
+                                        SemanticFingerprint =
                                             Fingerprint.parts [
                                                 layout.CompletedStableId
                                                 methodImplementationHash methodDeclaration
@@ -18157,7 +18159,7 @@ type internal CompilerService() =
                                             @ (cliTypeDependencyIds taskInputType)
                                             @ (cliTypeDependencyIds taskOutputType)
                                             |> List.distinct
-                                        ContentHash =
+                                        SemanticFingerprint =
                                             Fingerprint.parts [
                                                 layout.ContinuationStableId
                                                 methodImplementationHash methodDeclaration
@@ -18686,7 +18688,7 @@ type internal CompilerService() =
                                             @ (cliTypeDependencyIds
                                                 expression.OutputValueTaskType)
                                             |> List.distinct
-                                        ContentHash =
+                                        SemanticFingerprint =
                                             Fingerprint.parts [
                                                 layout.CompletedStableId
                                                 methodImplementationHash methodDeclaration
@@ -18804,7 +18806,7 @@ type internal CompilerService() =
                                             @ (cliTypeDependencyIds taskInputType)
                                             @ (cliTypeDependencyIds taskOutputType)
                                             |> List.distinct
-                                        ContentHash =
+                                        SemanticFingerprint =
                                             Fingerprint.parts [
                                                 layout.InputContinuationStableId
                                                 methodImplementationHash methodDeclaration
@@ -18949,7 +18951,7 @@ type internal CompilerService() =
                                             @ (cliTypeDependencyIds taskApplicableType)
                                             @ (cliTypeDependencyIds taskOutputType)
                                             |> List.distinct
-                                        ContentHash =
+                                        SemanticFingerprint =
                                             Fingerprint.parts [
                                                 layout.ApplicableContinuationStableId
                                                 methodImplementationHash methodDeclaration
@@ -19486,7 +19488,7 @@ type internal CompilerService() =
                                             @ (cliTypeDependencyIds
                                                 expression.OutputValueTaskType)
                                             |> List.distinct
-                                        ContentHash =
+                                        SemanticFingerprint =
                                             Fingerprint.parts [
                                                 layout.CompletedStableId
                                                 methodImplementationHash methodDeclaration
@@ -19608,7 +19610,7 @@ type internal CompilerService() =
                                             @ (cliTypeDependencyIds taskRightType)
                                             @ (cliTypeDependencyIds taskOutputType)
                                             |> List.distinct
-                                        ContentHash =
+                                        SemanticFingerprint =
                                             Fingerprint.parts [
                                                 layout.RightContinuationStableId
                                                 methodImplementationHash methodDeclaration
@@ -19749,7 +19751,7 @@ type internal CompilerService() =
                                             @ (cliTypeDependencyIds taskLeftType)
                                             @ (cliTypeDependencyIds taskOutputType)
                                             |> List.distinct
-                                        ContentHash =
+                                        SemanticFingerprint =
                                             Fingerprint.parts [
                                                 layout.LeftContinuationStableId
                                                 methodImplementationHash methodDeclaration
@@ -19935,7 +19937,7 @@ type internal CompilerService() =
                                         MaxStack = 8
                                         DependencyIds =
                                             instructionDependencyIds constructorInstructions
-                                        ContentHash =
+                                        SemanticFingerprint =
                                             Fingerprint.parts [
                                                 constructorStableId
                                                 methodImplementationHash methodDeclaration
@@ -20273,7 +20275,7 @@ type internal CompilerService() =
                                             instructionDependencyIds invokeInstructions
                                             @ (cliTypeDependencyIds taskOutputType)
                                             |> List.distinct
-                                        ContentHash =
+                                        SemanticFingerprint =
                                             Fingerprint.parts [
                                                 invokeStableId
                                                 methodImplementationHash methodDeclaration
@@ -20309,7 +20311,7 @@ type internal CompilerService() =
                                                 Name = capture.Field.Name
                                                 Type = capture.Type
                                                 Attributes = []
-                                                ContentHash =
+                                                SemanticFingerprint =
                                                     Fingerprint.parts [
                                                         capture.Name
                                                         TypeIdentity.cliType capture.Type
@@ -20627,7 +20629,7 @@ type internal CompilerService() =
                                             @ (cliTypeDependencyIds nonGenericTaskType)
                                             @ (cliTypeDependencyIds taskUnitType)
                                             |> List.distinct
-                                        ContentHash =
+                                        SemanticFingerprint =
                                             Fingerprint.parts [
                                                 layout.ContinuationStableId
                                                 methodImplementationHash methodDeclaration
@@ -21001,7 +21003,7 @@ type internal CompilerService() =
                                             instructionDependencyIds instructions
                                             @ (cliTypeDependencyIds returnType)
                                             |> List.distinct
-                                        ContentHash =
+                                        SemanticFingerprint =
                                             Fingerprint.parts [
                                                 stableId
                                                 methodImplementationHash methodDeclaration
@@ -21018,7 +21020,7 @@ type internal CompilerService() =
                                     Name = name
                                     Type = fieldType
                                     Attributes = []
-                                    ContentHash =
+                                    SemanticFingerprint =
                                         Fingerprint.parts [
                                             stableId
                                             TypeIdentity.cliType fieldType
@@ -21641,7 +21643,7 @@ type internal CompilerService() =
                                         DependencyIds =
                                             instructionDependencyIds instructions
                                             |> List.distinct
-                                        ContentHash =
+                                        SemanticFingerprint =
                                             Fingerprint.parts [
                                                 stableId
                                                 methodImplementationHash methodDeclaration
@@ -22436,7 +22438,7 @@ type internal CompilerService() =
                                             Name = "sequence"
                                             Type = expression.SequenceType
                                             Attributes = []
-                                            ContentHash =
+                                            SemanticFingerprint =
                                                 Fingerprint.parts [
                                                     layout.SequenceFieldStableId
                                                     TypeIdentity.cliType expression.SequenceType
@@ -22455,7 +22457,7 @@ type internal CompilerService() =
                                             Name = "enumerator"
                                             Type = enumeratorType
                                             Attributes = []
-                                            ContentHash =
+                                            SemanticFingerprint =
                                                 Fingerprint.parts [
                                                     layout.EnumeratorFieldStableId
                                                     TypeIdentity.cliType enumeratorType
@@ -22467,7 +22469,7 @@ type internal CompilerService() =
                                             Name = "results"
                                             Type = resultsType
                                             Attributes = []
-                                            ContentHash =
+                                            SemanticFingerprint =
                                                 Fingerprint.parts [
                                                     layout.ResultsFieldStableId
                                                     TypeIdentity.cliType resultsType
@@ -22479,7 +22481,7 @@ type internal CompilerService() =
                                             Name = "cancellationToken"
                                             Type = expression.CancellationTokenType
                                             Attributes = []
-                                            ContentHash =
+                                            SemanticFingerprint =
                                                 Fingerprint.parts [
                                                     layout.CancellationTokenFieldStableId
                                                     TypeIdentity.cliType
@@ -22500,7 +22502,7 @@ type internal CompilerService() =
                                             Name = "task"
                                             Type = expression.InputFunctionType
                                             Attributes = []
-                                            ContentHash =
+                                            SemanticFingerprint =
                                                 Fingerprint.parts [
                                                     layout.DelayTaskFieldStableId
                                                     TypeIdentity.cliType
@@ -22513,7 +22515,7 @@ type internal CompilerService() =
                                             Name = "cancellationToken"
                                             Type = expression.CancellationTokenType
                                             Attributes = []
-                                            ContentHash =
+                                            SemanticFingerprint =
                                                 Fingerprint.parts [
                                                     layout.DelayCancellationTokenFieldStableId
                                                     TypeIdentity.cliType
@@ -22625,7 +22627,7 @@ type internal CompilerService() =
                                         DependencyIds =
                                             instructionDependencyIds constructorInstructions
                                             |> List.distinct
-                                        ContentHash =
+                                        SemanticFingerprint =
                                             Fingerprint.parts [
                                                 layout.ConstructorStableId
                                                 methodImplementationHash methodDeclaration
@@ -22839,7 +22841,7 @@ type internal CompilerService() =
                                         DependencyIds =
                                             instructionDependencyIds continueWaitInstructions
                                             |> List.distinct
-                                        ContentHash =
+                                        SemanticFingerprint =
                                             Fingerprint.parts [
                                                 layout.ContinueWaitStableId
                                                 methodImplementationHash methodDeclaration
@@ -23059,7 +23061,7 @@ type internal CompilerService() =
                                         DependencyIds =
                                             instructionDependencyIds continueWorkInstructions
                                             |> List.distinct
-                                        ContentHash =
+                                        SemanticFingerprint =
                                             Fingerprint.parts [
                                                 layout.ContinueWorkStableId
                                                 methodImplementationHash methodDeclaration
@@ -23087,7 +23089,7 @@ type internal CompilerService() =
                                                 Name = "work"
                                                 Type = expression.OutputTaskType
                                                 Attributes = []
-                                                ContentHash =
+                                                SemanticFingerprint =
                                                     Fingerprint.parts [
                                                         layout.WorkFieldStableId
                                                         TypeIdentity.cliType
@@ -23100,7 +23102,7 @@ type internal CompilerService() =
                                                 Name = "compensation"
                                                 Type = expression.CompensationType
                                                 Attributes = []
-                                                ContentHash =
+                                                SemanticFingerprint =
                                                     Fingerprint.parts [
                                                         layout.CompensationFieldStableId
                                                         TypeIdentity.cliType
@@ -23591,7 +23593,7 @@ type internal CompilerService() =
                                     EmitDefaultSequencePoint = true
                                     MaxStack = 1
                                     DependencyIds = [ objectConstructor.DependencyId ]
-                                    ContentHash =
+                                    SemanticFingerprint =
                                         Fingerprint.parts [
                                             constructorStableId
                                             objectConstructor.StableId
@@ -23707,7 +23709,7 @@ type internal CompilerService() =
                                                     range) ->
                                 if not (List.isEmpty constructorArguments) then
                                     invalidOp
-                                        "object-expression constructor arguments reached symbolic lowering"
+                                        "object-expression constructor arguments reached lowering"
 
                                 let constructorStableId =
                                     objectExpressionConstructorStableId typeReference
@@ -23751,7 +23753,7 @@ type internal CompilerService() =
                                     EmitDefaultSequencePoint = false
                                     MaxStack = 1
                                     DependencyIds = [ baseConstructor.DependencyId ]
-                                    ContentHash =
+                                    SemanticFingerprint =
                                         Fingerprint.parts [
                                             constructorStableId
                                             baseConstructor.StableId
@@ -23950,7 +23952,7 @@ type internal CompilerService() =
                                             layout.CaptureFieldReference.DependencyId
                                             objectConstructor.DependencyId
                                         ]
-                                        ContentHash =
+                                        SemanticFingerprint =
                                             Fingerprint.parts [
                                                 layout.ConstructorStableId
                                                 layout.CaptureFieldReference.StableId
@@ -24044,7 +24046,7 @@ type internal CompilerService() =
                                         EmitDefaultSequencePoint = true
                                         MaxStack = 8
                                         DependencyIds = invokeDependencies
-                                        ContentHash =
+                                        SemanticFingerprint =
                                             Fingerprint.parts [
                                                 layout.InvokeStableId
                                                 methodImplementationHash methodDeclaration
@@ -24075,7 +24077,7 @@ type internal CompilerService() =
                                                 Name = expression.CaptureName
                                                 Type = layout.CaptureType
                                                 Attributes = []
-                                                ContentHash =
+                                                SemanticFingerprint =
                                                     Fingerprint.parts [
                                                         layout.CaptureFieldStableId
                                                         TypeIdentity.cliType layout.CaptureType
@@ -24172,7 +24174,7 @@ type internal CompilerService() =
                                             layout.CaptureFieldReference.DependencyId
                                             objectConstructor.DependencyId
                                         ]
-                                        ContentHash =
+                                        SemanticFingerprint =
                                             Fingerprint.parts [
                                                 layout.ConstructorStableId
                                                 layout.CaptureFieldStableId
@@ -24223,7 +24225,7 @@ type internal CompilerService() =
                                             layout.CaptureFieldReference.DependencyId
                                             targetMethod.DependencyId
                                         ]
-                                        ContentHash =
+                                        SemanticFingerprint =
                                             Fingerprint.parts [
                                                 layout.InvokeStableId
                                                 methodImplementationHash methodDeclaration
@@ -24254,7 +24256,7 @@ type internal CompilerService() =
                                                 Name = "receiver"
                                                 Type = layout.CaptureType
                                                 Attributes = []
-                                                ContentHash =
+                                                SemanticFingerprint =
                                                     Fingerprint.parts [
                                                         layout.CaptureFieldStableId
                                                         TypeIdentity.cliType layout.CaptureType
@@ -24390,7 +24392,7 @@ type internal CompilerService() =
                                             layout.CaptureFieldReference.DependencyId
                                             objectConstructor.DependencyId
                                         ]
-                                        ContentHash =
+                                        SemanticFingerprint =
                                             Fingerprint.parts [
                                                 layout.ConstructorStableId
                                                 layout.CaptureFieldStableId
@@ -24429,7 +24431,7 @@ type internal CompilerService() =
                                         DependencyIds = [
                                             layout.CaptureFieldReference.DependencyId
                                         ]
-                                        ContentHash =
+                                        SemanticFingerprint =
                                             Fingerprint.parts [
                                                 layout.InvokeStableId
                                                 methodImplementationHash methodDeclaration
@@ -24460,7 +24462,7 @@ type internal CompilerService() =
                                                 Name = expression.CaptureName
                                                 Type = layout.CaptureType
                                                 Attributes = []
-                                                ContentHash =
+                                                SemanticFingerprint =
                                                     Fingerprint.parts [
                                                         layout.CaptureFieldStableId
                                                         TypeIdentity.cliType layout.CaptureType
@@ -24647,7 +24649,7 @@ type internal CompilerService() =
                                                 captureFieldReference
                                                 >> _.DependencyId
                                             ))
-                                    ContentHash =
+                                    SemanticFingerprint =
                                         Fingerprint.parts [
                                             constructorStableId
                                             objectConstructor.StableId
@@ -24736,7 +24738,7 @@ type internal CompilerService() =
                                             Name = capture.Field.Name
                                             Type = capture.Type
                                             Attributes = []
-                                            ContentHash =
+                                            SemanticFingerprint =
                                                 Fingerprint.parts [
                                                     capture.Name
                                                     TypeIdentity.cliType capture.Type
@@ -24876,7 +24878,7 @@ type internal CompilerService() =
                                                 captureFieldReference
                                                 >> _.DependencyId
                                             ))
-                                    ContentHash =
+                                    SemanticFingerprint =
                                         Fingerprint.parts [
                                             constructorStableId
                                             objectConstructor.StableId
@@ -24971,7 +24973,7 @@ type internal CompilerService() =
                                             Name = capture.Field.Name
                                             Type = capture.Type
                                             Attributes = []
-                                            ContentHash =
+                                            SemanticFingerprint =
                                                 Fingerprint.parts [
                                                     capture.Name
                                                     TypeIdentity.cliType capture.Type
@@ -25021,7 +25023,7 @@ type internal CompilerService() =
                                     Attributes =
                                         field.Attributes
                                         |> List.map customAttributeFragment
-                                    ContentHash = field.ExportFingerprint
+                                    SemanticFingerprint = field.ExportFingerprint
                                 })
 
                             let methods =
@@ -25097,7 +25099,7 @@ type internal CompilerService() =
                 @ functionLambdaClosureTypes
                 @ delegateLambdaClosureTypes
 
-            let symbolic: SymbolicAssembly = {
+            let lowered: LoweredCompilation = {
                 SchemaVersion = querySchema
                 StableId = assemblyStableId
                 AssemblyName = assemblyName
@@ -25118,8 +25120,8 @@ type internal CompilerService() =
                 }
             }
 
-            lowerCache.Add(key, symbolic)
-            symbolic, key
+            lowerCache.Add(key, lowered)
+            lowered, key
 
     member _.Compile
         (
@@ -25276,7 +25278,7 @@ type internal CompilerService() =
                 | Ok(typedCompilation, checkKeys) ->
                     let checkElapsedMicroseconds = elapsedMicroseconds checkStarted
                     let lowerStarted = Stopwatch.GetTimestamp()
-                    let symbolic, lowerKey = lower assemblyName typedCompilation.Modules
+                    let loweredCompilation, lowerKey = lower assemblyName typedCompilation
                     let lowerElapsedMicroseconds = elapsedMicroseconds lowerStarted
 
                     let contentFingerprint =
@@ -25301,7 +25303,7 @@ type internal CompilerService() =
                     Ok {
                         ResolvedCompilation = resolvedCompilation
                         TypedCompilation = typedCompilation
-                        SymbolicAssembly = symbolic
+                        LoweredCompilation = loweredCompilation
                         QuerySchema = querySchema
                         NodeKind = if sources.Length = 1 then "source" else "project"
                         ContentFingerprint = contentFingerprint
@@ -25311,8 +25313,8 @@ type internal CompilerService() =
                         CheckKey = combine checkKeys
                         LowerKey = lowerKey
                         DependencyCount =
-                            symbolic.Module.TypeAbbreviations.Length
-                            + (symbolic.Module.Types
+                            loweredCompilation.Module.TypeAbbreviations.Length
+                            + (loweredCompilation.Module.Types
                                |> List.sumBy (fun typeFragment ->
                                    typeFragment.Methods
                                    |> List.sumBy (fun methodFragment ->

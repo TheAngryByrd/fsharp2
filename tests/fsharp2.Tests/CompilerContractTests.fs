@@ -19,7 +19,7 @@ module CompilerContractTests =
         |> Convert.ToHexString
         |> _.ToLowerInvariant()
 
-    let private compile (sourceText: string) =
+    let private compileWithOptimization optimization (sourceText: string) =
         let sourceBytes = Text.Encoding.UTF8.GetBytes(sourceText)
         let referenceImage = File.ReadAllBytes(Assembly.Load("System.Runtime").Location)
 
@@ -47,7 +47,7 @@ module CompilerContractTests =
                         fingerprint referenceImage
                     )
                 |],
-                SemanticOptions.Create([||], None, OptimizationMode.Disabled, false, false, None),
+                SemanticOptions.Create([||], None, optimization, false, false, None),
                 DiagnosticOptions.Create(None, [||], false, [||]),
                 EmissionOptions.Create(true, false, DebugFormat.None, [||], [| "Tracer.fs" |], [||]),
                 SigningOptions.Create(SigningMode.Unsigned, [||]),
@@ -56,6 +56,9 @@ module CompilerContractTests =
             )
 
         Compiler().Compile(request, CancellationToken.None)
+
+    let private compile sourceText =
+        compileWithOptimization OptimizationMode.Disabled sourceText
 
     [<Tests>]
     let tests =
@@ -627,4 +630,105 @@ module CompilerContractTests =
                         $"The {phase} phase must not start."
 
                 Expect.isEmpty result.Artifacts "A failed compilation must not contain an artifact."
+
+            testCase "success reports every contract phase in dependency order"
+            <| fun _ ->
+                let sourceText = "module Tracer\nlet answer () = 42\n"
+                let first = compile sourceText
+                let second = compile sourceText
+
+                Expect.equal first.Outcome CompilationOutcome.Succeeded "Compilation must succeed."
+
+                Expect.equal
+                    second.Outcome
+                    CompilationOutcome.Succeeded
+                    "Compilation must succeed again."
+
+                Expect.sequenceEqual
+                    (first.PhaseResults
+                     |> Seq.map _.Phase)
+                    [
+                        CompilationPhase.Source
+                        CompilationPhase.Syntax
+                        CompilationPhase.ResolvedSymbols
+                        CompilationPhase.TypedDeclarations
+                        CompilationPhase.LoweredCode
+                        CompilationPhase.OptimizedCode
+                        CompilationPhase.SymbolicEmission
+                        CompilationPhase.FinalLinking
+                    ]
+                    "The phase order must match the compiler contract."
+
+                Expect.sequenceEqual
+                    (first.PhaseResults
+                     |> Seq.map _.Status)
+                    [
+                        PhaseStatus.Completed
+                        PhaseStatus.Completed
+                        PhaseStatus.Completed
+                        PhaseStatus.Completed
+                        PhaseStatus.Completed
+                        PhaseStatus.Skipped
+                        PhaseStatus.Completed
+                        PhaseStatus.Completed
+                    ]
+                    "The success statuses must match the compiler contract."
+
+                Expect.sequenceEqual
+                    (first.PhaseResults
+                     |> Seq.map (fun phase -> phase.InputFingerprint, phase.OutputFingerprint))
+                    (second.PhaseResults
+                     |> Seq.map (fun phase -> phase.InputFingerprint, phase.OutputFingerprint))
+                    "Phase fingerprints must be stable."
+
+            testCase "enabled optimization stops at OptimizedCode"
+            <| fun _ ->
+                let result =
+                    compileWithOptimization
+                        OptimizationMode.Enabled
+                        "module Tracer\nlet answer () = 42\n"
+
+                match result.Outcome with
+                | CompilationOutcome.Unsupported failure ->
+                    Expect.equal failure.Code "FSC2C2002" "The failure code must be stable."
+
+                    Expect.equal
+                        failure.StoppingPhase
+                        CompilationPhase.OptimizedCode
+                        "Optimization must be the stopping phase."
+
+                    Expect.equal
+                        failure.UnsupportedValueIdentity
+                        "semantic.optimization=enabled"
+                        "The unsupported value identity must be stable."
+                | outcome -> failtestf "Expected an unsupported result, but received %A." outcome
+
+                let phaseStatus phase =
+                    result.PhaseResults
+                    |> Seq.find (fun phaseResult -> phaseResult.Phase = phase)
+                    |> _.Status
+
+                Expect.equal
+                    (phaseStatus CompilationPhase.LoweredCode)
+                    PhaseStatus.Completed
+                    "Lowering must complete."
+
+                Expect.equal
+                    (phaseStatus CompilationPhase.OptimizedCode)
+                    PhaseStatus.Unsupported
+                    "Optimization must be unsupported."
+
+                Expect.equal
+                    (phaseStatus CompilationPhase.SymbolicEmission)
+                    PhaseStatus.NotStarted
+                    "Symbolic emission must not start."
+
+                Expect.equal
+                    (phaseStatus CompilationPhase.FinalLinking)
+                    PhaseStatus.NotStarted
+                    "Final linking must not start."
+
+                Expect.isEmpty
+                    result.Artifacts
+                    "An unsupported compilation must not contain an artifact."
         ]

@@ -481,7 +481,7 @@ module internal Linker =
 
     let private encodeMethodReferenceSignature
         resolveTypeReference
-        (methodReference: SymbolicMethodReference)
+        (methodReference: LoweredMethodReference)
         =
         encodeCallableSignature
             resolveTypeReference
@@ -532,7 +532,7 @@ module internal Linker =
                         invalidOp
                             $"symbolic IL joins stack depths {existing} and {depth} at instruction {index}"
 
-            let callEffect (methodReference: SymbolicMethodReference) =
+            let callEffect (methodReference: LoweredMethodReference) =
                 let consumed =
                     methodReference.ParameterTypes.Length
                     + (if methodReference.IsInstance then 1 else 0)
@@ -623,7 +623,7 @@ module internal Linker =
 
     let private encodeMethodBody
         (metadata: MetadataBuilder)
-        (resolveDeclaringType: SymbolicDeclaringType -> EntityHandle)
+        (resolveDeclaringType: LoweredDeclaringType -> EntityHandle)
         resolveTypeReference
         (stream: MethodBodyStreamEncoder)
         (methodFragment: SymbolicMethodFragment)
@@ -654,7 +654,7 @@ module internal Linker =
                 |> metadata.GetOrAddBlob
                 |> metadata.AddStandaloneSignature
 
-        let addMethodReference (methodReference: SymbolicMethodReference) =
+        let addMethodReference (methodReference: LoweredMethodReference) =
             metadata.AddMemberReference(
                 resolveDeclaringType methodReference.DeclaringType,
                 metadata.GetOrAddString(methodReference.Name),
@@ -663,7 +663,7 @@ module internal Linker =
             )
 
         let addMethodSpecification
-            (methodReference: SymbolicMethodReference)
+            (methodReference: LoweredMethodReference)
             (genericArguments: CliType list)
             =
             let signature = BlobBuilder()
@@ -679,7 +679,7 @@ module internal Linker =
                 metadata.GetOrAddBlob(signature)
             )
 
-        let addFieldReference (fieldReference: SymbolicFieldReference) =
+        let addFieldReference (fieldReference: LoweredFieldReference) =
             metadata.AddMemberReference(
                 resolveDeclaringType fieldReference.DeclaringType,
                 metadata.GetOrAddString(fieldReference.Name),

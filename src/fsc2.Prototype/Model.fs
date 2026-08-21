@@ -678,11 +678,11 @@ type internal CliType =
     override _.ToString() = "CliType"
 
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
-type internal SymbolicDeclaringType =
+type internal LoweredDeclaringType =
     | CoreDeclaringType of QualifiedTypeName
     | CliDeclaringType of CliType
 
-    override _.ToString() = "SymbolicDeclaringType"
+    override _.ToString() = "LoweredDeclaringType"
 
 module internal StableIdentityFormatting =
     let qualifiedTypeName (typeName: QualifiedTypeName) =
@@ -733,7 +733,7 @@ module internal StableIdentityFormatting =
                     |> List.map cliType
             ]
 
-    let symbolicDeclaringType =
+    let loweredDeclaringType =
         function
         | CoreDeclaringType typeName ->
             "core:"
@@ -751,11 +751,11 @@ module internal StableIdentityExtensions =
         static member internal cliType(cliType) =
             StableIdentityFormatting.cliType cliType
 
-        static member internal symbolicDeclaringType(declaringType) =
-            StableIdentityFormatting.symbolicDeclaringType declaringType
+        static member internal loweredDeclaringType(declaringType) =
+            StableIdentityFormatting.loweredDeclaringType declaringType
 
-type internal SymbolicMethodReference = {
-    DeclaringType: SymbolicDeclaringType
+type internal LoweredMethodReference = {
+    DeclaringType: LoweredDeclaringType
     Name: string
     GenericArity: int
     IsInstance: bool
@@ -767,7 +767,7 @@ type internal SymbolicMethodReference = {
     member this.StableId =
         String.concat "|" [
             "method-reference"
-            StableIdentity.symbolicDeclaringType this.DeclaringType
+            StableIdentity.loweredDeclaringType this.DeclaringType
             this.Name
             "generic:"
             this.GenericArity.ToString(CultureInfo.InvariantCulture)
@@ -783,7 +783,7 @@ type internal SymbolicMethodReference = {
         this.TargetStableId
         |> Option.defaultValue this.StableId
 
-    override _.ToString() = "SymbolicMethodReference"
+    override _.ToString() = "LoweredMethodReference"
 
 type internal TypedCallArgument =
     | TypedValueArgument of string
@@ -1561,8 +1561,8 @@ type internal TypedCompilation = {
 
     override _.ToString() = "TypedCompilation"
 
-type internal SymbolicFieldReference = {
-    DeclaringType: SymbolicDeclaringType
+type internal LoweredFieldReference = {
+    DeclaringType: LoweredDeclaringType
     Name: string
     FieldType: CliType
     TargetStableId: string option
@@ -1571,7 +1571,7 @@ type internal SymbolicFieldReference = {
     member this.StableId =
         String.concat "|" [
             "field-reference"
-            StableIdentity.symbolicDeclaringType this.DeclaringType
+            StableIdentity.loweredDeclaringType this.DeclaringType
             this.Name
             StableIdentity.cliType this.FieldType
         ]
@@ -1580,10 +1580,10 @@ type internal SymbolicFieldReference = {
         this.TargetStableId
         |> Option.defaultValue this.StableId
 
-    override _.ToString() = "SymbolicFieldReference"
+    override _.ToString() = "LoweredFieldReference"
 
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
-type internal SymbolicInstruction =
+type internal LoweredOperation =
     | MarkSequencePoint of SourceRange
     | MarkHiddenSequencePoint
     | MarkLabel of int
@@ -1615,25 +1615,25 @@ type internal SymbolicInstruction =
     | InitializeObject of CliType
     | NewArray of elementType: CliType
     | StoreArrayElementReference
-    | LoadField of SymbolicFieldReference
-    | LoadFieldAddress of SymbolicFieldReference
-    | StoreField of SymbolicFieldReference
-    | LoadStaticField of SymbolicFieldReference
-    | StoreStaticField of SymbolicFieldReference
-    | CallMethod of SymbolicMethodReference
-    | CallVirtualMethod of SymbolicMethodReference
-    | CallGenericMethod of methodReference: SymbolicMethodReference * genericArguments: CliType list
-    | LoadFunctionPointer of SymbolicMethodReference
-    | NewObject of SymbolicMethodReference
+    | LoadField of LoweredFieldReference
+    | LoadFieldAddress of LoweredFieldReference
+    | StoreField of LoweredFieldReference
+    | LoadStaticField of LoweredFieldReference
+    | StoreStaticField of LoweredFieldReference
+    | CallMethod of LoweredMethodReference
+    | CallVirtualMethod of LoweredMethodReference
+    | CallGenericMethod of methodReference: LoweredMethodReference * genericArguments: CliType list
+    | LoadFunctionPointer of LoweredMethodReference
+    | NewObject of LoweredMethodReference
     | Pop
     | Throw
     | EndFinally
     | Return
 
-    override _.ToString() = "SymbolicInstruction"
+    override _.ToString() = "LoweredOperation"
 
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
-type internal SymbolicMethodKind =
+type internal LoweredMethodKind =
     | ModuleFunction
     | InternalModuleFunction
     | ModuleValueGetter
@@ -1649,7 +1649,7 @@ type internal SymbolicMethodKind =
     | ClosureInvoke
     | ObjectExpressionOverride
 
-    override _.ToString() = "SymbolicMethodKind"
+    override _.ToString() = "LoweredMethodKind"
 
 type internal SymbolicCustomAttributeFragment = {
     SchemaVersion: int
@@ -1681,7 +1681,7 @@ type internal SymbolicMethodFragment = {
     SchemaVersion: int
     StableId: string
     Name: string
-    Kind: SymbolicMethodKind
+    Kind: LoweredMethodKind
     GenericParameters: string list
     Constraints: TypedMethodConstraint list
     GenericParameterConstraints: (int * CliType) list
@@ -1689,7 +1689,7 @@ type internal SymbolicMethodFragment = {
     Parameters: SymbolicParameterFragment list
     Locals: SymbolicLocalFragment list
     ReturnType: CliType
-    Instructions: SymbolicInstruction list
+    Instructions: LoweredOperation list
     EmitDefaultSequencePoint: bool
     MaxStack: int
     DependencyIds: string list
@@ -1744,7 +1744,7 @@ type internal SymbolicPropertyFragment = {
     override _.ToString() = "SymbolicPropertyFragment"
 
 [<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
-type internal SymbolicTypeKind =
+type internal LoweredTypeKind =
     | ModuleContainer
     | ExtensionModuleContainer
     | StaticMemberContainer
@@ -1753,7 +1753,7 @@ type internal SymbolicTypeKind =
     | ClosureContainer
     | ObjectExpressionContainer
 
-    override _.ToString() = "SymbolicTypeKind"
+    override _.ToString() = "LoweredTypeKind"
 
 type internal SymbolicTypeFragment = {
     SchemaVersion: int
@@ -1762,7 +1762,7 @@ type internal SymbolicTypeFragment = {
     Name: string
     IsPublic: bool
     EnclosingTypeStableId: string option
-    Kind: SymbolicTypeKind
+    Kind: LoweredTypeKind
     GenericParameters: string list
     Attributes: SymbolicCustomAttributeFragment list
     LiteralFields: SymbolicLiteralFieldFragment list
@@ -1837,10 +1837,257 @@ type internal SymbolicAssembly = {
 
     override _.ToString() = "SymbolicAssembly"
 
+type internal LoweredCustomAttribute = {
+    SchemaVersion: int
+    StableId: string
+    Kind: KnownAttributeKind
+    ConstructorArguments: TypedAttributeArgument list
+    SemanticFingerprint: string
+} with
+
+    override _.ToString() = "LoweredCustomAttribute"
+
+type internal LoweredParameter = {
+    Name: string
+    Type: CliType
+    Attributes: LoweredCustomAttribute list
+} with
+
+    override _.ToString() = "LoweredParameter"
+
+type internal LoweredLocal = {
+    Index: int
+    Name: string
+    Type: CliType
+} with
+
+    override _.ToString() = "LoweredLocal"
+
+type internal LoweredMethodBody = {
+    Locals: LoweredLocal list
+    ControlFlow: LoweredOperation list
+    MaxStack: int
+} with
+
+    override _.ToString() = "LoweredMethodBody"
+
+type internal LoweredMethodDeclaration = {
+    SchemaVersion: int
+    StableId: string
+    Name: string
+    Kind: LoweredMethodKind
+    GenericParameters: string list
+    Constraints: TypedMethodConstraint list
+    GenericParameterConstraints: (int * CliType) list
+    Attributes: LoweredCustomAttribute list
+    Parameters: LoweredParameter list
+    Locals: LoweredLocal list
+    ReturnType: CliType
+    Instructions: LoweredOperation list
+    EmitDefaultSequencePoint: bool
+    MaxStack: int
+    DependencyIds: string list
+    SemanticFingerprint: string
+    DocumentIndex: int
+    DocumentChecksum: ImmutableArray<byte>
+    Range: SourceRange
+} with
+
+    member this.Body = {
+        Locals = this.Locals
+        ControlFlow = this.Instructions
+        MaxStack = this.MaxStack
+    }
+
+    override _.ToString() = "LoweredMethodDeclaration"
+
+type internal LoweredLiteralFieldDeclaration = {
+    SchemaVersion: int
+    StableId: string
+    Name: string
+    Value: string
+    SemanticFingerprint: string
+} with
+
+    override _.ToString() = "LoweredLiteralFieldDeclaration"
+
+type internal LoweredInstanceFieldDeclaration = {
+    SchemaVersion: int
+    StableId: string
+    Name: string
+    Type: CliType
+    Attributes: LoweredCustomAttribute list
+    SemanticFingerprint: string
+} with
+
+    override _.ToString() = "LoweredInstanceFieldDeclaration"
+
+type internal LoweredStaticFieldDeclaration = {
+    SchemaVersion: int
+    StableId: string
+    Name: string
+    Type: CliType
+    SemanticFingerprint: string
+} with
+
+    override _.ToString() = "LoweredStaticFieldDeclaration"
+
+type internal LoweredPropertyDeclaration = {
+    SchemaVersion: int
+    StableId: string
+    Name: string
+    Type: CliType
+    GetterStableId: string
+    SemanticFingerprint: string
+} with
+
+    override _.ToString() = "LoweredPropertyDeclaration"
+
+type internal LoweredTypeDeclaration = {
+    SchemaVersion: int
+    StableId: string
+    Namespace: string
+    Name: string
+    IsPublic: bool
+    EnclosingTypeStableId: string option
+    Kind: LoweredTypeKind
+    GenericParameters: string list
+    Attributes: LoweredCustomAttribute list
+    LiteralFields: LoweredLiteralFieldDeclaration list
+    InstanceFields: LoweredInstanceFieldDeclaration list
+    StaticFields: LoweredStaticFieldDeclaration list
+    Properties: LoweredPropertyDeclaration list
+    Methods: LoweredMethodDeclaration list
+} with
+
+    override _.ToString() = "LoweredTypeDeclaration"
+
+type internal LoweredDocument = {
+    SchemaVersion: int
+    StableId: string
+    Checksum: ImmutableArray<byte>
+} with
+
+    override _.ToString() = "LoweredDocument"
+
+type internal LoweredTypeAbbreviationDeclaration = {
+    SchemaVersion: int
+    StableId: string
+    Name: string
+    TypeParameters: string list
+    Constraints: TypedTypeConstraint list
+    TargetType: TypedTypeExpression
+    AllowsNull: bool
+    SemanticFingerprint: string
+} with
+
+    override _.ToString() = "LoweredTypeAbbreviationDeclaration"
+
+type internal LoweredNamedStringArgument = {
+    Name: string
+    Value: string
+} with
+
+    override _.ToString() = "LoweredNamedStringArgument"
+
+type internal LoweredAssemblyAttributeDeclaration = {
+    SchemaVersion: int
+    StableId: string
+    Kind: AssemblyAttributeKind
+    AttributeType: QualifiedTypeName
+    ConstructorArguments: string list
+    NamedArguments: LoweredNamedStringArgument list
+    SemanticFingerprint: string
+} with
+
+    override _.ToString() = "LoweredAssemblyAttributeDeclaration"
+
+type internal LoweredDeclaration =
+    | LoweredTypeAbbreviation of LoweredTypeAbbreviationDeclaration
+    | LoweredType of LoweredTypeDeclaration
+
+    override _.ToString() = "LoweredDeclaration"
+
+type internal LoweredModule = {
+    SchemaVersion: int
+    StableId: string
+    Name: string
+    TypeAbbreviations: LoweredTypeAbbreviationDeclaration list
+    Types: LoweredTypeDeclaration list
+} with
+
+    member this.Declarations =
+        [
+            yield!
+                this.TypeAbbreviations
+                |> List.map LoweredTypeAbbreviation
+
+            yield!
+                this.Types
+                |> List.map LoweredType
+        ]
+
+    override _.ToString() = "LoweredModule"
+
+type internal LoweredCompilation = {
+    SchemaVersion: int
+    StableId: string
+    AssemblyName: string
+    AssemblyVersion: Version
+    PublicFingerprint: string
+    Documents: LoweredDocument list
+    AssemblyAttributes: LoweredAssemblyAttributeDeclaration list
+    Module: LoweredModule
+} with
+
+    member this.ContentFingerprint =
+        String.concat "|" [
+            this.StableId
+            this.PublicFingerprint
+
+            yield!
+                this.Module.TypeAbbreviations
+                |> List.collect (fun declaration -> [
+                    declaration.StableId
+                    declaration.SemanticFingerprint
+                ])
+
+            for declaration in this.Module.Types do
+                declaration.StableId
+
+                yield!
+                    declaration.LiteralFields
+                    |> List.collect (fun field -> [ field.StableId; field.SemanticFingerprint ])
+
+                yield!
+                    declaration.InstanceFields
+                    |> List.collect (fun field -> [ field.StableId; field.SemanticFingerprint ])
+
+                yield!
+                    declaration.StaticFields
+                    |> List.collect (fun field -> [ field.StableId; field.SemanticFingerprint ])
+
+                yield!
+                    declaration.Properties
+                    |> List.collect (fun property -> [
+                        property.StableId
+                        property.SemanticFingerprint
+                    ])
+
+                yield!
+                    declaration.Methods
+                    |> List.collect (fun methodDeclaration -> [
+                        methodDeclaration.StableId
+                        methodDeclaration.SemanticFingerprint
+                    ])
+        ]
+
+    override _.ToString() = "LoweredCompilation"
+
 type internal CompilerQueryResult = {
     ResolvedCompilation: ResolvedCompilation
     TypedCompilation: TypedCompilation
-    SymbolicAssembly: SymbolicAssembly
+    LoweredCompilation: LoweredCompilation
     QuerySchema: int
     NodeKind: string
     ContentFingerprint: string
