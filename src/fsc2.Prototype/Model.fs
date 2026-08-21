@@ -635,6 +635,23 @@ type internal ParsedModule = {
 
     override _.ToString() = "ParsedModule"
 
+type internal ResolvedModule = {
+    SourcePath: string
+    DocumentIndex: int
+    Syntax: ParsedModule
+    VisibleValues: Map<string, string>
+    ContentFingerprint: string
+} with
+
+    override _.ToString() = "ResolvedModule"
+
+type internal ResolvedCompilation = {
+    Modules: ResolvedModule list
+    ContentFingerprint: string
+} with
+
+    override _.ToString() = "ResolvedCompilation"
+
 type internal CliTypeReference = {
     DeclarationId: string
     AssemblyName: string
@@ -1814,6 +1831,7 @@ type internal SymbolicAssembly = {
     override _.ToString() = "SymbolicAssembly"
 
 type internal CompilerQueryResult = {
+    ResolvedCompilation: ResolvedCompilation
     SymbolicAssembly: SymbolicAssembly
     QuerySchema: int
     NodeKind: string

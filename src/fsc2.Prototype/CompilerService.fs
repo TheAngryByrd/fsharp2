@@ -1191,13 +1191,101 @@ type internal CompilerService() =
                 parseCache.Add(key, parsed)
                 Ok(parsed, key)
 
-    let check
-        (references: ReferenceTypeIndex)
+    let resolve
         (sourcePath: string)
         (documentIndex: int)
-        (precedingModules: TypedModule list)
+        (precedingValues: Map<string, string>)
         (parsed: ParsedModule)
         =
+        let declarationIdentity name suffix =
+            parsed.StableId
+            + suffix
+            + name
+
+        let rec resolveDeclarations visibleValues =
+            function
+            | [] -> Ok visibleValues
+            | declaration :: remaining ->
+                let unresolvedValue =
+                    match declaration with
+                    | ParsedMethod { Body = ValueReference name; BodyRange = range } when
+                        visibleValues
+                        |> Map.containsKey name
+                        |> not
+                        ->
+                        Some(name, range)
+                    | ParsedMethod _
+                    | ParsedLiteralField _
+                    | ParsedNestedModule _
+                    | ParsedTypeAbbreviation _
+                    | ParsedStaticType _
+                    | ParsedObjectType _
+                    | ParsedStructType _ -> None
+
+                match unresolvedValue with
+                | Some(name, range) ->
+                    Error {
+                        Code = "FS0039"
+                        Message = $"The value or constructor '{name}' is not defined."
+                        Path = Some sourcePath
+                        Range = Some range
+                    }
+                | None ->
+                    let nextVisibleValues =
+                        match declaration with
+                        | ParsedMethod methodDeclaration ->
+                            visibleValues
+                            |> Map.add
+                                methodDeclaration.Name
+                                (declarationIdentity
+                                    methodDeclaration.Name
+                                    "/method:")
+                        | ParsedLiteralField fieldDeclaration ->
+                            visibleValues
+                            |> Map.add
+                                fieldDeclaration.Name
+                                (declarationIdentity
+                                    fieldDeclaration.Name
+                                    "/literal-field:")
+                        | ParsedNestedModule _
+                        | ParsedTypeAbbreviation _
+                        | ParsedStaticType _
+                        | ParsedObjectType _
+                        | ParsedStructType _ -> visibleValues
+
+                    resolveDeclarations nextVisibleValues remaining
+
+        match resolveDeclarations precedingValues parsed.Declarations with
+        | Error diagnostic -> Error diagnostic
+        | Ok visibleValues ->
+            let contentFingerprint =
+                [
+                    parsed.ContentFingerprint
+
+                    yield!
+                        visibleValues
+                        |> Map.toList
+                        |> List.collect (fun (name, stableId) -> [ name; stableId ])
+                ]
+                |> Fingerprint.parts
+
+            Ok {
+                SourcePath = sourcePath
+                DocumentIndex = documentIndex
+                Syntax = parsed
+                VisibleValues = visibleValues
+                ContentFingerprint = contentFingerprint
+            }
+
+    let check
+        (references: ReferenceTypeIndex)
+        (precedingModules: TypedModule list)
+        (resolved: ResolvedModule)
+        =
+        let sourcePath = resolved.SourcePath
+        let documentIndex = resolved.DocumentIndex
+        let parsed = resolved.Syntax
+
         let key =
             Fingerprint.parts [
                 querySchema.ToString(CultureInfo.InvariantCulture)
@@ -25116,8 +25204,8 @@ type internal CompilerService() =
         let rec checkAll typed keys remaining =
             match remaining with
             | [] -> Ok(List.rev typed, List.rev keys)
-            | (source, documentIndex, parsedModule) :: tail ->
-                match check references source.Path documentIndex (List.rev typed) parsedModule with
+            | resolvedModule :: tail ->
+                match check references (List.rev typed) resolvedModule with
                 | Error diagnostic -> Error diagnostic
                 | Ok(typedModule, key) ->
                     checkAll
@@ -25125,6 +25213,28 @@ type internal CompilerService() =
                          :: typed)
                         (key
                          :: keys)
+                        tail
+
+        let rec resolveAll visibleValues resolved remaining =
+            match remaining with
+            | [] ->
+                let modules = List.rev resolved
+
+                Ok {
+                    Modules = modules
+                    ContentFingerprint =
+                        modules
+                        |> List.map _.ContentFingerprint
+                        |> combine
+                }
+            | (source, documentIndex, parsedModule) :: tail ->
+                match resolve source.Path documentIndex visibleValues parsedModule with
+                | Error diagnostic -> Error diagnostic
+                | Ok resolvedModule ->
+                    resolveAll
+                        resolvedModule.VisibleValues
+                        (resolvedModule
+                         :: resolved)
                         tail
 
         let parseStarted = Stopwatch.GetTimestamp()
@@ -25135,60 +25245,66 @@ type internal CompilerService() =
             let parseElapsedMicroseconds = elapsedMicroseconds parseStarted
             let checkStarted = Stopwatch.GetTimestamp()
 
-            match checkAll [] [] parsedModules with
+            match resolveAll Map.empty [] parsedModules with
             | Error diagnostic -> Error diagnostic
-            | Ok(typedModules, checkKeys) ->
-                let checkElapsedMicroseconds = elapsedMicroseconds checkStarted
-                let lowerStarted = Stopwatch.GetTimestamp()
-                let symbolic, lowerKey = lower assemblyName typedModules
-                let lowerElapsedMicroseconds = elapsedMicroseconds lowerStarted
+            | Ok resolvedCompilation ->
+                match checkAll [] [] resolvedCompilation.Modules with
+                | Error diagnostic -> Error diagnostic
+                | Ok(typedModules, checkKeys) ->
+                    let checkElapsedMicroseconds = elapsedMicroseconds checkStarted
+                    let lowerStarted = Stopwatch.GetTimestamp()
+                    let symbolic, lowerKey = lower assemblyName typedModules
+                    let lowerElapsedMicroseconds = elapsedMicroseconds lowerStarted
 
-                let contentFingerprint =
-                    references.Fingerprint
-                    :: (parsedModules
-                        |> List.distinctBy (fun (_, documentIndex, _) -> documentIndex)
-                        |> List.map (fun (_, _, parsedModule) -> parsedModule.ContentFingerprint))
-                    |> combine
+                    let contentFingerprint =
+                        references.Fingerprint
+                        :: (parsedModules
+                            |> List.distinctBy (fun (_, documentIndex, _) -> documentIndex)
+                            |> List.map (fun (_, _, parsedModule) ->
+                                parsedModule.ContentFingerprint
+                            ))
+                        |> combine
 
-                let invalidationReason =
-                    if previousContentFingerprint.Length = 0 then
-                        "no-prior-state"
-                    elif previousContentFingerprint = contentFingerprint then
-                        "unchanged"
-                    else
-                        "source-content-changed"
+                    let invalidationReason =
+                        if previousContentFingerprint.Length = 0 then
+                            "no-prior-state"
+                        elif previousContentFingerprint = contentFingerprint then
+                            "unchanged"
+                        else
+                            "source-content-changed"
 
-                lastSuccessfulContent.[stateKey] <- contentFingerprint
+                    lastSuccessfulContent.[stateKey] <- contentFingerprint
 
-                Ok {
-                    SymbolicAssembly = symbolic
-                    QuerySchema = querySchema
-                    NodeKind = if sources.Length = 1 then "source" else "project"
-                    ContentFingerprint = contentFingerprint
-                    PreviousContentFingerprint = previousContentFingerprint
-                    InvalidationReason = invalidationReason
-                    ParseKey = combine parseKeys
-                    CheckKey = combine checkKeys
-                    LowerKey = lowerKey
-                    DependencyCount =
-                        symbolic.Module.TypeAbbreviations.Length
-                        + (symbolic.Module.Types
-                           |> List.sumBy (fun typeFragment ->
-                               typeFragment.Methods
-                               |> List.sumBy (fun methodFragment ->
-                                   methodFragment.DependencyIds.Length
-                               )
-                           ))
-                    ParseDecision =
-                        decision before.ParseHits parseHits before.ParseMisses parseMisses
-                    CheckDecision =
-                        decision before.CheckHits checkHits before.CheckMisses checkMisses
-                    LowerDecision =
-                        decision before.LowerHits lowerHits before.LowerMisses lowerMisses
-                    ParseElapsedMicroseconds = parseElapsedMicroseconds
-                    CheckElapsedMicroseconds = checkElapsedMicroseconds
-                    LowerElapsedMicroseconds = lowerElapsedMicroseconds
-                }
+                    Ok {
+                        ResolvedCompilation = resolvedCompilation
+                        SymbolicAssembly = symbolic
+                        QuerySchema = querySchema
+                        NodeKind = if sources.Length = 1 then "source" else "project"
+                        ContentFingerprint = contentFingerprint
+                        PreviousContentFingerprint = previousContentFingerprint
+                        InvalidationReason = invalidationReason
+                        ParseKey = combine parseKeys
+                        CheckKey = combine checkKeys
+                        LowerKey = lowerKey
+                        DependencyCount =
+                            symbolic.Module.TypeAbbreviations.Length
+                            + (symbolic.Module.Types
+                               |> List.sumBy (fun typeFragment ->
+                                   typeFragment.Methods
+                                   |> List.sumBy (fun methodFragment ->
+                                       methodFragment.DependencyIds.Length
+                                   )
+                               ))
+                        ParseDecision =
+                            decision before.ParseHits parseHits before.ParseMisses parseMisses
+                        CheckDecision =
+                            decision before.CheckHits checkHits before.CheckMisses checkMisses
+                        LowerDecision =
+                            decision before.LowerHits lowerHits before.LowerMisses lowerMisses
+                        ParseElapsedMicroseconds = parseElapsedMicroseconds
+                        CheckElapsedMicroseconds = checkElapsedMicroseconds
+                        LowerElapsedMicroseconds = lowerElapsedMicroseconds
+                    }
 
     member _.Statistics = {
         ParseHits = parseHits

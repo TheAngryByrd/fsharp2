@@ -19,6 +19,44 @@ module CompilerContractTests =
         |> Convert.ToHexString
         |> _.ToLowerInvariant()
 
+    let private compile (sourceText: string) =
+        let sourceBytes = Text.Encoding.UTF8.GetBytes(sourceText)
+        let referenceImage = File.ReadAllBytes(Assembly.Load("System.Runtime").Location)
+
+        let request =
+            CompilationRequest.Create(
+                CompilerContract.Version,
+                StableIdentity.create "request:tracer",
+                CompilationAssemblyIdentity.Create(
+                    StableIdentity.create "assembly:Tracer",
+                    "Tracer"
+                ),
+                [|
+                    SourceSnapshot.Create(
+                        StableIdentity.create "source:tracer",
+                        "Tracer.fs",
+                        sourceText,
+                        fingerprint sourceBytes
+                    )
+                |],
+                [|
+                    TargetReferenceSnapshot.Create(
+                        StableIdentity.create "reference:System.Runtime",
+                        "System.Runtime.dll",
+                        referenceImage,
+                        fingerprint referenceImage
+                    )
+                |],
+                SemanticOptions.Create([||], None, OptimizationMode.Disabled, false, false, None),
+                DiagnosticOptions.Create(None, [||], false, [||]),
+                EmissionOptions.Create(true, false, DebugFormat.None, [||], [| "Tracer.fs" |], [||]),
+                SigningOptions.Create(SigningMode.Unsigned, [||]),
+                ResourceInputs.Create([||], [||]),
+                [| RequestedArtifact.ImplementationAssembly |]
+            )
+
+        Compiler().Compile(request, CancellationToken.None)
+
     [<Tests>]
     let tests =
         testList "Compiler Contract" [
@@ -507,4 +545,45 @@ module CompilerContractTests =
                         "The captured source must execute."
                 finally
                     Directory.Delete(root, true)
+
+            testCase "unresolved value stops at ResolvedSymbols"
+            <| fun _ ->
+                let result = compile "module Tracer\nlet answer () = missing\n"
+
+                Expect.equal result.Outcome CompilationOutcome.Failed "Compilation must fail."
+
+                let phaseStatus phase =
+                    result.PhaseResults
+                    |> Seq.find (fun phaseResult -> phaseResult.Phase = phase)
+                    |> _.Status
+
+                Expect.equal
+                    (phaseStatus CompilationPhase.Source)
+                    PhaseStatus.Completed
+                    "The source phase must complete."
+
+                Expect.equal
+                    (phaseStatus CompilationPhase.Syntax)
+                    PhaseStatus.Completed
+                    "The syntax phase must complete."
+
+                Expect.equal
+                    (phaseStatus CompilationPhase.ResolvedSymbols)
+                    PhaseStatus.Failed
+                    "Symbol resolution must fail."
+
+                for phase in
+                    [
+                        CompilationPhase.TypedDeclarations
+                        CompilationPhase.LoweredCode
+                        CompilationPhase.OptimizedCode
+                        CompilationPhase.SymbolicEmission
+                        CompilationPhase.FinalLinking
+                    ] do
+                    Expect.equal
+                        (phaseStatus phase)
+                        PhaseStatus.NotStarted
+                        $"The {phase} phase must not start."
+
+                Expect.isEmpty result.Artifacts "A failed compilation must not contain an artifact."
         ]

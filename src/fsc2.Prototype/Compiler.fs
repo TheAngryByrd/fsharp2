@@ -3,6 +3,7 @@ namespace FSharp2.Compiler
 open System
 open System.Collections.Immutable
 open System.Security.Cryptography
+open System.Text
 open System.Threading
 
 type Compiler() =
@@ -13,6 +14,90 @@ type Compiler() =
         |> SHA256.HashData
         |> Convert.ToHexString
         |> _.ToLowerInvariant()
+
+    let textFingerprint (value: string) =
+        value
+        |> Encoding.UTF8.GetBytes
+        |> fingerprint
+
+    let phases = [|
+        CompilationPhase.Source
+        CompilationPhase.Syntax
+        CompilationPhase.ResolvedSymbols
+        CompilationPhase.TypedDeclarations
+        CompilationPhase.LoweredCode
+        CompilationPhase.OptimizedCode
+        CompilationPhase.SymbolicEmission
+        CompilationPhase.FinalLinking
+    |]
+
+    let sourceFingerprint (request: CompilationRequest) =
+        [
+            request.RequestIdentity.Value
+
+            yield!
+                request.Sources
+                |> Seq.collect (fun source -> [
+                    source.StableId.Value
+                    source.ContentFingerprint
+                ])
+        ]
+        |> String.concat "|"
+        |> textFingerprint
+
+    let phaseResult phase status inputFingerprint outputFingerprint = {
+        Phase = phase
+        Status = status
+        InputFingerprint = inputFingerprint
+        OutputFingerprint = outputFingerprint
+        TraceValues = ImmutableArray.Empty
+    }
+
+    let failurePhaseResults request failedPhase =
+        let sourceOutput = sourceFingerprint request
+        let syntaxOutput = textFingerprint $"syntax|{sourceOutput}"
+        let failedIndex = phases |> Array.findIndex ((=) failedPhase)
+
+        phases
+        |> Array.mapi (fun index phase ->
+            if index > failedIndex then
+                phaseResult phase PhaseStatus.NotStarted None None
+            elif index = failedIndex then
+                let inputFingerprint =
+                    match phase with
+                    | CompilationPhase.Source -> Some request.RequestIdentity.Value
+                    | CompilationPhase.Syntax -> Some sourceOutput
+                    | CompilationPhase.ResolvedSymbols -> Some syntaxOutput
+                    | CompilationPhase.TypedDeclarations
+                    | CompilationPhase.LoweredCode
+                    | CompilationPhase.OptimizedCode
+                    | CompilationPhase.SymbolicEmission
+                    | CompilationPhase.FinalLinking -> None
+
+                phaseResult phase PhaseStatus.Failed inputFingerprint None
+            else
+                match phase with
+                | CompilationPhase.Source ->
+                    phaseResult
+                        phase
+                        PhaseStatus.Completed
+                        (Some request.RequestIdentity.Value)
+                        (Some sourceOutput)
+                | CompilationPhase.Syntax ->
+                    phaseResult
+                        phase
+                        PhaseStatus.Completed
+                        (Some sourceOutput)
+                        (Some syntaxOutput)
+                | CompilationPhase.ResolvedSymbols
+                | CompilationPhase.TypedDeclarations
+                | CompilationPhase.LoweredCode
+                | CompilationPhase.OptimizedCode
+                | CompilationPhase.SymbolicEmission
+                | CompilationPhase.FinalLinking ->
+                    phaseResult phase PhaseStatus.Completed None None
+        )
+        |> ImmutableArray.CreateRange
 
     let artifact request kind suffix bytes =
         {
@@ -67,12 +152,18 @@ type Compiler() =
 
         match CompilationPipeline.compileRequest service request with
         | Error diagnostic ->
+            let failedPhase =
+                if diagnostic.Code = "FS0039" then
+                    CompilationPhase.ResolvedSymbols
+                else
+                    CompilationPhase.Syntax
+
             {
                 Outcome = CompilationOutcome.Failed
                 Diagnostics = ImmutableArray.Create(failureDiagnostic diagnostic)
                 Artifacts = ImmutableArray.Empty
                 Fingerprints = ImmutableArray.Empty
-                PhaseResults = ImmutableArray.Empty
+                PhaseResults = failurePhaseResults request failedPhase
                 Traces = ImmutableArray.Empty
             }
         | Ok compilation ->
