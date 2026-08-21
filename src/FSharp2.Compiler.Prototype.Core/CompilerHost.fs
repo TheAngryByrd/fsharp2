@@ -1,8 +1,10 @@
 namespace FSharp2.Compiler
 
 open System
+open System.Diagnostics
 open System.IO
 open System.Security.Cryptography
+open System.Threading
 
 module CompilerHost =
     let private writeTrace
@@ -71,8 +73,10 @@ module CompilerHost =
         )
 
     let private compileLocally (invocation: CompilerInvocation) (sources: SourceInput list) =
-        let service = CompilerService()
-        CompilationPipeline.compile service invocation sources
+        let compileStarted = Stopwatch.GetTimestamp()
+        let request = CompilationPipeline.createRequest invocation sources
+        let result = Compiler().Compile(request, CancellationToken.None)
+        CompilationPipeline.completeInvocation compileStarted invocation result
 
     let private runCompilation (arguments: string array) =
         match CommandLine.parse arguments with

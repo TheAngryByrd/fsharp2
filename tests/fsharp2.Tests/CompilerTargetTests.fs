@@ -12707,6 +12707,9 @@ module CompilerTargetTests =
     <DebugSymbols>false</DebugSymbols>
     <DebugType>portable</DebugType>
     <Deterministic>true</Deterministic>
+    <Optimize>false</Optimize>
+    <HighEntropyVA>false</HighEntropyVA>
+    <DisableILLinkSubstitutions>true</DisableILLinkSubstitutions>
     <RestoreSources>{packageSource}</RestoreSources>
     <RestorePackagesPath>{packageCache}</RestorePackagesPath>
     <RestoreIgnoreFailedSources>true</RestoreIgnoreFailedSources>

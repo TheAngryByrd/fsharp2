@@ -426,6 +426,32 @@ type Compiler() =
         )
         |> ImmutableArray.CreateRange
 
+    let successTraces compilation =
+        let query = compilation.Query
+
+        [|
+            $"querySchema={query.QuerySchema}"
+            $"nodeKind={query.NodeKind}"
+            $"contentFingerprint={query.ContentFingerprint}"
+            $"previousContentFingerprint={query.PreviousContentFingerprint}"
+            $"invalidationReason={query.InvalidationReason}"
+            $"parseKey={query.ParseKey}"
+            $"checkKey={query.CheckKey}"
+            $"lowerKey={query.LowerKey}"
+            $"dependencyCount={query.DependencyCount}"
+            $"parse={query.ParseDecision}"
+            $"check={query.CheckDecision}"
+            $"lower={query.LowerDecision}"
+            $"parseElapsedMicroseconds={query.ParseElapsedMicroseconds}"
+            $"checkElapsedMicroseconds={query.CheckElapsedMicroseconds}"
+            $"lowerElapsedMicroseconds={query.LowerElapsedMicroseconds}"
+            $"linkElapsedMicroseconds={compilation.LinkElapsedMicroseconds}"
+            $"exportFingerprint={compilation.SymbolicAssembly.PublicFingerprint}"
+            $"fragmentHash={CompilationPipeline.fragmentHash compilation.SymbolicAssembly}"
+            "emitted=true"
+        |]
+        |> ImmutableArray.CreateRange
+
     let failureDiagnostic (diagnostic: CompilerDiagnostic) = {
         Code = diagnostic.Code
         Severity = DiagnosticSeverity.Error
@@ -483,5 +509,5 @@ type Compiler() =
                         |> Seq.map _.Fingerprint
                         |> ImmutableArray.CreateRange
                     PhaseResults = phaseResults
-                    Traces = ImmutableArray.Empty
+                    Traces = successTraces compilation
                 }

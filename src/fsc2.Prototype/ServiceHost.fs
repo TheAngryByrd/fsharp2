@@ -3,7 +3,9 @@ namespace FSharp2.Compiler
 open System
 open System.IO
 open System.IO.Pipes
+open System.Security.Cryptography
 open System.Text
+open System.Threading
 
 /// Versioned, closed-schema prototype protocol. It deliberately avoids
 /// reflection-based serializers so the same service core can remain in the
@@ -318,7 +320,7 @@ module internal ServiceHost =
     }
 
     let runServer pipeName =
-        let service = CompilerService()
+        let compiler = Compiler()
 
         Console.Out.WriteLine(
             "ready="
@@ -365,9 +367,19 @@ module internal ServiceHost =
                 else
                     let invocation, sources = readInvocation reader
 
-                    sources
-                    |> CompilationPipeline.compile service invocation
-                    |> writeResponse writer
+                    let response =
+                        try
+                            let compileStarted = System.Diagnostics.Stopwatch.GetTimestamp()
+                            let request = CompilationPipeline.createRequest invocation sources
+                            let result = compiler.Compile(request, CancellationToken.None)
+                            CompilationPipeline.completeInvocation compileStarted invocation result
+                        finally
+                            if invocation.StrongNameKey.Length > 0 then
+                                CryptographicOperations.ZeroMemory(
+                                    invocation.StrongNameKey.AsSpan()
+                                )
+
+                    writeResponse writer response
             with ex ->
                 if server.IsConnected then
                     use writer = new BinaryWriter(server, Encoding.UTF8, true)

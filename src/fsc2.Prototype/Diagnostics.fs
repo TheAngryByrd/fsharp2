@@ -59,15 +59,21 @@ module internal DiagnosticFormatter =
             .Replace('\r', '\n')
             .Replace('\n', '\u001d')
 
-    let format (invocation: CompilerInvocation) (diagnostic: CompilerDiagnostic) =
+    let private formatDiagnostic
+        (invocation: CompilerInvocation)
+        code
+        diagnosticMessage
+        path
+        range
+        =
         let message =
             if invocation.FlatErrors then
-                flattenMessage diagnostic.Message
+                flattenMessage diagnosticMessage
             else
-                diagnostic.Message
+                diagnosticMessage
 
         let location =
-            match diagnostic.Path, diagnostic.Range with
+            match path, range with
             | Some path, Some range ->
                 let displayedPath =
                     if invocation.FullPaths then
@@ -86,6 +92,25 @@ module internal DiagnosticFormatter =
         "\n"
         + location
         + "error "
-        + diagnostic.Code
+        + code
         + ": "
         + message
+
+    let format (invocation: CompilerInvocation) (diagnostic: CompilerDiagnostic) =
+        formatDiagnostic
+            invocation
+            diagnostic.Code
+            diagnostic.Message
+            diagnostic.Path
+            diagnostic.Range
+
+    let formatCompilationDiagnostic
+        (invocation: CompilerInvocation)
+        (diagnostic: CompilationDiagnostic)
+        =
+        formatDiagnostic
+            invocation
+            diagnostic.Code
+            diagnostic.Message
+            diagnostic.LogicalPath
+            diagnostic.Range

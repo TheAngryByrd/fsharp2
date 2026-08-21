@@ -3,12 +3,23 @@ namespace fsharp2.Tests
 open System
 open System.IO
 open System.Reflection
+open System.Reflection.Emit
+open System.Reflection.Metadata
+open System.Reflection.Metadata.Ecma335
+open System.Reflection.PortableExecutable
 open System.Security.Cryptography
 open System.Threading
 open Expecto
 open FSharp2.Compiler
 
 module CompilerContractTests =
+    type private MethodCall = {
+        CallerType: string
+        CallerMethod: string
+        CalleeType: string
+        CalleeMethod: string
+    }
+
     let private bytes (values: seq<byte>) =
         values
         |> Seq.toArray
@@ -18,6 +29,174 @@ module CompilerContractTests =
         |> SHA256.HashData
         |> Convert.ToHexString
         |> _.ToLowerInvariant()
+
+    let private metadataTypeName (metadata: MetadataReader) (handle: EntityHandle) =
+        let fullName namespaceName name =
+            if String.IsNullOrEmpty(namespaceName) then
+                name
+            else
+                namespaceName
+                + "."
+                + name
+
+        match handle.Kind with
+        | HandleKind.TypeDefinition ->
+            let definition =
+                handle
+                |> MetadataTokens.GetRowNumber
+                |> MetadataTokens.TypeDefinitionHandle
+                |> metadata.GetTypeDefinition
+
+            fullName
+                (metadata.GetString(definition.Namespace))
+                (metadata.GetString(definition.Name))
+        | HandleKind.TypeReference ->
+            let reference =
+                handle
+                |> MetadataTokens.GetRowNumber
+                |> MetadataTokens.TypeReferenceHandle
+                |> metadata.GetTypeReference
+
+            fullName (metadata.GetString(reference.Namespace)) (metadata.GetString(reference.Name))
+        | _ -> handle.Kind.ToString()
+
+    let private typeDefinitionEntityHandle (handle: TypeDefinitionHandle) =
+        MetadataTokens.EntityHandle(TableIndex.TypeDef, MetadataTokens.GetRowNumber(handle))
+
+    let rec private metadataMethodName (metadata: MetadataReader) (handle: EntityHandle) =
+        match handle.Kind with
+        | HandleKind.MethodDefinition ->
+            let definition =
+                handle
+                |> MetadataTokens.GetRowNumber
+                |> MetadataTokens.MethodDefinitionHandle
+                |> metadata.GetMethodDefinition
+
+            metadataTypeName metadata (typeDefinitionEntityHandle (definition.GetDeclaringType())),
+            metadata.GetString(definition.Name)
+        | HandleKind.MemberReference ->
+            let reference =
+                handle
+                |> MetadataTokens.GetRowNumber
+                |> MetadataTokens.MemberReferenceHandle
+                |> metadata.GetMemberReference
+
+            metadataTypeName metadata reference.Parent, metadata.GetString(reference.Name)
+        | HandleKind.MethodSpecification ->
+            handle
+            |> MetadataTokens.GetRowNumber
+            |> MetadataTokens.MethodSpecificationHandle
+            |> metadata.GetMethodSpecification
+            |> _.Method
+            |> metadataMethodName metadata
+        | _ -> handle.Kind.ToString(), String.Empty
+
+    let private opCodes =
+        typeof<OpCodes>
+            .GetFields(
+                BindingFlags.Public
+                ||| BindingFlags.Static
+            )
+        |> Seq.map (fun field ->
+            let opCode = field.GetValue(null) :?> OpCode
+            int (uint16 opCode.Value), opCode
+        )
+        |> Map.ofSeq
+
+    let private operandSize (bytes: byte array) offset operandType =
+        match operandType with
+        | OperandType.InlineNone -> 0
+        | OperandType.ShortInlineBrTarget
+        | OperandType.ShortInlineI
+        | OperandType.ShortInlineVar -> 1
+        | OperandType.InlineVar -> 2
+        | OperandType.InlineBrTarget
+        | OperandType.InlineField
+        | OperandType.InlineI
+        | OperandType.InlineMethod
+        | OperandType.InlineSig
+        | OperandType.InlineString
+        | OperandType.InlineTok
+        | OperandType.InlineType
+        | OperandType.ShortInlineR -> 4
+        | OperandType.InlineI8
+        | OperandType.InlineR -> 8
+        | OperandType.InlineSwitch ->
+            let count = BitConverter.ToInt32(bytes, offset)
+
+            4
+            + (count * 4)
+        | operand -> failtestf "Unsupported IL operand type %A." operand
+
+    let private methodCalls assemblyPath =
+        use stream = File.OpenRead(assemblyPath)
+        use pe = new PEReader(stream)
+        let metadata = pe.GetMetadataReader()
+
+        [|
+            for methodHandle in metadata.MethodDefinitions do
+                let definition = metadata.GetMethodDefinition(methodHandle)
+
+                if
+                    definition.RelativeVirtualAddress
+                    <> 0
+                then
+                    let callerType =
+                        metadataTypeName
+                            metadata
+                            (typeDefinitionEntityHandle (definition.GetDeclaringType()))
+
+                    let callerMethod = metadata.GetString(definition.Name)
+                    let bytes = pe.GetMethodBody(definition.RelativeVirtualAddress).GetILBytes()
+                    let mutable offset = 0
+
+                    while offset < bytes.Length do
+                        let first = int bytes[offset]
+                        offset <- offset + 1
+
+                        let value =
+                            if first = 0xfe then
+                                let second = int bytes[offset]
+                                offset <- offset + 1
+
+                                0xfe00
+                                ||| second
+                            else
+                                first
+
+                        let opCode = opCodes[value]
+
+                        if
+                            opCode = OpCodes.Call
+                            || opCode = OpCodes.Callvirt
+                        then
+                            let token = BitConverter.ToInt32(bytes, offset)
+
+                            let calleeType, calleeMethod =
+                                token
+                                |> MetadataTokens.EntityHandle
+                                |> metadataMethodName metadata
+
+                            yield {
+                                CallerType = callerType
+                                CallerMethod = callerMethod
+                                CalleeType = calleeType
+                                CalleeMethod = calleeMethod
+                            }
+
+                        offset <-
+                            offset
+                            + operandSize bytes offset opCode.OperandType
+        |]
+
+    let private hasCall callerType callerMethod calleeType calleeMethod calls =
+        calls
+        |> Seq.exists (fun call ->
+            call.CallerType = callerType
+            && call.CallerMethod = callerMethod
+            && call.CalleeType = calleeType
+            && call.CalleeMethod = calleeMethod
+        )
 
     let private contractPhases = [|
         CompilationPhase.Source
@@ -1204,4 +1383,109 @@ module CompilerContractTests =
                         diagnostic.Severity
                         DiagnosticSeverity.Error
                         "Diagnostic policy must not suppress or demote an error."
+
+            testCase "direct CLI service and MSBuild routes only through Compiler.Compile"
+            <| fun _ ->
+                let coreCalls = methodCalls typeof<Compiler>.Assembly.Location
+                let testCalls = methodCalls (Assembly.GetExecutingAssembly().Location)
+
+                Expect.isTrue
+                    (hasCall
+                        "fsharp2.Tests.CompilerContractTests"
+                        "compileRequest"
+                        "FSharp2.Compiler.Compiler"
+                        "Compile"
+                        testCalls)
+                    "The direct test adapter must call Compiler.Compile."
+
+                Expect.isTrue
+                    (hasCall
+                        "FSharp2.Compiler.CompilerHost"
+                        "compileLocally"
+                        "FSharp2.Compiler.Compiler"
+                        "Compile"
+                        coreCalls)
+                    "The standalone CLI adapter must call Compiler.Compile."
+
+                Expect.isTrue
+                    (hasCall
+                        "FSharp2.Compiler.ServiceHost"
+                        "runServer"
+                        "FSharp2.Compiler.Compiler"
+                        "Compile"
+                        coreCalls)
+                    "The protocol v8 service adapter must call Compiler.Compile."
+
+                Expect.isTrue
+                    (hasCall
+                        "FSharp2.Compiler.Compiler"
+                        "Compile"
+                        "FSharp2.Compiler.CompilationPipeline"
+                        "compileRequest"
+                        coreCalls)
+                    "Compiler.Compile must own the internal pipeline entry."
+
+                let adapterTypes =
+                    set [
+                        "FSharp2.Compiler.CompilerHost"
+                        "FSharp2.Compiler.ServiceHost"
+                    ]
+
+                let forbiddenCallees =
+                    set [
+                        "FSharp2.Compiler.CompilerService", "Compile"
+                        "FSharp2.Compiler.CompilationPipeline", "compile"
+                        "FSharp2.Compiler.CompilationPipeline", "compileRequest"
+                        "FSharp2.Compiler.Linker", "link"
+                    ]
+
+                let forbiddenCalls =
+                    coreCalls
+                    |> Array.filter (fun call ->
+                        adapterTypes.Contains(call.CallerType)
+                        && forbiddenCallees.Contains(call.CalleeType, call.CalleeMethod)
+                    )
+
+                Expect.isEmpty
+                    forbiddenCalls
+                    "No standalone or service adapter may bypass Compiler.Compile."
+
+                let repositoryRoot =
+                    Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, "..", ".."))
+
+                let targets =
+                    File.ReadAllText(
+                        Path.Combine(
+                            repositoryRoot,
+                            "src",
+                            "FSharp2.Compiler.MSBuild",
+                            "buildTransitive",
+                            "FSharp2.Compiler.MSBuild.targets"
+                        )
+                    )
+
+                let packageProject =
+                    File.ReadAllText(
+                        Path.Combine(
+                            repositoryRoot,
+                            "src",
+                            "FSharp2.Compiler.MSBuild",
+                            "FSharp2.Compiler.MSBuild.csproj"
+                        )
+                    )
+
+                Expect.stringContains
+                    targets
+                    "tools/$(FSharp2CompilerHostRuntimeIdentifier)/fsc2.exe"
+                    "The MSBuild target must select the packaged fsc2 adapter."
+
+                Expect.stringContains
+                    targets
+                    "<FscToolExe>$([System.IO.Path]::GetFileName('$(FSharp2CompilerHostPath)'))</FscToolExe>"
+                    "CoreCompile must invoke the selected packaged adapter."
+
+                Expect.stringContains
+                    packageProject
+                    "PackagePath=\"tools/$(FSharp2CompilerHostRuntimeIdentifier)/fsc2.exe\""
+                    "The package must place fsc2 at the MSBuild target path."
         ]

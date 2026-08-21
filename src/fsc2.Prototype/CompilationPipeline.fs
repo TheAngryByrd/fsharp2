@@ -35,7 +35,7 @@ module internal CompilationPipeline =
         | StrongNameMode.PublicSign -> SigningMode.PublicSign
         | StrongNameMode.FullSign -> SigningMode.FullSign
 
-    let private createRequest (invocation: CompilerInvocation) (sources: SourceInput list) =
+    let createRequest (invocation: CompilerInvocation) (sources: SourceInput list) =
         let assemblyName = Path.GetFileNameWithoutExtension(invocation.AssemblyPath)
 
         let sourceSnapshots =
@@ -227,7 +227,7 @@ module internal CompilationPipeline =
         Emitted = false
     }
 
-    let private fragmentHash (symbolic: SymbolicAssembly) =
+    let fragmentHash (symbolic: SymbolicAssembly) =
         match
             [
                 yield!
@@ -250,6 +250,102 @@ module internal CompilationPipeline =
         with
         | [ contentHash ] -> contentHash
         | contentHashes -> String.concat "|" contentHashes
+
+    let completeInvocation
+        compileStarted
+        (invocation: CompilerInvocation)
+        (result: CompilationResult)
+        =
+        let traceValues =
+            result.Traces
+            |> Seq.map (fun value ->
+                let separator = value.IndexOf('=')
+
+                value[.. separator
+                         - 1],
+                value[separator
+                      + 1 ..]
+            )
+            |> Map.ofSeq
+
+        let trace key = traceValues[key]
+
+        let failureFromResult () =
+            match result.Outcome with
+            | CompilationOutcome.Failed ->
+                match Seq.tryHead result.Diagnostics with
+                | Some diagnostic ->
+                    diagnostic
+                    |> DiagnosticFormatter.formatCompilationDiagnostic invocation
+                    |> failure compileStarted
+                | None ->
+                    failure compileStarted "FSC2P9999: compilation failed without a diagnostic"
+            | CompilationOutcome.Unsupported unsupported ->
+                failure compileStarted $"{unsupported.Code}: {unsupported.Message}"
+            | CompilationOutcome.Cancelled cancellation ->
+                failure
+                    compileStarted
+                    $"FSC2P1002: request '{cancellation.RequestIdentity.Value}' was cancelled at {cancellation.ObservedPhase}"
+            | CompilationOutcome.Succeeded ->
+                failure compileStarted "FSC2P9999: successful compilation was mapped as a failure"
+
+        match result.Outcome with
+        | CompilationOutcome.Succeeded ->
+            let artifactBytes kind =
+                result.Artifacts
+                |> Seq.tryFind (fun artifact -> artifact.Kind = kind)
+                |> Option.map (fun artifact -> Seq.toArray artifact.Bytes)
+
+            match artifactBytes RequestedArtifact.ImplementationAssembly with
+            | None ->
+                failure compileStarted "FSC2P9999: compilation produced no implementation artifact"
+            | Some implementation ->
+                let linkedArtifacts = {
+                    Implementation = implementation
+                    PortablePdb =
+                        artifactBytes RequestedArtifact.PortablePdb
+                        |> Option.defaultValue Array.empty
+                    ReferenceAssembly =
+                        artifactBytes RequestedArtifact.ReferenceAssembly
+                        |> Option.defaultValue Array.empty
+                    Documentation =
+                        artifactBytes RequestedArtifact.Documentation
+                        |> Option.defaultValue Array.empty
+                }
+
+                let publishStarted = Stopwatch.GetTimestamp()
+                Linker.publishTransactionally invocation linkedArtifacts
+                let publishElapsedMicroseconds = elapsedMicroseconds publishStarted
+
+                {
+                    ExitCode = 0
+                    Error = String.Empty
+                    ServiceProcessId = Environment.ProcessId
+                    QuerySchema = Int32.Parse(trace "querySchema")
+                    NodeKind = trace "nodeKind"
+                    ContentFingerprint = trace "contentFingerprint"
+                    PreviousContentFingerprint = trace "previousContentFingerprint"
+                    InvalidationReason = trace "invalidationReason"
+                    ParseKey = trace "parseKey"
+                    CheckKey = trace "checkKey"
+                    LowerKey = trace "lowerKey"
+                    DependencyCount = Int32.Parse(trace "dependencyCount")
+                    ParseDecision = trace "parse"
+                    CheckDecision = trace "check"
+                    LowerDecision = trace "lower"
+                    ParseElapsedMicroseconds = Int64.Parse(trace "parseElapsedMicroseconds")
+                    CheckElapsedMicroseconds = Int64.Parse(trace "checkElapsedMicroseconds")
+                    LowerElapsedMicroseconds = Int64.Parse(trace "lowerElapsedMicroseconds")
+                    LinkElapsedMicroseconds = Int64.Parse(trace "linkElapsedMicroseconds")
+                    PublishElapsedMicroseconds = publishElapsedMicroseconds
+                    CompileElapsedMicroseconds = elapsedMicroseconds compileStarted
+                    ExportFingerprint = trace "exportFingerprint"
+                    FragmentHash = trace "fragmentHash"
+                    Emitted = Boolean.Parse(trace "emitted")
+                }
+        | CompilationOutcome.Failed
+        | CompilationOutcome.Unsupported _
+        | CompilationOutcome.Cancelled _ -> failureFromResult ()
 
     let private compileCore
         (service: CompilerService)
