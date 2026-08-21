@@ -4723,13 +4723,14 @@ type internal CompilerService() =
                                     let rec rewrite =
                                         function
                                         | TypedParameterReference index when
-                                            index >= lambdaParameterCount
+                                            index
+                                            >= lambdaParameterCount
                                             ->
                                             match
                                                 captures
                                                 |> List.tryFind (fun capture ->
-                                                    capture.OuterParameterIndex =
-                                                        index - lambdaParameterCount
+                                                    capture.OuterParameterIndex = index
+                                                                                  - lambdaParameterCount
                                                 )
                                             with
                                             | Some capture ->
@@ -8130,7 +8131,8 @@ type internal CompilerService() =
                                                                     captures
                                                                     |> List.filter (fun capture ->
                                                                         typedParameters
-                                                                        |> List.exists (fun parameter ->
+                                                                        |> List.exists (fun
+                                                                                            parameter ->
                                                                             parameter.Name = capture.Name
                                                                         )
                                                                         |> not

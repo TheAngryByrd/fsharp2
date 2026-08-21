@@ -111,10 +111,7 @@ module internal Linker =
                           - 1]
                 )
 
-    let private tryReadTargetReference
-        (expectedName: string)
-        (reference: TargetReferenceSnapshot)
-        =
+    let private tryReadTargetReference (expectedName: string) (reference: TargetReferenceSnapshot) =
         use pe = new PEReader(reference.PeImage)
 
         if not pe.HasMetadata then

@@ -228,24 +228,26 @@ module internal CompilationPipeline =
     }
 
     let private fragmentHash (symbolic: SymbolicAssembly) =
-        match [
-            yield!
-                symbolic.AssemblyAttributes
-                |> List.map _.ContentHash
-
-            yield!
-                symbolic.Module.TypeAbbreviations
-                |> List.map _.ContentHash
-
-            for typeFragment in symbolic.Module.Types do
+        match
+            [
                 yield!
-                    typeFragment.LiteralFields
+                    symbolic.AssemblyAttributes
                     |> List.map _.ContentHash
 
                 yield!
-                    typeFragment.Methods
+                    symbolic.Module.TypeAbbreviations
                     |> List.map _.ContentHash
-        ] with
+
+                for typeFragment in symbolic.Module.Types do
+                    yield!
+                        typeFragment.LiteralFields
+                        |> List.map _.ContentHash
+
+                    yield!
+                        typeFragment.Methods
+                        |> List.map _.ContentHash
+            ]
+        with
         | [ contentHash ] -> contentHash
         | contentHashes -> String.concat "|" contentHashes
 

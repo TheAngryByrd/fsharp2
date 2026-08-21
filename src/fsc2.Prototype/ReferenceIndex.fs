@@ -837,12 +837,11 @@ type internal ReferenceTypeIndex
                 genericArity
 
         let forwardedAssemblyTypes =
-            Dictionary<string, Dictionary<string * string, int * bool>>(
-                StringComparer.Ordinal
-            )
+            Dictionary<string, Dictionary<string * string, int * bool>>(StringComparer.Ordinal)
 
         let referencesByAssemblyName =
-            let result = Dictionary<string, TargetReferenceSnapshot>(StringComparer.OrdinalIgnoreCase)
+            let result =
+                Dictionary<string, TargetReferenceSnapshot>(StringComparer.OrdinalIgnoreCase)
 
             for reference in normalizedReferences do
                 use pe = new PEReader(reference.PeImage)
@@ -930,10 +929,7 @@ type internal ReferenceTypeIndex
                 forwardedAssemblyTypes.Add(identity, forwardedTypes)
                 forwardedTypes
 
-        let addForwardedTypeLocation
-            (facadeMetadata: MetadataReader)
-            (exportedType: ExportedType)
-            =
+        let addForwardedTypeLocation (facadeMetadata: MetadataReader) (exportedType: ExportedType) =
             if
                 exportedType.Implementation.Kind
                 <> HandleKind.AssemblyReference
@@ -1015,7 +1011,8 @@ type internal ReferenceTypeIndex
                 use pe = new PEReader(reference.PeImage)
 
                 if not pe.HasMetadata then
-                    invalidOp $"the reference '{reference.LogicalPath}' does not contain CLI metadata"
+                    invalidOp
+                        $"the reference '{reference.LogicalPath}' does not contain CLI metadata"
 
                 let metadata = pe.GetMetadataReader()
 
@@ -1250,9 +1247,7 @@ type internal ReferenceTypeIndex
                 frozenTypeLocations.Add(
                     declarationId,
                     locations
-                    |> Seq.distinctBy (fun location ->
-                        location.ReferenceIdentity, location.TypeRow
-                    )
+                    |> Seq.distinctBy (fun location -> location.ReferenceIdentity, location.TypeRow)
                     |> Seq.sortBy (fun location -> location.ReferenceIdentity, location.TypeRow)
                     |> List.ofSeq
                 )

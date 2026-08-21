@@ -28,7 +28,8 @@ module private ContractValidation =
         copied
         |> Seq.iter (fun value ->
             if obj.ReferenceEquals(value, null) then
-                nullArg name)
+                nullArg name
+        )
 
         copied
 
@@ -48,7 +49,10 @@ module private ContractValidation =
         let copied = array name values
 
         copied
-        |> Seq.iter (text name >> ignore)
+        |> Seq.iter (
+            text name
+            >> ignore
+        )
 
         copied
 
@@ -79,7 +83,15 @@ type CompilationAssemblyIdentity = {
     static member Create(stableId, name) =
         let validatedName = ContractValidation.text "name" name
 
-        if validatedName.IndexOfAny([| '/'; '\\' |]) >= 0 then
+        if
+            validatedName.IndexOfAny(
+                [|
+                    '/'
+                    '\\'
+                |]
+            )
+            >= 0
+        then
             invalidArg "name" "name must not contain a path separator."
 
         {
@@ -113,13 +125,12 @@ type SourceSnapshot = {
     ContentFingerprint: string
 } with
 
-    static member Create(stableId, logicalPath, text, contentFingerprint) =
-        {
-            StableId = stableId
-            LogicalPath = ContractValidation.text "logicalPath" logicalPath
-            Text = ContractValidation.value "text" text
-            ContentFingerprint = ContractValidation.text "contentFingerprint" contentFingerprint
-        }
+    static member Create(stableId, logicalPath, text, contentFingerprint) = {
+        StableId = stableId
+        LogicalPath = ContractValidation.text "logicalPath" logicalPath
+        Text = ContractValidation.value "text" text
+        ContentFingerprint = ContractValidation.text "contentFingerprint" contentFingerprint
+    }
 
     override _.ToString() = "SourceSnapshot"
 
@@ -130,13 +141,12 @@ type TargetReferenceSnapshot = {
     ContentFingerprint: string
 } with
 
-    static member Create(stableId, logicalPath, peImage, contentFingerprint) =
-        {
-            StableId = stableId
-            LogicalPath = ContractValidation.text "logicalPath" logicalPath
-            PeImage = ContractValidation.array "peImage" peImage
-            ContentFingerprint = ContractValidation.text "contentFingerprint" contentFingerprint
-        }
+    static member Create(stableId, logicalPath, peImage, contentFingerprint) = {
+        StableId = stableId
+        LogicalPath = ContractValidation.text "logicalPath" logicalPath
+        PeImage = ContractValidation.array "peImage" peImage
+        ContentFingerprint = ContractValidation.text "contentFingerprint" contentFingerprint
+    }
 
     override _.ToString() = "TargetReferenceSnapshot"
 
@@ -171,14 +181,22 @@ type SemanticOptions = {
     TargetProfile: string option
 } with
 
-    static member Create(defines, languageVersion, optimization, checkNulls, noFramework, targetProfile) =
+    static member Create
+        (defines, languageVersion, optimization, checkNulls, noFramework, targetProfile)
+        =
         let optimization = ContractValidation.reference "optimization" optimization
 
         languageVersion
-        |> Option.iter (ContractValidation.text "languageVersion" >> ignore)
+        |> Option.iter (
+            ContractValidation.text "languageVersion"
+            >> ignore
+        )
 
         targetProfile
-        |> Option.iter (ContractValidation.text "targetProfile" >> ignore)
+        |> Option.iter (
+            ContractValidation.text "targetProfile"
+            >> ignore
+        )
 
         {
             Defines = ContractValidation.stringArray "defines" defines
@@ -198,13 +216,12 @@ type DiagnosticOptions = {
     WarningsAsErrors: ImmutableArray<string>
 } with
 
-    static member Create(warningLevel, disabledWarnings, treatWarningsAsErrors, warningsAsErrors) =
-        {
-            WarningLevel = warningLevel
-            DisabledWarnings = ContractValidation.stringArray "disabledWarnings" disabledWarnings
-            TreatWarningsAsErrors = treatWarningsAsErrors
-            WarningsAsErrors = ContractValidation.stringArray "warningsAsErrors" warningsAsErrors
-        }
+    static member Create(warningLevel, disabledWarnings, treatWarningsAsErrors, warningsAsErrors) = {
+        WarningLevel = warningLevel
+        DisabledWarnings = ContractValidation.stringArray "disabledWarnings" disabledWarnings
+        TreatWarningsAsErrors = treatWarningsAsErrors
+        WarningsAsErrors = ContractValidation.stringArray "warningsAsErrors" warningsAsErrors
+    }
 
     override _.ToString() = "DiagnosticOptions"
 
@@ -217,22 +234,25 @@ type EmissionOptions = {
     SourceLinkJson: ImmutableArray<byte>
 } with
 
-    static member Create(
-        deterministic,
-        highEntropyVirtualAddress,
-        debugFormat,
-        embeddedSourceIdentities,
-        debugDocumentPaths,
-        sourceLinkJson
-    ) =
+    static member Create
+        (
+            deterministic,
+            highEntropyVirtualAddress,
+            debugFormat,
+            embeddedSourceIdentities,
+            debugDocumentPaths,
+            sourceLinkJson
+        ) =
         let debugFormat = ContractValidation.reference "debugFormat" debugFormat
 
         {
             Deterministic = deterministic
             HighEntropyVirtualAddress = highEntropyVirtualAddress
             DebugFormat = debugFormat
-            EmbeddedSourceIdentities = ContractValidation.array "embeddedSourceIdentities" embeddedSourceIdentities
-            DebugDocumentPaths = ContractValidation.stringArray "debugDocumentPaths" debugDocumentPaths
+            EmbeddedSourceIdentities =
+                ContractValidation.array "embeddedSourceIdentities" embeddedSourceIdentities
+            DebugDocumentPaths =
+                ContractValidation.stringArray "debugDocumentPaths" debugDocumentPaths
             SourceLinkJson = ContractValidation.array "sourceLinkJson" sourceLinkJson
         }
 
@@ -280,12 +300,11 @@ type NativeResourceSnapshot = {
     ContentFingerprint: string
 } with
 
-    static member Create(stableId, content, contentFingerprint) =
-        {
-            StableId = stableId
-            Content = ContractValidation.array "content" content
-            ContentFingerprint = ContractValidation.text "contentFingerprint" contentFingerprint
-        }
+    static member Create(stableId, content, contentFingerprint) = {
+        StableId = stableId
+        Content = ContractValidation.array "content" content
+        ContentFingerprint = ContractValidation.text "contentFingerprint" contentFingerprint
+    }
 
     override _.ToString() = "NativeResourceSnapshot"
 
@@ -294,11 +313,10 @@ type ResourceInputs = {
     Native: ImmutableArray<NativeResourceSnapshot>
 } with
 
-    static member Create(managed, native) =
-        {
-            Managed = ContractValidation.references "managed" managed
-            Native = ContractValidation.references "native" native
-        }
+    static member Create(managed, native) = {
+        Managed = ContractValidation.references "managed" managed
+        Native = ContractValidation.references "native" native
+    }
 
     override _.ToString() = "ResourceInputs"
 
@@ -413,31 +431,46 @@ type CompilationRequest = {
     RequestedArtifacts: ImmutableArray<RequestedArtifact>
 } with
 
-    static member Create(
-        contractVersion: int,
-        requestIdentity: StableIdentity,
-        assemblyIdentity: CompilationAssemblyIdentity,
-        sources: SourceSnapshot array,
-        targetReferences: TargetReferenceSnapshot array,
-        semanticOptions: SemanticOptions,
-        diagnosticOptions: DiagnosticOptions,
-        emissionOptions: EmissionOptions,
-        signingOptions: SigningOptions,
-        resources: ResourceInputs,
-        requestedArtifacts: RequestedArtifact array
-    ) =
-        if contractVersion <> CompilerContract.Version then
-            invalidArg "contractVersion" $"Unsupported compiler contract version '{contractVersion}'."
+    static member Create
+        (
+            contractVersion: int,
+            requestIdentity: StableIdentity,
+            assemblyIdentity: CompilationAssemblyIdentity,
+            sources: SourceSnapshot array,
+            targetReferences: TargetReferenceSnapshot array,
+            semanticOptions: SemanticOptions,
+            diagnosticOptions: DiagnosticOptions,
+            emissionOptions: EmissionOptions,
+            signingOptions: SigningOptions,
+            resources: ResourceInputs,
+            requestedArtifacts: RequestedArtifact array
+        ) =
+        if
+            contractVersion
+            <> CompilerContract.Version
+        then
+            invalidArg
+                "contractVersion"
+                $"Unsupported compiler contract version '{contractVersion}'."
 
-        let assemblyIdentity = ContractValidation.reference "assemblyIdentity" assemblyIdentity
+        let assemblyIdentity =
+            ContractValidation.reference "assemblyIdentity" assemblyIdentity
+
         let semanticOptions = ContractValidation.reference "semanticOptions" semanticOptions
-        let diagnosticOptions = ContractValidation.reference "diagnosticOptions" diagnosticOptions
+
+        let diagnosticOptions =
+            ContractValidation.reference "diagnosticOptions" diagnosticOptions
+
         let emissionOptions = ContractValidation.reference "emissionOptions" emissionOptions
         let signingOptions = ContractValidation.reference "signingOptions" signingOptions
         let resources = ContractValidation.reference "resources" resources
         let copiedSources = ContractValidation.references "sources" sources
-        let copiedTargetReferences = ContractValidation.references "targetReferences" targetReferences
-        let copiedRequestedArtifacts = ContractValidation.references "requestedArtifacts" requestedArtifacts
+
+        let copiedTargetReferences =
+            ContractValidation.references "targetReferences" targetReferences
+
+        let copiedRequestedArtifacts =
+            ContractValidation.references "requestedArtifacts" requestedArtifacts
 
         let validateIdentity name (identity: StableIdentity) =
             ContractValidation.text name identity.Value
@@ -446,50 +479,101 @@ type CompilationRequest = {
         validateIdentity "requestIdentity" requestIdentity
         validateIdentity "assemblyIdentity.StableId" assemblyIdentity.StableId
 
-        let assemblyName = ContractValidation.text "assemblyIdentity.Name" assemblyIdentity.Name
+        let assemblyName =
+            ContractValidation.text "assemblyIdentity.Name" assemblyIdentity.Name
 
-        if assemblyName.IndexOfAny([| '/'; '\\' |]) >= 0 then
-            invalidArg "assemblyIdentity.Name" "assemblyIdentity.Name must not contain a path separator."
+        if
+            assemblyName.IndexOfAny(
+                [|
+                    '/'
+                    '\\'
+                |]
+            )
+            >= 0
+        then
+            invalidArg
+                "assemblyIdentity.Name"
+                "assemblyIdentity.Name must not contain a path separator."
 
         for source in copiedSources do
             validateIdentity "sources.StableId" source.StableId
-            ContractValidation.text "sources.LogicalPath" source.LogicalPath |> ignore
-            ContractValidation.value "sources.Text" source.Text |> ignore
-            ContractValidation.text "sources.ContentFingerprint" source.ContentFingerprint |> ignore
+
+            ContractValidation.text "sources.LogicalPath" source.LogicalPath
+            |> ignore
+
+            ContractValidation.value "sources.Text" source.Text
+            |> ignore
+
+            ContractValidation.text "sources.ContentFingerprint" source.ContentFingerprint
+            |> ignore
 
         for reference in copiedTargetReferences do
             validateIdentity "targetReferences.StableId" reference.StableId
-            ContractValidation.text "targetReferences.LogicalPath" reference.LogicalPath |> ignore
-            ContractValidation.immutableArray "targetReferences.PeImage" reference.PeImage |> ignore
-            ContractValidation.text "targetReferences.ContentFingerprint" reference.ContentFingerprint |> ignore
+
+            ContractValidation.text "targetReferences.LogicalPath" reference.LogicalPath
+            |> ignore
+
+            ContractValidation.immutableArray "targetReferences.PeImage" reference.PeImage
+            |> ignore
+
+            ContractValidation.text
+                "targetReferences.ContentFingerprint"
+                reference.ContentFingerprint
+            |> ignore
 
         ContractValidation.immutableArray "semanticOptions.Defines" semanticOptions.Defines
-        |> Seq.iter (ContractValidation.text "semanticOptions.Defines" >> ignore)
+        |> Seq.iter (
+            ContractValidation.text "semanticOptions.Defines"
+            >> ignore
+        )
 
         semanticOptions.LanguageVersion
-        |> Option.iter (ContractValidation.text "semanticOptions.LanguageVersion" >> ignore)
+        |> Option.iter (
+            ContractValidation.text "semanticOptions.LanguageVersion"
+            >> ignore
+        )
 
         semanticOptions.TargetProfile
-        |> Option.iter (ContractValidation.text "semanticOptions.TargetProfile" >> ignore)
+        |> Option.iter (
+            ContractValidation.text "semanticOptions.TargetProfile"
+            >> ignore
+        )
 
         ContractValidation.reference "semanticOptions.Optimization" semanticOptions.Optimization
         |> ignore
 
-        ContractValidation.immutableArray "diagnosticOptions.DisabledWarnings" diagnosticOptions.DisabledWarnings
-        |> Seq.iter (ContractValidation.text "diagnosticOptions.DisabledWarnings" >> ignore)
+        ContractValidation.immutableArray
+            "diagnosticOptions.DisabledWarnings"
+            diagnosticOptions.DisabledWarnings
+        |> Seq.iter (
+            ContractValidation.text "diagnosticOptions.DisabledWarnings"
+            >> ignore
+        )
 
-        ContractValidation.immutableArray "diagnosticOptions.WarningsAsErrors" diagnosticOptions.WarningsAsErrors
-        |> Seq.iter (ContractValidation.text "diagnosticOptions.WarningsAsErrors" >> ignore)
+        ContractValidation.immutableArray
+            "diagnosticOptions.WarningsAsErrors"
+            diagnosticOptions.WarningsAsErrors
+        |> Seq.iter (
+            ContractValidation.text "diagnosticOptions.WarningsAsErrors"
+            >> ignore
+        )
 
         ContractValidation.immutableArray
             "emissionOptions.EmbeddedSourceIdentities"
             emissionOptions.EmbeddedSourceIdentities
         |> Seq.iter (validateIdentity "emissionOptions.EmbeddedSourceIdentities")
 
-        ContractValidation.immutableArray "emissionOptions.DebugDocumentPaths" emissionOptions.DebugDocumentPaths
-        |> Seq.iter (ContractValidation.text "emissionOptions.DebugDocumentPaths" >> ignore)
+        ContractValidation.immutableArray
+            "emissionOptions.DebugDocumentPaths"
+            emissionOptions.DebugDocumentPaths
+        |> Seq.iter (
+            ContractValidation.text "emissionOptions.DebugDocumentPaths"
+            >> ignore
+        )
 
-        ContractValidation.immutableArray "emissionOptions.SourceLinkJson" emissionOptions.SourceLinkJson
+        ContractValidation.immutableArray
+            "emissionOptions.SourceLinkJson"
+            emissionOptions.SourceLinkJson
         |> ignore
 
         ContractValidation.reference "emissionOptions.DebugFormat" emissionOptions.DebugFormat
@@ -508,18 +592,38 @@ type CompilationRequest = {
         |> ignore
 
         for resource in resources.Managed do
-            ContractValidation.reference "resources.Managed" resource |> ignore
+            ContractValidation.reference "resources.Managed" resource
+            |> ignore
+
             validateIdentity "resources.Managed.StableId" resource.StableId
-            ContractValidation.text "resources.Managed.LogicalName" resource.LogicalName |> ignore
-            ContractValidation.reference "resources.Managed.Visibility" resource.Visibility |> ignore
-            ContractValidation.immutableArray "resources.Managed.Content" resource.Content |> ignore
-            ContractValidation.text "resources.Managed.ContentFingerprint" resource.ContentFingerprint |> ignore
+
+            ContractValidation.text "resources.Managed.LogicalName" resource.LogicalName
+            |> ignore
+
+            ContractValidation.reference "resources.Managed.Visibility" resource.Visibility
+            |> ignore
+
+            ContractValidation.immutableArray "resources.Managed.Content" resource.Content
+            |> ignore
+
+            ContractValidation.text
+                "resources.Managed.ContentFingerprint"
+                resource.ContentFingerprint
+            |> ignore
 
         for resource in resources.Native do
-            ContractValidation.reference "resources.Native" resource |> ignore
+            ContractValidation.reference "resources.Native" resource
+            |> ignore
+
             validateIdentity "resources.Native.StableId" resource.StableId
-            ContractValidation.immutableArray "resources.Native.Content" resource.Content |> ignore
-            ContractValidation.text "resources.Native.ContentFingerprint" resource.ContentFingerprint |> ignore
+
+            ContractValidation.immutableArray "resources.Native.Content" resource.Content
+            |> ignore
+
+            ContractValidation.text
+                "resources.Native.ContentFingerprint"
+                resource.ContentFingerprint
+            |> ignore
 
         for artifact in copiedRequestedArtifacts do
             match artifact with
@@ -531,10 +635,22 @@ type CompilationRequest = {
             seq {
                 yield requestIdentity
                 yield assemblyIdentity.StableId
-                yield! copiedSources |> Seq.map (fun source -> source.StableId)
-                yield! copiedTargetReferences |> Seq.map (fun reference -> reference.StableId)
-                yield! resources.Managed |> Seq.map (fun resource -> resource.StableId)
-                yield! resources.Native |> Seq.map (fun resource -> resource.StableId)
+
+                yield!
+                    copiedSources
+                    |> Seq.map (fun source -> source.StableId)
+
+                yield!
+                    copiedTargetReferences
+                    |> Seq.map (fun reference -> reference.StableId)
+
+                yield!
+                    resources.Managed
+                    |> Seq.map (fun resource -> resource.StableId)
+
+                yield!
+                    resources.Native
+                    |> Seq.map (fun resource -> resource.StableId)
 
                 for artifact in copiedRequestedArtifacts do
                     match artifact with
@@ -546,23 +662,23 @@ type CompilationRequest = {
             identities
             |> Seq.groupBy _.Value
             |> Seq.tryPick (fun (value, matches) ->
-                if Seq.length matches > 1 then Some value else None)
+                if Seq.length matches > 1 then Some value else None
+            )
 
         match duplicateIdentity with
         | Some value -> invalidArg "request" $"Duplicate stable identity '{value}'."
-        | None ->
-            {
-                ContractVersion = contractVersion
-                RequestIdentity = requestIdentity
-                AssemblyIdentity = assemblyIdentity
-                Sources = copiedSources
-                TargetReferences = copiedTargetReferences
-                SemanticOptions = semanticOptions
-                DiagnosticOptions = diagnosticOptions
-                EmissionOptions = emissionOptions
-                SigningOptions = signingOptions
-                Resources = resources
-                RequestedArtifacts = copiedRequestedArtifacts
-            }
+        | None -> {
+            ContractVersion = contractVersion
+            RequestIdentity = requestIdentity
+            AssemblyIdentity = assemblyIdentity
+            Sources = copiedSources
+            TargetReferences = copiedTargetReferences
+            SemanticOptions = semanticOptions
+            DiagnosticOptions = diagnosticOptions
+            EmissionOptions = emissionOptions
+            SigningOptions = signingOptions
+            Resources = resources
+            RequestedArtifacts = copiedRequestedArtifacts
+          }
 
     override _.ToString() = "CompilationRequest"
