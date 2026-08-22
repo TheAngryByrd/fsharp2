@@ -13003,6 +13003,9 @@ module CompilerTargetTests =
                     let sourcePath = Path.Combine(projectRoot, "Tracer.fs")
                     let tracePath = Path.Combine(projectRoot, "obj", "fsharp2.trace")
                     let packageVersion = "0.0.0-integration"
+                    let packagedHostRuntimeIdentifier = RuntimeInformation.RuntimeIdentifier
+
+                    let packageId = $"FSharp2.Compiler.MSBuild.{packagedHostRuntimeIdentifier}"
 
                     let pipeName =
                         "fsharp2-msbuild-"
@@ -13069,7 +13072,7 @@ module CompilerTargetTests =
     <RestoreIgnoreFailedSources>true</RestoreIgnoreFailedSources>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="FSharp2.Compiler.MSBuild" Version="{packageVersion}" />
+    <PackageReference Include="{packageId}" Version="{packageVersion}" />
     <Reference Include="FSharp.Core" HintPath="{typeof<Microsoft.FSharp.Core.AutoOpenAttribute>.Assembly.Location}" />
     <Compile Include="First.fs" />
     <Compile Include="Tracer.fs" />
@@ -13097,15 +13100,13 @@ module CompilerTargetTests =
                         (restore.StandardOutput
                          + restore.StandardError)
 
-                    let packagedHostRuntimeIdentifier = RuntimeInformation.RuntimeIdentifier
-
                     let packagedHostExecutableName =
                         if OperatingSystem.IsWindows() then "fsc2.exe" else "fsc2"
 
                     let packagedHostPath =
                         Path.Combine(
                             packageCache,
-                            "fsharp2.compiler.msbuild",
+                            packageId.ToLowerInvariant(),
                             packageVersion,
                             "tools",
                             packagedHostRuntimeIdentifier,

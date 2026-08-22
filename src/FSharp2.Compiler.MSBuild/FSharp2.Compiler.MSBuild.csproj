@@ -1,7 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <PackageId>FSharp2.Compiler.MSBuild</PackageId>
     <Description>Opt-in MSBuild integration for the FSharp2 compiler.</Description>
     <IsPackable>true</IsPackable>
     <IncludeBuildOutput>false</IncludeBuildOutput>
@@ -10,6 +9,7 @@
     <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
     <DevelopmentDependency>true</DevelopmentDependency>
     <FSharp2CompilerHostRuntimeIdentifier Condition="'$(FSharp2CompilerHostRuntimeIdentifier)' == ''">$(NETCoreSdkRuntimeIdentifier)</FSharp2CompilerHostRuntimeIdentifier>
+    <PackageId>FSharp2.Compiler.MSBuild.$(FSharp2CompilerHostRuntimeIdentifier)</PackageId>
     <FSharp2CompilerHostExecutableName Condition="'$(FSharp2CompilerHostExecutableName)' == '' and $([System.String]::Copy('$(FSharp2CompilerHostRuntimeIdentifier)').StartsWith('win'))">fsc2.exe</FSharp2CompilerHostExecutableName>
     <FSharp2CompilerHostExecutableName Condition="'$(FSharp2CompilerHostExecutableName)' == ''">fsc2</FSharp2CompilerHostExecutableName>
     <FSharp2CompilerHostPublishDirectory>$([System.IO.Path]::GetFullPath('$(BaseIntermediateOutputPath)fsc2/$(Configuration)/$(FSharp2CompilerHostRuntimeIdentifier)/publish/'))</FSharp2CompilerHostPublishDirectory>
@@ -27,10 +27,10 @@
                       PrivateAssets="all" />
     <None Include="buildTransitive/FSharp2.Compiler.MSBuild.props"
           Pack="true"
-          PackagePath="buildTransitive/FSharp2.Compiler.MSBuild.props" />
+          PackagePath="buildTransitive/$(PackageId).props" />
     <None Include="buildTransitive/FSharp2.Compiler.MSBuild.targets"
           Pack="true"
-          PackagePath="buildTransitive/FSharp2.Compiler.MSBuild.targets" />
+          PackagePath="buildTransitive/$(PackageId).targets" />
   </ItemGroup>
 
   <Target Name="PublishFSharp2CompilerHostForPackage">
