@@ -12,6 +12,6 @@ ENV \
     DOTNET_USE_POLLING_FILE_WATCHER=true
 
 
-# [Optional] Uncomment this section to install additional OS packages.
-# RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
-#     && apt-get -y install --no-install-recommends <your-package-list-here>
+RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
+    && apt-get -y install --no-install-recommends clang zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
