@@ -1342,12 +1342,12 @@ module CompilerTargetTests =
         "chained-instance-field",
         "namespace CompatibilityOracleNegative\n\n[<Struct>]\ntype Inner = { Value: bool }\n\ntype Outer = { Inner: Inner }\n\nmodule Program =\n    let value: int = { Inner = { Value = true } }.Inner.Value\n",
         "FS0001"
-        "IcedTasks coverage expressions reject a mismatched struct tuple",
-        "icedtasks-expression-coverage",
+        "struct tuple expressions reject a mismatched element",
+        "struct-tuple-expression",
         "namespace CompatibilityOracleNegative\n\nmodule Program =\n    let value: struct (int * bool) = struct (1, 2)\n",
         "FS0001"
-        "AsyncEx coverage delegates reject different conditional results",
-        "asyncex-delegate-coverage",
+        "delegate expressions reject different conditional branch results",
+        "delegate-conditional-expression",
         "namespace CompatibilityOracleNegative\n\ntype Callback = delegate of int -> int\n\nmodule Program =\n    let flag = true\n    let callback = Callback(fun value -> if flag then value else false)\n",
         "FS0001"
         "try-with handlers reject a different result type",
