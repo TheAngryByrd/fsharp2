@@ -178,6 +178,7 @@ public static class ConformanceRunner
             }
         }
 
+        FallbackSentinel.RetainSelectedReceipt(fallbackReceiptPath);
         fallbackDetected |= !FallbackSentinel.ValidateReceipt(fallbackReceiptPath).IsValid;
         var publishedSuccessfulArtifact = coreEvidence.Artifacts.Any()
                                           && !string.Equals(coreEvidence.Outcome, "succeeded", StringComparison.Ordinal);

@@ -72,7 +72,7 @@ public static class ManifestLoader
         }
 
         ValidateCases(conformanceRoot, documents, issues);
-        ValidateOracleLocks(documents, issues);
+        ValidateOracleLocks(manifest, documents, issues);
         ValidateDiagnosticOccurrenceOrder(documents, issues);
         ValidateForbiddenFields(documents, issues);
 
@@ -504,6 +504,7 @@ public static class ManifestLoader
     }
 
     private static void ValidateOracleLocks(
+        JsonElement? manifest,
         Dictionary<string, JsonElement> documents,
         ImmutableArray<ValidationIssue>.Builder issues)
     {
@@ -540,6 +541,65 @@ public static class ManifestLoader
             {
                 issues.Add(new("lock-case-hash", path, $"The lock case hash is stale for '{caseId}'."));
             }
+
+            if (manifest is { } manifestDocument)
+            {
+                ValidateOracleIdentity(manifestDocument, conformanceCase, path, document, issues);
+            }
+        }
+    }
+
+    private static void ValidateOracleIdentity(
+        JsonElement manifest,
+        JsonElement conformanceCase,
+        string path,
+        JsonElement lockDocument,
+        ImmutableArray<ValidationIssue>.Builder issues)
+    {
+        if (!manifest.TryGetProperty("oraclePolicy", out var oraclePolicy)
+            || oraclePolicy.ValueKind != JsonValueKind.Object
+            || !lockDocument.TryGetProperty("oracleIdentity", out var oracleIdentity)
+            || oracleIdentity.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        string[] policyProperties =
+        [
+            "sdkVersion",
+            "sdkCommit",
+            "compiler",
+            "msbuildTask",
+            "fsharpCore",
+            "culture",
+            "encoding",
+        ];
+        foreach (var propertyName in policyProperties)
+        {
+            if (!oraclePolicy.TryGetProperty(propertyName, out var expected)
+                || !oracleIdentity.TryGetProperty(propertyName, out var actual)
+                || !CanonicalJson.Canonicalize(expected).SequenceEqual(CanonicalJson.Canonicalize(actual)))
+            {
+                issues.Add(new(
+                    "lock-oracle-identity",
+                    $"{path}/oracleIdentity/{propertyName}",
+                    $"The locked Oracle identity property '{propertyName}' does not match the manifest Oracle policy."));
+                return;
+            }
+        }
+
+        if (!conformanceCase.TryGetProperty("options", out var options)
+            || !oracleIdentity.TryGetProperty("optionHash", out var optionHash)
+            || optionHash.ValueKind != JsonValueKind.String
+            || !string.Equals(
+                Hashing.Sha256(CanonicalJson.Canonicalize(options)),
+                optionHash.GetString(),
+                StringComparison.Ordinal))
+        {
+            issues.Add(new(
+                "lock-oracle-identity",
+                $"{path}/oracleIdentity/optionHash",
+                "The locked Oracle option identity does not match the complete case options."));
         }
     }
 
