@@ -246,8 +246,12 @@ type internal CompilerInvocation = {
     NoFramework: bool
     WarningLevel: int option
     DisabledWarnings: string list
+    EnabledWarnings: string list
     TreatWarningsAsErrors: bool
     WarningsAsErrors: string list
+    WarningsNotAsErrors: string list
+    MaximumErrors: int option
+    AbortOnError: bool
     HighEntropyVA: bool
     TargetProfile: string option
     NoCopyFSharpCore: bool

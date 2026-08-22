@@ -484,6 +484,571 @@ module DiagnosticCompatibilityTests =
                     "DiagnosticFact suggestion facts"
                     (immutableItem "Arguments" copiedSuggestionFact)
 
+            testCase "warning policy matches pinned precedence"
+            <| fun _ ->
+                let compilerAssembly = typeof<Compiler>.Assembly
+
+                let visibility =
+                    Reflection.BindingFlags.Public
+                    ||| Reflection.BindingFlags.NonPublic
+
+                let staticMembers =
+                    visibility
+                    ||| Reflection.BindingFlags.Static
+
+                let instanceMembers =
+                    visibility
+                    ||| Reflection.BindingFlags.Instance
+
+                let requiredType name =
+                    let runtimeType = compilerAssembly.GetType($"FSharp2.Compiler.{name}", false)
+                    Expect.isNotNull runtimeType $"The compiler must define {name}."
+                    runtimeType
+
+                let requiredMethod name (runtimeType: Type) =
+                    let methodInfo = runtimeType.GetMethod(name, staticMembers)
+                    Expect.isNotNull methodInfo $"{runtimeType.Name} must define {name}."
+                    methodInfo
+
+                let options
+                    warningLevel
+                    disabledWarnings
+                    enabledWarnings
+                    treatWarningsAsErrors
+                    warningsAsErrors
+                    warningsNotAsErrors
+                    maximumErrors
+                    abortOnError
+                    localWarningDirectives
+                    =
+                    DiagnosticOptions.Create(
+                        warningLevel,
+                        disabledWarnings,
+                        enabledWarnings,
+                        treatWarningsAsErrors,
+                        warningsAsErrors,
+                        warningsNotAsErrors,
+                        maximumErrors,
+                        abortOnError,
+                        None,
+                        localWarningDirectives,
+                        false,
+                        false,
+                        false,
+                        DiagnosticStyle.Default,
+                        ConsoleColorMode.Automatic,
+                        None,
+                        None,
+                        false,
+                        false,
+                        false
+                    )
+
+                let defaults = options (Some 3) [||] [||] false [||] [||] None false [||]
+
+                let diagnostic occurrence code numericCode severity =
+                    CompilationDiagnostic.Create(
+                        occurrence,
+                        code,
+                        numericCode,
+                        None,
+                        DiagnosticStage.Compilation CompilationPhase.Syntax,
+                        severity,
+                        severity,
+                        DiagnosticDisposition.Emitted,
+                        None,
+                        "policy diagnostic",
+                        Some "Program.fs",
+                        None,
+                        [||],
+                        [||],
+                        Some DiagnosticStream.StandardError
+                    )
+
+                let directive order action code =
+                    LocalWarningDirective.Create(order, action, code, "Program.fs", None)
+
+                let policyType = requiredType "DiagnosticPolicy"
+                let evaluateMethod = requiredMethod "evaluate" policyType
+                let inputMethod = requiredMethod "input" policyType
+                let applyMethod = requiredMethod "apply" policyType
+                let outcomeMethod = requiredMethod "outcome" policyType
+
+                let apply
+                    diagnosticOptions
+                    (inputs: (int option * bool * bool * CompilationDiagnostic) array)
+                    =
+                    let runtimeInputs = Array.CreateInstance(inputMethod.ReturnType, inputs.Length)
+
+                    inputs
+                    |> Array.iteri (fun
+                                        index
+                                        (warningLevel, offByDefault, featureEnabled, diagnostic) ->
+                        runtimeInputs.SetValue(
+                            inputMethod.Invoke(
+                                null,
+                                [|
+                                    box warningLevel
+                                    box offByDefault
+                                    box featureEnabled
+                                    box diagnostic
+                                |]
+                            ),
+                            index
+                        )
+                    )
+
+                    applyMethod.Invoke(
+                        null,
+                        [|
+                            box diagnosticOptions
+                            box runtimeInputs
+                        |]
+                    )
+                    |> unbox<System.Collections.Immutable.ImmutableArray<CompilationDiagnostic>>
+
+                let applyOne diagnosticOptions warningLevel offByDefault featureEnabled diagnostic =
+                    apply diagnosticOptions [|
+                        Some warningLevel, offByDefault, featureEnabled, diagnostic
+                    |]
+                    |> Seq.exactlyOne
+
+                let outcome compilationOutcome (inputs: seq<CompilationDiagnostic>) =
+                    outcomeMethod.Invoke(
+                        null,
+                        [|
+                            box compilationOutcome
+                            box inputs
+                        |]
+                    )
+                    :?> CompilationOutcome
+
+                let assertResult
+                    name
+                    expectedSeverity
+                    expectedDisposition
+                    expectedSuppression
+                    (actual: CompilationDiagnostic)
+                    =
+                    Expect.equal actual.EffectiveSeverity expectedSeverity $"{name}: severity"
+                    Expect.equal actual.Disposition expectedDisposition $"{name}: disposition"
+                    Expect.equal actual.Suppression expectedSuppression $"{name}: suppression"
+
+                    let expectedStream =
+                        match expectedDisposition, expectedSeverity with
+                        | DiagnosticDisposition.Suppressed, _ -> None
+                        | DiagnosticDisposition.Emitted, DiagnosticSeverity.Information ->
+                            Some DiagnosticStream.StandardOutput
+                        | DiagnosticDisposition.Emitted, _ -> Some DiagnosticStream.StandardError
+
+                    Expect.equal actual.Stream expectedStream $"{name}: stream"
+
+                let localWarnon = [| directive 1L LocalWarningDirectiveAction.Enable "FS0057" |]
+
+                let localNowarn = [| directive 1L LocalWarningDirectiveAction.Disable "57" |]
+
+                let cases = [
+                    "original error",
+                    options (Some 0) [| "57" |] [||] true [| "FS0057" |] [||] None false localNowarn,
+                    DiagnosticSeverity.Error,
+                    2,
+                    false,
+                    true,
+                    DiagnosticSeverity.Error,
+                    DiagnosticDisposition.Emitted,
+                    None
+                    "global promotion",
+                    options (Some 3) [||] [||] true [||] [||] None false [||],
+                    DiagnosticSeverity.Warning,
+                    2,
+                    false,
+                    true,
+                    DiagnosticSeverity.Error,
+                    DiagnosticDisposition.Emitted,
+                    None
+                    "per-code promotion ignores command-line nowarn",
+                    options (Some 3) [| "FS0057" |] [||] false [| "57" |] [||] None false [||],
+                    DiagnosticSeverity.Warning,
+                    2,
+                    false,
+                    true,
+                    DiagnosticSeverity.Error,
+                    DiagnosticDisposition.Emitted,
+                    None
+                    "per-code demotion vetoes global promotion",
+                    options (Some 3) [||] [||] true [||] [| "FS0057" |] None false [||],
+                    DiagnosticSeverity.Warning,
+                    2,
+                    false,
+                    true,
+                    DiagnosticSeverity.Warning,
+                    DiagnosticDisposition.Emitted,
+                    None
+                    "information per-code promotion",
+                    options (Some 3) [||] [||] false [| "FS0057" |] [||] None false [||],
+                    DiagnosticSeverity.Information,
+                    2,
+                    false,
+                    true,
+                    DiagnosticSeverity.Error,
+                    DiagnosticDisposition.Emitted,
+                    None
+                    "enabled warning",
+                    defaults,
+                    DiagnosticSeverity.Warning,
+                    2,
+                    false,
+                    true,
+                    DiagnosticSeverity.Warning,
+                    DiagnosticDisposition.Emitted,
+                    None
+                    "local warnon overrides command-line nowarn and warning level",
+                    options (Some 0) [| "57" |] [||] false [||] [||] None false localWarnon,
+                    DiagnosticSeverity.Warning,
+                    2,
+                    false,
+                    true,
+                    DiagnosticSeverity.Warning,
+                    DiagnosticDisposition.Emitted,
+                    None
+                    "command-line warnon promotes information",
+                    options (Some 0) [||] [| "FS0057" |] false [||] [||] None false [||],
+                    DiagnosticSeverity.Information,
+                    2,
+                    true,
+                    true,
+                    DiagnosticSeverity.Warning,
+                    DiagnosticDisposition.Emitted,
+                    None
+                    "enabled information",
+                    defaults,
+                    DiagnosticSeverity.Information,
+                    2,
+                    false,
+                    true,
+                    DiagnosticSeverity.Information,
+                    DiagnosticDisposition.Emitted,
+                    None
+                    "global promotion respects command-line nowarn",
+                    options (Some 3) [| "FS0057" |] [||] true [||] [||] None false [||],
+                    DiagnosticSeverity.Warning,
+                    2,
+                    false,
+                    true,
+                    DiagnosticSeverity.Hidden,
+                    DiagnosticDisposition.Suppressed,
+                    Some DiagnosticSuppression.GlobalNowarn
+                    "local nowarn blocks per-code promotion",
+                    options (Some 3) [||] [||] false [| "FS0057" |] [||] None false localNowarn,
+                    DiagnosticSeverity.Warning,
+                    2,
+                    false,
+                    true,
+                    DiagnosticSeverity.Hidden,
+                    DiagnosticDisposition.Suppressed,
+                    Some DiagnosticSuppression.LocalNowarn
+                    "off-by-default warning",
+                    defaults,
+                    DiagnosticSeverity.Warning,
+                    2,
+                    true,
+                    true,
+                    DiagnosticSeverity.Hidden,
+                    DiagnosticDisposition.Suppressed,
+                    Some DiagnosticSuppression.OffByDefault
+                    "feature-gated warning",
+                    defaults,
+                    DiagnosticSeverity.Warning,
+                    2,
+                    false,
+                    false,
+                    DiagnosticSeverity.Hidden,
+                    DiagnosticDisposition.Suppressed,
+                    Some DiagnosticSuppression.LanguageFeature
+                    "original hidden occurrence",
+                    defaults,
+                    DiagnosticSeverity.Hidden,
+                    2,
+                    false,
+                    true,
+                    DiagnosticSeverity.Hidden,
+                    DiagnosticDisposition.Suppressed,
+                    Some DiagnosticSuppression.OffByDefault
+                ]
+
+                for name,
+                    diagnosticOptions,
+                    originalSeverity,
+                    diagnosticWarningLevel,
+                    offByDefault,
+                    languageFeatureEnabled,
+                    expectedSeverity,
+                    expectedDisposition,
+                    expectedSuppression in cases do
+                    diagnostic 0L "FS0057" 57 originalSeverity
+                    |> applyOne
+                        diagnosticOptions
+                        diagnosticWarningLevel
+                        offByDefault
+                        languageFeatureEnabled
+                    |> assertResult name expectedSeverity expectedDisposition expectedSuppression
+
+                for warningLevel in 0..5 do
+                    let expectedSeverity, expectedDisposition, expectedSuppression =
+                        if
+                            warningLevel
+                            >= 2
+                        then
+                            DiagnosticSeverity.Warning, DiagnosticDisposition.Emitted, None
+                        else
+                            DiagnosticSeverity.Hidden,
+                            DiagnosticDisposition.Suppressed,
+                            Some DiagnosticSuppression.WarningLevel
+
+                    diagnostic 0L "57" 57 DiagnosticSeverity.Warning
+                    |> applyOne
+                        (options (Some warningLevel) [||] [||] false [||] [||] None false [||])
+                        2
+                        false
+                        true
+                    |> assertResult
+                        $"warning level {warningLevel}"
+                        expectedSeverity
+                        expectedDisposition
+                        expectedSuppression
+
+                diagnostic 0L "FS1182" 1182 DiagnosticSeverity.Warning
+                |> applyOne
+                    (options (Some 0) [||] [| "1182" |] false [||] [||] None false [||])
+                    2
+                    true
+                    true
+                |> assertResult
+                    "warnon enables an off-by-default warning"
+                    DiagnosticSeverity.Warning
+                    DiagnosticDisposition.Emitted
+                    None
+
+                let error = diagnostic 0L "FS0001" 1 DiagnosticSeverity.Error
+                let promoted = diagnostic 1L "57" 57 DiagnosticSeverity.Warning
+                let trailing = diagnostic 2L "FS0058" 58 DiagnosticSeverity.Warning
+
+                let maximumResults =
+                    apply (options (Some 3) [||] [||] false [| "FS0057" |] [||] (Some 1) false [||]) [|
+                        None, false, true, error
+                        Some 2, false, true, promoted
+                        Some 2, false, true, trailing
+                    |]
+
+                Expect.equal maximumResults.Length 3 "Maximum errors must retain every occurrence."
+
+                maximumResults[1]
+                |> assertResult
+                    "maximum-error boundary"
+                    DiagnosticSeverity.Hidden
+                    DiagnosticDisposition.Suppressed
+                    (Some DiagnosticSuppression.MaximumErrors)
+
+                let abortResults =
+                    apply (options (Some 3) [||] [||] false [||] [||] None true [||]) [|
+                        None, false, true, error
+                        Some 2, false, true, trailing
+                    |]
+
+                Expect.equal abortResults.Length 2 "Abort-on-error must retain every occurrence."
+
+                abortResults[1]
+                |> assertResult
+                    "abort boundary"
+                    DiagnosticSeverity.Hidden
+                    DiagnosticDisposition.Suppressed
+                    (Some DiagnosticSuppression.AbortBoundary)
+
+                let promotedError =
+                    diagnostic 0L "FS0057" 57 DiagnosticSeverity.Warning
+                    |> applyOne
+                        (options (Some 3) [||] [||] false [| "57" |] [||] None false [||])
+                        2
+                        false
+                        true
+
+                Expect.equal
+                    (outcome CompilationOutcome.Succeeded [ promotedError ])
+                    CompilationOutcome.Failed
+                    "An emitted effective error must fail compilation."
+
+                let suppressedWarning =
+                    diagnostic 0L "FS0057" 57 DiagnosticSeverity.Warning
+                    |> applyOne
+                        (options (Some 3) [| "57" |] [||] false [||] [||] None false [||])
+                        2
+                        false
+                        true
+
+                Expect.equal
+                    (outcome CompilationOutcome.Failed [ suppressedWarning ])
+                    CompilationOutcome.Succeeded
+                    "A suppressed occurrence must not fail compilation."
+
+                let commandLineType = requiredType "CommandLine"
+                let parseMethod = requiredMethod "parse" commandLineType
+                let outputPath = Path.Combine(Path.GetTempPath(), "wave3.dll")
+
+                let parsed =
+                    parseMethod.Invoke(
+                        null,
+                        [|
+                            box [|
+                                "--target:library"
+                                $"-o:{outputPath}"
+                                "--deterministic+"
+                                "--debug:portable"
+                                "--warn:5"
+                                "--nowarn:FS0057"
+                                "--nowarn:1182"
+                                "--warnon:1182"
+                                "--warnon:FS3180"
+                                "--warnaserror+"
+                                "--warnaserror:FS0057"
+                                "--warnaserror:1182"
+                                "--warnaserror-:57"
+                                "--warnaserror-:FS1182"
+                                "--maxerrors:7"
+                                "--max-errors:9"
+                                "--abortonerror"
+                                "Program.fs"
+                            |]
+                        |]
+                    )
+
+                let resultCase, resultFields =
+                    Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(
+                        parsed,
+                        parsed.GetType(),
+                        visibility
+                    )
+
+                let parseDetail =
+                    if resultCase.Name = "Error" then
+                        resultFields[0] :?> string
+                    else
+                        String.Empty
+
+                Expect.equal
+                    resultCase.Name
+                    "Ok"
+                    $"Every Wave 3 warning option must parse. {parseDetail}"
+
+                let invocation = resultFields[0]
+
+                let invocationValue name =
+                    invocation.GetType().GetProperty(name, instanceMembers).GetValue(invocation)
+
+                Expect.sequenceEqual
+                    (invocationValue "DisabledWarnings"
+                     |> unbox<string list>)
+                    [
+                        "FS0057"
+                        "1182"
+                    ]
+                    "Command-line nowarn must preserve code order."
+
+                Expect.sequenceEqual
+                    (invocationValue "EnabledWarnings"
+                     |> unbox<string list>)
+                    [
+                        "1182"
+                        "FS3180"
+                    ]
+                    "Command-line warnon must preserve code order."
+
+                Expect.sequenceEqual
+                    (invocationValue "WarningsAsErrors"
+                     |> unbox<string list>)
+                    [
+                        "FS0057"
+                        "1182"
+                    ]
+                    "Per-code promotion must preserve code order."
+
+                Expect.sequenceEqual
+                    (invocationValue "WarningsNotAsErrors"
+                     |> unbox<string list>)
+                    [
+                        "57"
+                        "FS1182"
+                    ]
+                    "Per-code demotion must preserve code order."
+
+                Expect.equal
+                    (invocationValue "MaximumErrors"
+                     |> unbox<int option>)
+                    (Some 9)
+                    "The last maximum-error spelling must reach the invocation."
+
+                Expect.isTrue
+                    (invocationValue "AbortOnError"
+                     |> unbox<bool>)
+                    "Abort-on-error must reach the invocation."
+
+                let adapterSuppressed =
+                    diagnostic 0L "FS0058" 58 DiagnosticSeverity.Warning
+                    |> applyOne
+                        (options (Some 3) [| "58" |] [||] false [||] [||] None false [||])
+                        2
+                        false
+                        true
+
+                let adapterPromoted =
+                    diagnostic 1L "FS0057" 57 DiagnosticSeverity.Warning
+                    |> applyOne
+                        (options (Some 3) [||] [||] false [| "57" |] [||] None false [||])
+                        2
+                        false
+                        true
+
+                let adapterResult: CompilationResult = {
+                    Outcome = CompilationOutcome.Succeeded
+                    Diagnostics =
+                        System.Collections.Immutable.ImmutableArray.CreateRange [|
+                            adapterSuppressed
+                            adapterPromoted
+                        |]
+                    Artifacts = System.Collections.Immutable.ImmutableArray.Empty
+                    Fingerprints = System.Collections.Immutable.ImmutableArray.Empty
+                    PhaseResults = System.Collections.Immutable.ImmutableArray.Empty
+                    Traces = System.Collections.Immutable.ImmutableArray.Empty
+                }
+
+                let pipelineType = requiredType "CompilationPipeline"
+                let completeInvocationMethod = requiredMethod "completeInvocation" pipelineType
+
+                let adapterResponse =
+                    completeInvocationMethod.Invoke(
+                        null,
+                        [|
+                            box (Stopwatch.GetTimestamp())
+                            invocation
+                            box adapterResult
+                        |]
+                    )
+
+                let adapterError =
+                    adapterResponse
+                        .GetType()
+                        .GetProperty("Error", instanceMembers)
+                        .GetValue(adapterResponse)
+                    :?> string
+
+                Expect.stringContains
+                    adapterError
+                    "FS0057"
+                    "The adapter must report the emitted effective error."
+
+                Expect.isFalse
+                    (adapterError.Contains("FS0058", StringComparison.Ordinal))
+                    "The adapter must not report a suppressed occurrence as the failure."
+
             testCase "inventory discovers every pinned candidate"
             <| fun _ ->
                 let expected = discoverCandidates ()

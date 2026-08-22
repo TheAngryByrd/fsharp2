@@ -221,6 +221,8 @@ module internal CommandLine =
             let mutable noFramework = false
             let mutable warningLevel: int option = None
             let mutable treatWarningsAsErrors = false
+            let mutable maximumErrors: int option = None
+            let mutable abortOnError = false
             let mutable highEntropyVA = false
             let mutable targetProfile: string option = None
             let mutable noCopyFSharpCore = false
@@ -230,7 +232,9 @@ module internal CommandLine =
             let references = ResizeArray<string>()
             let defines = ResizeArray<string>()
             let disabledWarnings = ResizeArray<string>()
+            let enabledWarnings = ResizeArray<string>()
             let warningsAsErrors = ResizeArray<string>()
+            let warningsNotAsErrors = ResizeArray<string>()
             let testFlags = ResizeArray<string>()
             let pathMaps = ResizeArray<PathMap>()
             let unsupported = ResizeArray<string>()
@@ -304,6 +308,13 @@ module internal CommandLine =
                     true
                 elif
                     tryValue
+                        "--warnon:"
+                        (splitValues
+                         >> enabledWarnings.AddRange)
+                then
+                    true
+                elif
+                    tryValue
                         "--warn:"
                         (Int32.Parse
                          >> Some
@@ -312,9 +323,32 @@ module internal CommandLine =
                     true
                 elif
                     tryValue
+                        "--warnaserror-:"
+                        (splitValues
+                         >> warningsNotAsErrors.AddRange)
+                then
+                    true
+                elif
+                    tryValue
                         "--warnaserror:"
                         (splitValues
                          >> warningsAsErrors.AddRange)
+                then
+                    true
+                elif
+                    tryValue
+                        "--maxerrors:"
+                        (Int32.Parse
+                         >> Some
+                         >> fun value -> maximumErrors <- value)
+                then
+                    true
+                elif
+                    tryValue
+                        "--max-errors:"
+                        (Int32.Parse
+                         >> Some
+                         >> fun value -> maximumErrors <- value)
                 then
                     true
                 elif
@@ -352,6 +386,9 @@ module internal CommandLine =
                     true
                 elif isFlag "--warnaserror-" then
                     treatWarningsAsErrors <- false
+                    true
+                elif isFlag "--abortonerror" then
+                    abortOnError <- true
                     true
                 elif isFlag "--highentropyva+" then
                     highEntropyVA <- true
@@ -553,8 +590,12 @@ module internal CommandLine =
                         NoFramework = noFramework
                         WarningLevel = warningLevel
                         DisabledWarnings = List.ofSeq disabledWarnings
+                        EnabledWarnings = List.ofSeq enabledWarnings
                         TreatWarningsAsErrors = treatWarningsAsErrors
                         WarningsAsErrors = List.ofSeq warningsAsErrors
+                        WarningsNotAsErrors = List.ofSeq warningsNotAsErrors
+                        MaximumErrors = maximumErrors
+                        AbortOnError = abortOnError
                         HighEntropyVA = highEntropyVA
                         TargetProfile = targetProfile
                         NoCopyFSharpCore = noCopyFSharpCore

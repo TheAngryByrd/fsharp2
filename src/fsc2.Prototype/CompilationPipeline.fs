@@ -130,8 +130,24 @@ module internal CompilationPipeline =
             DiagnosticOptions.Create(
                 invocation.WarningLevel,
                 List.toArray invocation.DisabledWarnings,
+                List.toArray invocation.EnabledWarnings,
                 invocation.TreatWarningsAsErrors,
-                List.toArray invocation.WarningsAsErrors
+                List.toArray invocation.WarningsAsErrors,
+                List.toArray invocation.WarningsNotAsErrors,
+                invocation.MaximumErrors,
+                invocation.AbortOnError,
+                None,
+                [||],
+                invocation.FullPaths,
+                invocation.FlatErrors,
+                invocation.Utf8Output,
+                DiagnosticStyle.Default,
+                ConsoleColorMode.Automatic,
+                None,
+                None,
+                false,
+                false,
+                false
             ),
             EmissionOptions.Create(
                 invocation.Target,
@@ -193,9 +209,7 @@ module internal CompilationPipeline =
                         let entryPointCount =
                             symbolic.Module.Types
                             |> List.collect _.Methods
-                            |> List.filter (fun methodFragment ->
-                                methodFragment.Kind = EntryPoint
-                            )
+                            |> List.filter (fun methodFragment -> methodFragment.Kind = EntryPoint)
                             |> List.length
 
                         match request.EmissionOptions.Target, entryPointCount with
@@ -293,11 +307,15 @@ module internal CompilationPipeline =
             |> Map.ofSeq
 
         let trace key = traceValues[key]
+        let effectiveOutcome = DiagnosticPolicy.outcome result.Outcome result.Diagnostics
 
         let failureFromResult () =
-            match result.Outcome with
+            match effectiveOutcome with
             | CompilationOutcome.Failed ->
-                match Seq.tryHead result.Diagnostics with
+                match
+                    result.Diagnostics
+                    |> Seq.tryFind DiagnosticPolicy.isEffectiveError
+                with
                 | Some diagnostic ->
                     diagnostic
                     |> DiagnosticFormatter.formatCompilationDiagnostic invocation
@@ -313,7 +331,7 @@ module internal CompilationPipeline =
             | CompilationOutcome.Succeeded ->
                 failure compileStarted "FSC2P9999: successful compilation was mapped as a failure"
 
-        match result.Outcome with
+        match effectiveOutcome with
         | CompilationOutcome.Succeeded ->
             let artifactBytes kind =
                 result.Artifacts

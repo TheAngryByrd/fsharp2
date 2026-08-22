@@ -564,6 +564,7 @@ type Compiler() =
 
                     let diagnostics =
                         [| failureDiagnostic failedPhase diagnostic |]
+                        |> Seq.map (DiagnosticPolicy.input None false true)
                         |> DiagnosticPolicy.apply request.DiagnosticOptions
 
                     {
