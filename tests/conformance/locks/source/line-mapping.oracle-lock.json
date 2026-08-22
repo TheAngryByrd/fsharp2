@@ -1,0 +1,108 @@
+{
+  "documentKind": "oracle-lock-v1",
+  "schemaVersion": 1,
+  "lockId": "source.line-mapping",
+  "family": "source",
+  "caseId": "language.source.line-mapping-negative",
+  "caseHash": "sha256:a5af07b769f2b0652da6104c61c3dfc7cf4d7bfb7570cde1e5a8305a417a30b2",
+  "oracleIdentity": {
+    "sdkVersion": "10.0.110",
+    "sdkCommit": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd",
+    "compiler": {
+      "logicalPath": "sdk/10.0.110/FSharp/fsc.dll",
+      "sha256": "sha256:8cb573be4b7f70886929a572024ab26fc1893cfdd795ef124c58627610ddbf22",
+      "productVersion": "14.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "msbuildTask": {
+      "logicalPath": "sdk/10.0.110/FSharp/FSharp.Build.dll",
+      "sha256": "sha256:ab62157b2111ae5f172e863d086f7035503f83c0bdb9a9efc2e2450891df6e1a",
+      "productVersion": "14.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "fsharpCore": {
+      "logicalPath": "sdk/10.0.110/FSharp/FSharp.Core.dll",
+      "sha256": "sha256:ff83cead5566c9111b69e920c2703e6d8d125305d6ac1ac08692cafee3890968",
+      "productVersion": "10.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "culture": "en-US",
+    "encoding": "utf-8",
+    "optionHash": "sha256:d7dbe1efda313d1a91cbc6dc849b0056e288ffee3695befae1cd44fb044861a0"
+  },
+  "streams": {
+    "stdout": {
+      "base64": "TWljcm9zb2Z0IChSKSBGIyBDb21waWxlciB2ZXJzaW9uIDE0LjAuMTEwLjAgZm9yIEYjIDEwLjANCkNvcHlyaWdodCAoYykgTWljcm9zb2Z0IENvcnBvcmF0aW9uLiBBbGwgUmlnaHRzIFJlc2VydmVkLg0K",
+      "byteLength": 117,
+      "byteHash": "sha256:4d9efaf1c69fd2f1088ecef67012b9f589c03ca1700275fd67b10d914f009f33",
+      "text": "Microsoft (R) F# Compiler version 14.0.110.0 for F# 10.0\r\nCopyright (c) Microsoft Corporation. All Rights Reserved.\r\n",
+      "textHash": "sha256:4d9efaf1c69fd2f1088ecef67012b9f589c03ca1700275fd67b10d914f009f33"
+    },
+    "stderr": {
+      "base64": "DQpDOlxVc2Vyc1xqaW1teVxSZXBvc2l0b3JpZXNccHVibGljXFRoZUFuZ3J5QnlyZFxmc2hhcnAyXC5vbW9cdGVhbXNcdGVhbS1jZDE1ODUwZFxhcnRpZmFjdHNcaXNzdWUyOC1leGVjdXRpb25cMjctb3JhY2xlLWNhcHR1cmVzXG9yYWNsZS1sYW5ndWFnZS1zb3VyY2UtbGluZS1tYXBwaW5nLW5lZ2F0aXZlLTIwMjYwODIyVDE2MjA0MDY3NFotMjZiMjA1MTNkMzBmNGMxOTllMzI1ZjE1ZjNkOWY1ZGRcbGFuZXNcb3JhY2xlXHdvcmtcbWFwcGVkLmZzKDQwLDEzLDQwLDE0KTogcGFyc2UgZXJyb3IgRlMwMDEwOiBVbmV4cGVjdGVkIHN5bWJvbCAnKScgaW4gYmluZGluZw0K",
+      "byteLength": 324,
+      "byteHash": "sha256:6eab5730808782aee118be6bc17c1df79d2fdc04047418a150e9a9e964314944",
+      "text": "\r\nC:\\Users\\jimmy\\Repositories\\public\\TheAngryByrd\\fsharp2\\.omo\\teams\\team-cd15850d\\artifacts\\issue28-execution\\27-oracle-captures\\oracle-language-source-line-mapping-negative-20260822T162040674Z-26b20513d30f4c199e325f15f3d9f5dd\\lanes\\oracle\\work\\mapped.fs(40,13,40,14): parse error FS0010: Unexpected symbol ')' in binding\r\n",
+      "textHash": "sha256:6eab5730808782aee118be6bc17c1df79d2fdc04047418a150e9a9e964314944"
+    }
+  },
+  "process": {
+    "exitCode": 1,
+    "targetResult": "failed"
+  },
+  "diagnostics": [
+    {
+      "identity": "diagnostic.fs0010.0",
+      "code": "FS0010",
+      "subcategory": "parse",
+      "message": "Unexpected symbol ')' in binding",
+      "logicalSource": "mapped.fs",
+      "range": {
+        "startLine": 40,
+        "startColumn": 13,
+        "endLine": 40,
+        "endColumn": 14
+      },
+      "recoveryContext": "source-recovery",
+      "originalSeverity": "error",
+      "adjustedSeverity": "error",
+      "stream": "stderr",
+      "sequence": 0,
+      "occurrenceCount": 1,
+      "related": [],
+      "warningLevel": 5,
+      "suppressed": false,
+      "promoted": false,
+      "languageGate": null
+    }
+  ],
+  "artifacts": {
+    "preRun": [
+      {
+        "logicalPath": "/output/case.dll",
+        "state": "absent",
+        "sha256": null
+      },
+      {
+        "logicalPath": "/output/case.pdb",
+        "state": "absent",
+        "sha256": null
+      }
+    ],
+    "postRun": [
+      {
+        "logicalPath": "/output/case.dll",
+        "state": "absent",
+        "sha256": null
+      },
+      {
+        "logicalPath": "/output/case.pdb",
+        "state": "absent",
+        "sha256": null
+      }
+    ]
+  },
+  "review": {
+    "owner": "source-compatibility",
+    "sourceIssue": "#28",
+    "capturedAt": "2026-08-22T10:20:46.0270443-06:00",
+    "expiryCondition": "Refresh when the case hash, Oracle SDK identity, options, culture, encoding, or source fixture changes."
+  }
+}

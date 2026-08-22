@@ -39,16 +39,16 @@
   },
   "coverage": {
     "languageVersions": [
-      { "id": "preview", "status": "pending", "issue": "#14", "owner": "language-compatibility", "reviewCondition": "Review when the SDK preview grammar is fixed." },
+      { "id": "preview", "status": "required" },
       { "id": "default", "status": "required" },
-      { "id": "latest", "status": "pending", "issue": "#14", "owner": "language-compatibility", "reviewCondition": "Review after all released language modes pass." },
-      { "id": "latestmajor", "status": "pending", "issue": "#14", "owner": "language-compatibility", "reviewCondition": "Review after all major language modes pass." },
-      { "id": "4.6", "status": "pending", "issue": "#14", "owner": "language-compatibility", "reviewCondition": "Add a language-gate fixture." },
-      { "id": "4.7", "status": "pending", "issue": "#14", "owner": "language-compatibility", "reviewCondition": "Add a language-gate fixture." },
-      { "id": "5.0", "status": "pending", "issue": "#14", "owner": "language-compatibility", "reviewCondition": "Add a language-gate fixture." },
-      { "id": "6.0", "status": "pending", "issue": "#14", "owner": "language-compatibility", "reviewCondition": "Add a language-gate fixture." },
-      { "id": "7.0", "status": "pending", "issue": "#14", "owner": "language-compatibility", "reviewCondition": "Add a language-gate fixture." },
-      { "id": "8.0", "status": "pending", "issue": "#14", "owner": "language-compatibility", "reviewCondition": "Add a language-gate fixture." },
+      { "id": "latest", "status": "required" },
+      { "id": "latestmajor", "status": "required" },
+      { "id": "4.6", "status": "required" },
+      { "id": "4.7", "status": "required" },
+      { "id": "5.0", "status": "required" },
+      { "id": "6.0", "status": "required" },
+      { "id": "7.0", "status": "required" },
+      { "id": "8.0", "status": "required" },
       { "id": "9.0", "status": "required" },
       { "id": "10.0", "status": "required" }
     ],
@@ -125,6 +125,41 @@
       "title": "Inferred generic function",
       "requiredPolarities": ["positive", "negative"],
       "requiredPhases": ["source", "syntax", "resolved-symbols", "typed-declarations", "lowered-code", "symbolic-emission", "final-linking", "load", "execution"],
+      "envelope": "supported"
+    },
+    {
+      "id": "source.language-version-selection",
+      "title": "Source language version selection",
+      "requiredPolarities": ["positive", "negative"],
+      "requiredPhases": ["source", "syntax"],
+      "envelope": "supported"
+    },
+    {
+      "id": "source.encoding-and-ranges",
+      "title": "Source encoding and ranges",
+      "requiredPolarities": ["positive", "negative"],
+      "requiredPhases": ["source", "syntax"],
+      "envelope": "supported"
+    },
+    {
+      "id": "source.lexical-forms",
+      "title": "Source lexical forms",
+      "requiredPolarities": ["positive", "negative"],
+      "requiredPhases": ["source", "syntax"],
+      "envelope": "supported"
+    },
+    {
+      "id": "source.directives-and-layout",
+      "title": "Source directives and layout",
+      "requiredPolarities": ["positive", "negative"],
+      "requiredPhases": ["source", "syntax"],
+      "envelope": "supported"
+    },
+    {
+      "id": "source.scoped-warning-directives",
+      "title": "Source scoped warning directives",
+      "requiredPolarities": ["positive", "negative"],
+      "requiredPhases": ["source", "syntax"],
       "envelope": "supported"
     }
   ],

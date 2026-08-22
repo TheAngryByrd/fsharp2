@@ -1,0 +1,108 @@
+{
+  "documentKind": "oracle-lock-v1",
+  "schemaVersion": 1,
+  "lockId": "source.langversion-invalid",
+  "family": "source",
+  "caseId": "language.source.langversion-invalid-negative",
+  "caseHash": "sha256:7f746bf23cf781cfd139ae6e9b35b8494c9e5eae1c58ca9ec160d76e7dc9d028",
+  "oracleIdentity": {
+    "sdkVersion": "10.0.110",
+    "sdkCommit": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd",
+    "compiler": {
+      "logicalPath": "sdk/10.0.110/FSharp/fsc.dll",
+      "sha256": "sha256:8cb573be4b7f70886929a572024ab26fc1893cfdd795ef124c58627610ddbf22",
+      "productVersion": "14.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "msbuildTask": {
+      "logicalPath": "sdk/10.0.110/FSharp/FSharp.Build.dll",
+      "sha256": "sha256:ab62157b2111ae5f172e863d086f7035503f83c0bdb9a9efc2e2450891df6e1a",
+      "productVersion": "14.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "fsharpCore": {
+      "logicalPath": "sdk/10.0.110/FSharp/FSharp.Core.dll",
+      "sha256": "sha256:ff83cead5566c9111b69e920c2703e6d8d125305d6ac1ac08692cafee3890968",
+      "productVersion": "10.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "culture": "en-US",
+    "encoding": "utf-8",
+    "optionHash": "sha256:6492845d7796dbbce9907d330e9e79cbc11c2f4c16bc60ab17da2e8a50d6cd10"
+  },
+  "streams": {
+    "stdout": {
+      "base64": "",
+      "byteLength": 0,
+      "byteHash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "text": "",
+      "textHash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "stderr": {
+      "base64": "DQpwYXJhbWV0ZXIgZXJyb3IgRlMwMjQ2OiBVbnJlY29nbml6ZWQgdmFsdWUgJzExLjAnIGZvciAtLWxhbmd2ZXJzaW9uIHVzZSAtLWxhbmd2ZXJzaW9uOj8gZm9yIGNvbXBsZXRlIGxpc3QNCg==",
+      "byteLength": 109,
+      "byteHash": "sha256:ee612b88d38969409a99af83764dc2bb7847f919fa949f0d1a5550bb2e05429c",
+      "text": "\r\nparameter error FS0246: Unrecognized value '11.0' for --langversion use --langversion:? for complete list\r\n",
+      "textHash": "sha256:ee612b88d38969409a99af83764dc2bb7847f919fa949f0d1a5550bb2e05429c"
+    }
+  },
+  "process": {
+    "exitCode": 1,
+    "targetResult": "failed"
+  },
+  "diagnostics": [
+    {
+      "identity": "diagnostic.fs0246.0",
+      "code": "FS0246",
+      "subcategory": "parameter",
+      "message": "Unrecognized value '11.0' for --langversion use --langversion:? for complete list",
+      "logicalSource": "/command-line",
+      "range": {
+        "startLine": 1,
+        "startColumn": 0,
+        "endLine": 1,
+        "endColumn": 0
+      },
+      "recoveryContext": "language-version",
+      "originalSeverity": "error",
+      "adjustedSeverity": "error",
+      "stream": "stderr",
+      "sequence": 0,
+      "occurrenceCount": 1,
+      "related": [],
+      "warningLevel": 5,
+      "suppressed": false,
+      "promoted": false,
+      "languageGate": "11.0"
+    }
+  ],
+  "artifacts": {
+    "preRun": [
+      {
+        "logicalPath": "/output/case.dll",
+        "state": "absent",
+        "sha256": null
+      },
+      {
+        "logicalPath": "/output/case.pdb",
+        "state": "absent",
+        "sha256": null
+      }
+    ],
+    "postRun": [
+      {
+        "logicalPath": "/output/case.dll",
+        "state": "absent",
+        "sha256": null
+      },
+      {
+        "logicalPath": "/output/case.pdb",
+        "state": "absent",
+        "sha256": null
+      }
+    ]
+  },
+  "review": {
+    "owner": "source-compatibility",
+    "sourceIssue": "#28",
+    "capturedAt": "2026-08-22T10:19:31.7159359-06:00",
+    "expiryCondition": "Refresh when the case hash, Oracle SDK identity, options, culture, encoding, or source fixture changes."
+  }
+}
