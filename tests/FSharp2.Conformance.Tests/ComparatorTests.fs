@@ -1012,7 +1012,7 @@ module ComparatorTests =
                 expectObservedChange "resources" changedResources
                 expectObservedChange "debugger observations" changedDebugger
 
-            testCase "Conformance Comparators detect within-compiler byte changes"
+            physicalLaneTestCase "Conformance Comparators detect within-compiler byte changes"
             <| fun _ ->
                 let first = bytes "deterministic-artifact"
                 let second = bytes "deterministic-artifact"

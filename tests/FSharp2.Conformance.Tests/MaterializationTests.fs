@@ -20,7 +20,7 @@ module MaterializationTests =
     let tests =
         testSequenced
         <| testList "Conformance Materialization" [
-            testCase "Conformance Materialization preserves source and signature order"
+            physicalLaneTestCase "Conformance Materialization preserves source and signature order"
             <| fun _ ->
                 withCopiedRoot
                     "materialization-source-order"

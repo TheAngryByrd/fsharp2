@@ -498,7 +498,8 @@ module BundleReplayTests =
                         expectBundleIssue "bundle-file-length" receipt.BundleRoot
                     )
 
-            testCase "Conformance Replay reruns both compilers under a realistic long output root"
+            physicalLaneTestCase
+                "Conformance Replay reruns both compilers under a realistic long output root"
             <| fun _ ->
                 withCopiedRoot
                     "replay"

@@ -81,6 +81,9 @@ module TestSupport =
 
     let testAssemblyPath = typeof<TestAssemblyMarker>.Assembly.Location
 
+    let physicalLaneTestCase name body =
+        testList "Conformance Lanes" [ testCase name body ]
+
     let ensureDirectory path =
         Directory.CreateDirectory(path)
         |> ignore
