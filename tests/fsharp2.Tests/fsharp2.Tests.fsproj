@@ -23,6 +23,7 @@
         <Compile Include="SourceTextTests.fs" />
         <Compile Include="LanguageVersionTests.fs" />
         <Compile Include="LexerTests.fs" />
+        <Compile Include="DirectiveTests.fs" />
         <Compile Include="CompilerContractTests.fs" />
         <Compile Include="DiagnosticCompatibilityTests.fs" />
         <Compile Include="CompilerTargetTests.fs" />
