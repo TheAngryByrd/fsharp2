@@ -100,7 +100,7 @@ module CompilerContractEvidenceTests =
                         let diagnostics =
                             result.Diagnostics
                             |> Seq.map (fun diagnostic ->
-                                $"{diagnostic.Code}|{diagnostic.Severity}|{diagnostic.Message}|{diagnostic.LogicalPath}"
+                                $"{diagnostic.Code}|{diagnostic.EffectiveSeverity}|{diagnostic.Message}|{diagnostic.LogicalPath}"
                             )
                             |> String.concat "\n"
 

@@ -340,6 +340,256 @@ module SchemaAndDiscoveryTests =
     let tests =
         testSequenced
         <| testList "Conformance Schema and discovery" [
+            testCase "Conformance Schema projects diagnostic v2 into core evidence"
+            <| fun _ ->
+                withCopiedRoot
+                    "schema-diagnostic-v2-projection"
+                    (fun root ->
+                        let sourceRange
+                            startOffset
+                            startLine
+                            startColumn
+                            endOffset
+                            endLine
+                            endColumn
+                            : SourceRange =
+                            {
+                                Start = {
+                                    Offset = startOffset
+                                    Line = startLine
+                                    Column = startColumn
+                                }
+                                End = {
+                                    Offset = endOffset
+                                    Line = endLine
+                                    Column = endColumn
+                                }
+                            }
+
+                        let emittedRange = sourceRange 41 3 8 47 3 14
+
+                        let relatedInformation = [|
+                            DiagnosticRelatedInformation.Create(
+                                "The value is declared here.",
+                                Some "/src/Library.fs",
+                                Some(sourceRange 4 1 4 10 1 10)
+                            )
+                            DiagnosticRelatedInformation.Create(
+                                "The inferred type originates here.",
+                                None,
+                                None
+                            )
+                        |]
+
+                        let emitted =
+                            CompilationDiagnostic.Create(
+                                4_294_967_296L,
+                                "FS0020",
+                                20,
+                                Some "typecheck",
+                                DiagnosticStage.Compilation CompilationPhase.TypedDeclarations,
+                                DiagnosticSeverity.Warning,
+                                DiagnosticSeverity.Error,
+                                DiagnosticDisposition.Emitted,
+                                None,
+                                "The result is ignored.",
+                                Some "/src/Program.fs",
+                                Some emittedRange,
+                                relatedInformation,
+                                [|
+                                    "bind the result"
+                                    "ignore the result"
+                                |],
+                                Some DiagnosticStream.StandardError
+                            )
+
+                        let suppressed =
+                            CompilationDiagnostic.Create(
+                                4_294_967_297L,
+                                "FS0044",
+                                44,
+                                None,
+                                DiagnosticStage.CommandLine,
+                                DiagnosticSeverity.Warning,
+                                DiagnosticSeverity.Hidden,
+                                DiagnosticDisposition.Suppressed,
+                                Some DiagnosticSuppression.GlobalNowarn,
+                                "This construct is deprecated.",
+                                None,
+                                None,
+                                [||],
+                                [||],
+                                None
+                            )
+
+                        let compilation: CompilationResult = {
+                            Outcome = CompilationOutcome.Failed
+                            Diagnostics =
+                                immutableArray [
+                                    emitted
+                                    suppressed
+                                ]
+                            Artifacts = ImmutableArray<CompilationArtifact>.Empty
+                            Fingerprints = ImmutableArray<string>.Empty
+                            PhaseResults = ImmutableArray<PhaseResult>.Empty
+                            Traces = ImmutableArray<string>.Empty
+                        }
+
+                        let repository = ManifestLoader.Load(root)
+
+                        let materialized =
+                            CaseMaterializer.Materialize(
+                                repository,
+                                caseById repository "language.bindings.value-function-positive"
+                            )
+
+                        let coreEvidence = CoreEvidenceWriter.Create(compilation)
+
+                        let verdict =
+                            VerdictResult(
+                                ConformanceVerdict.Fail,
+                                ImmutableArray<string>.Empty,
+                                ImmutableArray<string>.Empty,
+                                false
+                            )
+
+                        let runResult =
+                            RunResultWriter.Create(
+                                "run-diagnostic-v2-projection",
+                                null,
+                                repository,
+                                materialized,
+                                SdkSelection.Resolve(root, sdkRoot, null),
+                                testAssemblyPath,
+                                compilation,
+                                coreEvidence,
+                                null,
+                                null,
+                                null,
+                                ImmutableArray<ProbeEvidence>.Empty,
+                                ImmutableArray<ComparisonResult>.Empty,
+                                verdict,
+                                ImmutableDictionary<string, ImmutableArray<byte>>.Empty
+                            )
+
+                        let projectedCore = runResult.GetProperty("coreEvidence")
+
+                        Expect.equal
+                            (projectedCore.GetProperty("contractVersion").GetInt32())
+                            2
+                            "Core evidence records diagnostic contract v2"
+
+                        Expect.equal
+                            (projectedCore.GetProperty("outcome").GetString())
+                            "failed"
+                            "Core evidence preserves the failed compiler outcome"
+
+                        let projectedDiagnostics =
+                            projectedCore.GetProperty("diagnostics").EnumerateArray()
+                            |> Seq.toArray
+
+                        Expect.equal
+                            projectedDiagnostics.Length
+                            2
+                            "Core evidence preserves every diagnostic occurrence"
+
+                        let expectProjectedDiagnostic index expected =
+                            let serialized = projectedDiagnostics[index].GetString()
+
+                            Expect.isNotNull
+                                serialized
+                                $"Diagnostic occurrence {index} is a structured JSON string"
+
+                            Expect.equal
+                                serialized
+                                expected
+                                $"Diagnostic occurrence {index} retains every v2 fact as canonical JSON"
+
+                            use document = JsonDocument.Parse(serialized)
+
+                            document.RootElement.Clone()
+
+                        let emittedProjection =
+                            expectProjectedDiagnostic
+                                0
+                                """{"code":"FS0020","disposition":"emitted","effectiveSeverity":"error","logicalPath":"/src/Program.fs","message":"The result is ignored.","numericCode":20,"occurrence":4294967296,"originalSeverity":"warning","range":{"end":{"column":14,"line":3,"offset":47},"start":{"column":8,"line":3,"offset":41}},"relatedInformation":[{"logicalPath":"/src/Library.fs","message":"The value is declared here.","range":{"end":{"column":10,"line":1,"offset":10},"start":{"column":4,"line":1,"offset":4}}},{"logicalPath":null,"message":"The inferred type originates here.","range":null}],"stage":{"kind":"compilation","phase":"typed-declarations"},"stream":"stderr","subcategory":"typecheck","suggestions":["bind the result","ignore the result"],"suppression":null}"""
+
+                        Expect.equal
+                            (emittedProjection.GetProperty("occurrence").GetInt64())
+                            4_294_967_296L
+                            "The emitted occurrence retains its Int64 order"
+
+                        let emittedStage = emittedProjection.GetProperty("stage")
+
+                        Expect.equal
+                            (emittedStage.GetProperty("kind").GetString(),
+                             emittedStage.GetProperty("phase").GetString())
+                            ("compilation", "typed-declarations")
+                            "The emitted occurrence retains its structured compilation stage"
+
+                        let projectedRelated =
+                            emittedProjection.GetProperty("relatedInformation").EnumerateArray()
+                            |> Seq.toArray
+
+                        Expect.sequenceEqual
+                            (projectedRelated
+                             |> Seq.map (fun item -> item.GetProperty("message").GetString()))
+                            [
+                                "The value is declared here."
+                                "The inferred type originates here."
+                            ]
+                            "The emitted occurrence retains related-information order"
+
+                        let relatedRange = projectedRelated[0].GetProperty("range")
+
+                        Expect.equal
+                            (relatedRange.GetProperty("start").GetProperty("offset").GetInt32(),
+                             relatedRange.GetProperty("end").GetProperty("offset").GetInt32())
+                            (4, 10)
+                            "Related information retains its exact nested range"
+
+                        Expect.sequenceEqual
+                            (emittedProjection.GetProperty("suggestions").EnumerateArray()
+                             |> Seq.map (fun suggestion -> suggestion.GetString()))
+                            [
+                                "bind the result"
+                                "ignore the result"
+                            ]
+                            "The emitted occurrence retains suggestion order"
+
+                        let suppressedProjection =
+                            expectProjectedDiagnostic
+                                1
+                                """{"code":"FS0044","disposition":"suppressed","effectiveSeverity":"hidden","logicalPath":null,"message":"This construct is deprecated.","numericCode":44,"occurrence":4294967297,"originalSeverity":"warning","range":null,"relatedInformation":[],"stage":{"kind":"command-line","phase":null},"stream":null,"subcategory":null,"suggestions":[],"suppression":"global-nowarn"}"""
+
+                        Expect.equal
+                            (suppressedProjection.GetProperty("occurrence").GetInt64())
+                            4_294_967_297L
+                            "The suppressed occurrence retains its Int64 order"
+
+                        let suppressedStage = suppressedProjection.GetProperty("stage")
+
+                        Expect.equal
+                            (suppressedStage.GetProperty("kind").GetString())
+                            "command-line"
+                            "The suppressed occurrence retains its stage kind"
+
+                        Expect.equal
+                            (suppressedStage.GetProperty("phase").ValueKind)
+                            JsonValueKind.Null
+                            "A non-compilation stage retains a null phase"
+
+                        Expect.equal
+                            (suppressedProjection.GetProperty("suppression").GetString())
+                            "global-nowarn"
+                            "The suppressed occurrence retains its suppression reason"
+
+                        Expect.equal
+                            (suppressedProjection.GetProperty("stream").ValueKind)
+                            JsonValueKind.Null
+                            "The suppressed occurrence retains no output stream"
+                    )
+
             testCase "Conformance Schema enforces the complete diagnostic compatibility envelope"
             <| fun _ ->
                 withCopiedRoot
