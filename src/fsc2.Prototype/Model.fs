@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 73
+    let Query = 74
 
 module private DiagnosticFactValidation =
     let text name (value: string) =

@@ -1150,6 +1150,7 @@ module private InlineExpansion =
 /// values are semantic/compiler state; final SRM state never enters these maps.
 type internal CompilerService() =
     let querySchema = CompilerSchema.Query
+    let lexicalCache = Dictionary<string, LexicalCore>(StringComparer.Ordinal)
     let parseCache = Dictionary<string, ParsedModule list>(StringComparer.Ordinal)
     let checkCache = Dictionary<string, TypedModule>(StringComparer.Ordinal)
     let lowerCache = Dictionary<string, LoweredCompilation>(StringComparer.Ordinal)
@@ -1165,20 +1166,74 @@ type internal CompilerService() =
         Stopwatch.GetElapsedTime(started).Ticks
         / 10L
 
-    let parse (defines: string list) (source: SourceInput) =
+    let normalizeDefines (defines: string seq) =
+        defines
+        |> Seq.distinct
+        |> Seq.sortWith (fun left right -> StringComparer.Ordinal.Compare(left, right))
+        |> Seq.toArray
+
+    let prepareSource (language: LanguageVersionIdentity) defines (snapshot: SourceSnapshot) =
         let normalizedDefines =
-            defines
-            |> List.distinct
-            |> List.sortWith (fun left right -> StringComparer.Ordinal.Compare(left, right))
+            normalizeDefines defines
 
         let key =
             Fingerprint.parts [
                 querySchema.ToString(CultureInfo.InvariantCulture)
-                "defines"
+                "lexical"
+                language.CacheIdentity
                 normalizedDefines.Length.ToString(CultureInfo.InvariantCulture)
                 yield! normalizedDefines
-                Path.GetFileName(source.Path)
-                source.Text
+                snapshot.Text
+            ]
+
+        match lexicalCache.TryGetValue(key) with
+        | true, core ->
+            {
+                Document = LexicalPipeline.bind language snapshot core
+                Decision = "hit"
+            }
+        | false, _ ->
+            let core =
+                snapshot.Text
+                |> SourceText.fromString
+                |> LexicalPipeline.prepareCore language normalizedDefines
+
+            lexicalCache.Add(key, core)
+
+            {
+                Document = LexicalPipeline.bind language snapshot core
+                Decision = "miss"
+            }
+
+    let lexicalDiagnostic (source: LexicalDocument) (diagnostic: SourceLexicalDiagnostic) =
+        let startPosition = SourceMap.mapPosition source.SourceMap diagnostic.Range.Start
+        let endPosition = SourceMap.mapPosition source.SourceMap diagnostic.Range.End
+
+        {
+            Code = diagnostic.Code
+            Message = diagnostic.Message
+            Path = startPosition.LogicalPath |> Option.defaultValue source.LogicalPath |> Some
+            Range =
+                Some {
+                    Start = {
+                        Offset = startPosition.Offset
+                        Line = startPosition.Line
+                        Column = startPosition.Column
+                    }
+                    End = {
+                        Offset = endPosition.Offset
+                        Line = endPosition.Line
+                        Column = endPosition.Column
+                    }
+                }
+        }
+
+    let parse (source: LexicalDocument) =
+        let key =
+            Fingerprint.parts [
+                querySchema.ToString(CultureInfo.InvariantCulture)
+                "parse"
+                source.LexicalFingerprint
             ]
 
         match parseCache.TryGetValue(key) with
@@ -1193,11 +1248,22 @@ type internal CompilerService() =
                 parseMisses
                 + 1
 
-            match Frontend.parse normalizedDefines source with
+            let compatibilitySource = {
+                Path = source.LogicalPath
+                Text = source.CompatibilityText
+            }
+
+            match Frontend.parse [] compatibilitySource with
             | Error error -> Error error
             | Ok parsed ->
-                parseCache.Add(key, parsed)
-                Ok(parsed, key)
+                let rebound =
+                    parsed
+                    |> List.map (fun parsedModule ->
+                        { parsedModule with SourceChecksum = source.SourceChecksum }
+                    )
+
+                parseCache.Add(key, rebound)
+                Ok(rebound, key)
 
     let expressionChildren =
         function
@@ -26157,12 +26223,16 @@ type internal CompilerService() =
             lowerCache.Add(key, lowered)
             lowered, key
 
+    member _.PrepareSource(language, defines, source) =
+        prepareSource language defines source
+
     member _.Compile
         (
             assemblyName: string,
+            language: LanguageVersionIdentity,
             defines: string list,
             references: ReferenceTypeIndex,
-            sources: SourceInput list
+            sources: SourceSnapshot list
         ) =
         let combine values =
             match values with
@@ -26172,13 +26242,17 @@ type internal CompilerService() =
                 |> String.concat "|"
                 |> Fingerprint.text
 
+        let preparedSources =
+            sources
+            |> List.map (fun source -> (prepareSource language defines source).Document)
+
         let stateKey =
             assemblyName
             + "\n"
             + references.Fingerprint
             + "\n"
-            + (sources
-               |> List.map _.Path
+            + (preparedSources
+               |> List.map _.LogicalPath
                |> String.concat "\n")
 
         let previousContentFingerprint =
@@ -26214,11 +26288,18 @@ type internal CompilerService() =
             else
                 "miss"
 
-        let rec parseAll documentIndex parsed keys remaining =
+        let rec parseAll
+            documentIndex
+            (parsed: (LexicalDocument * int * ParsedModule) list)
+            (keys: string list)
+            (remaining: LexicalDocument list)
+            =
             match remaining with
             | [] -> Ok(List.rev parsed, List.rev keys)
+            | source :: _ when not source.Diagnostics.IsEmpty ->
+                Error(lexicalDiagnostic source source.Diagnostics[0])
             | source :: tail ->
-                match parse defines source with
+                match parse source with
                 | Error diagnostic -> Error diagnostic
                 | Ok(parsedModules, key) ->
                     let sourceModules =
@@ -26272,7 +26353,7 @@ type internal CompilerService() =
         let rec resolveAll
             visibleValues
             (resolved: ResolvedModule list)
-            (remaining: (SourceInput * int * ParsedModule) list)
+            (remaining: (LexicalDocument * int * ParsedModule) list)
             =
             match remaining with
             | [] ->
@@ -26296,7 +26377,7 @@ type internal CompilerService() =
                 match
                     resolve
                         references
-                        source.Path
+                        source.LogicalPath
                         documentIndex
                         visibleValues
                         laterModuleNames
@@ -26312,7 +26393,7 @@ type internal CompilerService() =
 
         let parseStarted = Stopwatch.GetTimestamp()
 
-        match parseAll 0 [] [] sources with
+        match parseAll 0 [] [] preparedSources with
         | Error error -> Error error
         | Ok(parsedModules, parseKeys) ->
             let parseElapsedMicroseconds = elapsedMicroseconds parseStarted
@@ -26353,7 +26434,7 @@ type internal CompilerService() =
                         TypedCompilation = typedCompilation
                         LoweredCompilation = loweredCompilation
                         QuerySchema = querySchema
-                        NodeKind = if sources.Length = 1 then "source" else "project"
+                        NodeKind = if preparedSources.Length = 1 then "source" else "project"
                         ContentFingerprint = contentFingerprint
                         PreviousContentFingerprint = previousContentFingerprint
                         InvalidationReason = invalidationReason

@@ -16,6 +16,7 @@ type internal LexicalCore = {
     WarningDirectives: ImmutableArray<PathNeutralWarningDirective>
     LayoutTokens: ImmutableArray<LayoutToken>
     Diagnostics: ImmutableArray<SourceLexicalDiagnostic>
+    SourceChecksum: ImmutableArray<byte>
     LexicalFingerprint: string
     CompatibilityText: string
 }
@@ -35,8 +36,14 @@ type internal LexicalDocument = {
     member this.Directives = this.Core.Directives
     member this.LayoutTokens = this.Core.LayoutTokens
     member this.Diagnostics = this.Core.Diagnostics
+    member this.SourceChecksum = this.Core.SourceChecksum
     member this.LexicalFingerprint = this.Core.LexicalFingerprint
     member this.CompatibilityText = this.Core.CompatibilityText
+
+type internal LexicalPreparationResult = {
+    Document: LexicalDocument
+    Decision: string
+}
 
 module internal LexicalPipeline =
     let private normalizeDefines (defines: string seq) =
@@ -113,6 +120,11 @@ module internal LexicalPipeline =
             WarningDirectives = directives.WarningDirectives
             LayoutTokens = orderedLayoutTokens layout.Tokens
             Diagnostics = orderedDiagnostics layout.Diagnostics
+            SourceChecksum =
+                source.Text
+                |> Encoding.UTF8.GetBytes
+                |> SHA256.HashData
+                |> ImmutableArray.CreateRange
             LexicalFingerprint = fingerprint language.CacheIdentity normalizedDefines source.Text
             CompatibilityText = directives.CompatibilityText
         }

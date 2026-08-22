@@ -2085,13 +2085,57 @@ let first = 42
                     result.Artifacts
                     "An unsupported compilation must not contain an artifact."
 
-            testCase "unsupported language version stops at Syntax"
+            testCase "supported language versions complete the source phase"
+            <| fun _ ->
+                for mode in
+                    [
+                        "preview"
+                        "default"
+                        "latest"
+                        "latestmajor"
+                        "4.6"
+                        "4.7"
+                        "5.0"
+                        "6.0"
+                        "7.0"
+                        "8.0"
+                        "9.0"
+                        "10.0"
+                    ] do
+                    let request =
+                        createRequest
+                            (SemanticOptions.Create(
+                                [||],
+                                Some mode,
+                                OptimizationMode.Disabled,
+                                false,
+                                false,
+                                None
+                            ))
+                            (defaultDiagnosticOptions ())
+                            (defaultEmissionOptions ())
+                            (defaultSigningOptions ())
+                            (emptyResources ())
+                            defaultRequestedArtifacts
+                            "module Tracer\nlet answer () = 42\n"
+
+                    let result = compileRequest request
+                    Expect.equal result.Outcome CompilationOutcome.Succeeded $"Language mode {mode}"
+
+                    Expect.equal
+                        (result.PhaseResults
+                         |> Seq.find (fun phase -> phase.Phase = CompilationPhase.Source)
+                         |> _.Status)
+                        PhaseStatus.Completed
+                        $"Source phase {mode}"
+
+            testCase "unknown language version stops at Syntax"
             <| fun _ ->
                 let request =
                     createRequest
                         (SemanticOptions.Create(
                             [||],
-                            Some "8.0",
+                            Some "11.0",
                             OptimizationMode.Disabled,
                             false,
                             false,
@@ -2108,7 +2152,7 @@ let first = 42
                 |> assertUnsupported
                     "FSC2C2001"
                     CompilationPhase.Syntax
-                    "semantic.language-version=8.0"
+                    "semantic.language-version=11.0"
 
             testCase "signature source inputs stop at Syntax as unsupported"
             <| fun _ ->

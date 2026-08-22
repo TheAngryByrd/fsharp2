@@ -239,20 +239,21 @@ module internal CompilationPipeline =
     }
 
     let compileRequest (service: CompilerService) (request: CompilationRequest) =
-        match ReferenceTypeIndex.Create(request.TargetReferences) with
-        | Error message -> Error(diagnostic "FSC2P1001" message)
-        | Ok references ->
+        match
+            ReferenceTypeIndex.Create(request.TargetReferences),
+            LanguageVersion.normalize request.SemanticOptions.LanguageVersion
+        with
+        | Error message, _ -> Error(diagnostic "FSC2P1001" message)
+        | _, Error message -> Error(diagnostic "FSC2C2001" message)
+        | Ok references, Ok language ->
             let sources =
                 request.Sources
-                |> Seq.map (fun source -> {
-                    Path = source.LogicalPath
-                    Text = source.Text
-                })
                 |> List.ofSeq
 
             match
                 service.Compile(
                     request.AssemblyIdentity.Name,
+                    language,
                     List.ofSeq request.SemanticOptions.Defines,
                     references,
                     sources

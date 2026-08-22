@@ -26,6 +26,8 @@
         <Compile Include="DirectiveTests.fs" />
         <Compile Include="LayoutTests.fs" />
         <Compile Include="LexicalPipelineTests.fs" />
+        <Compile Include="SourceReuseTests.fs" />
+        <Compile Include="CompilerTargetSourceTests.fs" />
         <Compile Include="CompilerContractTests.fs" />
         <Compile Include="DiagnosticCompatibilityTests.fs" />
         <Compile Include="CompilerTargetTests.fs" />

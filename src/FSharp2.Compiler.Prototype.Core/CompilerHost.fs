@@ -1,6 +1,7 @@
 namespace FSharp2.Compiler
 
 open System
+open System.Collections.Immutable
 open System.Diagnostics
 open System.IO
 open System.Security.Cryptography
@@ -162,10 +163,17 @@ module CompilerHost =
 
                 let sources =
                     invocation.SourcePaths
-                    |> List.map (fun sourcePath -> {
-                        Path = sourcePath
-                        Text = File.ReadAllText(sourcePath)
-                    })
+                    |> List.map (fun sourcePath ->
+                        let decoded =
+                            File.ReadAllBytes(sourcePath)
+                            |> ImmutableArray.CreateRange
+                            |> SourceText.decode
+
+                        {
+                            Path = sourcePath
+                            Text = decoded.Text
+                        }
+                    )
 
                 let response =
                     try

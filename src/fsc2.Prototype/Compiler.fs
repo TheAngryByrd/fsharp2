@@ -210,10 +210,7 @@ type Compiler() =
             )
         | _ ->
             match request.SemanticOptions.LanguageVersion with
-            | Some languageVersion when
-                languageVersion
-                <> "9.0"
-                ->
+            | Some languageVersion when LanguageVersion.normalize (Some languageVersion) |> Result.isError ->
                 Some(
                     unsupportedFailure
                         "FSC2C2001"
@@ -527,6 +524,35 @@ type Compiler() =
             Some DiagnosticStream.StandardError
         )
 
+    let effectiveDiagnosticOptions (request: CompilationRequest) =
+        let language =
+            LanguageVersion.normalize request.SemanticOptions.LanguageVersion
+            |> Result.defaultWith invalidOp
+
+        let existing = request.DiagnosticOptions.LocalWarningDirectives
+
+        let firstSourceOrder =
+            existing
+            |> Seq.map _.Order
+            |> Seq.fold max -1L
+            |> (+) 1L
+
+        let sourceDirectives =
+            request.Sources
+            |> Seq.collect (fun source ->
+                service.PrepareSource(language, request.SemanticOptions.Defines, source).Document.WarningDirectives
+            )
+            |> Seq.mapi (fun index directive ->
+                { directive with Order = firstSourceOrder + int64 index }
+            )
+
+        {
+            request.DiagnosticOptions with
+                LocalWarningDirectives =
+                    Seq.append existing sourceDirectives
+                    |> ImmutableArray.CreateRange
+        }
+
     member _.Compile(request: CompilationRequest, cancellationToken: CancellationToken) =
         if cancellationToken.IsCancellationRequested then
             cancelledResult request
@@ -541,6 +567,8 @@ type Compiler() =
 
                 unsupportedResult failure phaseResults
             | None ->
+                let diagnosticOptions = effectiveDiagnosticOptions request
+
                 match CompilationPipeline.compileRequest service request with
                 | Error diagnostic when diagnostic.Code = "FSC2C2002" ->
                     let failure = {
@@ -565,7 +593,7 @@ type Compiler() =
                     let diagnostics =
                         [| failureDiagnostic failedPhase diagnostic |]
                         |> Seq.map (DiagnosticPolicy.input None false true)
-                        |> DiagnosticPolicy.apply request.DiagnosticOptions
+                        |> DiagnosticPolicy.apply diagnosticOptions
 
                     {
                         Outcome = CompilationOutcome.Failed
