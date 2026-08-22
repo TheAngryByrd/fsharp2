@@ -1,0 +1,87 @@
+namespace fsharp2.Tests
+
+open Expecto
+open FSharp2.Compiler
+
+module LayoutTests =
+    let private prepare text =
+        let language =
+            LanguageVersion.normalize (Some "10.0")
+            |> Result.defaultWith failtest
+
+        let source = SourceText.fromString text
+        let lexed = Lexer.tokenize language source
+        let directives = Directives.analyze language Set.empty source lexed
+        Layout.apply source directives lexed
+
+    [<Tests>]
+    let tests =
+        testList "Issue28.Layout" [
+            testCase "emits block separator and dedent events with exact ranges"
+            <| fun _ ->
+                let result = prepare "let outer =\n    let inner = 1\n    inner\nlet after = 2"
+
+                Expect.sequenceEqual
+                    (result.Tokens
+                     |> Seq.choose (fun token ->
+                         if token.Kind = LayoutTokenKind.SourceToken then
+                             None
+                         else
+                             Some(token.Kind, token.Range.Start.Line, token.Range.Start.Column)
+                     ))
+                    [
+                        LayoutTokenKind.BeginBlock, 2, 5
+                        LayoutTokenKind.Separator, 3, 5
+                        LayoutTokenKind.EndBlock, 4, 1
+                    ]
+                    "Offside events"
+
+            testCase "treats tabs consistently and ignores blank and comment-only lines"
+            <| fun _ ->
+                let result =
+                    prepare "let outer =\n\tlet first = 1\n\n    // comment\n\tlet second = 2"
+
+                let structural =
+                    result.Tokens
+                    |> Seq.filter (fun token ->
+                        token.Kind
+                        <> LayoutTokenKind.SourceToken
+                    )
+                    |> Seq.toArray
+
+                Expect.equal structural.Length 3 "Blank and comment lines do not create events"
+                Expect.equal structural[0].Kind LayoutTokenKind.BeginBlock "Tab starts a block"
+
+                Expect.equal
+                    structural[1].Kind
+                    LayoutTokenKind.Separator
+                    "Equal indentation separates declarations"
+
+                Expect.equal structural[2].Kind LayoutTokenKind.EndBlock "EOF closes the block"
+
+            testCase "suppresses layout inside balanced delimiters"
+            <| fun _ ->
+                let result = prepare "let values = [\n    1\n    2\n]"
+
+                Expect.isFalse
+                    (result.Tokens
+                     |> Seq.exists (fun token -> token.Kind = LayoutTokenKind.BeginBlock))
+                    "Delimited indentation is not an offside block"
+
+            testCase "reports bad dedent and still closes blocks at EOF"
+            <| fun _ ->
+                let result = prepare "let outer =\n    let inner =\n        1\n  let bad = 2"
+
+                Expect.contains
+                    (result.Diagnostics
+                     |> Seq.map _.Code)
+                    "FS0058"
+                    "Bad dedent diagnostic"
+
+                Expect.equal
+                    (result.Tokens
+                     |> Seq.filter (fun token -> token.Kind = LayoutTokenKind.EndBlock)
+                     |> Seq.length)
+                    2
+                    "Both open blocks close"
+        ]
