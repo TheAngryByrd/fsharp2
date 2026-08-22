@@ -1013,21 +1013,22 @@ public static class ConformanceRunner
     {
         public static DiagnosticFact FromCompilation(CompilationDiagnostic diagnostic, int sequence)
         {
-            var range = diagnostic.Range;
+            var projection = DiagnosticProjection.Create(diagnostic);
+            var range = projection.Range;
             return new DiagnosticFact(
-                diagnostic.Code,
-                diagnostic.Severity.ToString().ToLowerInvariant() switch
+                projection.Code,
+                projection.EffectiveSeverity switch
                 {
                     "information" => "info",
                     var value => value,
                 },
-                Flatten(diagnostic.Message),
-                diagnostic.LogicalPath is null ? string.Empty : diagnostic.LogicalPath.Value,
-                range is null ? null : range.Value.Start.Line,
-                range is null ? null : range.Value.Start.Column,
-                range is null ? null : range.Value.End.Line,
-                range is null ? null : range.Value.End.Column,
-                "stderr",
+                Flatten(projection.Message),
+                projection.LogicalPath ?? string.Empty,
+                range?.Start.Line,
+                range?.Start.Column,
+                range?.End.Line,
+                range?.End.Column,
+                projection.Stream ?? string.Empty,
                 sequence);
         }
 

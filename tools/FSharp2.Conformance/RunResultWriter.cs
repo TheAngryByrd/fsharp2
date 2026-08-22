@@ -267,7 +267,7 @@ public static class RunResultWriter
     }
 
     private static string FormatDiagnostic(CompilationDiagnostic diagnostic) =>
-        $"{diagnostic.Code}|{diagnostic.Severity}|{diagnostic.LogicalPath}|{diagnostic.Range}|{diagnostic.Message}";
+        DiagnosticProjection.Serialize(diagnostic);
 
     private static string PhaseStatus(string value) => value switch
     {
