@@ -1,6 +1,7 @@
 namespace FSharp2.Compiler
 
 open System
+open System.Collections.Immutable
 open System.Diagnostics
 open System.IO
 open System.Security.Cryptography
@@ -18,6 +19,34 @@ type internal CoreCompilation = {
 /// The host-independent compile/link/publish path shared by standalone and
 /// persistent-service execution.
 module internal CompilationPipeline =
+    type Response = {
+        ExitCode: int
+        DiagnosticOptions: DiagnosticOptions
+        Diagnostics: ImmutableArray<CompilationDiagnostic>
+        ServiceProcessId: int
+        QuerySchema: int
+        NodeKind: string
+        ContentFingerprint: string
+        PreviousContentFingerprint: string
+        InvalidationReason: string
+        ParseKey: string
+        CheckKey: string
+        LowerKey: string
+        DependencyCount: int
+        ParseDecision: string
+        CheckDecision: string
+        LowerDecision: string
+        ParseElapsedMicroseconds: int64
+        CheckElapsedMicroseconds: int64
+        LowerElapsedMicroseconds: int64
+        LinkElapsedMicroseconds: int64
+        PublishElapsedMicroseconds: int64
+        CompileElapsedMicroseconds: int64
+        ExportFingerprint: string
+        FragmentHash: string
+        Emitted: bool
+    }
+
     let private elapsedMicroseconds started =
         Stopwatch.GetElapsedTime(started).Ticks
         / 10L
@@ -35,7 +64,59 @@ module internal CompilationPipeline =
         | StrongNameMode.PublicSign -> SigningMode.PublicSign
         | StrongNameMode.FullSign -> SigningMode.FullSign
 
-    let createRequest (invocation: CompilerInvocation) (sources: SourceInput list) =
+    let defaultDiagnosticOptions () =
+        DiagnosticOptions.Create(
+            None,
+            [||],
+            [||],
+            false,
+            [||],
+            [||],
+            None,
+            false,
+            None,
+            [||],
+            false,
+            false,
+            false,
+            DiagnosticStyle.Default,
+            ConsoleColorMode.Automatic,
+            None,
+            None,
+            false,
+            false,
+            false
+        )
+
+    let diagnosticOptions (invocation: CompilerInvocation) (renderingOptions: DiagnosticOptions) =
+        DiagnosticOptions.Create(
+            invocation.WarningLevel,
+            List.toArray invocation.DisabledWarnings,
+            List.toArray invocation.EnabledWarnings,
+            invocation.TreatWarningsAsErrors,
+            List.toArray invocation.WarningsAsErrors,
+            List.toArray invocation.WarningsNotAsErrors,
+            invocation.MaximumErrors,
+            invocation.AbortOnError,
+            renderingOptions.PreferredUICulture,
+            Seq.toArray renderingOptions.LocalWarningDirectives,
+            renderingOptions.FullPaths,
+            renderingOptions.FlatErrors,
+            renderingOptions.Utf8Output,
+            renderingOptions.DiagnosticStyle,
+            renderingOptions.ConsoleColorMode,
+            renderingOptions.LCID,
+            renderingOptions.PreferredUILanguage,
+            renderingOptions.TestParserErrorRecovery,
+            renderingOptions.StandardOutputRedirected,
+            renderingOptions.StandardErrorRedirected
+        )
+
+    let createRequestWithDiagnosticOptions
+        (invocation: CompilerInvocation)
+        (diagnosticOptions: DiagnosticOptions)
+        (sources: SourceInput list)
+        =
         let assemblyName = Path.GetFileNameWithoutExtension(invocation.AssemblyPath)
 
         let sourceSnapshots =
@@ -127,28 +208,7 @@ module internal CompilationPipeline =
                 invocation.NoFramework,
                 invocation.TargetProfile
             ),
-            DiagnosticOptions.Create(
-                invocation.WarningLevel,
-                List.toArray invocation.DisabledWarnings,
-                List.toArray invocation.EnabledWarnings,
-                invocation.TreatWarningsAsErrors,
-                List.toArray invocation.WarningsAsErrors,
-                List.toArray invocation.WarningsNotAsErrors,
-                invocation.MaximumErrors,
-                invocation.AbortOnError,
-                None,
-                [||],
-                invocation.FullPaths,
-                invocation.FlatErrors,
-                invocation.Utf8Output,
-                DiagnosticStyle.Default,
-                ConsoleColorMode.Automatic,
-                None,
-                None,
-                false,
-                false,
-                false
-            ),
+            diagnosticOptions,
             EmissionOptions.Create(
                 invocation.Target,
                 invocation.Deterministic,
@@ -165,6 +225,11 @@ module internal CompilationPipeline =
             ResourceInputs.Create(managedResources, nativeResources),
             requestedArtifacts
         )
+
+    let createRequest (invocation: CompilerInvocation) (sources: SourceInput list) =
+        defaultDiagnosticOptions ()
+        |> diagnosticOptions invocation
+        |> fun options -> createRequestWithDiagnosticOptions invocation options sources
 
     let private diagnostic code message = {
         Code = code
@@ -238,9 +303,61 @@ module internal CompilationPipeline =
                     with ex ->
                         Error(diagnostic "FSC2P9999" ex.Message)
 
-    let private failure started message = {
+    let private responseDiagnostic code numericCode stage message =
+        CompilationDiagnostic.Create(
+            0L,
+            code,
+            numericCode,
+            None,
+            stage,
+            DiagnosticSeverity.Error,
+            DiagnosticSeverity.Error,
+            DiagnosticDisposition.Emitted,
+            None,
+            message,
+            None,
+            None,
+            [||],
+            [||],
+            Some DiagnosticStream.StandardError
+        )
+
+    let private structuredCompilerDiagnostic (diagnostic: CompilerDiagnostic) =
+        let numericText =
+            if diagnostic.Code.StartsWith("FS", StringComparison.Ordinal) then
+                diagnostic.Code.AsSpan(2)
+            elif diagnostic.Code.StartsWith("FSC2P", StringComparison.Ordinal) then
+                diagnostic.Code.AsSpan(5)
+            else
+                ReadOnlySpan<char>()
+
+        let numericCode =
+            match Int32.TryParse(numericText) with
+            | true, value -> value
+            | false, _ -> 0
+
+        CompilationDiagnostic.Create(
+            0L,
+            diagnostic.Code,
+            numericCode,
+            None,
+            DiagnosticStage.Compilation CompilationPhase.Syntax,
+            DiagnosticSeverity.Error,
+            DiagnosticSeverity.Error,
+            DiagnosticDisposition.Emitted,
+            None,
+            diagnostic.Message,
+            diagnostic.Path,
+            diagnostic.Range,
+            [||],
+            [||],
+            Some DiagnosticStream.StandardError
+        )
+
+    let private failure started options diagnostics = {
         ExitCode = 1
-        Error = message
+        DiagnosticOptions = options
+        Diagnostics = ImmutableArray.CreateRange diagnostics
         ServiceProcessId = Environment.ProcessId
         QuerySchema = CompilerSchema.Query
         NodeKind = "source"
@@ -264,6 +381,11 @@ module internal CompilationPipeline =
         FragmentHash = String.Empty
         Emitted = false
     }
+
+    let serviceFailure options code numericCode message =
+        responseDiagnostic code numericCode DiagnosticStage.Host message
+        |> Array.singleton
+        |> failure (Stopwatch.GetTimestamp()) options
 
     let fragmentHash (symbolic: SymbolicAssembly) =
         match
@@ -292,6 +414,7 @@ module internal CompilationPipeline =
     let completeInvocation
         compileStarted
         (invocation: CompilerInvocation)
+        (diagnosticOptions: DiagnosticOptions)
         (result: CompilationResult)
         =
         let traceValues =
@@ -312,24 +435,40 @@ module internal CompilationPipeline =
         let failureFromResult () =
             match effectiveOutcome with
             | CompilationOutcome.Failed ->
-                match
-                    result.Diagnostics
-                    |> Seq.tryFind DiagnosticPolicy.isEffectiveError
-                with
-                | Some diagnostic ->
-                    diagnostic
-                    |> DiagnosticFormatter.formatCompilationDiagnostic invocation
-                    |> failure compileStarted
-                | None ->
-                    failure compileStarted "FSC2P9999: compilation failed without a diagnostic"
+                if result.Diagnostics |> Seq.exists DiagnosticPolicy.isEffectiveError then
+                    failure compileStarted diagnosticOptions result.Diagnostics
+                else
+                    responseDiagnostic
+                        "FSC2P9999"
+                        9999
+                        DiagnosticStage.Host
+                        "compilation failed without a diagnostic"
+                    |> Array.singleton
+                    |> failure compileStarted diagnosticOptions
             | CompilationOutcome.Unsupported unsupported ->
-                failure compileStarted $"{unsupported.Code}: {unsupported.Message}"
+                responseDiagnostic
+                    unsupported.Code
+                    0
+                    (DiagnosticStage.Compilation unsupported.StoppingPhase)
+                    unsupported.Message
+                |> Array.singleton
+                |> failure compileStarted diagnosticOptions
             | CompilationOutcome.Cancelled cancellation ->
-                failure
-                    compileStarted
-                    $"FSC2P1002: request '{cancellation.RequestIdentity.Value}' was cancelled at {cancellation.ObservedPhase}"
+                responseDiagnostic
+                    "FSC2P1002"
+                    1002
+                    DiagnosticStage.Host
+                    $"request '{cancellation.RequestIdentity.Value}' was cancelled at {cancellation.ObservedPhase}"
+                |> Array.singleton
+                |> failure compileStarted diagnosticOptions
             | CompilationOutcome.Succeeded ->
-                failure compileStarted "FSC2P9999: successful compilation was mapped as a failure"
+                responseDiagnostic
+                    "FSC2P9999"
+                    9999
+                    DiagnosticStage.Host
+                    "successful compilation was mapped as a failure"
+                |> Array.singleton
+                |> failure compileStarted diagnosticOptions
 
         match effectiveOutcome with
         | CompilationOutcome.Succeeded ->
@@ -340,7 +479,13 @@ module internal CompilationPipeline =
 
             match artifactBytes RequestedArtifact.ImplementationAssembly with
             | None ->
-                failure compileStarted "FSC2P9999: compilation produced no implementation artifact"
+                responseDiagnostic
+                    "FSC2P9999"
+                    9999
+                    DiagnosticStage.Publication
+                    "compilation produced no implementation artifact"
+                |> Array.singleton
+                |> failure compileStarted diagnosticOptions
             | Some implementation ->
                 let linkedArtifacts = {
                     Implementation = implementation
@@ -361,7 +506,8 @@ module internal CompilationPipeline =
 
                 {
                     ExitCode = 0
-                    Error = String.Empty
+                    DiagnosticOptions = diagnosticOptions
+                    Diagnostics = result.Diagnostics
                     ServiceProcessId = Environment.ProcessId
                     QuerySchema = Int32.Parse(trace "querySchema")
                     NodeKind = trace "nodeKind"
@@ -395,15 +541,17 @@ module internal CompilationPipeline =
         (sources: SourceInput list)
         =
         let compileStarted = Stopwatch.GetTimestamp()
+        let options = defaultDiagnosticOptions () |> diagnosticOptions invocation
 
         try
-            let request = createRequest invocation sources
+            let request = createRequestWithDiagnosticOptions invocation options sources
 
             match compileRequest service request with
             | Error compilerDiagnostic ->
                 compilerDiagnostic
-                |> DiagnosticFormatter.format invocation
-                |> failure compileStarted
+                |> structuredCompilerDiagnostic
+                |> Array.singleton
+                |> failure compileStarted options
             | Ok compilation ->
                 let publishStarted = Stopwatch.GetTimestamp()
                 Linker.publishTransactionally invocation compilation.Artifacts
@@ -412,7 +560,8 @@ module internal CompilationPipeline =
 
                 {
                     ExitCode = 0
-                    Error = String.Empty
+                    DiagnosticOptions = options
+                    Diagnostics = ImmutableArray.Empty
                     ServiceProcessId = Environment.ProcessId
                     QuerySchema = query.QuerySchema
                     NodeKind = query.NodeKind
@@ -437,9 +586,9 @@ module internal CompilationPipeline =
                     Emitted = true
                 }
         with ex ->
-            "FSC2P9999: "
-            + ex.Message
-            |> failure compileStarted
+            responseDiagnostic "FSC2P9999" 9999 DiagnosticStage.Host ex.Message
+            |> Array.singleton
+            |> failure compileStarted options
 
     let compile
         (service: CompilerService)

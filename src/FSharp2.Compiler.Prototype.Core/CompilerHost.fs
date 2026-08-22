@@ -24,7 +24,7 @@ module CompilerHost =
     let private writeTrace
         (invocation: CompilerInvocation)
         (path: string)
-        (response: ServiceCompilationResponse)
+        (response: CompilationPipeline.Response)
         =
         let directory = Path.GetDirectoryName(path)
 
@@ -86,11 +86,22 @@ module CompilerHost =
             |]
         )
 
-    let private compileLocally (invocation: CompilerInvocation) (sources: SourceInput list) =
+    let private compileLocally
+        (invocation: CompilerInvocation)
+        (diagnosticOptions: DiagnosticOptions)
+        (sources: SourceInput list)
+        =
         let compileStarted = Stopwatch.GetTimestamp()
-        let request = CompilationPipeline.createRequest invocation sources
+
+        let request =
+            CompilationPipeline.createRequestWithDiagnosticOptions
+                invocation
+                diagnosticOptions
+                sources
+
         let result = Compiler().Compile(request, CancellationToken.None)
-        CompilationPipeline.completeInvocation compileStarted invocation result
+
+        CompilationPipeline.completeInvocation compileStarted invocation diagnosticOptions result
 
     let private sourceTextForPath (sources: SourceInput list) path =
         let comparison =
@@ -103,6 +114,30 @@ module CompilerHost =
         |> List.tryFind (fun source -> String.Equals(source.Path, path, comparison))
         |> Option.map _.Text
 
+    let private sourceLineForDiagnostic sources (diagnostic: CompilationDiagnostic) =
+        match diagnostic.LogicalPath, diagnostic.Range with
+        | Some path, Some range ->
+            sourceTextForPath sources path
+            |> Option.bind (fun source ->
+                let lines =
+                    source
+                        .Replace("\r\n", "\n", StringComparison.Ordinal)
+                        .Replace('\r', '\n')
+                        .Split('\n')
+
+                if
+                    range.Start.Line > 0
+                    && range.Start.Line
+                       <= lines.Length
+                then
+                    Some
+                        lines[range.Start.Line
+                              - 1]
+                else
+                    None
+            )
+        | _ -> None
+
     let private runCompilation (arguments: string array) =
         match CommandLine.diagnosticOptions arguments with
         | Error message ->
@@ -112,7 +147,7 @@ module CompilerHost =
             )
 
             1
-        | Ok diagnosticOptions ->
+        | Ok renderingOptions ->
             match CommandLine.parse arguments with
             | Error message ->
                 Console.Error.WriteLine(
@@ -122,6 +157,9 @@ module CompilerHost =
 
                 1
             | Ok invocation ->
+                let diagnosticOptions =
+                    CompilationPipeline.diagnosticOptions invocation renderingOptions
+
                 let sources =
                     invocation.SourcePaths
                     |> List.map (fun sourcePath -> {
@@ -132,8 +170,9 @@ module CompilerHost =
                 let response =
                     try
                         match invocation.ServerName with
-                        | Some pipeName -> ServiceHost.compileRemote pipeName invocation sources
-                        | None -> compileLocally invocation sources
+                        | Some pipeName ->
+                            ServiceHost.compileRemote pipeName invocation diagnosticOptions sources
+                        | None -> compileLocally invocation diagnosticOptions sources
                     finally
                         if invocation.StrongNameKey.Length > 0 then
                             CryptographicOperations.ZeroMemory(invocation.StrongNameKey.AsSpan())
@@ -141,14 +180,11 @@ module CompilerHost =
                 invocation.TracePath
                 |> Option.iter (fun path -> writeTrace invocation path response)
 
-                if
-                    response.ExitCode
-                    <> 0
-                then
-                    DiagnosticRendering.renderFormattedError
-                        diagnosticOptions
-                        response.Error
-                        (sourceTextForPath sources)
+                for diagnostic in response.Diagnostics do
+                    DiagnosticRendering.render
+                        response.DiagnosticOptions
+                        diagnostic
+                        (sourceLineForDiagnostic sources diagnostic)
                     |> writeRenderedDiagnostic
 
                 response.ExitCode

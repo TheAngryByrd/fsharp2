@@ -1,9 +1,11 @@
 namespace fsharp2.Tests
 
 open System
+open System.Collections.Immutable
 open System.Collections.Generic
 open System.Diagnostics
 open System.IO
+open System.IO.Pipes
 open System.Resources
 open System.Runtime.Loader
 open System.Text
@@ -434,6 +436,103 @@ module DiagnosticCompatibilityTests =
             Reflection.BindingFlags.Public
             ||| Reflection.BindingFlags.NonPublic
         )
+
+    let private configuration =
+        let releaseSegment =
+            $"{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}"
+
+        if
+            AppContext.BaseDirectory.Contains(releaseSegment, StringComparison.OrdinalIgnoreCase)
+        then
+            "Release"
+        else
+            "Debug"
+
+    let private compilerStartInfo arguments =
+        let startInfo = ProcessStartInfo()
+        let nativeExecutable = Environment.GetEnvironmentVariable("FSC2_EXECUTABLE")
+
+        if String.IsNullOrWhiteSpace(nativeExecutable) then
+            startInfo.FileName <- "dotnet"
+
+            for argument in
+                [
+                    "run"
+                    "--no-build"
+                    "--configuration"
+                    configuration
+                    "--project"
+                    $"{repositoryRoot}/src/fsc2.Prototype/fsc2.Prototype.fsproj"
+                    "--"
+                ] do
+                startInfo.ArgumentList.Add(argument)
+        else
+            startInfo.FileName <- Path.GetFullPath(nativeExecutable)
+
+        for argument in arguments do
+            startInfo.ArgumentList.Add(argument)
+
+        startInfo
+
+    let private invokeCompilerBytes workingDirectory arguments =
+        let startInfo = compilerStartInfo arguments
+        startInfo.WorkingDirectory <- workingDirectory
+        startInfo.UseShellExecute <- false
+        startInfo.RedirectStandardOutput <- true
+        startInfo.RedirectStandardError <- true
+
+        use child = new Process(StartInfo = startInfo)
+        use standardOutput = new MemoryStream()
+        use standardError = new MemoryStream()
+
+        child.Start()
+        |> ignore
+
+        let copyOutput = child.StandardOutput.BaseStream.CopyToAsync(standardOutput)
+        let copyError = child.StandardError.BaseStream.CopyToAsync(standardError)
+
+        if not (child.WaitForExit(30_000)) then
+            child.Kill(true)
+            failtest "fsc2 did not exit within 30 seconds"
+
+        Threading.Tasks.Task.WaitAll [|
+            copyOutput
+            copyError
+        |]
+
+        child.ExitCode, standardOutput.ToArray(), standardError.ToArray()
+
+    let private startCompilerService workingDirectory pipeName =
+        let startInfo =
+            compilerStartInfo [
+                "--fsharp2-serve:"
+                + pipeName
+            ]
+
+        startInfo.WorkingDirectory <- workingDirectory
+        startInfo.UseShellExecute <- false
+        startInfo.RedirectStandardOutput <- true
+        startInfo.RedirectStandardError <- true
+
+        let child = new Process(StartInfo = startInfo)
+
+        child.Start()
+        |> ignore
+
+        let ready = child.StandardOutput.ReadLineAsync()
+
+        if not (ready.Wait(10_000)) then
+            child.Kill(true)
+            child.Dispose()
+            failtest "the compiler service did not become ready within 10 seconds"
+
+        Expect.equal
+            ready.Result
+            ("ready="
+             + pipeName)
+            "The compiler service must identify its endpoint."
+
+        child
 
     [<Tests>]
     let tests =
@@ -1190,25 +1289,34 @@ module DiagnosticCompatibilityTests =
                         [|
                             box (Stopwatch.GetTimestamp())
                             invocation
+                            box defaults
                             box adapterResult
                         |]
                     )
 
-                let adapterError =
+                let adapterDiagnostics =
                     adapterResponse
                         .GetType()
-                        .GetProperty("Error", instanceMembers)
+                        .GetProperty("Diagnostics", instanceMembers)
                         .GetValue(adapterResponse)
-                    :?> string
+                    |> unbox<ImmutableArray<CompilationDiagnostic>>
 
-                Expect.stringContains
-                    adapterError
-                    "FS0057"
+                Expect.isTrue
+                    (adapterDiagnostics
+                     |> Seq.exists (fun diagnostic ->
+                         diagnostic.Code = "FS0057"
+                         && diagnostic.EffectiveSeverity = DiagnosticSeverity.Error
+                         && diagnostic.Disposition = DiagnosticDisposition.Emitted
+                     ))
                     "The adapter must report the emitted effective error."
 
-                Expect.isFalse
-                    (adapterError.Contains("FS0058", StringComparison.Ordinal))
-                    "The adapter must not report a suppressed occurrence as the failure."
+                Expect.isTrue
+                    (adapterDiagnostics
+                     |> Seq.exists (fun diagnostic ->
+                         diagnostic.Code = "FS0058"
+                         && diagnostic.Disposition = DiagnosticDisposition.Suppressed
+                     ))
+                    "The adapter must preserve the suppressed occurrence as structured data."
 
             testCase "rendering bytes match every pinned style"
             <| fun _ ->
@@ -1750,6 +1858,604 @@ module DiagnosticCompatibilityTests =
                     File.Delete(corruptSatellitePath)
                     Directory.Delete(corruptSatelliteDirectory)
                     Directory.Delete(fixtureDirectory)
+
+            testCase "direct and service results are structurally identical"
+            <| fun _ ->
+                let compilerAssembly = typeof<Compiler>.Assembly
+
+                let visibility =
+                    Reflection.BindingFlags.Public
+                    ||| Reflection.BindingFlags.NonPublic
+
+                let staticMembers =
+                    visibility
+                    ||| Reflection.BindingFlags.Static
+
+                let instanceMembers =
+                    visibility
+                    ||| Reflection.BindingFlags.Instance
+
+                let requiredType name =
+                    let runtimeType = compilerAssembly.GetType($"FSharp2.Compiler.{name}", false)
+                    Expect.isNotNull runtimeType $"The compiler must define {name}."
+                    runtimeType
+
+                let requiredMethod name (runtimeType: Type) =
+                    let methodInfo = runtimeType.GetMethod(name, staticMembers)
+                    Expect.isNotNull methodInfo $"{runtimeType.Name} must define {name}."
+                    methodInfo
+
+                let range = {
+                    Start = { Offset = 12; Line = 3; Column = 13 }
+                    End = { Offset = 13; Line = 3; Column = 14 }
+                }
+
+                let options =
+                    DiagnosticOptions.Create(
+                        Some 5,
+                        [|
+                            "FS0057"
+                            "1182"
+                        |],
+                        [|
+                            "1182"
+                            "FS3180"
+                        |],
+                        true,
+                        [|
+                            "FS0057"
+                            "1182"
+                        |],
+                        [|
+                            "57"
+                            "FS1182"
+                        |],
+                        Some 9,
+                        true,
+                        Some "fr-FR",
+                        [|
+                            LocalWarningDirective.Create(
+                                4L,
+                                LocalWarningDirectiveAction.Enable,
+                                "FS0057",
+                                "Program.fs",
+                                Some range
+                            )
+                        |],
+                        true,
+                        false,
+                        true,
+                        DiagnosticStyle.Rich,
+                        ConsoleColorMode.Disabled,
+                        Some 1036,
+                        Some "fr-CA",
+                        true,
+                        true,
+                        true
+                    )
+
+                let suppressed =
+                    CompilationDiagnostic.Create(
+                        0L,
+                        "FS0057",
+                        57,
+                        Some "typecheck",
+                        DiagnosticStage.Compilation CompilationPhase.TypedDeclarations,
+                        DiagnosticSeverity.Warning,
+                        DiagnosticSeverity.Hidden,
+                        DiagnosticDisposition.Suppressed,
+                        Some DiagnosticSuppression.LocalNowarn,
+                        "Unused value.",
+                        Some "Program.fs",
+                        Some range,
+                        [||],
+                        [||],
+                        None
+                    )
+
+                let emitted =
+                    CompilationDiagnostic.Create(
+                        1L,
+                        "FS0010",
+                        10,
+                        Some "parse",
+                        DiagnosticStage.Compilation CompilationPhase.Syntax,
+                        DiagnosticSeverity.Error,
+                        DiagnosticSeverity.Error,
+                        DiagnosticDisposition.Emitted,
+                        None,
+                        "Unexpected symbol ')' in binding",
+                        Some "Program.fs",
+                        Some range,
+                        [|
+                            DiagnosticRelatedInformation.Create(
+                                "The binding starts here.",
+                                Some "Program.fs",
+                                Some range
+                            )
+                        |],
+                        [|
+                            "("
+                            "value"
+                        |],
+                        Some DiagnosticStream.StandardError
+                    )
+
+                let result: CompilationResult = {
+                    Outcome = CompilationOutcome.Failed
+                    Diagnostics =
+                        ImmutableArray.CreateRange [|
+                            suppressed
+                            emitted
+                        |]
+                    Artifacts = ImmutableArray.Empty
+                    Fingerprints = ImmutableArray.Empty
+                    PhaseResults = ImmutableArray.Empty
+                    Traces = ImmutableArray.Empty
+                }
+
+                let outputPath = Path.Combine(Path.GetTempPath(), "wave5-structural.dll")
+
+                let parsedCase, parsedFields =
+                    commandLineResult "parse" [|
+                        "--target:library"
+                        $"--out:{outputPath}"
+                        "--deterministic+"
+                        "--debug:portable"
+                        "--warn:5"
+                        "--nowarn:FS0057"
+                        "--nowarn:1182"
+                        "--warnon:1182"
+                        "--warnon:FS3180"
+                        "--warnaserror+"
+                        "--warnaserror:FS0057"
+                        "--warnaserror:1182"
+                        "--warnaserror-:57"
+                        "--warnaserror-:FS1182"
+                        "--max-errors:9"
+                        "--abortonerror"
+                        "Program.fs"
+                    |]
+
+                Expect.equal parsedCase.Name "Ok" "The structural request must parse."
+                let invocation = parsedFields[0]
+                let pipelineType = requiredType "CompilationPipeline"
+                let completeInvocation = requiredMethod "completeInvocation" pipelineType
+
+                Expect.equal
+                    (completeInvocation.GetParameters().Length)
+                    4
+                    "The adapter must carry structured diagnostic options into the result."
+
+                let directResponse =
+                    completeInvocation.Invoke(
+                        null,
+                        [|
+                            box (Stopwatch.GetTimestamp())
+                            invocation
+                            box options
+                            box result
+                        |]
+                    )
+
+                Expect.isNull
+                    (directResponse.GetType().GetProperty("Error", instanceMembers))
+                    "The active service result must not expose a preformatted Error field."
+
+                let serviceHostType = requiredType "ServiceHost"
+                let writeInvocation = requiredMethod "writeInvocation" serviceHostType
+
+                Expect.equal
+                    (writeInvocation.GetParameters().Length)
+                    4
+                    "Protocol v10 requests must carry structured diagnostic options."
+
+                let writeResponse = requiredMethod "writeResponse" serviceHostType
+                let readResponse = requiredMethod "readResponse" serviceHostType
+
+                use responseBytes = new MemoryStream()
+
+                use responseWriter = new BinaryWriter(responseBytes, Encoding.UTF8, true)
+
+                writeResponse.Invoke(
+                    null,
+                    [|
+                        box responseWriter
+                        directResponse
+                    |]
+                )
+                |> ignore
+
+                responseBytes.Position <- 0L
+
+                use responseReader = new BinaryReader(responseBytes, Encoding.UTF8, true)
+                let serviceResponse = readResponse.Invoke(null, [| box responseReader |])
+
+                let responseValue name response =
+                    response.GetType().GetProperty(name, instanceMembers).GetValue(response)
+
+                let diagnosticOptionsProjection (value: DiagnosticOptions) =
+                    value.WarningLevel,
+                    (value.DisabledWarnings
+                     |> Seq.toArray),
+                    (value.EnabledWarnings
+                     |> Seq.toArray),
+                    value.TreatWarningsAsErrors,
+                    (value.WarningsAsErrors
+                     |> Seq.toArray),
+                    (value.WarningsNotAsErrors
+                     |> Seq.toArray),
+                    value.MaximumErrors,
+                    value.AbortOnError,
+                    value.PreferredUICulture,
+                    (value.LocalWarningDirectives
+                     |> Seq.toArray),
+                    value.FullPaths,
+                    value.FlatErrors,
+                    value.Utf8Output,
+                    value.DiagnosticStyle,
+                    value.ConsoleColorMode,
+                    value.LCID,
+                    value.PreferredUILanguage,
+                    value.TestParserErrorRecovery,
+                    value.StandardOutputRedirected,
+                    value.StandardErrorRedirected
+
+                let expectDiagnosticOptionsEqual message expected actual =
+                    Expect.equal
+                        (diagnosticOptionsProjection actual)
+                        (diagnosticOptionsProjection expected)
+                        message
+
+                for propertyName in
+                    [
+                        "ExitCode"
+                        "ServiceProcessId"
+                        "QuerySchema"
+                        "NodeKind"
+                        "ContentFingerprint"
+                        "PreviousContentFingerprint"
+                        "InvalidationReason"
+                        "ParseKey"
+                        "CheckKey"
+                        "LowerKey"
+                        "DependencyCount"
+                        "ParseDecision"
+                        "CheckDecision"
+                        "LowerDecision"
+                        "ParseElapsedMicroseconds"
+                        "CheckElapsedMicroseconds"
+                        "LowerElapsedMicroseconds"
+                        "LinkElapsedMicroseconds"
+                        "PublishElapsedMicroseconds"
+                        "CompileElapsedMicroseconds"
+                        "ExportFingerprint"
+                        "FragmentHash"
+                        "Emitted"
+                    ] do
+                    Expect.equal
+                        (responseValue propertyName serviceResponse)
+                        (responseValue propertyName directResponse)
+                        $"Protocol v10 must preserve {propertyName}."
+
+                let transportedOptions =
+                    responseValue "DiagnosticOptions" serviceResponse
+                    |> unbox<DiagnosticOptions>
+
+                expectDiagnosticOptionsEqual
+                    "Protocol v10 must preserve every structured diagnostic option."
+                    options
+                    transportedOptions
+
+                let diagnosticProjection (diagnostic: CompilationDiagnostic) =
+                    diagnostic.Occurrence,
+                    diagnostic.Code,
+                    diagnostic.NumericCode,
+                    diagnostic.Subcategory,
+                    string diagnostic.Stage,
+                    string diagnostic.OriginalSeverity,
+                    string diagnostic.EffectiveSeverity,
+                    string diagnostic.Disposition,
+                    Option.map string diagnostic.Suppression,
+                    diagnostic.Message,
+                    diagnostic.LogicalPath,
+                    diagnostic.Range,
+                    (diagnostic.RelatedInformation
+                     |> Seq.map (fun related -> related.Message, related.LogicalPath, related.Range)
+                     |> Seq.toArray),
+                    (diagnostic.Suggestions
+                     |> Seq.toArray),
+                    Option.map string diagnostic.Stream
+
+                let directDiagnostics =
+                    responseValue "Diagnostics" directResponse
+                    |> unbox<ImmutableArray<CompilationDiagnostic>>
+
+                let serviceDiagnostics =
+                    responseValue "Diagnostics" serviceResponse
+                    |> unbox<ImmutableArray<CompilationDiagnostic>>
+
+                Expect.sequenceEqual
+                    (directDiagnostics
+                     |> Seq.map diagnosticProjection)
+                    (serviceDiagnostics
+                     |> Seq.map diagnosticProjection)
+                    "Protocol v10 must preserve every diagnostic occurrence and field."
+
+                let sourcePath =
+                    Path.Combine(
+                        repositoryRoot,
+                        "tests",
+                        "FSharp2.Prototype.Diagnostics",
+                        "UnexpectedToken.fs"
+                    )
+
+                let sourceInputType = requiredType "SourceInput"
+
+                let invocationSourcePath =
+                    invocation
+                        .GetType()
+                        .GetProperty("SourcePaths", instanceMembers)
+                        .GetValue(invocation)
+                    |> unbox<string list>
+                    |> List.exactlyOne
+
+                let liveSource =
+                    Microsoft.FSharp.Reflection.FSharpValue.MakeRecord(
+                        sourceInputType,
+                        [|
+                            box invocationSourcePath
+                            box (File.ReadAllText(sourcePath))
+                        |],
+                        visibility
+                    )
+
+                let sourceValues = Array.CreateInstance(sourceInputType, 1)
+                sourceValues.SetValue(liveSource, 0)
+
+                let listModuleType =
+                    typeof<list<int>>.Assembly
+                        .GetType("Microsoft.FSharp.Collections.ListModule", true)
+
+                let ofSeq =
+                    listModuleType
+                        .GetMethod("OfSeq", staticMembers)
+                        .MakeGenericMethod([| sourceInputType |])
+
+                let liveSources = ofSeq.Invoke(null, [| box sourceValues |])
+
+                let createRequest = requiredMethod "createRequestWithDiagnosticOptions" pipelineType
+
+                let liveRequest =
+                    createRequest.Invoke(
+                        null,
+                        [|
+                            invocation
+                            box options
+                            liveSources
+                        |]
+                    )
+                    |> unbox<CompilationRequest>
+
+                let liveResult = Compiler().Compile(liveRequest, Threading.CancellationToken.None)
+
+                let liveDirectResponse =
+                    completeInvocation.Invoke(
+                        null,
+                        [|
+                            box (Stopwatch.GetTimestamp())
+                            invocation
+                            box options
+                            box liveResult
+                        |]
+                    )
+
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-wave5-service",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                let pipeName =
+                    "fsharp2-"
+                    + Guid.NewGuid().ToString("N")
+
+                use service = startCompilerService root pipeName
+
+                let readProtocolFailure (version: int) =
+                    use client =
+                        new NamedPipeClientStream(
+                            ".",
+                            pipeName,
+                            PipeDirection.InOut,
+                            PipeOptions.None
+                        )
+
+                    client.Connect(10_000)
+
+                    use writer = new BinaryWriter(client, Encoding.UTF8, true)
+                    writer.Write(0x46533250)
+                    writer.Write(version)
+                    writer.Flush()
+
+                    use reader = new BinaryReader(client, Encoding.UTF8, true)
+                    readResponse.Invoke(null, [| box reader |])
+
+                try
+                    for version in
+                        [
+                            9
+                            11
+                        ] do
+                        let rejected = readProtocolFailure version
+
+                        Expect.equal
+                            (responseValue "ExitCode" rejected :?> int)
+                            1
+                            $"Protocol version {version} must fail."
+
+                        let rejectionDiagnostics =
+                            responseValue "Diagnostics" rejected
+                            |> unbox<ImmutableArray<CompilationDiagnostic>>
+
+                        Expect.equal
+                            rejectionDiagnostics.Length
+                            1
+                            $"Protocol version {version} diagnostic count"
+
+                        Expect.equal
+                            rejectionDiagnostics[0].Code
+                            "FSC2P2002"
+                            $"Protocol version {version} code"
+
+                        Expect.equal
+                            rejectionDiagnostics[0].Message
+                            "unsupported compiler service protocol version"
+                            $"Protocol version {version} message"
+
+                    let compileRemote = requiredMethod "compileRemote" serviceHostType
+
+                    let liveServiceResponse =
+                        compileRemote.Invoke(
+                            null,
+                            [|
+                                box pipeName
+                                invocation
+                                box options
+                                liveSources
+                            |]
+                        )
+
+                    let liveDirectOptions =
+                        responseValue "DiagnosticOptions" liveDirectResponse
+                        |> unbox<DiagnosticOptions>
+
+                    let liveServiceOptions =
+                        responseValue "DiagnosticOptions" liveServiceResponse
+                        |> unbox<DiagnosticOptions>
+
+                    expectDiagnosticOptionsEqual
+                        "The retained service must preserve every structured diagnostic option."
+                        liveDirectOptions
+                        liveServiceOptions
+
+                    let liveDirectDiagnostics =
+                        responseValue "Diagnostics" liveDirectResponse
+                        |> unbox<ImmutableArray<CompilationDiagnostic>>
+
+                    let liveServiceDiagnostics =
+                        responseValue "Diagnostics" liveServiceResponse
+                        |> unbox<ImmutableArray<CompilationDiagnostic>>
+
+                    Expect.sequenceEqual
+                        (liveServiceDiagnostics
+                         |> Seq.map diagnosticProjection)
+                        (liveDirectDiagnostics
+                         |> Seq.map diagnosticProjection)
+                        "The retained service must preserve every structured diagnostic occurrence."
+
+                    let compile name serverName =
+                        let responsePath =
+                            Path.Combine(
+                                root,
+                                name
+                                + ".rsp"
+                            )
+
+                        let outputPath =
+                            Path.Combine(
+                                root,
+                                name
+                                + ".dll"
+                            )
+
+                        let pdbPath =
+                            Path.Combine(
+                                root,
+                                name
+                                + ".pdb"
+                            )
+
+                        let arguments = ResizeArray<string>()
+
+                        serverName
+                        |> Option.iter (fun value -> arguments.Add($"--fsharp2-server:{value}"))
+
+                        for argument in
+                            [
+                                "--nologo"
+                                "--target:library"
+                                "--fullpaths"
+                                "--richerrors"
+                                "--utf8output"
+                                "--consolecolors-"
+                                "--preferreduilang:fr-FR"
+                                "--warn:5"
+                                "--nowarn:FS0057"
+                                "--warnon:FS3180"
+                                "--warnaserror+"
+                                "--warnaserror:FS0057"
+                                "--warnaserror-:FS1182"
+                                "--max-errors:9"
+                                "--abortonerror"
+                                "--deterministic+"
+                                "--debug:portable"
+                                $"--out:{outputPath}"
+                                $"--pdb:{pdbPath}"
+                                sourcePath
+                            ] do
+                            arguments.Add(argument)
+
+                        File.WriteAllLines(responsePath, arguments)
+
+                        invokeCompilerBytes root [
+                            "@"
+                            + responsePath
+                        ]
+
+                    let directExit, directOutput, directError = compile "direct" None
+                    let serviceExit, serviceOutput, serviceError = compile "service" (Some pipeName)
+
+                    Expect.equal directExit 1 "The direct diagnostic compilation must fail."
+                    Expect.equal serviceExit directExit "The retained-service exit must match."
+
+                    Expect.sequenceEqual
+                        serviceOutput
+                        directOutput
+                        "The retained-service stdout bytes must match."
+
+                    Expect.sequenceEqual
+                        serviceError
+                        directError
+                        "The retained-service stderr bytes must match."
+
+                    Expect.isGreaterThan
+                        serviceError.Length
+                        0
+                        "The diagnostic must write bytes to stderr."
+                finally
+                    if not service.HasExited then
+                        service.Kill(true)
+
+                        service.WaitForExit(10_000)
+                        |> ignore
+
+                    let rec deleteRoot attempts =
+                        try
+                            Directory.Delete(root, true)
+                        with :? IOException when attempts > 0 ->
+                            Threading.Thread.Sleep(50)
+
+                            deleteRoot (
+                                attempts
+                                - 1
+                            )
+
+                    deleteRoot 100
 
             testCase "inventory discovers every pinned candidate"
             <| fun _ ->
