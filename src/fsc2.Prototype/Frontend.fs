@@ -3232,133 +3232,60 @@ module internal Frontend =
                             End = closeToken.Range.End
                         }
 
-                        return!
-                            match
-                                leadingBindings,
-                                ordinaryBindings,
-                                trailingBindings,
+                        let bindReturn =
+                            BindReturnFromComputation(
+                                builderName,
+                                trailingBindings
+                                |> List.map (fun (name, input, _) -> name, input),
                                 returnKind,
-                                returnExpression
-                            with
-                            | [ cancellationTokenName, UnitApplication "getCancellationToken", _ ],
-                              [ firstTaskName,
-                                FunctionApplication(ValueReference leftName,
-                                                    ValueReference firstCancellationTokenName),
-                                false,
-                                firstBindingRange
-                                secondTaskName,
-                                FunctionApplication(ValueReference rightName,
-                                                    ValueReference secondCancellationTokenName),
-                                false,
-                                secondBindingRange ],
-                              [ leftResultName, ValueReference leftTaskName, _
-                                rightResultName, ValueReference rightTaskName, _ ],
-                              ComputationReturn,
-                              TupleExpression([ ValueReference returnedLeftName
-                                                ValueReference returnedRightName ],
-                                              _) when
-                                firstCancellationTokenName = cancellationTokenName
-                                && secondCancellationTokenName = cancellationTokenName
-                                && leftTaskName = firstTaskName
-                                && rightTaskName = secondTaskName
-                                && returnedLeftName = leftResultName
-                                && returnedRightName = rightResultName
-                                ->
-                                let bindReturn =
-                                    BindReturnFromComputation(
-                                        "coldTask",
-                                        [
-                                            leftResultName, ValueReference firstTaskName
-                                            rightResultName, ValueReference secondTaskName
-                                        ],
-                                        ComputationReturn,
-                                        returnExpression,
-                                        computationRange
-                                    )
+                                returnExpression,
+                                computationRange
+                            )
 
-                                let secondBodyRange = computationRange
-
-                                let firstBodyRange = {
-                                    Start = secondBindingRange.Start
-                                    End = computationRange.End
+                        let bodyAfterOrdinaryBindings, bodyAfterOrdinaryRange =
+                            ((bindReturn, computationRange),
+                             (ordinaryBindings
+                              |> List.rev))
+                            ||> List.fold (fun
+                                               (body, bodyRange)
+                                               (name, value, _, bindingRange) ->
+                                LetExpression(
+                                    name,
+                                    false,
+                                    false,
+                                    value,
+                                    body,
+                                    bindingRange,
+                                    bodyRange
+                                ),
+                                {
+                                    Start = bindingRange.Start
+                                    End = bodyRange.End
                                 }
+                            )
 
-                                let body =
-                                    LetExpression(
-                                        firstTaskName,
-                                        false,
-                                        false,
-                                        UnitApplication leftName,
-                                        LetExpression(
-                                            secondTaskName,
-                                            false,
-                                            false,
-                                            UnitApplication rightName,
-                                            bindReturn,
-                                            secondBindingRange,
-                                            secondBodyRange
-                                        ),
-                                        firstBindingRange,
-                                        firstBodyRange
-                                    )
+                        let body, _ =
+                            ((bodyAfterOrdinaryBindings, bodyAfterOrdinaryRange),
+                             (leadingBindings
+                              |> List.rev))
+                            ||> List.fold (fun (body, bodyRange) (name, input, bindingRange) ->
+                                ComputationBindingExpression(
+                                    name,
+                                    input,
+                                    body,
+                                    bindingRange,
+                                    bodyRange
+                                ),
+                                {
+                                    Start = bindingRange.Start
+                                    End = bodyRange.End
+                                }
+                            )
 
-                                parsePostfixMemberCalls
-                                    (ComputationExpression("coldTask", body, computationRange))
-                                    computationRange
-                            | _ ->
-                                let bindReturn =
-                                    BindReturnFromComputation(
-                                        builderName,
-                                        trailingBindings
-                                        |> List.map (fun (name, input, _) -> name, input),
-                                        returnKind,
-                                        returnExpression,
-                                        computationRange
-                                    )
-
-                                let bodyAfterOrdinaryBindings, bodyAfterOrdinaryRange =
-                                    ((bindReturn, computationRange),
-                                     (ordinaryBindings
-                                      |> List.rev))
-                                    ||> List.fold (fun
-                                                       (body, bodyRange)
-                                                       (name, value, _, bindingRange) ->
-                                        LetExpression(
-                                            name,
-                                            false,
-                                            false,
-                                            value,
-                                            body,
-                                            bindingRange,
-                                            bodyRange
-                                        ),
-                                        {
-                                            Start = bindingRange.Start
-                                            End = bodyRange.End
-                                        }
-                                    )
-
-                                let body, _ =
-                                    ((bodyAfterOrdinaryBindings, bodyAfterOrdinaryRange),
-                                     (leadingBindings
-                                      |> List.rev))
-                                    ||> List.fold (fun (body, bodyRange) (name, input, bindingRange) ->
-                                        ComputationBindingExpression(
-                                            name,
-                                            input,
-                                            body,
-                                            bindingRange,
-                                            bodyRange
-                                        ),
-                                        {
-                                            Start = bindingRange.Start
-                                            End = bodyRange.End
-                                        }
-                                    )
-
-                                parsePostfixMemberCalls
-                                    (ComputationExpression(builderName, body, computationRange))
-                                    computationRange
+                        return!
+                            parsePostfixMemberCalls
+                                (ComputationExpression(builderName, body, computationRange))
+                                computationRange
                     }
                 | Identifier builderName when
                     index + 3 < input.Length

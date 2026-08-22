@@ -8,6 +8,31 @@ open System.IO
 open System.Security.Cryptography
 open System.Text
 
+module private TypedComputationExpression =
+    let awaitableBind expression =
+        TypedComputation(AwaitableBindLowering expression)
+
+    let awaitableApply expression =
+        TypedComputation(AwaitableApplyLowering expression)
+
+    let awaitableZip expression =
+        TypedComputation(AwaitableZipLowering expression)
+
+    let functionParallelZip expression =
+        TypedComputation(FunctionParallelZipLowering expression)
+
+    let awaitableTryFinally expression =
+        TypedComputation(AwaitableTryFinallyLowering expression)
+
+    let computationWhile expression =
+        TypedComputation(ComputationWhileLowering expression)
+
+    let sequenceAggregation expression =
+        TypedComputation(SequenceAggregationLowering expression)
+
+    let awaitableUnitConversion expression =
+        TypedComputation(AwaitableUnitConversionLowering expression)
+
 module private Fingerprint =
     let text (value: string) =
         value
@@ -357,7 +382,7 @@ module private TypeIdentity =
                 cliType expression.LambdaReturnType
                 inlineBody expression.LambdaBody
             ]
-        | TypedValueTaskBind expression ->
+        | TypedComputation (AwaitableBindLowering expression) ->
             Fingerprint.parts [
                 "value-task-bind"
                 expression.BuilderName
@@ -372,7 +397,7 @@ module private TypeIdentity =
                 cliType expression.InputValueTaskType
                 cliType expression.OutputValueTaskType
             ]
-        | TypedValueTaskApply expression ->
+        | TypedComputation (AwaitableApplyLowering expression) ->
             Fingerprint.parts [
                 "value-task-apply"
                 expression.BuilderName
@@ -385,7 +410,7 @@ module private TypeIdentity =
                 cliType expression.InputValueTaskType
                 cliType expression.OutputValueTaskType
             ]
-        | TypedValueTaskZip expression ->
+        | TypedComputation (AwaitableZipLowering expression) ->
             Fingerprint.parts [
                 "value-task-zip"
                 expression.BuilderName
@@ -398,15 +423,16 @@ module private TypeIdentity =
                 cliType expression.RightValueTaskType
                 cliType expression.OutputValueTaskType
             ]
-        | TypedColdTaskParallelZip expression ->
+        | TypedComputation (FunctionParallelZipLowering expression) ->
             Fingerprint.parts [
-                "cold-task-parallel-zip"
+                "function-parallel-zip"
                 inlineBody (TypedFunctionLambda expression.Function)
-                inlineBody (TypedValueTaskZip expression.Zip)
+                inlineBody (TypedComputationExpression.awaitableZip expression.Zip)
             ]
-        | TypedTaskTryFinally expression ->
+        | TypedComputation (AwaitableTryFinallyLowering expression) ->
             Fingerprint.parts [
                 "task-try-finally"
+                expression.BuilderName
                 expression.WaitParameterIndex.ToString(CultureInfo.InvariantCulture)
                 expression.WorkParameterIndex.ToString(CultureInfo.InvariantCulture)
                 expression.CompensationParameterIndex.ToString(CultureInfo.InvariantCulture)
@@ -415,15 +441,16 @@ module private TypeIdentity =
                 cliType expression.OutputTaskType
                 cliType expression.CompensationType
             ]
-        | TypedAsyncWhile expression ->
+        | TypedComputation (ComputationWhileLowering expression) ->
             Fingerprint.parts [
                 "async-while"
+                expression.BuilderName
                 expression.GuardParameterIndex.ToString(CultureInfo.InvariantCulture)
                 expression.ComputationParameterIndex.ToString(CultureInfo.InvariantCulture)
                 cliType expression.AsyncBooleanType
                 cliType expression.AsyncUnitType
             ]
-        | TypedCancellableTaskSequential expression ->
+        | TypedComputation (SequenceAggregationLowering expression) ->
             Fingerprint.parts [
                 "cancellable-task-sequential"
                 expression.SequenceParameterIndex.ToString(CultureInfo.InvariantCulture)
@@ -432,7 +459,7 @@ module private TypeIdentity =
                 cliType expression.OutputFunctionType
                 cliType expression.UnitType
             ]
-        | TypedValueTaskOfUnit expression ->
+        | TypedComputation (AwaitableUnitConversionLowering expression) ->
             Fingerprint.parts [
                 "value-task-of-unit"
                 expression.BuilderName
@@ -4931,30 +4958,94 @@ type internal CompilerService() =
 
                                 let isSingleValueMemberCall
                                     expectedReceiver
-                                    expectedMember
                                     expectedValue
                                     =
                                     function
                                     | MemberCall(actualReceiver,
-                                                 actualMember,
+                                                 _,
                                                  [ ValueReference actualValue ])
                                     | ExpressionMemberCall(ValueReference actualReceiver,
-                                                           actualMember,
+                                                           _,
                                                            [ ValueReference actualValue ]) ->
                                         actualReceiver = expectedReceiver
-                                        && actualMember = expectedMember
                                         && actualValue = expectedValue
                                     | _ -> false
 
-                                let isUnitMemberCall expectedReceiver expectedMember =
+                                let isUnitMemberCall expectedReceiver =
                                     function
-                                    | MemberCall(actualReceiver, actualMember, [])
+                                    | MemberCall(actualReceiver, _, [])
                                     | ExpressionMemberCall(ValueReference actualReceiver,
-                                                           actualMember,
+                                                           _,
                                                            []) ->
                                         actualReceiver = expectedReceiver
-                                        && actualMember = expectedMember
                                     | _ -> false
+
+                                let (|ParallelBindings|_|) body =
+                                    let tryReturn firstTaskName secondTaskName =
+                                        function
+                                        | BindReturnFromComputation(returnBuilderName,
+                                                                    [ leftResultName,
+                                                                      ValueReference leftTaskName
+                                                                      rightResultName,
+                                                                      ValueReference rightTaskName ],
+                                                                    ComputationReturn,
+                                                                    TupleExpression([ ValueReference returnedLeftName
+                                                                                      ValueReference returnedRightName ],
+                                                                                    _),
+                                                                    _) when
+                                            firstTaskName = leftTaskName
+                                            && secondTaskName = rightTaskName
+                                            && leftResultName = returnedLeftName
+                                            && rightResultName = returnedRightName
+                                            ->
+                                            Some returnBuilderName
+                                        | _ -> None
+
+                                    match body with
+                                    | LetExpression(firstTaskName,
+                                                    false,
+                                                    false,
+                                                    UnitApplication leftName,
+                                                    LetExpression(secondTaskName,
+                                                                  false,
+                                                                  false,
+                                                                  UnitApplication rightName,
+                                                                  returnExpression,
+                                                                  _,
+                                                                  _),
+                                                    _,
+                                                    _) ->
+                                        tryReturn firstTaskName secondTaskName returnExpression
+                                        |> Option.map (fun returnBuilderName ->
+                                            returnBuilderName, leftName, rightName
+                                        )
+                                    | ComputationBindingExpression(environmentName,
+                                                                   _,
+                                                                   LetExpression(firstTaskName,
+                                                                                 false,
+                                                                                 false,
+                                                                                 FunctionApplication(ValueReference leftName,
+                                                                                                     ValueReference leftEnvironmentName),
+                                                                                 LetExpression(secondTaskName,
+                                                                                               false,
+                                                                                               false,
+                                                                                               FunctionApplication(ValueReference rightName,
+                                                                                                                   ValueReference rightEnvironmentName),
+                                                                                               returnExpression,
+                                                                                               _,
+                                                                                               _),
+                                                                                 _,
+                                                                                 _),
+                                                                   _,
+                                                                   _) when
+                                        leftEnvironmentName = environmentName
+                                        && rightEnvironmentName = environmentName
+                                        ->
+                                        tryReturn firstTaskName secondTaskName returnExpression
+                                        |> Option.map (fun returnBuilderName ->
+                                            returnBuilderName, leftName, rightName
+                                        )
+                                    | _ -> None
 
                                 let rec typeStaticExpressionFor
                                     (expressionReceiver: (string * CliType) option)
@@ -5049,19 +5140,13 @@ type internal CompilerService() =
                                                                           _,
                                                                           _),
                                                             range) when
-                                        builderName = "cancellableTask"
-                                        && returnBuilderName = builderName
+                                        returnBuilderName = builderName
                                         && itemName = boundItemName
                                         && isSingleValueMemberCall
                                             resultsName
-                                            "Add"
                                             resultName
                                             addExpression
-                                        && (isUnitMemberCall resultsName "Close" finalizerExpression
-                                            || isUnitMemberCall
-                                                resultsName
-                                                "ToArray"
-                                                finalizerExpression)
+                                        && isUnitMemberCall resultsName finalizerExpression
                                         ->
                                         let sequenceParameterIndex =
                                             expressionParameters
@@ -5193,7 +5278,8 @@ type internal CompilerService() =
                                                                 ]
                                                             )
 
-                                                        TypedCancellableTaskSequential {
+                                                        TypedComputationExpression.sequenceAggregation {
+                                                            BuilderName = builderName
                                                             SequenceParameterIndex =
                                                                 sequenceParameterIndex
                                                             ElementType = elementType
@@ -5233,13 +5319,13 @@ type internal CompilerService() =
                                                         nextLocalIndex
                                                     | _ ->
                                                         invalidOp
-                                                            "the cancellable-task sequential type set is incomplete"
+                                                            "the task sequence type set is incomplete"
                                                 )
                                             | _ ->
                                                 diagnostic
                                                     range
-                                                    "a cancellable-task sequential loop requires a sequence of CancellationToken-to-Task functions"
-                                    | BindReturnFromComputation("valueTask",
+                                                    "task sequence aggregation requires CancellationToken-to-Task functions"
+                                    | BindReturnFromComputation(builderName,
                                                                 [ bindingName,
                                                                   ValueReference sourceName ],
                                                                 returnKind,
@@ -5406,8 +5492,8 @@ type internal CompilerService() =
                                                         nonGenericTaskTypeReference
                                                         operationCanceledExceptionTypeReference
                                                         exceptionTypeReference ] ->
-                                                        TypedValueTaskBind {
-                                                            BuilderName = "valueTask"
+                                                        TypedComputationExpression.awaitableBind {
+                                                            BuilderName = builderName
                                                             ReturnKind = returnKind
                                                             BinderParameterIndex =
                                                                 binderParameterIndex
@@ -5457,7 +5543,7 @@ type internal CompilerService() =
                                                          "valueTask map requires an F# function from the source ValueTask result to the returned value"
                                                      | ComputationReturnFrom ->
                                                          "valueTask bind requires an F# function from the source ValueTask result to another ValueTask")
-                                    | BindReturnFromComputation("valueTask",
+                                    | BindReturnFromComputation(builderName,
                                                                 [ applierBindingName,
                                                                   ValueReference applicableName
                                                                   inputBindingName,
@@ -5604,8 +5690,8 @@ type internal CompilerService() =
                                                                 [ outputType ]
                                                             )
 
-                                                        TypedValueTaskApply {
-                                                            BuilderName = "valueTask"
+                                                        TypedComputationExpression.awaitableApply {
+                                                            BuilderName = builderName
                                                             ApplicableParameterIndex =
                                                                 applicableParameterIndex
                                                             InputParameterIndex =
@@ -5652,7 +5738,7 @@ type internal CompilerService() =
                                                 diagnostic
                                                     range
                                                     "valueTask apply requires ValueTask sources containing a compatible F# function and argument"
-                                    | BindReturnFromComputation("valueTask",
+                                    | BindReturnFromComputation(builderName,
                                                                 [ leftBindingName,
                                                                   ValueReference leftName
                                                                   rightBindingName,
@@ -5805,8 +5891,8 @@ type internal CompilerService() =
                                                                 [ tupleType ]
                                                             )
 
-                                                        TypedValueTaskZip {
-                                                            BuilderName = "valueTask"
+                                                        TypedComputationExpression.awaitableZip {
+                                                            BuilderName = builderName
                                                             LeftParameterIndex = leftParameterIndex
                                                             RightParameterIndex =
                                                                 rightParameterIndex
@@ -5852,7 +5938,7 @@ type internal CompilerService() =
                                                 diagnostic
                                                     range
                                                     "valueTask zip requires two generic ValueTask sources"
-                                    | BindReturnFromComputation("valueTask",
+                                    | BindReturnFromComputation(builderName,
                                                                 [],
                                                                 ComputationReturnFrom,
                                                                 ValueReference sourceName,
@@ -5976,8 +6062,8 @@ type internal CompilerService() =
                                                                 [ unitType ]
                                                             )
 
-                                                        TypedValueTaskOfUnit {
-                                                            BuilderName = "valueTask"
+                                                        TypedComputationExpression.awaitableUnitConversion {
+                                                            BuilderName = builderName
                                                             SourceParameterIndex =
                                                                 sourceParameterIndex
                                                             SourceValueTaskType =
@@ -6019,34 +6105,12 @@ type internal CompilerService() =
                                                 diagnostic
                                                     range
                                                     "valueTask unit conversion requires a non-generic ValueTask source"
-                                    | ComputationExpression("coldTask",
-                                                            LetExpression(firstTaskName,
-                                                                          false,
-                                                                          false,
-                                                                          UnitApplication leftName,
-                                                                          LetExpression(secondTaskName,
-                                                                                        false,
-                                                                                        false,
-                                                                                        UnitApplication rightName,
-                                                                                        BindReturnFromComputation("coldTask",
-                                                                                                                  [ leftResultName,
-                                                                                                                    ValueReference leftTaskName
-                                                                                                                    rightResultName,
-                                                                                                                    ValueReference rightTaskName ],
-                                                                                                                  ComputationReturn,
-                                                                                                                  TupleExpression([ ValueReference returnedLeftName
-                                                                                                                                    ValueReference returnedRightName ],
-                                                                                                                                  _),
-                                                                                                                  _),
-                                                                                        _,
-                                                                                        _),
-                                                                          _,
-                                                                          _),
+                                    | ComputationExpression(builderName,
+                                                            ParallelBindings(returnBuilderName,
+                                                                             leftName,
+                                                                             rightName),
                                                             range) when
-                                        firstTaskName = leftTaskName
-                                        && secondTaskName = rightTaskName
-                                        && leftResultName = returnedLeftName
-                                        && rightResultName = returnedRightName
+                                        builderName = returnBuilderName
                                         ->
                                         let leftParameterIndex =
                                             expressionParameters
@@ -6064,11 +6128,11 @@ type internal CompilerService() =
                                         | None, _ ->
                                             diagnostic
                                                 range
-                                                $"the cold-task source '{leftName}' is not a method parameter"
+                                                $"the parallel computation source '{leftName}' is not a method parameter"
                                         | _, None ->
                                             diagnostic
                                                 range
-                                                $"the cold-task source '{rightName}' is not a method parameter"
+                                                $"the parallel computation source '{rightName}' is not a method parameter"
                                         | Some leftParameterIndex, Some rightParameterIndex ->
                                             let leftFunctionType =
                                                 expressionParameters.[leftParameterIndex].Type
@@ -6256,17 +6320,11 @@ type internal CompilerService() =
                                                             else
                                                                 outputTaskType
 
-                                                        let builderName =
-                                                            if isCancellable then
-                                                                "cancellableValueTask"
-                                                            else
-                                                                "coldTask"
-
                                                         let modeName =
                                                             if isCancellable then
-                                                                "CancellableValueTaskParallelZip"
+                                                                "CancellationTokenValueTaskParallelZip"
                                                             else
-                                                                "ColdTaskParallelZip"
+                                                                "UnitTaskParallelZip"
 
                                                         let outputFunctionType =
                                                             CliGenericType(
@@ -6423,25 +6481,26 @@ type internal CompilerService() =
                                                             Range = range
                                                         }
 
-                                                        TypedColdTaskParallelZip {
+                                                        TypedComputationExpression.functionParallelZip {
                                                             Function = functionExpression
                                                             Zip = zipExpression
+                                                            IsCancellationTokenBased = isCancellable
                                                         },
                                                         outputFunctionType,
                                                         nextLocalIndex
                                                     | _ ->
                                                         invalidOp
-                                                            "the cold-task parallel zip type set is incomplete"
+                                                            "the function-based parallel zip type set is incomplete"
                                                 )
                                             | _ ->
                                                 diagnostic
                                                     range
-                                                    "coldTask parallel zip requires two unit-to-Task function parameters"
-                                    | ComputationExpression("task",
+                                                    "parallel computation requires compatible unit-to-Task or CancellationToken-to-ValueTask functions"
+                                    | ComputationExpression(builderName,
                                                             SequentialValueExpression [ ComputationDoExpression(ValueReference waitName,
                                                                                                                 _),
                                                                                         _
-                                                                                        TryFinallyExpression(BindReturnFromComputation("task",
+                                                                                        TryFinallyExpression(BindReturnFromComputation(returnBuilderName,
                                                                                                                                        [],
                                                                                                                                        ComputationReturnFrom,
                                                                                                                                        ValueReference workName,
@@ -6455,7 +6514,9 @@ type internal CompilerService() =
                                                                                                              _,
                                                                                                              _),
                                                                                         _ ],
-                                                            range) ->
+                                                            range) when
+                                        returnBuilderName = builderName
+                                        ->
                                         let parameterIndex name =
                                             expressionParameters
                                             |> List.tryFindIndex (fun parameter ->
@@ -6590,7 +6651,8 @@ type internal CompilerService() =
                                                         taskExtensionsTypeReference
                                                         operationCanceledExceptionTypeReference
                                                         exceptionTypeReference ] ->
-                                                        TypedTaskTryFinally {
+                                                        TypedComputationExpression.awaitableTryFinally {
+                                                            BuilderName = builderName
                                                             WaitParameterIndex = waitParameterIndex
                                                             WorkParameterIndex = workParameterIndex
                                                             CompensationParameterIndex =
@@ -8042,7 +8104,8 @@ type internal CompilerService() =
                                                                     captures
                                                                     |> List.filter (fun capture ->
                                                                         typedParameters
-                                                                        |> List.exists (fun parameter ->
+                                                                        |> List.exists (fun
+                                                                                            parameter ->
                                                                             parameter.Name = capture.Name
                                                                         )
                                                                         |> not
@@ -10371,14 +10434,14 @@ type internal CompilerService() =
                                     | TypedResumableCode _
                                     | TypedResumableTryFinally _
                                     | TypedTraitCall _ -> []
-                                    | TypedValueTaskBind _
-                                    | TypedValueTaskApply _
-                                    | TypedValueTaskZip _
-                                    | TypedColdTaskParallelZip _
-                                    | TypedTaskTryFinally _
-                                    | TypedAsyncWhile _
-                                    | TypedCancellableTaskSequential _
-                                    | TypedValueTaskOfUnit _ -> []
+                                    | TypedComputation (AwaitableBindLowering _)
+                                    | TypedComputation (AwaitableApplyLowering _)
+                                    | TypedComputation (AwaitableZipLowering _)
+                                    | TypedComputation (FunctionParallelZipLowering _)
+                                    | TypedComputation (AwaitableTryFinallyLowering _)
+                                    | TypedComputation (ComputationWhileLowering _)
+                                    | TypedComputation (SequenceAggregationLowering _)
+                                    | TypedComputation (AwaitableUnitConversionLowering _) -> []
 
                                 let typedBody =
                                     typeStaticExpression Map.empty 0 methodDeclaration.Body
@@ -10424,7 +10487,7 @@ type internal CompilerService() =
                                                     expression.ConstructionRange
                                                 | TypedDelegateLambda expression ->
                                                     expression.ConstructionRange
-                                                | TypedTaskTryFinally expression ->
+                                                | TypedComputation (AwaitableTryFinallyLowering expression) ->
                                                     let taskStart = expression.Range.Start
 
                                                     {
@@ -10433,13 +10496,13 @@ type internal CompilerService() =
                                                             taskStart with
                                                                 Offset =
                                                                     taskStart.Offset
-                                                                    + "task".Length
+                                                                    + expression.BuilderName.Length
                                                                 Column =
                                                                     taskStart.Column
-                                                                    + "task".Length
+                                                                    + expression.BuilderName.Length
                                                         }
                                                     }
-                                                | TypedCancellableTaskSequential expression ->
+                                                | TypedComputation (SequenceAggregationLowering expression) ->
                                                     let builderStart = expression.Range.Start
 
                                                     {
@@ -10448,10 +10511,10 @@ type internal CompilerService() =
                                                             builderStart with
                                                                 Offset =
                                                                     builderStart.Offset
-                                                                    + "cancellableTask".Length
+                                                                    + expression.BuilderName.Length
                                                                 Column =
                                                                     builderStart.Column
-                                                                    + "cancellableTask".Length
+                                                                    + expression.BuilderName.Length
                                                         }
                                                     }
                                                 | _ -> methodDeclaration.BodyRange
@@ -10894,7 +10957,7 @@ type internal CompilerService() =
                                 let unsupported () =
                                     diagnostic
                                         methodDeclaration.BodyRange
-                                        "only the IcedTasks resumable Return and TryFinally compensation lambda shapes are supported"
+                                        "the resumable code lambda shape is not supported"
 
                                 match resolveConstructedCliType expectedType constructedType with
                                 | Error error -> Error error
@@ -11352,7 +11415,12 @@ type internal CompilerService() =
                                                     methodDeclaration.BodyRange
                                                     "the bound member result must be an F# function"
 
-                            let typeAsyncWhile guardName computationName range =
+                            let typeAsyncWhile
+                                (builderName: string)
+                                guardName
+                                computationName
+                                range
+                                =
                                 let guardParameterIndex =
                                     parameters
                                     |> List.tryFindIndex (fun parameter ->
@@ -11456,16 +11524,17 @@ type internal CompilerService() =
                                                     End = {
                                                         Offset =
                                                             range.Start.Offset
-                                                            + 5
+                                                            + builderName.Length
                                                         Line = range.Start.Line
                                                         Column =
                                                             range.Start.Column
-                                                            + 5
+                                                            + builderName.Length
                                                     }
                                                 }
 
                                                 Ok(
-                                                    TypedAsyncWhile {
+                                                    TypedComputationExpression.computationWhile {
+                                                        BuilderName = builderName
                                                         GuardParameterIndex = guardParameterIndex
                                                         ComputationParameterIndex =
                                                             computationParameterIndex
@@ -11695,7 +11764,7 @@ type internal CompilerService() =
                                                         $"the instance member call '{memberName}' is ambiguous"
                                 | BoundInstanceMember(receiverName, memberName) ->
                                     typeBoundInstanceMember receiverName memberName
-                                | ComputationExpression("async",
+                                | ComputationExpression(builderName,
                                                         LetExpression(keepGoingName,
                                                                       true,
                                                                       false,
@@ -11723,7 +11792,7 @@ type internal CompilerService() =
                                     && keepGoingName = assignedName
                                     && guardResultName = resultName
                                     ->
-                                    typeAsyncWhile guardName computationName range
+                                    typeAsyncWhile builderName guardName computationName range
                                 | StringLiteral _ ->
                                     diagnostic
                                         methodDeclaration.BodyRange
@@ -11821,8 +11890,8 @@ type internal CompilerService() =
                                 let range =
                                     match body with
                                     | TypedResumableCode expression -> expression.Range
-                                    | TypedAsyncWhile expression -> expression.Range
-                                    | TypedCancellableTaskSequential expression ->
+                                    | TypedComputation (ComputationWhileLowering expression) -> expression.Range
+                                    | TypedComputation (SequenceAggregationLowering expression) ->
                                         let builderStart = expression.Range.Start
 
                                         {
@@ -11831,10 +11900,10 @@ type internal CompilerService() =
                                                 builderStart with
                                                     Offset =
                                                         builderStart.Offset
-                                                        + "cancellableTask".Length
+                                                        + expression.BuilderName.Length
                                                     Column =
                                                         builderStart.Column
-                                                        + "cancellableTask".Length
+                                                        + expression.BuilderName.Length
                                             }
                                         }
                                     | TypedIntegerLiteral _
@@ -11856,12 +11925,12 @@ type internal CompilerService() =
                                     | TypedUnitLambda _
                                     | TypedFunctionLambda _
                                     | TypedDelegateLambda _
-                                    | TypedValueTaskBind _
-                                    | TypedValueTaskApply _
-                                    | TypedValueTaskZip _
-                                    | TypedColdTaskParallelZip _
-                                    | TypedTaskTryFinally _
-                                    | TypedValueTaskOfUnit _
+                                    | TypedComputation (AwaitableBindLowering _)
+                                    | TypedComputation (AwaitableApplyLowering _)
+                                    | TypedComputation (AwaitableZipLowering _)
+                                    | TypedComputation (FunctionParallelZipLowering _)
+                                    | TypedComputation (AwaitableTryFinallyLowering _)
+                                    | TypedComputation (AwaitableUnitConversionLowering _)
                                     | TypedConditional _
                                     | TypedUpcast _
                                     | TypedSequential _
@@ -13043,8 +13112,8 @@ type internal CompilerService() =
                                 methodTypeParametersToTypeParameters expression.LambdaReturnType
                             LambdaBody = methodExpressionTypesToTypeParameters expression.LambdaBody
                     }
-                | TypedValueTaskBind expression ->
-                    TypedValueTaskBind {
+                | TypedComputation (AwaitableBindLowering expression) ->
+                    TypedComputationExpression.awaitableBind {
                         expression with
                             InputType = methodTypeParametersToTypeParameters expression.InputType
                             OutputType = methodTypeParametersToTypeParameters expression.OutputType
@@ -13067,8 +13136,8 @@ type internal CompilerService() =
                             ExceptionType =
                                 methodTypeParametersToTypeParameters expression.ExceptionType
                     }
-                | TypedValueTaskApply expression ->
-                    TypedValueTaskApply {
+                | TypedComputation (AwaitableApplyLowering expression) ->
+                    TypedComputationExpression.awaitableApply {
                         expression with
                             InputType = methodTypeParametersToTypeParameters expression.InputType
                             OutputType = methodTypeParametersToTypeParameters expression.OutputType
@@ -13095,8 +13164,8 @@ type internal CompilerService() =
                             ExceptionType =
                                 methodTypeParametersToTypeParameters expression.ExceptionType
                     }
-                | TypedValueTaskZip expression ->
-                    TypedValueTaskZip {
+                | TypedComputation (AwaitableZipLowering expression) ->
+                    TypedComputationExpression.awaitableZip {
                         expression with
                             LeftType = methodTypeParametersToTypeParameters expression.LeftType
                             RightType = methodTypeParametersToTypeParameters expression.RightType
@@ -13121,7 +13190,7 @@ type internal CompilerService() =
                             ExceptionType =
                                 methodTypeParametersToTypeParameters expression.ExceptionType
                     }
-                | TypedColdTaskParallelZip expression ->
+                | TypedComputation (FunctionParallelZipLowering expression) ->
                     let mappedFunction =
                         match
                             methodExpressionTypesToTypeParameters (
@@ -13131,23 +13200,24 @@ type internal CompilerService() =
                         | TypedFunctionLambda mapped -> mapped
                         | _ ->
                             invalidOp
-                                "the cold-task parallel zip function mapping changed its shape"
+                                "the function parallel zip function mapping changed its shape"
 
                     let mappedZip =
                         match
-                            methodExpressionTypesToTypeParameters (TypedValueTaskZip expression.Zip)
+                            methodExpressionTypesToTypeParameters (TypedComputationExpression.awaitableZip expression.Zip)
                         with
-                        | TypedValueTaskZip mapped -> mapped
+                        | TypedComputation (AwaitableZipLowering mapped) -> mapped
                         | _ ->
                             invalidOp
-                                "the cold-task parallel zip value-task mapping changed its shape"
+                                "the function parallel zip awaitable mapping changed its shape"
 
-                    TypedColdTaskParallelZip {
+                    TypedComputationExpression.functionParallelZip {
                         Function = mappedFunction
                         Zip = mappedZip
+                        IsCancellationTokenBased = expression.IsCancellationTokenBased
                     }
-                | TypedTaskTryFinally expression ->
-                    TypedTaskTryFinally {
+                | TypedComputation (AwaitableTryFinallyLowering expression) ->
+                    TypedComputationExpression.awaitableTryFinally {
                         expression with
                             ResultType = methodTypeParametersToTypeParameters expression.ResultType
                             NonGenericTaskType =
@@ -13170,8 +13240,8 @@ type internal CompilerService() =
                             ExceptionType =
                                 methodTypeParametersToTypeParameters expression.ExceptionType
                     }
-                | TypedAsyncWhile expression ->
-                    TypedAsyncWhile {
+                | TypedComputation (ComputationWhileLowering expression) ->
+                    TypedComputationExpression.computationWhile {
                         expression with
                             UnitType = methodTypeParametersToTypeParameters expression.UnitType
                             AsyncBooleanType =
@@ -13179,8 +13249,8 @@ type internal CompilerService() =
                             AsyncUnitType =
                                 methodTypeParametersToTypeParameters expression.AsyncUnitType
                     }
-                | TypedCancellableTaskSequential expression ->
-                    TypedCancellableTaskSequential {
+                | TypedComputation (SequenceAggregationLowering expression) ->
+                    TypedComputationExpression.sequenceAggregation {
                         expression with
                             ElementType =
                                 methodTypeParametersToTypeParameters expression.ElementType
@@ -13201,8 +13271,8 @@ type internal CompilerService() =
                                     expression.CancellationTokenType
                             UnitType = methodTypeParametersToTypeParameters expression.UnitType
                     }
-                | TypedValueTaskOfUnit expression ->
-                    TypedValueTaskOfUnit {
+                | TypedComputation (AwaitableUnitConversionLowering expression) ->
+                    TypedComputationExpression.awaitableUnitConversion {
                         expression with
                             SourceValueTaskType =
                                 methodTypeParametersToTypeParameters expression.SourceValueTaskType
@@ -13692,7 +13762,7 @@ type internal CompilerService() =
 
             let valueTaskBindHelperLayout
                 (methodDeclaration: TypedMethodDeclaration)
-                (expression: TypedValueTaskBindExpression)
+                (expression: TypedAwaitableBindLowering)
                 =
                 let stableId =
                     methodDeclaration.StableId
@@ -13737,9 +13807,9 @@ type internal CompilerService() =
                     DefinitionType = instantiateClosure typeReference definitionArguments
                     DefinitionExpression =
                         match
-                            methodExpressionTypesToTypeParameters (TypedValueTaskBind expression)
+                            methodExpressionTypesToTypeParameters (TypedComputationExpression.awaitableBind expression)
                         with
-                        | TypedValueTaskBind mapped -> mapped
+                        | TypedComputation (AwaitableBindLowering mapped) -> mapped
                         | _ -> invalidOp "the value-task bind expression mapping changed its shape"
                     CompletedStableId =
                         stableId
@@ -13751,7 +13821,7 @@ type internal CompilerService() =
 
             let valueTaskApplyHelperLayout
                 (methodDeclaration: TypedMethodDeclaration)
-                (expression: TypedValueTaskApplyExpression)
+                (expression: TypedAwaitableApplyLowering)
                 =
                 let stableId =
                     methodDeclaration.StableId
@@ -13796,9 +13866,9 @@ type internal CompilerService() =
                     DefinitionType = instantiateClosure typeReference definitionArguments
                     DefinitionExpression =
                         match
-                            methodExpressionTypesToTypeParameters (TypedValueTaskApply expression)
+                            methodExpressionTypesToTypeParameters (TypedComputationExpression.awaitableApply expression)
                         with
-                        | TypedValueTaskApply mapped -> mapped
+                        | TypedComputation (AwaitableApplyLowering mapped) -> mapped
                         | _ -> invalidOp "the value-task apply expression mapping changed its shape"
                     CompletedStableId =
                         stableId
@@ -13813,7 +13883,7 @@ type internal CompilerService() =
 
             let valueTaskZipHelperLayout
                 (methodDeclaration: TypedMethodDeclaration)
-                (expression: TypedValueTaskZipExpression)
+                (expression: TypedAwaitableZipLowering)
                 =
                 let stableId =
                     methodDeclaration.StableId
@@ -13858,9 +13928,9 @@ type internal CompilerService() =
                     DefinitionType = instantiateClosure typeReference definitionArguments
                     DefinitionExpression =
                         match
-                            methodExpressionTypesToTypeParameters (TypedValueTaskZip expression)
+                            methodExpressionTypesToTypeParameters (TypedComputationExpression.awaitableZip expression)
                         with
-                        | TypedValueTaskZip mapped -> mapped
+                        | TypedComputation (AwaitableZipLowering mapped) -> mapped
                         | _ -> invalidOp "the value-task zip expression mapping changed its shape"
                     CompletedStableId =
                         stableId
@@ -13875,7 +13945,7 @@ type internal CompilerService() =
 
             let valueTaskOfUnitHelperLayout
                 (methodDeclaration: TypedMethodDeclaration)
-                (expression: TypedValueTaskOfUnitExpression)
+                (expression: TypedAwaitableUnitConversionLowering)
                 =
                 let stableId =
                     methodDeclaration.StableId
@@ -13920,9 +13990,9 @@ type internal CompilerService() =
                     DefinitionType = instantiateClosure typeReference definitionArguments
                     DefinitionExpression =
                         match
-                            methodExpressionTypesToTypeParameters (TypedValueTaskOfUnit expression)
+                            methodExpressionTypesToTypeParameters (TypedComputationExpression.awaitableUnitConversion expression)
                         with
-                        | TypedValueTaskOfUnit mapped -> mapped
+                        | TypedComputation (AwaitableUnitConversionLowering mapped) -> mapped
                         | _ -> invalidOp "the value-task unit expression mapping changed its shape"
                     ContinuationStableId =
                         stableId
@@ -13931,7 +14001,7 @@ type internal CompilerService() =
 
             let taskTryFinallyHelperLayout
                 (methodDeclaration: TypedMethodDeclaration)
-                (expression: TypedTaskTryFinallyExpression)
+                (expression: TypedAwaitableTryFinallyLowering)
                 =
                 let stableId =
                     methodDeclaration.StableId
@@ -13971,9 +14041,9 @@ type internal CompilerService() =
 
                 let definitionExpression =
                     match
-                        methodExpressionTypesToTypeParameters (TypedTaskTryFinally expression)
+                        methodExpressionTypesToTypeParameters (TypedComputationExpression.awaitableTryFinally expression)
                     with
-                    | TypedTaskTryFinally mapped -> mapped
+                    | TypedComputation (AwaitableTryFinallyLowering mapped) -> mapped
                     | _ -> invalidOp "the task try-finally expression mapping changed its shape"
 
                 {|
@@ -14001,7 +14071,7 @@ type internal CompilerService() =
 
             let asyncWhileHelperLayout
                 (methodDeclaration: TypedMethodDeclaration)
-                (expression: TypedAsyncWhileExpression)
+                (expression: TypedComputationWhileLowering)
                 =
                 let stableId =
                     methodDeclaration.StableId
@@ -14060,9 +14130,9 @@ type internal CompilerService() =
                     UnitClosureType = unitClosureType
                 |}
 
-            let cancellableTaskSequentialHelperLayout
+            let sequenceAggregationHelperLayout
                 (methodDeclaration: TypedMethodDeclaration)
-                (expression: TypedCancellableTaskSequentialExpression)
+                (expression: TypedSequenceAggregationLowering)
                 =
                 let stableId =
                     methodDeclaration.StableId
@@ -14071,7 +14141,7 @@ type internal CompilerService() =
 
                 let name =
                     methodDeclaration.Name
-                    + "@CancellableTaskSequential"
+                    + "@SequenceAggregation"
                     + expression.Range.Start.Line.ToString(CultureInfo.InvariantCulture)
 
                 let typeReference helperStableId helperName = {
@@ -14127,13 +14197,13 @@ type internal CompilerService() =
                 let definitionExpression =
                     match
                         methodExpressionTypesToTypeParameters (
-                            TypedCancellableTaskSequential expression
+                            TypedComputationExpression.sequenceAggregation expression
                         )
                     with
-                    | TypedCancellableTaskSequential mapped -> mapped
+                    | TypedComputation (SequenceAggregationLowering mapped) -> mapped
                     | _ ->
                         invalidOp
-                            "the cancellable-task sequential expression mapping changed its shape"
+                            "the sequence aggregation expression mapping changed its shape"
 
                 {|
                     StableId = stableId
@@ -14600,7 +14670,7 @@ type internal CompilerService() =
             let valueTaskOfUnitInstructions
                 (methodDeclaration: TypedMethodDeclaration)
                 kind
-                (expression: TypedValueTaskOfUnitExpression)
+                (expression: TypedAwaitableUnitConversionLowering)
                 =
                 let layout = valueTaskOfUnitHelperLayout methodDeclaration expression
 
@@ -14764,7 +14834,7 @@ type internal CompilerService() =
             let asyncWhileInstructions
                 (methodDeclaration: TypedMethodDeclaration)
                 kind
-                (expression: TypedAsyncWhileExpression)
+                (expression: TypedComputationWhileLowering)
                 =
                 let layout = asyncWhileHelperLayout methodDeclaration expression
 
@@ -14903,12 +14973,12 @@ type internal CompilerService() =
                     CallGenericMethod(delay, [ expression.UnitType ])
                 ]
 
-            let cancellableTaskSequentialInstructions
+            let sequenceAggregationInstructions
                 (methodDeclaration: TypedMethodDeclaration)
                 kind
-                (expression: TypedCancellableTaskSequentialExpression)
+                (expression: TypedSequenceAggregationLowering)
                 =
-                let layout = cancellableTaskSequentialHelperLayout methodDeclaration expression
+                let layout = sequenceAggregationHelperLayout methodDeclaration expression
 
                 let constructor = {
                     DeclaringType = CliDeclaringType layout.MethodOuterType
@@ -14992,7 +15062,7 @@ type internal CompilerService() =
             let taskTryFinallyInstructions
                 (methodDeclaration: TypedMethodDeclaration)
                 kind
-                (expression: TypedTaskTryFinallyExpression)
+                (expression: TypedAwaitableTryFinallyLowering)
                 =
                 let layout = taskTryFinallyHelperLayout methodDeclaration expression
 
@@ -15415,9 +15485,9 @@ type internal CompilerService() =
                             Type = valueType
                         }
                     ]
-                | TypedValueTaskOfUnit expression ->
+                | TypedComputation (AwaitableUnitConversionLowering expression) ->
                     valueTaskOfUnitInstructions methodDeclaration kind expression, []
-                | TypedAsyncWhile expression ->
+                | TypedComputation (ComputationWhileLowering expression) ->
                     asyncWhileInstructions methodDeclaration kind expression, []
                 | TypedFunctionApplication(functionType,
                                            domainType,
@@ -16006,17 +16076,17 @@ type internal CompilerService() =
                     functionLambdaConstructionInstructions kind expression, []
                 | TypedDelegateLambda expression ->
                     delegateLambdaConstructionInstructions kind expression, []
-                | TypedColdTaskParallelZip expression ->
+                | TypedComputation (FunctionParallelZipLowering expression) ->
                     functionLambdaConstructionInstructions kind expression.Function, []
-                | TypedTaskTryFinally expression ->
+                | TypedComputation (AwaitableTryFinallyLowering expression) ->
                     taskTryFinallyInstructions methodDeclaration kind expression, []
                 | TypedBoundInstanceMethod _
                 | TypedUnitLambda _
-                | TypedValueTaskBind _
-                | TypedValueTaskApply _
-                | TypedValueTaskZip _
-                | TypedCancellableTaskSequential _
-                | TypedValueTaskOfUnit _
+                | TypedComputation (AwaitableBindLowering _)
+                | TypedComputation (AwaitableApplyLowering _)
+                | TypedComputation (AwaitableZipLowering _)
+                | TypedComputation (SequenceAggregationLowering _)
+                | TypedComputation (AwaitableUnitConversionLowering _)
                 | TypedResumableCode _
                 | TypedResumableTryFinally _
                 | TypedTraitCall _ -> invalidOp "this expression cannot be lowered as a local value"
@@ -16046,27 +16116,27 @@ type internal CompilerService() =
                         Return
                     ],
                     []
-                | TypedColdTaskParallelZip expression ->
+                | TypedComputation (FunctionParallelZipLowering expression) ->
                     functionLambdaConstructionInstructions kind expression.Function
                     @ [ Return ],
                     []
-                | TypedTaskTryFinally expression ->
+                | TypedComputation (AwaitableTryFinallyLowering expression) ->
                     taskTryFinallyInstructions methodDeclaration kind expression
                     @ [ Return ],
                     []
-                | TypedAsyncWhile expression ->
+                | TypedComputation (ComputationWhileLowering expression) ->
                     asyncWhileInstructions methodDeclaration kind expression
                     @ [ Return ],
                     []
-                | TypedCancellableTaskSequential expression ->
-                    cancellableTaskSequentialInstructions methodDeclaration kind expression
+                | TypedComputation (SequenceAggregationLowering expression) ->
+                    sequenceAggregationInstructions methodDeclaration kind expression
                     @ [ Return ],
                     []
-                | TypedValueTaskOfUnit expression ->
+                | TypedComputation (AwaitableUnitConversionLowering expression) ->
                     valueTaskOfUnitInstructions methodDeclaration kind expression
                     @ [ Return ],
                     []
-                | TypedValueTaskBind expression ->
+                | TypedComputation (AwaitableBindLowering expression) ->
                     let layout = valueTaskBindHelperLayout methodDeclaration expression
                     let definition = layout.DefinitionExpression
                     let slowPath = freshLabel ()
@@ -16270,7 +16340,7 @@ type internal CompilerService() =
                         Return
                     ],
                     []
-                | TypedValueTaskApply expression ->
+                | TypedComputation (AwaitableApplyLowering expression) ->
                     let layout = valueTaskApplyHelperLayout methodDeclaration expression
                     let definition = layout.DefinitionExpression
                     let slowPath = freshLabel ()
@@ -16488,7 +16558,7 @@ type internal CompilerService() =
                         Return
                     ],
                     []
-                | TypedValueTaskZip expression ->
+                | TypedComputation (AwaitableZipLowering expression) ->
                     let layout = valueTaskZipHelperLayout methodDeclaration expression
                     let definition = layout.DefinitionExpression
                     let slowPath = freshLabel ()
@@ -17049,14 +17119,14 @@ type internal CompilerService() =
                         | TypedUnitLambda _
                         | TypedFunctionLambda _
                         | TypedDelegateLambda _
-                        | TypedValueTaskBind _
-                        | TypedValueTaskApply _
-                        | TypedValueTaskZip _
-                        | TypedColdTaskParallelZip _
-                        | TypedTaskTryFinally _
-                        | TypedAsyncWhile _
-                        | TypedCancellableTaskSequential _
-                        | TypedValueTaskOfUnit _
+                        | TypedComputation (AwaitableBindLowering _)
+                        | TypedComputation (AwaitableApplyLowering _)
+                        | TypedComputation (AwaitableZipLowering _)
+                        | TypedComputation (FunctionParallelZipLowering _)
+                        | TypedComputation (AwaitableTryFinallyLowering _)
+                        | TypedComputation (ComputationWhileLowering _)
+                        | TypedComputation (SequenceAggregationLowering _)
+                        | TypedComputation (AwaitableUnitConversionLowering _)
                         | TypedResumableTryFinally _ -> 8
                         | TypedIntegerLiteral _
                         | TypedStringLiteral _
@@ -17653,7 +17723,7 @@ type internal CompilerService() =
                             moduleDeclaration.Methods
                             |> List.choose (fun methodDeclaration ->
                                 match methodDeclaration.Body with
-                                | TypedValueTaskBind expression ->
+                                | TypedComputation (AwaitableBindLowering expression) ->
                                     let layout =
                                         valueTaskBindHelperLayout methodDeclaration expression
 
@@ -18120,7 +18190,7 @@ type internal CompilerService() =
                             moduleDeclaration.Methods
                             |> List.choose (fun methodDeclaration ->
                                 match methodDeclaration.Body with
-                                | TypedValueTaskApply applyExpression ->
+                                | TypedComputation (AwaitableApplyLowering applyExpression) ->
                                     let layout =
                                         valueTaskApplyHelperLayout
                                             methodDeclaration
@@ -18905,8 +18975,8 @@ type internal CompilerService() =
 
             let rec tryFindValueTaskZip =
                 function
-                | TypedValueTaskZip expression -> Some expression
-                | TypedColdTaskParallelZip { Zip = expression } -> Some expression
+                | TypedComputation (AwaitableZipLowering expression) -> Some expression
+                | TypedComputation (FunctionParallelZipLowering { Zip = expression }) -> Some expression
                 | TypedLet(_, _, _, _, value, body, _, _) ->
                     tryFindValueTaskZip value
                     |> Option.orElseWith (fun () -> tryFindValueTaskZip body)
@@ -19702,15 +19772,15 @@ type internal CompilerService() =
                     )
                 )
 
-            let rec tryFindColdTaskParallelZip =
+            let rec tryFindFunctionParallelZip =
                 function
-                | TypedColdTaskParallelZip expression -> Some expression
+                | TypedComputation (FunctionParallelZipLowering expression) -> Some expression
                 | TypedLet(_, _, _, _, value, body, _, _) ->
-                    tryFindColdTaskParallelZip value
-                    |> Option.orElseWith (fun () -> tryFindColdTaskParallelZip body)
+                    tryFindFunctionParallelZip value
+                    |> Option.orElseWith (fun () -> tryFindFunctionParallelZip body)
                 | _ -> None
 
-            let coldTaskParallelZipClosureTypes =
+            let functionParallelZipClosureTypes =
                 modulesWithContentHashes
                 |> List.collect (fun (typed, declarationsWithContentHashes) ->
                     declarationsWithContentHashes
@@ -19719,23 +19789,23 @@ type internal CompilerService() =
                         | TypedNestedModule moduleDeclaration ->
                             moduleDeclaration.Methods
                             |> List.choose (fun methodDeclaration ->
-                                match tryFindColdTaskParallelZip methodDeclaration.Body with
-                                | Some coldTaskExpression ->
+                                match tryFindFunctionParallelZip methodDeclaration.Body with
+                                | Some parallelExpression ->
                                     let functionExpression =
                                         match
                                             methodExpressionTypesToTypeParameters (
-                                                TypedFunctionLambda coldTaskExpression.Function
+                                                TypedFunctionLambda parallelExpression.Function
                                             )
                                         with
                                         | TypedFunctionLambda mapped -> mapped
                                         | _ ->
                                             invalidOp
-                                                "the cold-task parallel zip closure mapping changed its shape"
+                                                "the function parallel zip closure mapping changed its shape"
 
                                     let layout =
                                         valueTaskZipHelperLayout
                                             methodDeclaration
-                                            coldTaskExpression.Zip
+                                            parallelExpression.Zip
 
                                     let zipExpression = layout.DefinitionExpression
 
@@ -19746,7 +19816,7 @@ type internal CompilerService() =
                                             typeReference.DeclarationId
                                         | _ ->
                                             invalidOp
-                                                "the cold-task parallel zip closure must be a named CLI type"
+                                                "the function parallel zip closure must be a named CLI type"
 
                                     let constructorStableId =
                                         closureStableId
@@ -19759,10 +19829,10 @@ type internal CompilerService() =
                                     let captures = functionExpression.Captures
 
                                     let leftCapture =
-                                        captures.[coldTaskExpression.Zip.LeftParameterIndex]
+                                        captures.[parallelExpression.Zip.LeftParameterIndex]
 
                                     let rightCapture =
-                                        captures.[coldTaskExpression.Zip.RightParameterIndex]
+                                        captures.[parallelExpression.Zip.RightParameterIndex]
 
                                     let captureFieldReference capture = {
                                         DeclaringType =
@@ -19794,7 +19864,7 @@ type internal CompilerService() =
                                         )
 
                                     let isCancellable =
-                                        zipExpression.BuilderName = "cancellableValueTask"
+                                        parallelExpression.IsCancellationTokenBased
 
                                     let objectConstructor = {
                                         DeclaringType =
@@ -20247,7 +20317,7 @@ type internal CompilerService() =
 
             let rec valueTaskOfUnitExpressions =
                 function
-                | TypedValueTaskOfUnit expression -> [ expression ]
+                | TypedComputation (AwaitableUnitConversionLowering expression) -> [ expression ]
                 | TypedLet(_, _, _, _, value, body, _, _) ->
                     valueTaskOfUnitExpressions value
                     @ valueTaskOfUnitExpressions body
@@ -20328,13 +20398,13 @@ type internal CompilerService() =
                 | TypedDefaultValue _
                 | TypedBoundInstanceMethod _
                 | TypedUnitLambda _
-                | TypedValueTaskBind _
-                | TypedValueTaskApply _
-                | TypedValueTaskZip _
-                | TypedColdTaskParallelZip _
-                | TypedTaskTryFinally _
-                | TypedAsyncWhile _
-                | TypedCancellableTaskSequential _
+                | TypedComputation (AwaitableBindLowering _)
+                | TypedComputation (AwaitableApplyLowering _)
+                | TypedComputation (AwaitableZipLowering _)
+                | TypedComputation (FunctionParallelZipLowering _)
+                | TypedComputation (AwaitableTryFinallyLowering _)
+                | TypedComputation (ComputationWhileLowering _)
+                | TypedComputation (SequenceAggregationLowering _)
                 | TypedResumableCode _
                 | TypedResumableTryFinally _
                 | TypedTraitCall _ -> []
@@ -20608,7 +20678,7 @@ type internal CompilerService() =
                         |> declarationMethods
                         |> List.collect (fun methodDeclaration ->
                             match methodDeclaration.Body with
-                            | TypedAsyncWhile expression ->
+                            | TypedComputation (ComputationWhileLowering expression) ->
                                 let layout = asyncWhileHelperLayout methodDeclaration expression
 
                                 let objectConstructor = {
@@ -21399,7 +21469,7 @@ type internal CompilerService() =
                 )
                 |> List.collect id
 
-            let cancellableTaskSequentialHelperTypes =
+            let sequenceAggregationHelperTypes =
                 modulesWithContentHashes
                 |> List.collect (fun (typed, declarationsWithContentHashes) ->
                     let rec nestedModuleMethods (moduleDeclaration: TypedNestedModuleDeclaration) = [
@@ -21448,9 +21518,9 @@ type internal CompilerService() =
                         |> declarationMethods
                         |> List.collect (fun (methodDeclaration, enclosingTypeStableId) ->
                             match methodDeclaration.Body with
-                            | TypedCancellableTaskSequential sourceExpression ->
+                            | TypedComputation (SequenceAggregationLowering sourceExpression) ->
                                 let layout =
-                                    cancellableTaskSequentialHelperLayout
+                                    sequenceAggregationHelperLayout
                                         methodDeclaration
                                         sourceExpression
 
@@ -22459,7 +22529,7 @@ type internal CompilerService() =
                                 let methodDeclaration = objectMethodDeclaration.Method
 
                                 match methodDeclaration.Body with
-                                | TypedTaskTryFinally sourceExpression ->
+                                | TypedComputation (AwaitableTryFinallyLowering sourceExpression) ->
                                     let layout =
                                         taskTryFinallyHelperLayout
                                             methodDeclaration
@@ -23122,14 +23192,14 @@ type internal CompilerService() =
                 | TypedDefaultValue _
                 | TypedBoundInstanceMethod _
                 | TypedUnitLambda _
-                | TypedValueTaskBind _
-                | TypedValueTaskApply _
-                | TypedValueTaskZip _
-                | TypedColdTaskParallelZip _
-                | TypedTaskTryFinally _
-                | TypedAsyncWhile _
-                | TypedCancellableTaskSequential _
-                | TypedValueTaskOfUnit _
+                | TypedComputation (AwaitableBindLowering _)
+                | TypedComputation (AwaitableApplyLowering _)
+                | TypedComputation (AwaitableZipLowering _)
+                | TypedComputation (FunctionParallelZipLowering _)
+                | TypedComputation (AwaitableTryFinallyLowering _)
+                | TypedComputation (ComputationWhileLowering _)
+                | TypedComputation (SequenceAggregationLowering _)
+                | TypedComputation (AwaitableUnitConversionLowering _)
                 | TypedResumableCode _
                 | TypedResumableTryFinally _
                 | TypedTraitCall _ -> []
@@ -23216,14 +23286,14 @@ type internal CompilerService() =
                 | TypedDefaultValue _
                 | TypedBoundInstanceMethod _
                 | TypedUnitLambda _
-                | TypedValueTaskBind _
-                | TypedValueTaskApply _
-                | TypedValueTaskZip _
-                | TypedColdTaskParallelZip _
-                | TypedTaskTryFinally _
-                | TypedAsyncWhile _
-                | TypedCancellableTaskSequential _
-                | TypedValueTaskOfUnit _
+                | TypedComputation (AwaitableBindLowering _)
+                | TypedComputation (AwaitableApplyLowering _)
+                | TypedComputation (AwaitableZipLowering _)
+                | TypedComputation (FunctionParallelZipLowering _)
+                | TypedComputation (AwaitableTryFinallyLowering _)
+                | TypedComputation (ComputationWhileLowering _)
+                | TypedComputation (SequenceAggregationLowering _)
+                | TypedComputation (AwaitableUnitConversionLowering _)
                 | TypedResumableCode _
                 | TypedResumableTryFinally _
                 | TypedTraitCall _ -> []
@@ -23310,14 +23380,14 @@ type internal CompilerService() =
                 | TypedDefaultValue _
                 | TypedBoundInstanceMethod _
                 | TypedUnitLambda _
-                | TypedValueTaskBind _
-                | TypedValueTaskApply _
-                | TypedValueTaskZip _
-                | TypedColdTaskParallelZip _
-                | TypedTaskTryFinally _
-                | TypedAsyncWhile _
-                | TypedCancellableTaskSequential _
-                | TypedValueTaskOfUnit _
+                | TypedComputation (AwaitableBindLowering _)
+                | TypedComputation (AwaitableApplyLowering _)
+                | TypedComputation (AwaitableZipLowering _)
+                | TypedComputation (FunctionParallelZipLowering _)
+                | TypedComputation (AwaitableTryFinallyLowering _)
+                | TypedComputation (ComputationWhileLowering _)
+                | TypedComputation (SequenceAggregationLowering _)
+                | TypedComputation (AwaitableUnitConversionLowering _)
                 | TypedResumableCode _
                 | TypedResumableTryFinally _
                 | TypedTraitCall _ -> []
@@ -23791,14 +23861,14 @@ type internal CompilerService() =
                                     | TypedUnitLambda _
                                     | TypedFunctionLambda _
                                     | TypedDelegateLambda _
-                                    | TypedValueTaskBind _
-                                    | TypedValueTaskApply _
-                                    | TypedValueTaskZip _
-                                    | TypedColdTaskParallelZip _
-                                    | TypedTaskTryFinally _
-                                    | TypedAsyncWhile _
-                                    | TypedCancellableTaskSequential _
-                                    | TypedValueTaskOfUnit _
+                                    | TypedComputation (AwaitableBindLowering _)
+                                    | TypedComputation (AwaitableApplyLowering _)
+                                    | TypedComputation (AwaitableZipLowering _)
+                                    | TypedComputation (FunctionParallelZipLowering _)
+                                    | TypedComputation (AwaitableTryFinallyLowering _)
+                                    | TypedComputation (ComputationWhileLowering _)
+                                    | TypedComputation (SequenceAggregationLowering _)
+                                    | TypedComputation (AwaitableUnitConversionLowering _)
                                     | TypedConditional _
                                     | TypedUpcast _
                                     | TypedSequential _
@@ -24199,14 +24269,14 @@ type internal CompilerService() =
                                 | TypedUnitLambda _
                                 | TypedFunctionLambda _
                                 | TypedDelegateLambda _
-                                | TypedValueTaskBind _
-                                | TypedValueTaskApply _
-                                | TypedValueTaskZip _
-                                | TypedColdTaskParallelZip _
-                                | TypedTaskTryFinally _
-                                | TypedAsyncWhile _
-                                | TypedCancellableTaskSequential _
-                                | TypedValueTaskOfUnit _
+                                | TypedComputation (AwaitableBindLowering _)
+                                | TypedComputation (AwaitableApplyLowering _)
+                                | TypedComputation (AwaitableZipLowering _)
+                                | TypedComputation (FunctionParallelZipLowering _)
+                                | TypedComputation (AwaitableTryFinallyLowering _)
+                                | TypedComputation (ComputationWhileLowering _)
+                                | TypedComputation (SequenceAggregationLowering _)
+                                | TypedComputation (AwaitableUnitConversionLowering _)
                                 | TypedConditional _
                                 | TypedUpcast _
                                 | TypedSequential _
@@ -24405,14 +24475,14 @@ type internal CompilerService() =
                                 | TypedBoundInstanceMethod _
                                 | TypedFunctionLambda _
                                 | TypedDelegateLambda _
-                                | TypedValueTaskBind _
-                                | TypedValueTaskApply _
-                                | TypedValueTaskZip _
-                                | TypedColdTaskParallelZip _
-                                | TypedTaskTryFinally _
-                                | TypedAsyncWhile _
-                                | TypedCancellableTaskSequential _
-                                | TypedValueTaskOfUnit _
+                                | TypedComputation (AwaitableBindLowering _)
+                                | TypedComputation (AwaitableApplyLowering _)
+                                | TypedComputation (AwaitableZipLowering _)
+                                | TypedComputation (FunctionParallelZipLowering _)
+                                | TypedComputation (AwaitableTryFinallyLowering _)
+                                | TypedComputation (ComputationWhileLowering _)
+                                | TypedComputation (SequenceAggregationLowering _)
+                                | TypedComputation (AwaitableUnitConversionLowering _)
                                 | TypedConditional _
                                 | TypedUpcast _
                                 | TypedSequential _
@@ -24994,12 +25064,12 @@ type internal CompilerService() =
                 @ valueTaskBindHelperTypes
                 @ valueTaskApplyHelperTypes
                 @ valueTaskZipHelperTypes
-                @ coldTaskParallelZipClosureTypes
+                @ functionParallelZipClosureTypes
                 @ valueTaskOfUnitHelperTypes
                 @ asyncWhileHelperTypes
                 @ staticTypes
                 @ objectTypes
-                @ cancellableTaskSequentialHelperTypes
+                @ sequenceAggregationHelperTypes
                 @ taskTryFinallyHelperTypes
                 @ objectExpressionTypes
                 @ structTypes

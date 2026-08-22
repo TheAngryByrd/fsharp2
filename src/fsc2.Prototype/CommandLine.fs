@@ -333,8 +333,6 @@ module internal CommandLine =
                 elif isFlag "-g" then
                     portablePdb <- true
                     true
-                elif isFlag "--tailcalls-" then
-                    true
                 elif isFlag "--checknulls+" then
                     checkNulls <- true
                     true

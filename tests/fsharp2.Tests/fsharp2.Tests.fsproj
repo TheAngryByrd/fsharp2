@@ -18,6 +18,7 @@
     </ItemGroup>
     <ItemGroup>
         <Compile Include="CompilerTargetTests.fs" />
+        <Compile Include="CompilerContractTests.fs" />
         <Compile Include="Tests.fs" />
         <Compile Include="Main.fs" />
     </ItemGroup>
