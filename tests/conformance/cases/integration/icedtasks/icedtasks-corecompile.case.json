@@ -1,4 +1,5 @@
 {
+  "documentKind": "case-v1",
   "schemaVersion": 1,
   "caseId": "integration.icedtasks.corecompile",
   "kind": "integration",

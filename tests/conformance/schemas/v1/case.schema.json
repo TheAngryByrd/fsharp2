@@ -5,6 +5,7 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
+    "documentKind",
     "schemaVersion",
     "caseId",
     "kind",
@@ -28,6 +29,7 @@
     "timeout"
   ],
   "properties": {
+    "documentKind": { "const": "case-v1" },
     "schemaVersion": { "const": 1 },
     "caseId": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+$" },
     "kind": { "enum": ["language", "integration"] },
@@ -50,7 +52,8 @@
     "probes": { "type": "array", "items": { "$ref": "#/$defs/probe" } },
     "comparisons": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/comparison" } },
     "cleanup": { "$ref": "#/$defs/cleanup" },
-    "timeout": { "$ref": "#/$defs/timeout" }
+    "timeout": { "$ref": "#/$defs/timeout" },
+    "diagnosticCompatibility": { "$ref": "#/$defs/diagnosticCompatibility" }
   },
   "allOf": [
     {
@@ -66,6 +69,282 @@
     "hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "relativePath": { "type": "string", "pattern": "^(?![A-Za-z]:)(?!/)(?!.*\\\\).+$" },
     "logicalPath": { "type": "string", "pattern": "^/[^\\\\]+$" },
+    "diagnosticCompatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request", "output", "occurrences"],
+      "properties": {
+        "request": { "$ref": "#/$defs/diagnosticRequest" },
+        "output": { "$ref": "#/$defs/diagnosticOutput" },
+        "occurrences": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/diagnosticOccurrence" }
+        }
+      }
+    },
+    "diagnosticRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "warningLevel",
+        "disabledWarnings",
+        "enabledWarnings",
+        "treatWarningsAsErrors",
+        "warningsAsErrors",
+        "warningsNotAsErrors",
+        "maximumErrors",
+        "abortOnError",
+        "preferredUICulture",
+        "localWarningDirectives"
+      ],
+      "properties": {
+        "warningLevel": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "disabledWarnings": { "$ref": "#/$defs/diagnosticCodes" },
+        "enabledWarnings": { "$ref": "#/$defs/diagnosticCodes" },
+        "treatWarningsAsErrors": { "type": "boolean" },
+        "warningsAsErrors": { "$ref": "#/$defs/diagnosticCodes" },
+        "warningsNotAsErrors": { "$ref": "#/$defs/diagnosticCodes" },
+        "maximumErrors": { "type": "integer", "minimum": 1 },
+        "abortOnError": { "type": "boolean" },
+        "preferredUICulture": { "type": "string", "minLength": 1 },
+        "localWarningDirectives": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/localWarningDirective" }
+        }
+      }
+    },
+    "localWarningDirective": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "code", "logicalPath", "range", "scope"],
+      "properties": {
+        "kind": { "const": "nowarn" },
+        "code": { "type": "string", "pattern": "^FS[0-9]{4}$" },
+        "logicalPath": { "$ref": "#/$defs/logicalPath" },
+        "range": { "$ref": "#/$defs/diagnosticRange" },
+        "scope": { "enum": ["file", "line"] }
+      }
+    },
+    "diagnosticCodes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^FS[0-9]{4}$" }
+    },
+    "diagnosticOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fullPaths",
+        "flatErrors",
+        "utf8Output",
+        "diagnosticStyle",
+        "consoleColorMode",
+        "lcid",
+        "preferredUILanguage",
+        "testParserErrorRecovery",
+        "standardOutputRedirected",
+        "standardErrorRedirected"
+      ],
+      "properties": {
+        "fullPaths": { "type": "boolean" },
+        "flatErrors": { "type": "boolean" },
+        "utf8Output": { "type": "boolean" },
+        "diagnosticStyle": { "enum": ["default", "visual-studio", "gcc", "rich", "flat"] },
+        "consoleColorMode": { "enum": ["automatic", "enabled", "disabled"] },
+        "lcid": { "type": ["integer", "null"], "minimum": 0 },
+        "preferredUILanguage": { "type": ["string", "null"], "minLength": 1 },
+        "testParserErrorRecovery": { "type": "boolean" },
+        "standardOutputRedirected": { "type": "boolean" },
+        "standardErrorRedirected": { "type": "boolean" }
+      }
+    },
+    "diagnosticStage": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "command-line" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "phase"],
+          "properties": {
+            "kind": { "const": "compilation" },
+            "phase": {
+              "enum": [
+                "source",
+                "syntax",
+                "resolved-symbols",
+                "typed-declarations",
+                "lowered-code",
+                "optimized-code",
+                "symbolic-emission",
+                "final-linking"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "publication" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "host" } }
+        }
+      ]
+    },
+    "diagnosticRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["startLine", "startColumn", "endLine", "endColumn"],
+      "properties": {
+        "startLine": { "type": "integer", "minimum": 1 },
+        "startColumn": { "type": "integer", "minimum": 0 },
+        "endLine": { "type": "integer", "minimum": 1 },
+        "endColumn": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "diagnosticRawBytes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["offset", "length", "sha256"],
+      "properties": {
+        "offset": { "type": "integer", "minimum": 0 },
+        "length": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "diagnosticRelatedInformation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message", "logicalPath", "range"],
+      "properties": {
+        "message": { "type": "string" },
+        "logicalPath": { "type": ["string", "null"], "pattern": "^/[^\\\\]+$" },
+        "range": {
+          "oneOf": [
+            { "$ref": "#/$defs/diagnosticRange" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "diagnosticOccurrence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "occurrence",
+        "code",
+        "numericCode",
+        "subcategory",
+        "stage",
+        "originalSeverity",
+        "effectiveSeverity",
+        "disposition",
+        "suppression",
+        "message",
+        "logicalPath",
+        "materializedPath",
+        "range",
+        "relatedInformation",
+        "suggestions",
+        "recoveryGroup",
+        "parentOccurrence",
+        "rawBytes",
+        "stream"
+      ],
+      "properties": {
+        "occurrence": { "type": "integer", "minimum": 0 },
+        "code": { "type": "string", "pattern": "^FS[0-9]{4}$" },
+        "numericCode": { "type": "integer", "minimum": 0, "maximum": 9999 },
+        "subcategory": { "type": ["string", "null"] },
+        "stage": { "$ref": "#/$defs/diagnosticStage" },
+        "originalSeverity": { "enum": ["information", "warning", "error"] },
+        "effectiveSeverity": { "enum": ["hidden", "information", "warning", "error"] },
+        "disposition": { "enum": ["emitted", "suppressed"] },
+        "suppression": {
+          "type": ["string", "null"],
+          "enum": [
+            null,
+            "warning-level",
+            "global-nowarn",
+            "local-nowarn",
+            "off-by-default",
+            "language-feature",
+            "maximum-errors",
+            "abort-boundary"
+          ]
+        },
+        "message": { "type": "string" },
+        "logicalPath": { "type": ["string", "null"], "pattern": "^/[^\\\\]+$" },
+        "materializedPath": {
+          "oneOf": [
+            { "$ref": "#/$defs/relativePath" },
+            { "type": "null" }
+          ]
+        },
+        "range": {
+          "oneOf": [
+            { "$ref": "#/$defs/diagnosticRange" },
+            { "type": "null" }
+          ]
+        },
+        "relatedInformation": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/diagnosticRelatedInformation" }
+        },
+        "suggestions": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "recoveryGroup": { "type": ["string", "null"], "minLength": 1 },
+        "parentOccurrence": { "type": ["integer", "null"], "minimum": 0 },
+        "rawBytes": {
+          "oneOf": [
+            { "$ref": "#/$defs/diagnosticRawBytes" },
+            { "type": "null" }
+          ]
+        },
+        "stream": { "type": ["string", "null"], "enum": [null, "stdout", "stderr"] }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "disposition": { "const": "suppressed" } },
+            "required": ["disposition"]
+          },
+          "then": {
+            "properties": {
+              "effectiveSeverity": { "const": "hidden" },
+              "suppression": { "type": "string" },
+              "rawBytes": { "type": "null" },
+              "stream": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "disposition": { "const": "emitted" } },
+            "required": ["disposition"]
+          },
+          "then": {
+            "properties": {
+              "effectiveSeverity": { "enum": ["information", "warning", "error"] },
+              "suppression": { "type": "null" },
+              "rawBytes": { "$ref": "#/$defs/diagnosticRawBytes" },
+              "stream": { "enum": ["stdout", "stderr"] }
+            }
+          }
+        }
+      ]
+    },
     "keyValue": {
       "type": "object",
       "additionalProperties": false,

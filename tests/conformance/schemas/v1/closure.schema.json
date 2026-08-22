@@ -4,18 +4,89 @@
   "title": "FSharp2 ordered reference closure v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "closureId", "family", "targetFramework", "references", "comparison", "review"],
+  "required": ["documentKind", "schemaVersion", "closureId", "family", "targetFramework", "references", "comparison", "review"],
   "properties": {
+    "documentKind": { "const": "closure-expectation-v1" },
     "schemaVersion": { "const": 1 },
     "closureId": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+$" },
     "family": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+$" },
     "targetFramework": { "type": "string", "minLength": 1 },
     "references": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/reference" } },
     "comparison": { "const": "exact-ordered-closure" },
-    "review": { "$ref": "#/$defs/review" }
+    "review": { "$ref": "#/$defs/review" },
+    "diagnosticClosure": { "$ref": "#/$defs/diagnosticClosure" }
   },
   "$defs": {
     "hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "diagnosticDisposition": {
+      "enum": ["reachable", "reserved", "aliased", "retired", "unreachable"]
+    },
+    "workingDiagnosticDisposition": {
+      "enum": ["untriggered", "reachable", "reserved", "aliased", "retired", "unreachable"]
+    },
+    "diagnosticDispositionRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "familyId",
+        "variantId",
+        "workingDisposition",
+        "finalDisposition",
+        "blockingIssue",
+        "evidenceHashes"
+      ],
+      "properties": {
+        "familyId": { "type": "string", "pattern": "^FS[0-9]{4}$" },
+        "variantId": { "type": "string", "pattern": "^FS[0-9]{4}\\.[a-z0-9][a-z0-9.-]*$" },
+        "workingDisposition": { "$ref": "#/$defs/workingDiagnosticDisposition" },
+        "finalDisposition": {
+          "oneOf": [
+            { "$ref": "#/$defs/diagnosticDisposition" },
+            { "type": "null" }
+          ]
+        },
+        "blockingIssue": { "type": ["string", "null"], "pattern": "^#[0-9]+$" },
+        "evidenceHashes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/hash" }
+        }
+      }
+    },
+    "diagnosticClosure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "dispositions"],
+      "properties": {
+        "state": { "enum": ["working", "final"] },
+        "dispositions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/diagnosticDispositionRecord" }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "state": { "const": "final" } },
+            "required": ["state"]
+          },
+          "then": {
+            "properties": {
+              "dispositions": {
+                "items": {
+                  "properties": {
+                    "workingDisposition": { "$ref": "#/$defs/diagnosticDisposition" },
+                    "finalDisposition": { "$ref": "#/$defs/diagnosticDisposition" },
+                    "blockingIssue": { "type": "null" },
+                    "evidenceHashes": { "minItems": 1 }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
     "reference": {
       "type": "object",
       "additionalProperties": false,

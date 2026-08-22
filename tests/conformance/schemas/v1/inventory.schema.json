@@ -4,8 +4,9 @@
   "title": "FSharp2 conformance inventory v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "inventoryId", "family", "caseIds", "positiveCaseIds", "negativeCaseIds", "featureRows", "languageVersions", "optionCells", "artifactKinds", "probeKinds", "review"],
+  "required": ["documentKind", "schemaVersion", "inventoryId", "family", "caseIds", "positiveCaseIds", "negativeCaseIds", "featureRows", "languageVersions", "optionCells", "artifactKinds", "probeKinds", "review"],
   "properties": {
+    "documentKind": { "const": "family-inventory-v1" },
     "schemaVersion": { "const": 1 },
     "inventoryId": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+$" },
     "family": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+$" },
@@ -17,9 +18,288 @@
     "optionCells": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string" } },
     "artifactKinds": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
     "probeKinds": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
-    "review": { "$ref": "#/$defs/review" }
+    "review": { "$ref": "#/$defs/review" },
+    "diagnosticFamilies": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/diagnosticFamily" }
+    }
   },
   "$defs": {
+    "hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "diagnosticEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "sha256"],
+      "properties": {
+        "source": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "diagnosticEvidenceList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/diagnosticEvidence" }
+    },
+    "dynamicNumberSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["boundary"],
+          "properties": {
+            "boundary": { "const": "not-applicable" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "sha256", "boundary", "values"],
+          "properties": {
+            "source": { "type": "string", "minLength": 1 },
+            "sha256": { "$ref": "#/$defs/hash" },
+            "boundary": { "const": "closed" },
+            "values": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "type": "integer", "minimum": 0, "maximum": 9999 }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "sha256", "boundary", "boundaryDescription", "blockingIssue"],
+          "properties": {
+            "source": { "type": "string", "minLength": 1 },
+            "sha256": { "$ref": "#/$defs/hash" },
+            "boundary": { "enum": ["open", "external"] },
+            "boundaryDescription": { "type": "string", "minLength": 1 },
+            "blockingIssue": { "type": "string", "pattern": "^#[0-9]+$" }
+          }
+        }
+      ]
+    },
+    "diagnosticDisposition": {
+      "enum": ["reachable", "reserved", "aliased", "retired", "unreachable"]
+    },
+    "workingDiagnosticDisposition": {
+      "enum": ["untriggered", "reachable", "reserved", "aliased", "retired", "unreachable"]
+    },
+    "diagnosticStage": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "command-line" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "phase"],
+          "properties": {
+            "kind": { "const": "compilation" },
+            "phase": {
+              "enum": [
+                "source",
+                "syntax",
+                "resolved-symbols",
+                "typed-declarations",
+                "lowered-code",
+                "optimized-code",
+                "symbolic-emission",
+                "final-linking"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "publication" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "host" } }
+        }
+      ]
+    },
+    "reachabilityReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["disposition", "evidenceHashes"],
+      "properties": {
+        "disposition": { "$ref": "#/$defs/workingDiagnosticDisposition" },
+        "evidenceHashes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/hash" }
+        }
+      }
+    },
+    "diagnosticPlaceholder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "minLength": 1 }
+      }
+    },
+    "effectiveSeverityCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["condition", "severity"],
+      "properties": {
+        "condition": { "type": "string", "minLength": 1 },
+        "severity": { "enum": ["hidden", "information", "warning", "error"] }
+      }
+    },
+    "diagnosticCulture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["culture", "available", "fallbackCulture"],
+      "properties": {
+        "culture": { "type": "string", "minLength": 1 },
+        "available": { "type": "boolean" },
+        "fallbackCulture": { "type": ["string", "null"], "minLength": 1 }
+      }
+    },
+    "recoveryShape": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recoveryGroup", "parentOccurrence"],
+      "properties": {
+        "recoveryGroup": { "enum": ["none", "nullable", "required"] },
+        "parentOccurrence": { "enum": ["none", "nullable", "required"] }
+      }
+    },
+    "diagnosticVariant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "variantId",
+        "productionKey",
+        "messageIdentity",
+        "placeholders",
+        "originalSeverities",
+        "effectiveSeverityCases",
+        "stages",
+        "subcategories",
+        "languageVersions",
+        "warningLevel",
+        "offByDefault",
+        "optionSensitiveBehavior",
+        "cultures",
+        "triggerCaseIds",
+        "recoveryShape",
+        "relatedInformationShape",
+        "oracleEvidenceHashes"
+      ],
+      "properties": {
+        "variantId": { "type": "string", "pattern": "^FS[0-9]{4}\\.[a-z0-9][a-z0-9.-]*$" },
+        "productionKey": { "type": "string", "minLength": 1 },
+        "messageIdentity": { "type": "string", "minLength": 1 },
+        "placeholders": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/diagnosticPlaceholder" }
+        },
+        "originalSeverities": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["information", "warning", "error"] }
+        },
+        "effectiveSeverityCases": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/effectiveSeverityCase" }
+        },
+        "stages": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/diagnosticStage" }
+        },
+        "subcategories": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "languageVersions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "warningLevel": { "type": ["integer", "null"], "minimum": 0, "maximum": 5 },
+        "offByDefault": { "type": "boolean" },
+        "optionSensitiveBehavior": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "cultures": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/diagnosticCulture" }
+        },
+        "triggerCaseIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+$" }
+        },
+        "recoveryShape": { "$ref": "#/$defs/recoveryShape" },
+        "relatedInformationShape": { "enum": ["none", "ordered"] },
+        "oracleEvidenceHashes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/hash" }
+        }
+      }
+    },
+    "diagnosticFamily": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "familyId",
+        "numericCode",
+        "candidateStatus",
+        "sourceMappingEvidence",
+        "neutralResourceEvidence",
+        "satelliteResourceEvidence",
+        "upstreamBaselineEvidence",
+        "dynamicNumberSource",
+        "variantIds",
+        "reachabilityReview",
+        "blockingFeatureIssue",
+        "variants"
+      ],
+      "properties": {
+        "familyId": { "type": "string", "pattern": "^FS[0-9]{4}$" },
+        "numericCode": { "type": "integer", "minimum": 0, "maximum": 9999 },
+        "candidateStatus": { "const": "candidate" },
+        "sourceMappingEvidence": { "$ref": "#/$defs/diagnosticEvidenceList" },
+        "neutralResourceEvidence": { "$ref": "#/$defs/diagnosticEvidenceList" },
+        "satelliteResourceEvidence": { "$ref": "#/$defs/diagnosticEvidenceList" },
+        "upstreamBaselineEvidence": { "$ref": "#/$defs/diagnosticEvidenceList" },
+        "dynamicNumberSource": { "$ref": "#/$defs/dynamicNumberSource" },
+        "variantIds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^FS[0-9]{4}\\.[a-z0-9][a-z0-9.-]*$" }
+        },
+        "reachabilityReview": { "$ref": "#/$defs/reachabilityReview" },
+        "blockingFeatureIssue": { "type": ["string", "null"], "pattern": "^#[0-9]+$" },
+        "variants": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/diagnosticVariant" }
+        }
+      }
+    },
     "review": {
       "type": "object",
       "additionalProperties": false,

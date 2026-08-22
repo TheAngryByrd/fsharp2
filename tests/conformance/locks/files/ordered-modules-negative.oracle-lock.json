@@ -1,9 +1,10 @@
 {
+  "documentKind": "oracle-lock-v1",
   "schemaVersion": 1,
   "lockId": "files.ordered-modules-negative",
   "family": "files",
   "caseId": "language.files.ordered-modules-negative",
-  "caseHash": "sha256:272ed08c672bfeb9585c7dc7d5f81b2d5b4ba8ec394be5b6573a5a23bb343824",
+  "caseHash": "sha256:da5c71635df0ebc81d346007a200fcb25d475763a1f2ee02c51fac7d14a971a4",
   "oracleIdentity": {
     "sdkVersion": "10.0.110",
     "sdkCommit": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd",

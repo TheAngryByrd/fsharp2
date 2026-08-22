@@ -1,9 +1,10 @@
 {
+  "documentKind": "oracle-lock-v1",
   "schemaVersion": 1,
   "lockId": "generics.inferred-function-negative",
   "family": "generics",
   "caseId": "language.generics.inferred-function-negative",
-  "caseHash": "sha256:a657600e3902a19f01f4a11864e39e9ac0997a755985b5c33c24fe184dc86f89",
+  "caseHash": "sha256:224474008fe278258ba2313841a0e46edebd508f6c0e793a4f84db5d828d4755",
   "oracleIdentity": {
     "sdkVersion": "10.0.110",
     "sdkCommit": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd",

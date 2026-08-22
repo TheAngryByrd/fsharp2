@@ -1,9 +1,10 @@
 {
+  "documentKind": "oracle-lock-v1",
   "schemaVersion": 1,
   "lockId": "signatures.contract-negative",
   "family": "signatures",
   "caseId": "language.signatures.contract-negative",
-  "caseHash": "sha256:56e940656cb857ccefddf32d5714d5598a4fc456903dafce6f7f79e6dcb0ee4e",
+  "caseHash": "sha256:cb9990ebba4ea2f0ee4f5aaac965c86f22be9544126594b64cee02a067b0a734",
   "oracleIdentity": {
     "sdkVersion": "10.0.110",
     "sdkCommit": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd",

@@ -1,9 +1,10 @@
 {
+  "documentKind": "oracle-lock-v1",
   "schemaVersion": 1,
   "lockId": "bindings.value-function-type-negative",
   "family": "bindings",
   "caseId": "language.bindings.value-function-type-negative",
-  "caseHash": "sha256:92fe634544fcd45eff563132195f82da98dddef43543d51bbe55514245fdf449",
+  "caseHash": "sha256:90d6d75c1993c75c50635700915e65ad78fcd3cb39f8a6c89c7d43632cd1b127",
   "oracleIdentity": {
     "sdkVersion": "10.0.110",
     "sdkCommit": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd",

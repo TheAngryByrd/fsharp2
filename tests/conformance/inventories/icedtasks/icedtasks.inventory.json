@@ -1,4 +1,5 @@
 {
+  "documentKind": "family-inventory-v1",
   "schemaVersion": 1,
   "inventoryId": "icedtasks.inventory",
   "family": "icedtasks",

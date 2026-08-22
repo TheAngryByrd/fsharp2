@@ -1,4 +1,5 @@
 {
+  "documentKind": "closure-expectation-v1",
   "schemaVersion": 1,
   "closureId": "files-net10-closure",
   "family": "files",
