@@ -9,12 +9,19 @@
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
     <DevelopmentDependency>true</DevelopmentDependency>
-    <FSharp2CompilerHostRuntimeIdentifier>win-x64</FSharp2CompilerHostRuntimeIdentifier>
+    <FSharp2CompilerHostRuntimeIdentifier Condition="'$(FSharp2CompilerHostRuntimeIdentifier)' == ''">$(NETCoreSdkRuntimeIdentifier)</FSharp2CompilerHostRuntimeIdentifier>
+    <FSharp2CompilerHostExecutableName Condition="'$(FSharp2CompilerHostExecutableName)' == '' and $([System.String]::Copy('$(FSharp2CompilerHostRuntimeIdentifier)').StartsWith('win'))">fsc2.exe</FSharp2CompilerHostExecutableName>
+    <FSharp2CompilerHostExecutableName Condition="'$(FSharp2CompilerHostExecutableName)' == ''">fsc2</FSharp2CompilerHostExecutableName>
     <FSharp2CompilerHostPublishDirectory>$([System.IO.Path]::GetFullPath('$(BaseIntermediateOutputPath)fsc2/$(Configuration)/$(FSharp2CompilerHostRuntimeIdentifier)/publish/'))</FSharp2CompilerHostPublishDirectory>
     <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);PublishFSharp2CompilerHostForPackage</TargetsForTfmSpecificContentInPackage>
   </PropertyGroup>
 
   <ItemGroup>
+    <_FSharp2CompilerHostPack Include="@(KnownILCompilerPack->WithMetadataValue('TargetFramework', '$(TargetFramework)'))" />
+    <PackageDownload Include="Microsoft.NETCore.App.Runtime.NativeAOT.win-x64"
+                     Version="[@(_FSharp2CompilerHostPack->'%(ILCompilerPackVersion)')]" />
+    <PackageDownload Include="Microsoft.NETCore.App.Runtime.NativeAOT.linux-x64"
+                     Version="[@(_FSharp2CompilerHostPack->'%(ILCompilerPackVersion)')]" />
     <ProjectReference Include="../fsc2.Prototype/fsc2.Prototype.fsproj"
                       ReferenceOutputAssembly="false"
                       PrivateAssets="all" />
@@ -32,13 +39,13 @@
              BuildInParallel="false"
              Properties="Configuration=$(Configuration);RuntimeIdentifier=$(FSharp2CompilerHostRuntimeIdentifier);PublishAot=true;SelfContained=true;PublishDir=$(FSharp2CompilerHostPublishDirectory)" />
 
-    <Error Condition="!Exists('$(FSharp2CompilerHostPublishDirectory)fsc2.exe')"
+    <Error Condition="!Exists('$(FSharp2CompilerHostPublishDirectory)$(FSharp2CompilerHostExecutableName)')"
            Code="FSC2MSB0001"
            Text="The FSharp2 NativeAOT compiler host was not produced for $(FSharp2CompilerHostRuntimeIdentifier)." />
 
     <ItemGroup>
-      <TfmSpecificPackageFile Include="$(FSharp2CompilerHostPublishDirectory)fsc2.exe"
-                              PackagePath="tools/$(FSharp2CompilerHostRuntimeIdentifier)/fsc2.exe" />
+      <TfmSpecificPackageFile Include="$(FSharp2CompilerHostPublishDirectory)$(FSharp2CompilerHostExecutableName)"
+                              PackagePath="tools/$(FSharp2CompilerHostRuntimeIdentifier)" />
     </ItemGroup>
   </Target>
 </Project>

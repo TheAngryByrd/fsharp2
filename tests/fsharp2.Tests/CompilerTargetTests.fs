@@ -13070,6 +13070,7 @@ module CompilerTargetTests =
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="FSharp2.Compiler.MSBuild" Version="{packageVersion}" />
+    <Reference Include="FSharp.Core" HintPath="{typeof<Microsoft.FSharp.Core.AutoOpenAttribute>.Assembly.Location}" />
     <Compile Include="First.fs" />
     <Compile Include="Tracer.fs" />
   </ItemGroup>
@@ -13096,15 +13097,24 @@ module CompilerTargetTests =
                         (restore.StandardOutput
                          + restore.StandardError)
 
+                    let packagedHostRuntimeIdentifier = RuntimeInformation.RuntimeIdentifier
+
+                    let packagedHostExecutableName =
+                        if OperatingSystem.IsWindows() then "fsc2.exe" else "fsc2"
+
                     let packagedHostPath =
                         Path.Combine(
                             packageCache,
                             "fsharp2.compiler.msbuild",
                             packageVersion,
                             "tools",
-                            "win-x64",
-                            "fsc2.exe"
+                            packagedHostRuntimeIdentifier,
+                            packagedHostExecutableName
                         )
+
+                    Expect.isTrue
+                        (File.Exists(packagedHostPath))
+                        $"The package must contain the {packagedHostRuntimeIdentifier} compiler host."
 
                     use service = startPackagedCompilerService projectRoot packagedHostPath pipeName
 
