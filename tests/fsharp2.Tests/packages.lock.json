@@ -118,6 +118,12 @@
       "fsharp2": {
         "type": "Project"
       },
+      "FSharp2.Compiler.Core": {
+        "type": "Project",
+        "dependencies": {
+          "FSharp.Core": "[10.0.100, )"
+        }
+      },
       "FSharp.Core": {
         "type": "CentralTransitive",
         "requested": "[10.0.100, )",
