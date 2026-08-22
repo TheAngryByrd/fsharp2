@@ -1994,8 +1994,26 @@ module CompilerTargetTests =
 
                     let constructor =
                         metadata.MemberReferences
+                        |> Seq.map metadata.GetMemberReference
+                        |> Seq.filter (fun reference ->
+                            if
+                                metadata.GetString(reference.Name)
+                                <> ".ctor"
+                                || reference.Parent.Kind
+                                   <> HandleKind.TypeReference
+                            then
+                                false
+                            else
+                                let declaringType =
+                                    reference.Parent
+                                    |> MetadataTokens.GetRowNumber
+                                    |> MetadataTokens.TypeReferenceHandle
+                                    |> metadata.GetTypeReference
+
+                                metadata.GetString(declaringType.Namespace) = "System"
+                                && metadata.GetString(declaringType.Name) = "NotSupportedException"
+                        )
                         |> Seq.exactlyOne
-                        |> metadata.GetMemberReference
 
                     let declaringType =
                         constructor.Parent
@@ -11639,36 +11657,192 @@ module CompilerTargetTests =
                         "/mapped/Tracer.fs"
                         "the document path should honor the requested path map"
 
-                    let importScopeHandle =
+                    use implementationStream = File.OpenRead(outputPath)
+                    use implementation = new PEReader(implementationStream)
+                    let metadata = implementation.GetMetadataReader()
+
+                    let rec typeName (handle: EntityHandle) =
+                        match handle.Kind with
+                        | HandleKind.TypeReference ->
+                            let reference =
+                                handle
+                                |> MetadataTokens.GetRowNumber
+                                |> MetadataTokens.TypeReferenceHandle
+                                |> metadata.GetTypeReference
+
+                            let name = metadata.GetString(reference.Name)
+
+                            if reference.ResolutionScope.Kind = HandleKind.TypeReference then
+                                typeName reference.ResolutionScope
+                                + "+"
+                                + name
+                            else
+                                let namespaceName = metadata.GetString(reference.Namespace)
+
+                                if String.IsNullOrEmpty(namespaceName) then
+                                    name
+                                else
+                                    namespaceName
+                                    + "."
+                                    + name
+                        | kind -> failtestf "unsupported imported type handle %A" kind
+
+                    let imports importScopeHandle =
+                        let importScope = pdb.GetImportScope(importScopeHandle)
+
+                        let definitions =
+                            importScope.GetImports()
+                            |> Seq.toList
+
+                        let namespaces =
+                            definitions
+                            |> List.choose (fun definition ->
+                                if definition.Kind = ImportDefinitionKind.ImportNamespace then
+                                    definition.TargetNamespace
+                                    |> pdb.GetBlobBytes
+                                    |> Encoding.UTF8.GetString
+                                    |> Some
+                                else
+                                    None
+                            )
+
+                        let types =
+                            definitions
+                            |> List.choose (fun definition ->
+                                if definition.Kind = ImportDefinitionKind.ImportType then
+                                    definition.TargetType
+                                    |> typeName
+                                    |> Some
+                                else
+                                    None
+                            )
+
+                        importScope, namespaces, types
+
+                    let expectedNamespaces = [
+                        "Microsoft"
+                        "Microsoft.FSharp"
+                        "Microsoft.FSharp.Core"
+                        "Microsoft.FSharp.Collections"
+                        "Microsoft.FSharp.Control"
+                    ]
+
+                    let expectedTypes = [
+                        "Microsoft.FSharp.Core.LanguagePrimitives+IntrinsicOperators"
+                        "Microsoft.FSharp.Control.TaskBuilderExtensions.LowPriority"
+                        "Microsoft.FSharp.Control.TaskBuilderExtensions.LowPlusPriority"
+                        "Microsoft.FSharp.Control.TaskBuilderExtensions.MediumPriority"
+                        "Microsoft.FSharp.Control.TaskBuilderExtensions.HighPriority"
+                        "Microsoft.FSharp.Linq.QueryRunExtensions.LowPriority"
+                        "Microsoft.FSharp.Linq.QueryRunExtensions.HighPriority"
+                    ]
+
+                    let importScopes =
                         pdb.ImportScopes
-                        |> Seq.exactlyOne
+                        |> Seq.map imports
+                        |> Seq.toList
 
-                    let importScope = pdb.GetImportScope(importScopeHandle)
-
-                    let importDefinition =
-                        importScope.GetImports()
-                        |> Seq.exactlyOne
-
-                    Expect.equal
-                        importDefinition.Kind
-                        ImportDefinitionKind.ImportNamespace
-                        "the PDB should encode the imported namespace kind"
+                    let rootScopes =
+                        importScopes
+                        |> List.filter (fun (scope, _, _) -> scope.Parent.IsNil)
 
                     Expect.equal
-                        (pdb.GetBlobBytes(importDefinition.TargetNamespace)
-                         |> Encoding.UTF8.GetString)
-                        "System"
-                        "the PDB should preserve the imported namespace"
+                        rootScopes.Length
+                        1
+                        "the PDB should contain one semantic root import scope"
+
+                    let _, rootNamespaces, rootTypes = List.exactlyOne rootScopes
+
+                    Expect.sequenceEqual
+                        rootNamespaces
+                        []
+                        "the PDB root import scope should contain no namespaces"
+
+                    Expect.sequenceEqual
+                        rootTypes
+                        []
+                        "the PDB root import scope should contain no types"
+
+                    let childScopes =
+                        importScopes
+                        |> List.filter (fun (scope, _, _) -> not scope.Parent.IsNil)
+
+                    Expect.equal
+                        childScopes.Length
+                        1
+                        "the PDB should contain one semantic child import scope"
+
+                    let childScope, childNamespaces, childTypes = List.exactlyOne childScopes
+
+                    let childParent, childParentNamespaces, childParentTypes =
+                        imports childScope.Parent
+
+                    Expect.isTrue
+                        childParent.Parent.IsNil
+                        "the PDB child import scope parent should be the semantic root"
+
+                    Expect.sequenceEqual
+                        childParentNamespaces
+                        []
+                        "the PDB child import scope parent should contain no namespaces"
+
+                    Expect.sequenceEqual
+                        childParentTypes
+                        []
+                        "the PDB child import scope parent should contain no types"
+
+                    Expect.sequenceEqual
+                        childNamespaces
+                        expectedNamespaces
+                        "the PDB should preserve the Oracle namespace imports"
+
+                    Expect.sequenceEqual
+                        childTypes
+                        expectedTypes
+                        "the PDB should preserve the Oracle type imports"
 
                     let localScope =
                         pdb.LocalScopes
                         |> Seq.exactlyOne
                         |> pdb.GetLocalScope
 
-                    Expect.equal
-                        localScope.ImportScope
-                        importScopeHandle
-                        "the method scope should reference the encoded imports"
+                    Expect.isFalse
+                        localScope.ImportScope.IsNil
+                        "the method scope should reference encoded imports"
+
+                    let methodImportScope, methodNamespaces, methodTypes =
+                        imports localScope.ImportScope
+
+                    Expect.isFalse
+                        methodImportScope.Parent.IsNil
+                        "the method scope should reference the semantic child imports"
+
+                    let methodParent, methodParentNamespaces, methodParentTypes =
+                        imports methodImportScope.Parent
+
+                    Expect.isTrue
+                        methodParent.Parent.IsNil
+                        "the method import parent should be the semantic root"
+
+                    Expect.sequenceEqual
+                        methodParentNamespaces
+                        []
+                        "the method import parent should contain no namespaces"
+
+                    Expect.sequenceEqual
+                        methodParentTypes
+                        []
+                        "the method import parent should contain no types"
+
+                    Expect.sequenceEqual
+                        methodNamespaces
+                        expectedNamespaces
+                        "the method scope should preserve the Oracle namespace imports"
+
+                    Expect.sequenceEqual
+                        methodTypes
+                        expectedTypes
+                        "the method scope should preserve the Oracle type imports"
 
                     let customDebugInformation =
                         pdb.CustomDebugInformation

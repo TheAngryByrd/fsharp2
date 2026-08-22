@@ -177,6 +177,23 @@ module internal Linker =
         Flags = enum<AssemblyFlags> 0
     }
 
+    let private defaultFSharpCoreReference = {
+        Name = "FSharp.Core"
+        Version = Version(10, 0, 0, 0)
+        Culture = String.Empty
+        PublicKeyToken = [|
+            0xb0uy
+            0x3fuy
+            0x5fuy
+            0x7fuy
+            0x11uy
+            0xd5uy
+            0x0auy
+            0x3auy
+        |]
+        Flags = enum<AssemblyFlags> 0
+    }
+
     let private targetReferenceName (symbolic: SymbolicAssembly) =
         symbolic.AssemblyAttributes
         |> List.tryPick (fun attribute ->
@@ -223,6 +240,11 @@ module internal Linker =
             |> Seq.tryPick (tryReadTargetReference expectedName)
         with
         | Some reference -> reference
+        | None when
+            request.TargetReferences.IsEmpty
+            && expectedName = "FSharp.Core"
+            ->
+            defaultFSharpCoreReference
         | None ->
             invalidOp (
                 "the target reference set does not contain assembly '"
@@ -880,6 +902,10 @@ module internal Linker =
         | NoEagerConstraintApplicationAttribute -> {
             Namespace = "Microsoft.FSharp.Core.CompilerServices"
             Name = "NoEagerConstraintApplicationAttribute"
+          }
+        | EntryPointAttribute -> {
+            Namespace = "Microsoft.FSharp.Core"
+            Name = "EntryPointAttribute"
           }
         | CompilationMappingAttribute -> {
             Namespace = "Microsoft.FSharp.Core"
@@ -2025,18 +2051,65 @@ module internal Linker =
             )
             |> ignore
 
-        let systemNamespace = pdbMetadata.GetOrAddBlobUTF8("System", false)
+        let rootImportScope =
+            pdbMetadata.AddImportScope(
+                Unchecked.defaultof<ImportScopeHandle>,
+                Unchecked.defaultof<BlobHandle>
+            )
+
         let importDefinitions = BlobBuilder()
 
-        importDefinitions.WriteCompressedInteger(int ImportDefinitionKind.ImportNamespace)
+        let addNamespaceImport namespaceName =
+            importDefinitions.WriteCompressedInteger(int ImportDefinitionKind.ImportNamespace)
 
-        systemNamespace
-        |> MetadataTokens.GetHeapOffset
-        |> importDefinitions.WriteCompressedInteger
+            pdbMetadata.GetOrAddBlobUTF8(namespaceName, false)
+            |> MetadataTokens.GetHeapOffset
+            |> importDefinitions.WriteCompressedInteger
+
+        let addTypeImport namespaceName typeName =
+            importDefinitions.WriteCompressedInteger(int ImportDefinitionKind.ImportType)
+
+            resolveCliTypeReference {
+                DeclarationId =
+                    "reference:FSharp.Core/type:"
+                    + namespaceName
+                    + "."
+                    + typeName
+                AssemblyName = "FSharp.Core"
+                TypeName = {
+                    Namespace = namespaceName
+                    Name = typeName
+                }
+                IsValueType = false
+            }
+            |> CodedIndex.TypeDefOrRef
+            |> importDefinitions.WriteCompressedInteger
+
+        for namespaceName in [ "Microsoft"; "Microsoft.FSharp" ] do
+            addNamespaceImport namespaceName
+
+        addTypeImport "Microsoft.FSharp.Core" "LanguagePrimitives+IntrinsicOperators"
+
+        for namespaceName in [
+            "Microsoft.FSharp.Core"
+            "Microsoft.FSharp.Collections"
+            "Microsoft.FSharp.Control"
+        ] do
+            addNamespaceImport namespaceName
+
+        for namespaceName, typeName in [
+            "Microsoft.FSharp.Control.TaskBuilderExtensions", "LowPriority"
+            "Microsoft.FSharp.Control.TaskBuilderExtensions", "LowPlusPriority"
+            "Microsoft.FSharp.Control.TaskBuilderExtensions", "MediumPriority"
+            "Microsoft.FSharp.Control.TaskBuilderExtensions", "HighPriority"
+            "Microsoft.FSharp.Linq.QueryRunExtensions", "LowPriority"
+            "Microsoft.FSharp.Linq.QueryRunExtensions", "HighPriority"
+        ] do
+            addTypeImport namespaceName typeName
 
         let importScope =
             pdbMetadata.AddImportScope(
-                Unchecked.defaultof<ImportScopeHandle>,
+                rootImportScope,
                 pdbMetadata.GetOrAddBlob(importDefinitions)
             )
 

@@ -86,7 +86,7 @@ module CompilerContractTests =
 
         image.ToArray()
 
-    let private metadataTypeName (metadata: MetadataReader) (handle: EntityHandle) =
+    let rec private metadataTypeName (metadata: MetadataReader) (handle: EntityHandle) =
         let fullName namespaceName name =
             if String.IsNullOrEmpty(namespaceName) then
                 name
@@ -113,7 +113,14 @@ module CompilerContractTests =
                 |> MetadataTokens.TypeReferenceHandle
                 |> metadata.GetTypeReference
 
-            fullName (metadata.GetString(reference.Namespace)) (metadata.GetString(reference.Name))
+            let name = metadata.GetString(reference.Name)
+
+            if reference.ResolutionScope.Kind = HandleKind.TypeReference then
+                metadataTypeName metadata reference.ResolutionScope
+                + "+"
+                + name
+            else
+                fullName (metadata.GetString(reference.Namespace)) name
         | _ -> handle.Kind.ToString()
 
     let private typeDefinitionEntityHandle (handle: TypeDefinitionHandle) =
@@ -861,12 +868,19 @@ module CompilerContractTests =
 
                 try
                     let sourcePath = Path.Combine(root, "input.fs")
-                    let referencePath = Path.Combine(root, "target-reference.dll")
+                    let systemRuntimeReferencePath = Path.Combine(root, "System.Runtime.dll")
+                    let fsharpCoreReferencePath = Path.Combine(root, "FSharp.Core.dll")
                     let sourceText = "module Tracer\nlet answer () = 42\n"
-                    let referenceImage = File.ReadAllBytes(Assembly.Load("System.Runtime").Location)
+
+                    let systemRuntimeReferenceImage =
+                        File.ReadAllBytes(Assembly.Load("System.Runtime").Location)
+
+                    let fsharpCoreReferenceImage =
+                        File.ReadAllBytes(typeof<int list>.Assembly.Location)
 
                     File.WriteAllText(sourcePath, sourceText)
-                    File.WriteAllBytes(referencePath, referenceImage)
+                    File.WriteAllBytes(systemRuntimeReferencePath, systemRuntimeReferenceImage)
+                    File.WriteAllBytes(fsharpCoreReferencePath, fsharpCoreReferenceImage)
 
                     let sourceSnapshot =
                         SourceSnapshot.Create(
@@ -876,12 +890,22 @@ module CompilerContractTests =
                             fingerprint (Text.Encoding.UTF8.GetBytes(sourceText))
                         )
 
-                    let referenceSnapshot =
-                        let capturedImage = File.ReadAllBytes(referencePath)
+                    let systemRuntimeReferenceSnapshot =
+                        let capturedImage = File.ReadAllBytes(systemRuntimeReferencePath)
 
                         TargetReferenceSnapshot.Create(
                             StableIdentity.create "reference:System.Runtime",
                             "System.Runtime.dll",
+                            capturedImage,
+                            fingerprint capturedImage
+                        )
+
+                    let fsharpCoreReferenceSnapshot =
+                        let capturedImage = File.ReadAllBytes(fsharpCoreReferencePath)
+
+                        TargetReferenceSnapshot.Create(
+                            StableIdentity.create "reference:FSharp.Core",
+                            "FSharp.Core.dll",
                             capturedImage,
                             fingerprint capturedImage
                         )
@@ -895,7 +919,10 @@ module CompilerContractTests =
                                 "Tracer"
                             ),
                             [| sourceSnapshot |],
-                            [| referenceSnapshot |],
+                            [|
+                                systemRuntimeReferenceSnapshot
+                                fsharpCoreReferenceSnapshot
+                            |],
                             SemanticOptions.Create(
                                 [||],
                                 None,
@@ -919,7 +946,8 @@ module CompilerContractTests =
                         )
 
                     File.Delete(sourcePath)
-                    File.WriteAllBytes(referencePath, [| 0uy |])
+                    File.WriteAllBytes(systemRuntimeReferencePath, [| 0uy |])
+                    File.WriteAllBytes(fsharpCoreReferencePath, [| 0uy |])
 
                     let result = Compiler().Compile(request, CancellationToken.None)
 
@@ -1110,6 +1138,487 @@ let main _ =
                     result.Outcome
                     CompilationOutcome.Succeeded
                     $"Ordered value and entry-point declarations must compile. Diagnostics:{Environment.NewLine}{diagnostics}"
+
+            testCase "entry-point methods preserve Oracle metadata attributes"
+            <| fun _ ->
+                let sourceText =
+                    """module Program
+
+let answer () = 42
+
+[<EntryPoint>]
+let main _ =
+    printfn "%d" (answer ())
+    0
+"""
+
+                let result = compile sourceText
+
+                let diagnostics =
+                    result.Diagnostics
+                    |> Seq.map (fun diagnostic -> diagnostic.Message)
+                    |> String.concat Environment.NewLine
+
+                Expect.equal
+                    result.Outcome
+                    CompilationOutcome.Succeeded
+                    $"The entry-point fixture must compile. Diagnostics:{Environment.NewLine}{diagnostics}"
+
+                let implementation =
+                    result.Artifacts
+                    |> Seq.find (fun artifact ->
+                        artifact.Kind = RequestedArtifact.ImplementationAssembly
+                    )
+
+                let emittedAssembly = Assembly.Load(bytes implementation.Bytes)
+
+                let mainMethod =
+                    emittedAssembly
+                        .GetType("Program", true)
+                        .GetMethod(
+                            "main",
+                            BindingFlags.Public
+                            ||| BindingFlags.NonPublic
+                            ||| BindingFlags.Static
+                        )
+
+                let entryPointAttributes =
+                    mainMethod.CustomAttributes
+                    |> Seq.filter (fun attribute ->
+                        attribute.AttributeType.FullName = "Microsoft.FSharp.Core.EntryPointAttribute"
+                    )
+                    |> Seq.toList
+
+                Expect.equal
+                    entryPointAttributes.Length
+                    1
+                    "Program.main must have one Microsoft.FSharp.Core.EntryPointAttribute."
+
+                let entryPointAttribute = List.exactlyOne entryPointAttributes
+
+                Expect.isEmpty
+                    entryPointAttribute.ConstructorArguments
+                    "The entry-point attribute must use its zero-argument constructor."
+
+            testCase "module types preserve Oracle compilation mapping metadata"
+            <| fun _ ->
+                let sourceText =
+                    """module Program
+
+let answer () = 42
+
+[<EntryPoint>]
+let main _ =
+    printfn "%d" (answer ())
+    0
+"""
+
+                let result = compile sourceText
+
+                let diagnostics =
+                    result.Diagnostics
+                    |> Seq.map (fun diagnostic -> diagnostic.Message)
+                    |> String.concat Environment.NewLine
+
+                Expect.equal
+                    result.Outcome
+                    CompilationOutcome.Succeeded
+                    $"The module metadata fixture must compile. Diagnostics:{Environment.NewLine}{diagnostics}"
+
+                let implementation =
+                    result.Artifacts
+                    |> Seq.find (fun artifact ->
+                        artifact.Kind = RequestedArtifact.ImplementationAssembly
+                    )
+
+                let emittedAssembly = Assembly.Load(bytes implementation.Bytes)
+                let programType = emittedAssembly.GetType("Program", true)
+
+                let compilationMappingAttributes =
+                    programType.CustomAttributes
+                    |> Seq.filter (fun attribute ->
+                        attribute.AttributeType.FullName = "Microsoft.FSharp.Core.CompilationMappingAttribute"
+                    )
+                    |> Seq.toList
+
+                Expect.equal
+                    compilationMappingAttributes.Length
+                    1
+                    "Program must have one Microsoft.FSharp.Core.CompilationMappingAttribute."
+
+                let compilationMappingAttribute = List.exactlyOne compilationMappingAttributes
+
+                Expect.equal
+                    compilationMappingAttribute.ConstructorArguments.Count
+                    1
+                    "The compilation mapping attribute must have one semantic constructor argument."
+
+                let sourceConstruct = compilationMappingAttribute.ConstructorArguments.[0]
+
+                Expect.equal
+                    sourceConstruct.ArgumentType
+                    typeof<Microsoft.FSharp.Core.SourceConstructFlags>
+                    "The compilation mapping argument must use SourceConstructFlags."
+
+                Expect.equal
+                    (enum<Microsoft.FSharp.Core.SourceConstructFlags> (
+                        Convert.ToInt32(sourceConstruct.Value)
+                    ))
+                    Microsoft.FSharp.Core.SourceConstructFlags.Module
+                    "The compilation mapping attribute must identify a module construct."
+
+            testCase "entry-point wildcard parameters use Oracle metadata names"
+            <| fun _ ->
+                let sourceText =
+                    """module Program
+
+let answer () = 42
+
+[<EntryPoint>]
+let main _ =
+    printfn "%d" (answer ())
+    0
+"""
+
+                let result = compile sourceText
+
+                let diagnostics =
+                    result.Diagnostics
+                    |> Seq.map (fun diagnostic -> diagnostic.Message)
+                    |> String.concat Environment.NewLine
+
+                Expect.equal
+                    result.Outcome
+                    CompilationOutcome.Succeeded
+                    $"The wildcard parameter fixture must compile. Diagnostics:{Environment.NewLine}{diagnostics}"
+
+                let implementation =
+                    result.Artifacts
+                    |> Seq.find (fun artifact ->
+                        artifact.Kind = RequestedArtifact.ImplementationAssembly
+                    )
+
+                let emittedAssembly = Assembly.Load(bytes implementation.Bytes)
+
+                let mainMethod =
+                    emittedAssembly
+                        .GetType("Program", true)
+                        .GetMethod(
+                            "main",
+                            BindingFlags.Public
+                            ||| BindingFlags.NonPublic
+                            ||| BindingFlags.Static
+                        )
+
+                let parameters = mainMethod.GetParameters()
+
+                Expect.equal
+                    parameters.Length
+                    1
+                    "Program.main must preserve its single source parameter."
+
+                Expect.equal
+                    parameters.[0].Name
+                    "_arg1"
+                    "The entry-point wildcard must use the Oracle metadata name."
+
+            testCase "portable PDB preserves Oracle FSharp import scopes"
+            <| fun _ ->
+                let sourceText =
+                    """module Program
+
+let answer () = 42
+
+[<EntryPoint>]
+let main _ =
+    printfn "%d" (answer ())
+    0
+"""
+
+                let request =
+                    createRequest
+                        (defaultSemanticOptions ())
+                        (defaultDiagnosticOptions ())
+                        (EmissionOptions.Create(
+                            true,
+                            false,
+                            DebugFormat.Portable,
+                            [||],
+                            [| "Program.fs" |],
+                            [||]
+                        ))
+                        (defaultSigningOptions ())
+                        (emptyResources ())
+                        [|
+                            RequestedArtifact.ImplementationAssembly
+                            RequestedArtifact.PortablePdb
+                        |]
+                        sourceText
+
+                let result = compileRequest request
+
+                let diagnostics =
+                    result.Diagnostics
+                    |> Seq.map (fun diagnostic -> diagnostic.Message)
+                    |> String.concat Environment.NewLine
+
+                Expect.equal
+                    result.Outcome
+                    CompilationOutcome.Succeeded
+                    $"The portable PDB fixture must compile. Diagnostics:{Environment.NewLine}{diagnostics}"
+
+                let implementation =
+                    result.Artifacts
+                    |> Seq.find (fun artifact ->
+                        artifact.Kind = RequestedArtifact.ImplementationAssembly
+                    )
+
+                let portablePdb =
+                    result.Artifacts
+                    |> Seq.find (fun artifact -> artifact.Kind = RequestedArtifact.PortablePdb)
+
+                use implementationStream = new MemoryStream(bytes implementation.Bytes, false)
+
+                use pe = new PEReader(implementationStream)
+                let metadata = pe.GetMetadataReader()
+
+                use pdbStream = new MemoryStream(bytes portablePdb.Bytes, false)
+                use pdbProvider = MetadataReaderProvider.FromPortablePdbStream(pdbStream)
+                let pdb = pdbProvider.GetMetadataReader()
+
+                let imports importScopeHandle =
+                    let importScope = pdb.GetImportScope(importScopeHandle)
+
+                    let definitions =
+                        importScope.GetImports()
+                        |> Seq.toList
+
+                    let namespaces =
+                        definitions
+                        |> List.choose (fun definition ->
+                            if definition.Kind = ImportDefinitionKind.ImportNamespace then
+                                definition.TargetNamespace
+                                |> pdb.GetBlobBytes
+                                |> Text.Encoding.UTF8.GetString
+                                |> Some
+                            else
+                                None
+                        )
+
+                    let types =
+                        definitions
+                        |> List.choose (fun definition ->
+                            if definition.Kind = ImportDefinitionKind.ImportType then
+                                definition.TargetType
+                                |> metadataTypeName metadata
+                                |> Some
+                            else
+                                None
+                        )
+
+                    importScope, namespaces, types
+
+                let orderedImports importScopeHandle =
+                    let importScope = pdb.GetImportScope(importScopeHandle)
+
+                    importScope.GetImports()
+                    |> Seq.map (fun definition ->
+                        match definition.Kind with
+                        | ImportDefinitionKind.ImportNamespace ->
+                            definition.TargetNamespace
+                            |> pdb.GetBlobBytes
+                            |> Text.Encoding.UTF8.GetString
+                            |> sprintf "namespace:%s"
+                        | ImportDefinitionKind.ImportType ->
+                            definition.TargetType
+                            |> metadataTypeName metadata
+                            |> sprintf "type:%s"
+                        | kind -> failtestf "Unsupported import definition kind %A." kind
+                    )
+                    |> Seq.toList
+
+                let expectedNamespaces = [
+                    "Microsoft"
+                    "Microsoft.FSharp"
+                    "Microsoft.FSharp.Core"
+                    "Microsoft.FSharp.Collections"
+                    "Microsoft.FSharp.Control"
+                ]
+
+                let expectedTypes = [
+                    "Microsoft.FSharp.Core.LanguagePrimitives+IntrinsicOperators"
+                    "Microsoft.FSharp.Control.TaskBuilderExtensions.LowPriority"
+                    "Microsoft.FSharp.Control.TaskBuilderExtensions.LowPlusPriority"
+                    "Microsoft.FSharp.Control.TaskBuilderExtensions.MediumPriority"
+                    "Microsoft.FSharp.Control.TaskBuilderExtensions.HighPriority"
+                    "Microsoft.FSharp.Linq.QueryRunExtensions.LowPriority"
+                    "Microsoft.FSharp.Linq.QueryRunExtensions.HighPriority"
+                ]
+
+                let expectedImportOrder = [
+                    "namespace:Microsoft"
+                    "namespace:Microsoft.FSharp"
+                    "type:Microsoft.FSharp.Core.LanguagePrimitives+IntrinsicOperators"
+                    "namespace:Microsoft.FSharp.Core"
+                    "namespace:Microsoft.FSharp.Collections"
+                    "namespace:Microsoft.FSharp.Control"
+                    "type:Microsoft.FSharp.Control.TaskBuilderExtensions.LowPriority"
+                    "type:Microsoft.FSharp.Control.TaskBuilderExtensions.LowPlusPriority"
+                    "type:Microsoft.FSharp.Control.TaskBuilderExtensions.MediumPriority"
+                    "type:Microsoft.FSharp.Control.TaskBuilderExtensions.HighPriority"
+                    "type:Microsoft.FSharp.Linq.QueryRunExtensions.LowPriority"
+                    "type:Microsoft.FSharp.Linq.QueryRunExtensions.HighPriority"
+                ]
+
+                let importScopes =
+                    pdb.ImportScopes
+                    |> Seq.map imports
+                    |> Seq.toList
+
+                let rootScopes =
+                    importScopes
+                    |> List.filter (fun (scope, _, _) -> scope.Parent.IsNil)
+
+                Expect.equal
+                    rootScopes.Length
+                    1
+                    "The portable PDB must contain one semantic root import scope."
+
+                let _, rootNamespaces, rootTypes = List.exactlyOne rootScopes
+
+                Expect.sequenceEqual
+                    rootNamespaces
+                    []
+                    "The root import scope must contain no namespace imports."
+
+                Expect.sequenceEqual
+                    rootTypes
+                    []
+                    "The root import scope must contain no type imports."
+
+                let childScopes =
+                    importScopes
+                    |> List.filter (fun (scope, _, _) -> not scope.Parent.IsNil)
+
+                Expect.equal
+                    childScopes.Length
+                    1
+                    "The portable PDB must contain one semantic child import scope."
+
+                let childScopeHandle =
+                    pdb.ImportScopes
+                    |> Seq.filter (fun handle ->
+                        let scope = pdb.GetImportScope(handle)
+                        not scope.Parent.IsNil
+                    )
+                    |> Seq.exactlyOne
+
+                Expect.sequenceEqual
+                    (orderedImports childScopeHandle)
+                    expectedImportOrder
+                    "The child import scope must preserve the Oracle import order."
+
+                let childScope, childNamespaces, childTypes = List.exactlyOne childScopes
+
+                let parentScope, parentNamespaces, parentTypes = imports childScope.Parent
+
+                Expect.isTrue
+                    parentScope.Parent.IsNil
+                    "The child import scope parent must be the semantic root."
+
+                Expect.sequenceEqual
+                    parentNamespaces
+                    []
+                    "The child import scope parent must contain no namespaces."
+
+                Expect.sequenceEqual
+                    parentTypes
+                    []
+                    "The child import scope parent must contain no types."
+
+                Expect.sequenceEqual
+                    childNamespaces
+                    expectedNamespaces
+                    "The child import scope must preserve the Oracle namespace imports."
+
+                Expect.sequenceEqual
+                    childTypes
+                    expectedTypes
+                    "The child import scope must preserve the Oracle type imports."
+
+                let methodScopes =
+                    pdb.LocalScopes
+                    |> Seq.map (fun handle ->
+                        let localScope = pdb.GetLocalScope(handle)
+                        let methodDefinition = metadata.GetMethodDefinition(localScope.Method)
+
+                        let declaringType =
+                            methodDefinition.GetDeclaringType()
+                            |> typeDefinitionEntityHandle
+                            |> metadataTypeName metadata
+
+                        let methodName =
+                            declaringType
+                            + "."
+                            + metadata.GetString(methodDefinition.Name)
+
+                        Expect.isFalse
+                            localScope.ImportScope.IsNil
+                            $"{methodName} must have an import-scope association."
+
+                        let methodImportScope, namespaces, types = imports localScope.ImportScope
+
+                        Expect.isFalse
+                            methodImportScope.Parent.IsNil
+                            $"{methodName} must use the semantic child import scope."
+
+                        let methodParent, methodParentNamespaces, methodParentTypes =
+                            imports methodImportScope.Parent
+
+                        methodName,
+                        namespaces,
+                        types,
+                        methodParent.Parent.IsNil,
+                        methodParentNamespaces,
+                        methodParentTypes
+                    )
+                    |> Seq.toList
+
+                Expect.sequenceEqual
+                    (methodScopes
+                     |> List.map (fun (methodName, _, _, _, _, _) -> methodName)
+                     |> List.sort)
+                    [
+                        "Program.answer"
+                        "Program.main"
+                    ]
+                    "Both emitted methods must have portable PDB local scopes."
+
+                for methodName, namespaces, types, parentIsRoot, parentNamespaces, parentTypes in
+                    methodScopes do
+                    Expect.sequenceEqual
+                        namespaces
+                        expectedNamespaces
+                        $"{methodName} must use the Oracle namespace imports."
+
+                    Expect.sequenceEqual
+                        types
+                        expectedTypes
+                        $"{methodName} must use the Oracle type imports."
+
+                    Expect.isTrue
+                        parentIsRoot
+                        $"{methodName} imports must have the semantic root parent."
+
+                    Expect.sequenceEqual
+                        parentNamespaces
+                        []
+                        $"{methodName} import parent must contain no namespaces."
+
+                    Expect.sequenceEqual
+                        parentTypes
+                        []
+                        $"{methodName} import parent must contain no types."
 
             testCase "inferred generic top-level functions compile through the public contract"
             <| fun _ ->

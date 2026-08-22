@@ -919,6 +919,7 @@ type internal KnownAttributeKind =
     | DefaultValueAttribute
     | InlineIfLambdaAttribute
     | NoEagerConstraintApplicationAttribute
+    | EntryPointAttribute
     | CompilationMappingAttribute
     | CompilationArgumentCountsAttribute
 

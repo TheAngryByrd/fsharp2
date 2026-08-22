@@ -624,6 +624,7 @@ module private TypeIdentity =
         | DefaultValueAttribute -> "default-value"
         | InlineIfLambdaAttribute -> "inline-if-lambda"
         | NoEagerConstraintApplicationAttribute -> "no-eager-constraint-application"
+        | EntryPointAttribute -> "entry-point"
         | CompilationMappingAttribute -> "compilation-mapping"
         | CompilationArgumentCountsAttribute -> "compilation-argument-counts"
 
@@ -13875,8 +13876,13 @@ type internal CompilerService() =
                 SemanticFingerprint = attribute.ExportFingerprint
             }
 
-            let parameterFragment (parameter: TypedParameter) : LoweredParameter = {
-                Name = parameter.Name
+            let parameterFragment index (parameter: TypedParameter) : LoweredParameter = {
+                Name =
+                    if parameter.Name = "_" then
+                        "_arg"
+                        + string (index + 1)
+                    else
+                        parameter.Name
                 Type = parameter.Type
                 Attributes =
                     parameter.Attributes
@@ -13902,6 +13908,23 @@ type internal CompilerService() =
                             yield!
                                 arguments
                                 |> List.map TypeIdentity.attributeArgument
+                        ]
+                }
+
+            let entryPointAttribute ownerStableId =
+                let stableId =
+                    ownerStableId
+                    + "/attribute:entry-point"
+
+                {
+                    SchemaVersion = querySchema
+                    StableId = stableId
+                    Kind = EntryPointAttribute
+                    ConstructorArguments = []
+                    SemanticFingerprint =
+                        Fingerprint.parts [
+                            stableId
+                            TypeIdentity.attributeKind EntryPointAttribute
                         ]
                 }
 
@@ -18122,12 +18145,17 @@ type internal CompilerService() =
                     GenericParameters = methodDeclaration.GenericParameters
                     Constraints = methodDeclaration.Constraints
                     GenericParameterConstraints = genericParameterConstraints methodDeclaration
-                    Attributes =
-                        methodDeclaration.Attributes
-                        |> List.map customAttributeFragment
+                    Attributes = [
+                        yield!
+                            methodDeclaration.Attributes
+                            |> List.map customAttributeFragment
+
+                        if kind = EntryPoint then
+                            entryPointAttribute fragmentStableId
+                    ]
                     Parameters =
                         methodDeclaration.Parameters
-                        |> List.map parameterFragment
+                        |> List.mapi parameterFragment
                     Locals = locals
                     ReturnType = methodDeclaration.ReturnType
                     Instructions = instructions
@@ -18338,19 +18366,13 @@ type internal CompilerService() =
                                     | _ -> false
                             ))
 
-                    let customAttributes =
-                        if
-                            List.isEmpty typed.Attributes
-                            && not containsNestedType
-                        then
-                            []
-                        else
-                            [
-                                yield!
-                                    typed.Attributes
-                                    |> List.map customAttributeFragment
-                                compilationMappingAttribute typeStableId ModuleConstruct
-                            ]
+                    let customAttributes = [
+                        yield!
+                            typed.Attributes
+                            |> List.map customAttributeFragment
+
+                        compilationMappingAttribute typeStableId ModuleConstruct
+                    ]
 
                     if
                         List.isEmpty literalFields
