@@ -21,8 +21,7 @@ jobs:
       - name: Setup necessary dotnet SDKs
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: |
-            10.x
+          dotnet-version: 10.0.110
       - name: Build via Bash
         if: runner.os != 'Windows'
         run: |
@@ -39,6 +38,75 @@ jobs:
           CI: true
           CONFIGURATION: ${{ matrix.configuration }}
           ENABLE_COVERAGE: true
+
+  conformance:
+    name: Conformance correctness (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macOS-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v5
+      - name: Setup .NET SDK 10.0.110
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.110
+      - name: Verify .NET SDK
+        shell: pwsh
+        run: |
+          $version = (dotnet --version | Out-String).Trim()
+          if ($version -ne '10.0.110') {
+            throw "Selected dotnet reported '$version'. Expected '10.0.110'."
+          }
+      - name: Restore conformance projects
+        run: dotnet restore tests/FSharp2.Conformance.Tests/FSharp2.Conformance.Tests.fsproj --locked-mode
+      - name: Test conformance harness
+        run: dotnet test tests/FSharp2.Conformance.Tests/FSharp2.Conformance.Tests.fsproj -c Release --no-restore --filter "FullyQualifiedName!~Conformance Lanes"
+      - name: Validate conformance contracts
+        run: dotnet run --project tools/FSharp2.Conformance/FSharp2.Conformance.csproj -c Release --no-restore -- validate --root tests/conformance
+
+  conformance-smoke:
+    name: Conformance strict FSharp2 smoke (Windows x64)
+    needs: conformance
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v5
+      - name: Setup .NET SDK 10.0.110
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.110
+      - name: Verify .NET SDK
+        shell: pwsh
+        run: |
+          $version = (dotnet --version | Out-String).Trim()
+          if ($version -ne '10.0.110') {
+            throw "Selected dotnet reported '$version'. Expected '10.0.110'."
+          }
+      - name: Restore solution
+        run: dotnet restore fsharp2.sln --locked-mode
+      - name: Publish strict FSharp2 host
+        shell: pwsh
+        run: |
+          $fsharp2HostRoot = Join-Path $env:RUNNER_TEMP 'fsharp2-conformance-host'
+          dotnet publish src/fsc2.Prototype/fsc2.Prototype.fsproj -c Release -r win-x64 --no-restore -p:PublishAot=true -p:SelfContained=true -o $fsharp2HostRoot
+          $fsharp2Host = Join-Path $fsharp2HostRoot 'fsc2.exe'
+          if (-not (Test-Path -LiteralPath $fsharp2Host -PathType Leaf)) {
+            throw "Published host not found: $fsharp2Host"
+          }
+          $fsharp2Host = (Resolve-Path -LiteralPath $fsharp2Host).Path
+          $dotnetRoot = Split-Path (Get-Command dotnet -CommandType Application).Source -Parent
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "FSharp2CompilerHostPath=$fsharp2Host"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "FSHARP2_DOTNET_ROOT=$dotnetRoot"
+      - name: Test strict physical lanes
+        shell: pwsh
+        run: dotnet test tests/FSharp2.Conformance.Tests/FSharp2.Conformance.Tests.fsproj -c Release --no-restore --filter "FullyQualifiedName~Conformance Lanes"
+      - name: Run focused correctness case
+        shell: pwsh
+        run: |
+          dotnet run --project tools/FSharp2.Conformance/FSharp2.Conformance.csproj -c Release --no-restore -- run --root tests/conformance --case language.bindings.value-function-positive --dotnet-root $env:FSHARP2_DOTNET_ROOT --fsharp2-host $env:FSharp2CompilerHostPath --output-root artifacts/conformance
+
   # Builds the project in a dev container
   build-devcontainer:
     runs-on: ubuntu-latest
