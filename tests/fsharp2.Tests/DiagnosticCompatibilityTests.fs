@@ -1351,7 +1351,7 @@ module DiagnosticCompatibilityTests =
                     "\nerror FS0010: Unexpected symbol ')' in binding\n"
                     + "  --> Program.fs (3,17)\n"
                     + "  3 | let answer () = )\n"
-                    + String(' ', 22)
+                    + System.String(' ', 22)
                     + "^\r\n"
                 ]
 
@@ -1494,7 +1494,7 @@ module DiagnosticCompatibilityTests =
                         "\nerror FS0001: Type mismatch\n"
                         + "  --> Program.fs (5,9)\n"
                         + "  5 | let x = mismatch\n"
-                        + String(' ', 14)
+                        + System.String(' ', 14)
                         + "^^^^^\r\n"
                     ))
                     "Rich output must mark every covered column."
@@ -1633,7 +1633,7 @@ module DiagnosticCompatibilityTests =
                         "\nerror FS0010: Unexpected symbol ')' in binding\n"
                         + "  --> Second.fs (3,17)\n"
                         + "  3 | let answer () = )\n"
-                        + String(' ', 22)
+                        + System.String(' ', 22)
                         + "^\r\n"
                     ))
                     "Rich multi-source output must use the diagnostic source text."
