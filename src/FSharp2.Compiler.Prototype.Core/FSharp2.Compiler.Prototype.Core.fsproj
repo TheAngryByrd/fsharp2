@@ -10,6 +10,9 @@
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="fsharp2.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="FSharp.Core" />
   </ItemGroup>
   <ItemGroup>
@@ -18,6 +21,8 @@
     <Compile Include="../fsc2.Prototype/Diagnostics.fs" Link="Diagnostics.fs" />
     <Compile Include="../fsc2.Prototype/CommandLine.fs" Link="CommandLine.fs" />
     <Compile Include="../fsc2.Prototype/Frontend.fs" Link="Frontend.fs" />
+    <Compile Include="../fsc2.Prototype/ReferenceModel.fs" Link="ReferenceModel.fs" />
+    <Compile Include="../fsc2.Prototype/Ecma335ReferenceImporter.fs" Link="Ecma335ReferenceImporter.fs" />
     <Compile Include="../fsc2.Prototype/ReferenceIndex.fs" Link="ReferenceIndex.fs" />
     <Compile Include="../fsc2.Prototype/CompilerService.fs" Link="CompilerService.fs" />
     <Compile Include="../fsc2.Prototype/SymbolicEmission.fs" Link="SymbolicEmission.fs" />
