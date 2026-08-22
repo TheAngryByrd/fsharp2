@@ -27,28 +27,54 @@ module internal DiagnosticPolicy =
             >> ((=) expected)
         )
 
-    let apply (options: DiagnosticOptions) diagnostics =
+    let private emitted
+        severity
+        fallbackStream
+        (diagnostic: CompilationDiagnostic)
+        : CompilationDiagnostic =
+        {
+            diagnostic with
+                EffectiveSeverity = severity
+                Disposition = DiagnosticDisposition.Emitted
+                Suppression = None
+                Stream =
+                    diagnostic.Stream
+                    |> Option.orElse (Some fallbackStream)
+        }
+
+    let private suppressed reason (diagnostic: CompilationDiagnostic) : CompilationDiagnostic = {
+        diagnostic with
+            EffectiveSeverity = DiagnosticSeverity.Hidden
+            Disposition = DiagnosticDisposition.Suppressed
+            Suppression = Some reason
+            Stream = None
+    }
+
+    let apply (options: DiagnosticOptions) (diagnostics: seq<CompilationDiagnostic>) =
         diagnostics
-        |> Seq.choose (fun diagnostic ->
-            match diagnostic.Severity with
-            | DiagnosticSeverity.Information
-            | DiagnosticSeverity.Error -> Some diagnostic
+        |> Seq.map (fun diagnostic ->
+            match diagnostic.OriginalSeverity with
+            | DiagnosticSeverity.Hidden ->
+                suppressed
+                    (diagnostic.Suppression
+                     |> Option.defaultValue DiagnosticSuppression.OffByDefault)
+                    diagnostic
+            | DiagnosticSeverity.Information ->
+                emitted DiagnosticSeverity.Information DiagnosticStream.StandardOutput diagnostic
+            | DiagnosticSeverity.Error ->
+                emitted DiagnosticSeverity.Error DiagnosticStream.StandardError diagnostic
             | DiagnosticSeverity.Warning ->
-                if
-                    options.WarningLevel = Some 0
-                    || containsCode options.DisabledWarnings diagnostic.Code
-                then
-                    None
+                if options.WarningLevel = Some 0 then
+                    suppressed DiagnosticSuppression.WarningLevel diagnostic
+                elif containsCode options.DisabledWarnings diagnostic.Code then
+                    suppressed DiagnosticSuppression.GlobalNowarn diagnostic
                 elif
                     options.TreatWarningsAsErrors
                     || containsCode options.WarningsAsErrors diagnostic.Code
                 then
-                    Some {
-                        diagnostic with
-                            Severity = DiagnosticSeverity.Error
-                    }
+                    emitted DiagnosticSeverity.Error DiagnosticStream.StandardError diagnostic
                 else
-                    Some diagnostic
+                    emitted DiagnosticSeverity.Warning DiagnosticStream.StandardError diagnostic
         )
         |> ImmutableArray.CreateRange
 

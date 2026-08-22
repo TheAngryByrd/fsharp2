@@ -500,13 +500,32 @@ type Compiler() =
         |]
         |> ImmutableArray.CreateRange
 
-    let failureDiagnostic (diagnostic: CompilerDiagnostic) = {
-        Code = diagnostic.Code
-        Severity = DiagnosticSeverity.Error
-        Message = diagnostic.Message
-        LogicalPath = diagnostic.Path
-        Range = diagnostic.Range
-    }
+    let numericDiagnosticCode (code: string) =
+        if code.StartsWith("FS", StringComparison.Ordinal) then
+            match Int32.TryParse(code[2..]) with
+            | true, value -> value
+            | false, _ -> 0
+        else
+            0
+
+    let failureDiagnostic failedPhase (diagnostic: CompilerDiagnostic) =
+        CompilationDiagnostic.Create(
+            0L,
+            diagnostic.Code,
+            numericDiagnosticCode diagnostic.Code,
+            None,
+            DiagnosticStage.Compilation failedPhase,
+            DiagnosticSeverity.Error,
+            DiagnosticSeverity.Error,
+            DiagnosticDisposition.Emitted,
+            None,
+            diagnostic.Message,
+            diagnostic.Path,
+            diagnostic.Range,
+            [||],
+            [||],
+            Some DiagnosticStream.StandardError
+        )
 
     member _.Compile(request: CompilationRequest, cancellationToken: CancellationToken) =
         if cancellationToken.IsCancellationRequested then
@@ -520,9 +539,7 @@ type Compiler() =
                     else
                         prevalidatedUnsupportedPhaseResults failure.StoppingPhase
 
-                unsupportedResult
-                    failure
-                    phaseResults
+                unsupportedResult failure phaseResults
             | None ->
                 match CompilationPipeline.compileRequest service request with
                 | Error diagnostic when diagnostic.Code = "FSC2C2002" ->
@@ -546,7 +563,7 @@ type Compiler() =
                             CompilationPhase.Syntax
 
                     let diagnostics =
-                        [| failureDiagnostic diagnostic |]
+                        [| failureDiagnostic failedPhase diagnostic |]
                         |> DiagnosticPolicy.apply request.DiagnosticOptions
 
                     {

@@ -2516,6 +2516,354 @@ let first = 42
                     CompilationPhase.FinalLinking
                     "resources.native-count=2"
 
+            testCase "Compiler Contract.diagnostic v2 preserves every occurrence and related fact"
+            <| fun _ ->
+                Expect.equal
+                    CompilerContract.Version
+                    2
+                    "The diagnostic contract must increment exactly once."
+
+                let diagnosticProperties =
+                    typeof<CompilationDiagnostic>.GetProperties()
+                    |> Array.map _.Name
+                    |> Set.ofArray
+
+                for propertyName in
+                    [
+                        "Occurrence"
+                        "Code"
+                        "NumericCode"
+                        "Subcategory"
+                        "Stage"
+                        "OriginalSeverity"
+                        "EffectiveSeverity"
+                        "Disposition"
+                        "Suppression"
+                        "Message"
+                        "LogicalPath"
+                        "Range"
+                        "RelatedInformation"
+                        "Suggestions"
+                        "Stream"
+                    ] do
+                    Expect.isTrue
+                        (diagnosticProperties.Contains(propertyName))
+                        $"CompilationDiagnostic must expose {propertyName}."
+
+                Expect.isFalse
+                    (diagnosticProperties.Contains("Severity"))
+                    "The v2 contract must not retain the ambiguous v1 severity field."
+
+                let result = compile "module Tracer\nlet answer: int = \"text\"\n"
+
+                let diagnostic =
+                    result.Diagnostics
+                    |> Seq.exactlyOne
+
+                Expect.equal diagnostic.Occurrence 0L "Occurrence order must be stable."
+                Expect.equal diagnostic.Code "FS0001" "The code must be preserved."
+                Expect.equal diagnostic.NumericCode 1 "The numeric code must be preserved."
+                Expect.isNone diagnostic.Subcategory "The current diagnostic has no subcategory."
+
+                Expect.equal
+                    diagnostic.Stage
+                    (DiagnosticStage.Compilation CompilationPhase.TypedDeclarations)
+                    "The diagnostic stage must identify the failing phase."
+
+                Expect.equal
+                    diagnostic.OriginalSeverity
+                    DiagnosticSeverity.Error
+                    "Original severity must be preserved."
+
+                Expect.equal
+                    diagnostic.EffectiveSeverity
+                    DiagnosticSeverity.Error
+                    "Effective severity must be evaluated."
+
+                Expect.equal
+                    diagnostic.Disposition
+                    DiagnosticDisposition.Emitted
+                    "The error must be emitted."
+
+                Expect.isNone
+                    diagnostic.Suppression
+                    "An emitted error must not have a suppression reason."
+
+                Expect.equal
+                    diagnostic.Stream
+                    (Some DiagnosticStream.StandardError)
+                    "The error must select standard error."
+
+                Expect.isEmpty
+                    diagnostic.RelatedInformation
+                    "The empty related facts must be retained."
+
+                Expect.isEmpty diagnostic.Suggestions "The empty suggestions must be retained."
+
+                let relatedInformation = [|
+                    DiagnosticRelatedInformation.Create(
+                        "The declaration is here.",
+                        Some "Library.fs",
+                        None
+                    )
+                |]
+
+                let suggestions = [| "Use a compatible value." |]
+
+                let warning =
+                    CompilationDiagnostic.Create(
+                        4L,
+                        "FS0020",
+                        20,
+                        Some "typecheck",
+                        DiagnosticStage.Compilation CompilationPhase.TypedDeclarations,
+                        DiagnosticSeverity.Warning,
+                        DiagnosticSeverity.Error,
+                        DiagnosticDisposition.Emitted,
+                        None,
+                        "The result is ignored.",
+                        Some "Tracer.fs",
+                        None,
+                        relatedInformation,
+                        suggestions,
+                        Some DiagnosticStream.StandardError
+                    )
+
+                relatedInformation[0] <-
+                    DiagnosticRelatedInformation.Create("Changed.", Some "Changed.fs", None)
+
+                suggestions[0] <- "Changed."
+
+                Expect.equal
+                    warning.RelatedInformation[0].Message
+                    "The declaration is here."
+                    "Related information must be defensively copied."
+
+                Expect.equal
+                    warning.Suggestions[0]
+                    "Use a compatible value."
+                    "Suggestions must be defensively copied."
+
+                let disabledWarnings = [| "FS0020" |]
+                let enabledWarnings = [| "FS1182" |]
+                let warningsAsErrors = [| "FS0044" |]
+                let warningsNotAsErrors = [| "FS0025" |]
+
+                let localWarningDirectives = [|
+                    LocalWarningDirective.Create(
+                        3L,
+                        LocalWarningDirectiveAction.Disable,
+                        "FS0020",
+                        "Tracer.fs",
+                        None
+                    )
+                |]
+
+                let completeOptions =
+                    DiagnosticOptions.Create(
+                        Some 4,
+                        disabledWarnings,
+                        enabledWarnings,
+                        true,
+                        warningsAsErrors,
+                        warningsNotAsErrors,
+                        Some 100,
+                        true,
+                        Some "fr-FR",
+                        localWarningDirectives,
+                        true,
+                        true,
+                        true,
+                        DiagnosticStyle.Gcc,
+                        ConsoleColorMode.Disabled,
+                        Some 1036,
+                        Some "fr",
+                        true,
+                        true,
+                        true
+                    )
+
+                disabledWarnings[0] <- "FS9999"
+                enabledWarnings[0] <- "FS9999"
+                warningsAsErrors[0] <- "FS9999"
+                warningsNotAsErrors[0] <- "FS9999"
+
+                localWarningDirectives[0] <-
+                    LocalWarningDirective.Create(
+                        9L,
+                        LocalWarningDirectiveAction.Enable,
+                        "FS9999",
+                        "Changed.fs",
+                        None
+                    )
+
+                Expect.sequenceEqual
+                    completeOptions.DisabledWarnings
+                    [ "FS0020" ]
+                    "NoWarn must be copied."
+
+                Expect.sequenceEqual
+                    completeOptions.EnabledWarnings
+                    [ "FS1182" ]
+                    "WarnOn must be copied."
+
+                Expect.sequenceEqual
+                    completeOptions.WarningsAsErrors
+                    [ "FS0044" ]
+                    "WarnAsError must be copied."
+
+                Expect.sequenceEqual
+                    completeOptions.WarningsNotAsErrors
+                    [ "FS0025" ]
+                    "WarnAsWarn must be copied."
+
+                Expect.equal
+                    completeOptions.LocalWarningDirectives[0].Order
+                    3L
+                    "Local directives must be copied."
+
+                Expect.equal
+                    completeOptions.WarningLevel
+                    (Some 4)
+                    "Warning level must be normalized."
+
+                Expect.isTrue completeOptions.TreatWarningsAsErrors "WarnAsError must be retained."
+
+                Expect.equal
+                    completeOptions.MaximumErrors
+                    (Some 100)
+                    "Maximum errors must be retained."
+
+                Expect.isTrue completeOptions.AbortOnError "Abort-on-error must be retained."
+
+                Expect.equal
+                    completeOptions.PreferredUICulture
+                    (Some "fr-FR")
+                    "The normalized UI culture must be retained."
+
+                Expect.isTrue completeOptions.FullPaths "Full-path output must be retained."
+                Expect.isTrue completeOptions.FlatErrors "Flat-message output must be retained."
+                Expect.isTrue completeOptions.Utf8Output "UTF-8 output must be retained."
+
+                Expect.equal
+                    completeOptions.DiagnosticStyle
+                    DiagnosticStyle.Gcc
+                    "GCC style must be retained."
+
+                Expect.equal
+                    completeOptions.ConsoleColorMode
+                    ConsoleColorMode.Disabled
+                    "Console color mode must be retained."
+
+                Expect.equal completeOptions.LCID (Some 1036) "The LCID input must be retained."
+
+                Expect.equal
+                    completeOptions.PreferredUILanguage
+                    (Some "fr")
+                    "The preferred UI language input must be retained."
+
+                Expect.isTrue
+                    completeOptions.TestParserErrorRecovery
+                    "Parser recovery input must be retained."
+
+                Expect.isTrue
+                    completeOptions.StandardOutputRedirected
+                    "Standard-output redirection must be retained."
+
+                Expect.isTrue
+                    completeOptions.StandardErrorRedirected
+                    "Standard-error redirection must be retained."
+
+                let errorOccurrence =
+                    CompilationDiagnostic.Create(
+                        5L,
+                        "FS0001",
+                        1,
+                        None,
+                        DiagnosticStage.Compilation CompilationPhase.TypedDeclarations,
+                        DiagnosticSeverity.Error,
+                        DiagnosticSeverity.Error,
+                        DiagnosticDisposition.Emitted,
+                        None,
+                        "The types do not match.",
+                        Some "Tracer.fs",
+                        None,
+                        [||],
+                        [||],
+                        Some DiagnosticStream.StandardError
+                    )
+
+                let policyType =
+                    typeof<Compiler>.Assembly.GetType("FSharp2.Compiler.DiagnosticPolicy", true)
+
+                let applyPolicy =
+                    policyType.GetMethod(
+                        "apply",
+                        BindingFlags.Static
+                        ||| BindingFlags.Public
+                        ||| BindingFlags.NonPublic
+                    )
+
+                Expect.isNotNull applyPolicy "Diagnostic policy evaluation must exist."
+
+                let occurrences: seq<CompilationDiagnostic> = [
+                    warning
+                    errorOccurrence
+                ]
+
+                let evaluated =
+                    applyPolicy.Invoke(
+                        null,
+                        [|
+                            box (DiagnosticOptions.Create(Some 0, [||], false, [||]))
+                            box occurrences
+                        |]
+                    )
+                    :?> Collections.Immutable.ImmutableArray<CompilationDiagnostic>
+
+                Expect.sequenceEqual
+                    (evaluated
+                     |> Seq.map _.Occurrence)
+                    [
+                        4L
+                        5L
+                    ]
+                    "Evaluation must retain every occurrence in stable order."
+
+                Expect.equal
+                    evaluated[0].Disposition
+                    DiagnosticDisposition.Suppressed
+                    "Warning level zero must retain a suppressed occurrence."
+
+                Expect.equal
+                    evaluated[0].EffectiveSeverity
+                    DiagnosticSeverity.Hidden
+                    "A suppressed occurrence must have Hidden effective severity."
+
+                Expect.equal
+                    evaluated[0].Suppression
+                    (Some DiagnosticSuppression.WarningLevel)
+                    "The suppression reason must be retained."
+
+                Expect.isNone
+                    evaluated[0].Stream
+                    "A suppressed occurrence must not select a stream."
+
+                Expect.equal
+                    evaluated[0].RelatedInformation[0].Message
+                    "The declaration is here."
+                    "Evaluation must preserve related facts."
+
+                Expect.equal
+                    evaluated[0].Suggestions[0]
+                    "Use a compatible value."
+                    "Evaluation must preserve suggestions."
+
+                Expect.equal
+                    evaluated[1].Disposition
+                    DiagnosticDisposition.Emitted
+                    "The error occurrence must remain emitted."
+
             testCase "diagnostic policy preserves errors for every supported option"
             <| fun _ ->
                 for warningLevel in
@@ -2553,7 +2901,7 @@ let first = 42
                     Expect.equal diagnostic.Code "FS0001" "The error code must be preserved."
 
                     Expect.equal
-                        diagnostic.Severity
+                        diagnostic.EffectiveSeverity
                         DiagnosticSeverity.Error
                         "Diagnostic policy must not suppress or demote an error."
 

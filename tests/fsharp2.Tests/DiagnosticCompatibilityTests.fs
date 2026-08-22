@@ -7,6 +7,7 @@ open System.IO
 open System.Text.Json
 open System.Text.RegularExpressions
 open Expecto
+open FSharp2.Compiler
 
 module DiagnosticCompatibilityTests =
     let private pinnedSourceCommit = "b611d184a141d1ad1994ff59c01fecc10f787a89"
@@ -276,6 +277,213 @@ module DiagnosticCompatibilityTests =
     [<Tests>]
     let tests =
         testList "Diagnostic Compatibility" [
+            testCase "phase facts contain no rendered messages"
+            <| fun _ ->
+                let compilerAssembly = typeof<Compiler>.Assembly
+
+                let visibility =
+                    Reflection.BindingFlags.Public
+                    ||| Reflection.BindingFlags.NonPublic
+
+                let instanceMembers =
+                    visibility
+                    ||| Reflection.BindingFlags.Instance
+
+                let staticMembers =
+                    visibility
+                    ||| Reflection.BindingFlags.Static
+
+                let requiredType name =
+                    let runtimeType = compilerAssembly.GetType($"FSharp2.Compiler.{name}", false)
+                    Expect.isNotNull runtimeType $"The compiler must define {name}."
+                    runtimeType
+
+                let propertyNames (runtimeType: Type) =
+                    runtimeType.GetProperties(instanceMembers)
+                    |> Array.map _.Name
+                    |> Set.ofArray
+
+                let requiredMethod name (runtimeType: Type) =
+                    let methodInfo = runtimeType.GetMethod(name, staticMembers)
+                    Expect.isNotNull methodInfo $"{runtimeType.Name} must define {name}."
+                    methodInfo
+
+                let typedArray (elementType: Type) (values: obj array) =
+                    let result = Array.CreateInstance(elementType, values.Length)
+
+                    values
+                    |> Array.iteri (fun index value -> result.SetValue(value, index))
+
+                    result
+
+                let propertyValue name (value: obj) =
+                    value.GetType().GetProperty(name, instanceMembers).GetValue(value)
+
+                let immutableItem name (value: obj) =
+                    let items = propertyValue name value
+                    items.GetType().GetProperty("Item").GetValue(items, [| box 0 |])
+
+                let factProperties =
+                    requiredType "DiagnosticFact"
+                    |> propertyNames
+
+                for propertyName in
+                    [
+                        "Key"
+                        "Stage"
+                        "OriginalSeverity"
+                        "WarningLevel"
+                        "OffByDefault"
+                        "LogicalPath"
+                        "Range"
+                        "Arguments"
+                        "RelatedFacts"
+                        "SuggestionFacts"
+                        "RecoveryGroup"
+                        "ParentOccurrence"
+                        "PhaseLocalOrder"
+                    ] do
+                    Expect.isTrue
+                        (factProperties.Contains(propertyName))
+                        $"DiagnosticFact must expose {propertyName}."
+
+                Expect.isFalse
+                    (factProperties.Contains("Message"))
+                    "A phase fact must not contain a rendered message."
+
+                for typeName in
+                    [
+                        "DiagnosticRelatedFact"
+                        "DiagnosticSuggestionFact"
+                    ] do
+                    let names =
+                        requiredType typeName
+                        |> propertyNames
+
+                    Expect.isFalse
+                        (names.Contains("Message"))
+                        $"{typeName} must not contain a rendered message."
+
+                let argumentType = requiredType "DiagnosticArgument"
+                let keyType = requiredType "DiagnosticKey"
+                let relatedType = requiredType "DiagnosticRelatedFact"
+                let suggestionType = requiredType "DiagnosticSuggestionFact"
+                let factType = requiredType "DiagnosticFact"
+
+                let stringArgumentCase =
+                    Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(argumentType, visibility)
+                    |> Array.find (fun case -> case.Name = "String")
+
+                let argument value =
+                    Microsoft.FSharp.Reflection.FSharpValue.MakeUnion(
+                        stringArgumentCase,
+                        [| box value |],
+                        visibility
+                    )
+
+                let originalArgument = argument "original"
+                let changedArgument = argument "changed"
+
+                let key =
+                    (requiredMethod "create" keyType).Invoke(null, [| box "test.diagnostic" |])
+
+                let relatedArguments = typedArray argumentType [| originalArgument |]
+
+                let relatedFact =
+                    (requiredMethod "Create" relatedType)
+                        .Invoke(
+                            null,
+                            [|
+                                key
+                                relatedArguments
+                                null
+                                null
+                                box 0L
+                            |]
+                        )
+
+                let suggestionArguments = typedArray argumentType [| originalArgument |]
+
+                let suggestionFact =
+                    (requiredMethod "Create" suggestionType)
+                        .Invoke(
+                            null,
+                            [|
+                                key
+                                suggestionArguments
+                                box 0L
+                            |]
+                        )
+
+                let factArguments = typedArray argumentType [| originalArgument |]
+                let relatedFacts = typedArray relatedType [| relatedFact |]
+                let suggestionFacts = typedArray suggestionType [| suggestionFact |]
+
+                let fact =
+                    (requiredMethod "Create" factType)
+                        .Invoke(
+                            null,
+                            [|
+                                key
+                                box (DiagnosticStage.Compilation CompilationPhase.Syntax)
+                                box DiagnosticSeverity.Error
+                                null
+                                box false
+                                null
+                                null
+                                factArguments
+                                relatedFacts
+                                suggestionFacts
+                                null
+                                null
+                                box 0L
+                            |]
+                        )
+
+                relatedArguments.SetValue(changedArgument, 0)
+                suggestionArguments.SetValue(changedArgument, 0)
+                factArguments.SetValue(changedArgument, 0)
+                relatedFacts.SetValue(null, 0)
+                suggestionFacts.SetValue(null, 0)
+
+                let assertOriginalArgument owner value =
+                    let case, fields =
+                        Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(
+                            value,
+                            argumentType,
+                            visibility
+                        )
+
+                    Expect.equal case.Name "String" $"{owner} must preserve the argument type."
+
+                    Expect.equal
+                        (fields[0] :?> string)
+                        "original"
+                        $"{owner} must copy its arguments."
+
+                assertOriginalArgument
+                    "DiagnosticRelatedFact"
+                    (immutableItem "Arguments" relatedFact)
+
+                assertOriginalArgument
+                    "DiagnosticSuggestionFact"
+                    (immutableItem "Arguments" suggestionFact)
+
+                assertOriginalArgument "DiagnosticFact" (immutableItem "Arguments" fact)
+
+                let copiedRelatedFact = immutableItem "RelatedFacts" fact
+                let copiedSuggestionFact = immutableItem "SuggestionFacts" fact
+                Expect.isNotNull copiedRelatedFact "DiagnosticFact must copy related facts."
+                Expect.isNotNull copiedSuggestionFact "DiagnosticFact must copy suggestion facts."
+
+                assertOriginalArgument
+                    "DiagnosticFact related facts"
+                    (immutableItem "Arguments" copiedRelatedFact)
+
+                assertOriginalArgument
+                    "DiagnosticFact suggestion facts"
+                    (immutableItem "Arguments" copiedSuggestionFact)
+
             testCase "inventory discovers every pinned candidate"
             <| fun _ ->
                 let expected = discoverCandidates ()

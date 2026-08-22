@@ -8,6 +8,183 @@ module internal CompilerSchema =
     [<Literal>]
     let Query = 73
 
+module private DiagnosticFactValidation =
+    let text name (value: string) =
+        if String.IsNullOrWhiteSpace(value) then
+            invalidArg name $"{name} must contain text."
+
+        value
+
+    let array name (values: 'T array) =
+        if isNull values then
+            nullArg name
+
+        ImmutableArray.CreateRange values
+
+    let references name (values: 'T array) =
+        let copied = array name values
+
+        copied
+        |> Seq.iter (fun value ->
+            if obj.ReferenceEquals(value, null) then
+                nullArg name
+        )
+
+        copied
+
+[<Struct; StructuralEquality; StructuralComparison>]
+type internal DiagnosticKey =
+    private
+    | DiagnosticKey of string
+
+    member this.Value =
+        let (DiagnosticKey value) = this
+        value
+
+    static member create(value: string) =
+        DiagnosticKey(DiagnosticFactValidation.text "value" value)
+
+    override this.ToString() = this.Value
+
+[<Struct; StructuralEquality; StructuralComparison>]
+type internal DiagnosticRecoveryGroup =
+    private
+    | DiagnosticRecoveryGroup of string
+
+    member this.Value =
+        let (DiagnosticRecoveryGroup value) = this
+        value
+
+    static member create(value: string) =
+        DiagnosticRecoveryGroup(DiagnosticFactValidation.text "value" value)
+
+    override this.ToString() = this.Value
+
+[<System.Diagnostics.DebuggerDisplay("{ToString()}")>]
+type internal DiagnosticArgument =
+    | String of string
+    | Int32 of int
+    | Int64 of int64
+    | Boolean of bool
+    | Character of char
+    | Decimal of decimal
+    | Identifier of string
+    | TypeName of string
+    | LogicalPath of string
+
+    override _.ToString() = "DiagnosticArgument"
+
+type internal DiagnosticRelatedFact = {
+    Key: DiagnosticKey
+    Arguments: ImmutableArray<DiagnosticArgument>
+    LogicalPath: string option
+    Range: SourceRange option
+    Order: int64
+} with
+
+    static member Create(key, arguments, logicalPath, range, order) =
+        if order < 0L then
+            invalidArg "order" "order must be non-negative."
+
+        logicalPath
+        |> Option.iter (
+            DiagnosticFactValidation.text "logicalPath"
+            >> ignore
+        )
+
+        {
+            Key = key
+            Arguments = DiagnosticFactValidation.references "arguments" arguments
+            LogicalPath = logicalPath
+            Range = range
+            Order = order
+        }
+
+    override _.ToString() = "DiagnosticRelatedFact"
+
+type internal DiagnosticSuggestionFact = {
+    Key: DiagnosticKey
+    Arguments: ImmutableArray<DiagnosticArgument>
+    Order: int64
+} with
+
+    static member Create(key, arguments, order) =
+        if order < 0L then
+            invalidArg "order" "order must be non-negative."
+
+        {
+            Key = key
+            Arguments = DiagnosticFactValidation.references "arguments" arguments
+            Order = order
+        }
+
+    override _.ToString() = "DiagnosticSuggestionFact"
+
+type internal DiagnosticFact = {
+    Key: DiagnosticKey
+    Stage: DiagnosticStage
+    OriginalSeverity: DiagnosticSeverity
+    WarningLevel: int option
+    OffByDefault: bool
+    LogicalPath: string option
+    Range: SourceRange option
+    Arguments: ImmutableArray<DiagnosticArgument>
+    RelatedFacts: ImmutableArray<DiagnosticRelatedFact>
+    SuggestionFacts: ImmutableArray<DiagnosticSuggestionFact>
+    RecoveryGroup: DiagnosticRecoveryGroup option
+    ParentOccurrence: int64 option
+    PhaseLocalOrder: int64
+} with
+
+    static member Create
+        (
+            key,
+            stage,
+            originalSeverity,
+            warningLevel,
+            offByDefault,
+            logicalPath,
+            range,
+            arguments,
+            relatedFacts,
+            suggestionFacts,
+            recoveryGroup,
+            parentOccurrence,
+            phaseLocalOrder
+        ) =
+        if phaseLocalOrder < 0L then
+            invalidArg "phaseLocalOrder" "phaseLocalOrder must be non-negative."
+
+        parentOccurrence
+        |> Option.iter (fun value ->
+            if value < 0L then
+                invalidArg "parentOccurrence" "parentOccurrence must be non-negative."
+        )
+
+        logicalPath
+        |> Option.iter (
+            DiagnosticFactValidation.text "logicalPath"
+            >> ignore
+        )
+
+        {
+            Key = key
+            Stage = stage
+            OriginalSeverity = originalSeverity
+            WarningLevel = warningLevel
+            OffByDefault = offByDefault
+            LogicalPath = logicalPath
+            Range = range
+            Arguments = DiagnosticFactValidation.references "arguments" arguments
+            RelatedFacts = DiagnosticFactValidation.references "relatedFacts" relatedFacts
+            SuggestionFacts = DiagnosticFactValidation.references "suggestionFacts" suggestionFacts
+            RecoveryGroup = recoveryGroup
+            ParentOccurrence = parentOccurrence
+            PhaseLocalOrder = phaseLocalOrder
+        }
+
+    override _.ToString() = "DiagnosticFact"
+
 type internal CompilerDiagnostic = {
     Code: string
     Message: string
@@ -210,8 +387,7 @@ type internal ParsedExpression =
         memberName: string *
         typeArguments: ParsedTypeExpression list *
         arguments: ParsedExpression list
-    | BoundInstanceMember of
-        receiverName: string * memberName: string * receiverRange: SourceRange
+    | BoundInstanceMember of receiverName: string * memberName: string * receiverRange: SourceRange
     | MemberAssignment of rootName: string * memberPath: string list * value: ParsedExpression
     | SequentialExpression of ParsedExpression list
     | FunctionApplication of

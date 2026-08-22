@@ -59,7 +59,7 @@ module private ContractValidation =
 [<RequireQualifiedAccess>]
 module CompilerContract =
     [<Literal>]
-    let Version = 1
+    let Version = 2
 
 [<Struct; StructuralEquality; StructuralComparison>]
 type StableIdentity =
@@ -209,19 +209,165 @@ type SemanticOptions = {
 
     override _.ToString() = "SemanticOptions"
 
+[<RequireQualifiedAccess>]
+type LocalWarningDirectiveAction =
+    | Enable
+    | Disable
+
+type LocalWarningDirective = {
+    Order: int64
+    Action: LocalWarningDirectiveAction
+    Code: string
+    LogicalPath: string
+    Range: SourceRange option
+} with
+
+    static member Create(order, action, code, logicalPath, range) =
+        if order < 0L then
+            invalidArg "order" "order must be non-negative."
+
+        {
+            Order = order
+            Action = ContractValidation.reference "action" action
+            Code = ContractValidation.text "code" code
+            LogicalPath = ContractValidation.text "logicalPath" logicalPath
+            Range = range
+        }
+
+    override _.ToString() = "LocalWarningDirective"
+
+[<RequireQualifiedAccess>]
+type DiagnosticStyle =
+    | Default
+    | VisualStudio
+    | Gcc
+    | Rich
+    | Flat
+
+[<RequireQualifiedAccess>]
+type ConsoleColorMode =
+    | Automatic
+    | Enabled
+    | Disabled
+
 type DiagnosticOptions = {
     WarningLevel: int option
     DisabledWarnings: ImmutableArray<string>
+    EnabledWarnings: ImmutableArray<string>
     TreatWarningsAsErrors: bool
     WarningsAsErrors: ImmutableArray<string>
+    WarningsNotAsErrors: ImmutableArray<string>
+    MaximumErrors: int option
+    AbortOnError: bool
+    PreferredUICulture: string option
+    LocalWarningDirectives: ImmutableArray<LocalWarningDirective>
+    FullPaths: bool
+    FlatErrors: bool
+    Utf8Output: bool
+    DiagnosticStyle: DiagnosticStyle
+    ConsoleColorMode: ConsoleColorMode
+    LCID: int option
+    PreferredUILanguage: string option
+    TestParserErrorRecovery: bool
+    StandardOutputRedirected: bool
+    StandardErrorRedirected: bool
 } with
 
-    static member Create(warningLevel, disabledWarnings, treatWarningsAsErrors, warningsAsErrors) = {
-        WarningLevel = warningLevel
-        DisabledWarnings = ContractValidation.stringArray "disabledWarnings" disabledWarnings
-        TreatWarningsAsErrors = treatWarningsAsErrors
-        WarningsAsErrors = ContractValidation.stringArray "warningsAsErrors" warningsAsErrors
-    }
+    static member Create(warningLevel, disabledWarnings, treatWarningsAsErrors, warningsAsErrors) =
+        DiagnosticOptions.Create(
+            warningLevel,
+            disabledWarnings,
+            [||],
+            treatWarningsAsErrors,
+            warningsAsErrors,
+            [||],
+            None,
+            false,
+            None,
+            [||],
+            false,
+            false,
+            false,
+            DiagnosticStyle.Default,
+            ConsoleColorMode.Automatic,
+            None,
+            None,
+            false,
+            false,
+            false
+        )
+
+    static member Create
+        (
+            warningLevel,
+            disabledWarnings,
+            enabledWarnings,
+            treatWarningsAsErrors,
+            warningsAsErrors,
+            warningsNotAsErrors,
+            maximumErrors,
+            abortOnError,
+            preferredUICulture,
+            localWarningDirectives,
+            fullPaths,
+            flatErrors,
+            utf8Output,
+            diagnosticStyle,
+            consoleColorMode,
+            lcid,
+            preferredUILanguage,
+            testParserErrorRecovery,
+            standardOutputRedirected,
+            standardErrorRedirected
+        ) =
+        maximumErrors
+        |> Option.iter (fun value ->
+            if value < 0 then
+                invalidArg "maximumErrors" "maximumErrors must be non-negative."
+        )
+
+        lcid
+        |> Option.iter (fun value ->
+            if value < 0 then
+                invalidArg "lcid" "lcid must be non-negative."
+        )
+
+        preferredUICulture
+        |> Option.iter (
+            ContractValidation.text "preferredUICulture"
+            >> ignore
+        )
+
+        preferredUILanguage
+        |> Option.iter (
+            ContractValidation.text "preferredUILanguage"
+            >> ignore
+        )
+
+        {
+            WarningLevel = warningLevel
+            DisabledWarnings = ContractValidation.stringArray "disabledWarnings" disabledWarnings
+            EnabledWarnings = ContractValidation.stringArray "enabledWarnings" enabledWarnings
+            TreatWarningsAsErrors = treatWarningsAsErrors
+            WarningsAsErrors = ContractValidation.stringArray "warningsAsErrors" warningsAsErrors
+            WarningsNotAsErrors =
+                ContractValidation.stringArray "warningsNotAsErrors" warningsNotAsErrors
+            MaximumErrors = maximumErrors
+            AbortOnError = abortOnError
+            PreferredUICulture = preferredUICulture
+            LocalWarningDirectives =
+                ContractValidation.references "localWarningDirectives" localWarningDirectives
+            FullPaths = fullPaths
+            FlatErrors = flatErrors
+            Utf8Output = utf8Output
+            DiagnosticStyle = ContractValidation.reference "diagnosticStyle" diagnosticStyle
+            ConsoleColorMode = ContractValidation.reference "consoleColorMode" consoleColorMode
+            LCID = lcid
+            PreferredUILanguage = preferredUILanguage
+            TestParserErrorRecovery = testParserErrorRecovery
+            StandardOutputRedirected = standardOutputRedirected
+            StandardErrorRedirected = standardErrorRedirected
+        }
 
     override _.ToString() = "DiagnosticOptions"
 
@@ -378,9 +524,37 @@ type PhaseStatus =
 
 [<RequireQualifiedAccess>]
 type DiagnosticSeverity =
+    | Hidden
     | Information
     | Warning
     | Error
+
+[<RequireQualifiedAccess>]
+type DiagnosticStream =
+    | StandardOutput
+    | StandardError
+
+[<RequireQualifiedAccess>]
+type DiagnosticStage =
+    | CommandLine
+    | Compilation of CompilationPhase
+    | Publication
+    | Host
+
+[<RequireQualifiedAccess>]
+type DiagnosticDisposition =
+    | Emitted
+    | Suppressed
+
+[<RequireQualifiedAccess>]
+type DiagnosticSuppression =
+    | WarningLevel
+    | GlobalNowarn
+    | LocalNowarn
+    | OffByDefault
+    | LanguageFeature
+    | MaximumErrors
+    | AbortBoundary
 
 type PhaseResult = {
     Phase: CompilationPhase
@@ -392,13 +566,133 @@ type PhaseResult = {
 
     override _.ToString() = "PhaseResult"
 
-type CompilationDiagnostic = {
-    Code: string
-    Severity: DiagnosticSeverity
+type DiagnosticRelatedInformation = {
     Message: string
     LogicalPath: string option
     Range: SourceRange option
 } with
+
+    static member Create(message, logicalPath, range) =
+        logicalPath
+        |> Option.iter (
+            ContractValidation.text "logicalPath"
+            >> ignore
+        )
+
+        {
+            Message = ContractValidation.value "message" message
+            LogicalPath = logicalPath
+            Range = range
+        }
+
+    override _.ToString() = "DiagnosticRelatedInformation"
+
+type CompilationDiagnostic = {
+    Occurrence: int64
+    Code: string
+    NumericCode: int
+    Subcategory: string option
+    Stage: DiagnosticStage
+    OriginalSeverity: DiagnosticSeverity
+    EffectiveSeverity: DiagnosticSeverity
+    Disposition: DiagnosticDisposition
+    Suppression: DiagnosticSuppression option
+    Message: string
+    LogicalPath: string option
+    Range: SourceRange option
+    RelatedInformation: ImmutableArray<DiagnosticRelatedInformation>
+    Suggestions: ImmutableArray<string>
+    Stream: DiagnosticStream option
+} with
+
+    static member Create
+        (
+            occurrence,
+            code,
+            numericCode,
+            subcategory,
+            stage,
+            originalSeverity,
+            effectiveSeverity,
+            disposition,
+            suppression,
+            message,
+            logicalPath,
+            range,
+            relatedInformation,
+            suggestions,
+            stream
+        ) =
+        if occurrence < 0L then
+            invalidArg "occurrence" "occurrence must be non-negative."
+
+        if numericCode < 0 then
+            invalidArg "numericCode" "numericCode must be non-negative."
+
+        subcategory
+        |> Option.iter (
+            ContractValidation.text "subcategory"
+            >> ignore
+        )
+
+        logicalPath
+        |> Option.iter (
+            ContractValidation.text "logicalPath"
+            >> ignore
+        )
+
+        let stage = ContractValidation.reference "stage" stage
+
+        let originalSeverity =
+            ContractValidation.reference "originalSeverity" originalSeverity
+
+        let effectiveSeverity =
+            ContractValidation.reference "effectiveSeverity" effectiveSeverity
+
+        let disposition = ContractValidation.reference "disposition" disposition
+        let suppression: DiagnosticSuppression option = suppression
+        let stream: DiagnosticStream option = stream
+
+        match disposition with
+        | DiagnosticDisposition.Emitted ->
+            if suppression.IsSome then
+                invalidArg "suppression" "An emitted diagnostic cannot have a suppression reason."
+
+            if stream.IsNone then
+                invalidArg "stream" "An emitted diagnostic must select an output stream."
+        | DiagnosticDisposition.Suppressed ->
+            if
+                effectiveSeverity
+                <> DiagnosticSeverity.Hidden
+            then
+                invalidArg
+                    "effectiveSeverity"
+                    "A suppressed diagnostic must have Hidden effective severity."
+
+            if suppression.IsNone then
+                invalidArg "suppression" "A suppressed diagnostic must have a suppression reason."
+
+            if stream.IsSome then
+                invalidArg "stream" "A suppressed diagnostic cannot select an output stream."
+
+        {
+            Occurrence = occurrence
+            Code = ContractValidation.text "code" code
+            NumericCode = numericCode
+            Subcategory = subcategory
+            Stage = stage
+            OriginalSeverity = originalSeverity
+            EffectiveSeverity = effectiveSeverity
+            Disposition = disposition
+            Suppression = suppression
+            Message = ContractValidation.value "message" message
+            LogicalPath = logicalPath
+            Range = range
+            RelatedInformation =
+                ContractValidation.references "relatedInformation" relatedInformation
+            Suggestions = ContractValidation.stringArray "suggestions" suggestions
+            Stream = stream
+        }
 
     override _.ToString() = "CompilationDiagnostic"
 
@@ -579,12 +873,90 @@ type CompilationRequest = {
         )
 
         ContractValidation.immutableArray
+            "diagnosticOptions.EnabledWarnings"
+            diagnosticOptions.EnabledWarnings
+        |> Seq.iter (
+            ContractValidation.text "diagnosticOptions.EnabledWarnings"
+            >> ignore
+        )
+
+        ContractValidation.immutableArray
             "diagnosticOptions.WarningsAsErrors"
             diagnosticOptions.WarningsAsErrors
         |> Seq.iter (
             ContractValidation.text "diagnosticOptions.WarningsAsErrors"
             >> ignore
         )
+
+        ContractValidation.immutableArray
+            "diagnosticOptions.WarningsNotAsErrors"
+            diagnosticOptions.WarningsNotAsErrors
+        |> Seq.iter (
+            ContractValidation.text "diagnosticOptions.WarningsNotAsErrors"
+            >> ignore
+        )
+
+        ContractValidation.immutableArray
+            "diagnosticOptions.LocalWarningDirectives"
+            diagnosticOptions.LocalWarningDirectives
+        |> Seq.iter (fun directive ->
+            ContractValidation.reference "diagnosticOptions.LocalWarningDirectives" directive
+            |> ignore
+
+            if directive.Order < 0L then
+                invalidArg
+                    "diagnosticOptions.LocalWarningDirectives"
+                    "A local warning directive order must be non-negative."
+
+            ContractValidation.reference
+                "diagnosticOptions.LocalWarningDirectives.Action"
+                directive.Action
+            |> ignore
+
+            ContractValidation.text "diagnosticOptions.LocalWarningDirectives.Code" directive.Code
+            |> ignore
+
+            ContractValidation.text
+                "diagnosticOptions.LocalWarningDirectives.LogicalPath"
+                directive.LogicalPath
+            |> ignore
+        )
+
+        diagnosticOptions.MaximumErrors
+        |> Option.iter (fun value ->
+            if value < 0 then
+                invalidArg
+                    "diagnosticOptions.MaximumErrors"
+                    "diagnosticOptions.MaximumErrors must be non-negative."
+        )
+
+        diagnosticOptions.PreferredUICulture
+        |> Option.iter (
+            ContractValidation.text "diagnosticOptions.PreferredUICulture"
+            >> ignore
+        )
+
+        diagnosticOptions.LCID
+        |> Option.iter (fun value ->
+            if value < 0 then
+                invalidArg "diagnosticOptions.LCID" "diagnosticOptions.LCID must be non-negative."
+        )
+
+        diagnosticOptions.PreferredUILanguage
+        |> Option.iter (
+            ContractValidation.text "diagnosticOptions.PreferredUILanguage"
+            >> ignore
+        )
+
+        ContractValidation.reference
+            "diagnosticOptions.DiagnosticStyle"
+            diagnosticOptions.DiagnosticStyle
+        |> ignore
+
+        ContractValidation.reference
+            "diagnosticOptions.ConsoleColorMode"
+            diagnosticOptions.ConsoleColorMode
+        |> ignore
 
         ContractValidation.immutableArray
             "emissionOptions.EmbeddedSourceIdentities"
