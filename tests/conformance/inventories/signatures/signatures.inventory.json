@@ -24,7 +24,11 @@
     "debug-optimize-minus-tailcalls-minus-portable-deterministic",
     "release-optimize-plus-tailcalls-plus-portable-deterministic",
     "noframework-simpleresolution-fullpaths-flaterrors-consolecolors-minus",
-    "explicit-ordered-references-fsharp-core-identity"
+    "explicit-ordered-references-fsharp-core-identity",
+    "implementation-assembly-request",
+    "reference-assembly-request",
+    "portable-pdb-request",
+    "xml-documentation-request"
   ],
   "artifactKinds": [
     "implementation-assembly",

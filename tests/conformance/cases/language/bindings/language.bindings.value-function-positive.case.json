@@ -195,7 +195,9 @@
       ],
       "consumerProbes": [
         "managed-load",
-        "runtime"
+        "runtime",
+        "downstream-fsharp",
+        "downstream-csharp"
       ]
     },
     {
@@ -350,6 +352,44 @@
         {
           "name": "expectedStdout",
           "value": "42\n"
+        }
+      ]
+    },
+    {
+      "id": "probe.downstream-fsharp",
+      "kind": "downstream-fsharp",
+      "required": true,
+      "configuration": [
+        {
+          "name": "targetFramework",
+          "value": "net10.0"
+        },
+        {
+          "name": "source",
+          "value": "module Consumer\n\n[<EntryPoint>]\nlet main _ =\n    if Program.answer () = 42 then 0 else 1\n"
+        },
+        {
+          "name": "expectedExitCode",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "id": "probe.downstream-csharp",
+      "kind": "downstream-csharp",
+      "required": true,
+      "configuration": [
+        {
+          "name": "targetFramework",
+          "value": "net10.0"
+        },
+        {
+          "name": "source",
+          "value": "internal static class Consumer\n{\n    private static int Main() => global::Program.answer() == 42 ? 0 : 1;\n}\n"
+        },
+        {
+          "name": "expectedExitCode",
+          "value": 0
         }
       ]
     },
