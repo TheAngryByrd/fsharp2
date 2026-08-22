@@ -396,6 +396,21 @@ module private TypeIdentity =
                 cliType expression.BinderType
                 cliType expression.InputValueTaskType
                 cliType expression.OutputValueTaskType
+                expression.BuilderOperations.BuilderGetter.StableId
+                expression.BuilderOperations.Bind.Target.StableId
+                expression.BuilderOperations.ReturnOperation.Target.StableId
+                expression.BuilderOperations.Delay.Target.StableId
+                expression.BuilderOperations.Run.Target.StableId
+
+                yield!
+                    [
+                        expression.BuilderOperations.Bind
+                        expression.BuilderOperations.ReturnOperation
+                        expression.BuilderOperations.Delay
+                        expression.BuilderOperations.Run
+                    ]
+                    |> List.collect _.GenericArguments
+                    |> List.map cliType
             ]
         | TypedComputation (AwaitableApplyLowering expression) ->
             Fingerprint.parts [
@@ -5059,6 +5074,173 @@ type internal CompilerService() =
                                             expressionReceiver
                                             expressionParameters
 
+                                    let resolveBuilderBindOperations
+                                        builderName
+                                        inputType
+                                        binderResultType
+                                        binderType
+                                        sourceType
+                                        outputValueTaskType
+                                        returnKind
+                                        converterTypeReference
+                                        range
+                                        =
+                                        let getterCandidates =
+                                            [
+                                                builderName
+                                                "get_" + builderName
+                                            ]
+                                            |> List.collect references.SourceMethods
+                                            |> List.filter (fun methodDefinition ->
+                                                methodDefinition.IsStatic
+                                                && methodDefinition.GenericArity = 0
+                                                && List.isEmpty methodDefinition.ParameterTypes
+                                            )
+                                            |> List.distinctBy _.StableId
+
+                                        match getterCandidates with
+                                        | [] ->
+                                            diagnostic
+                                                range
+                                                $"the computation builder '{builderName}' does not resolve to a public static value"
+                                        | _ :: _ :: _ ->
+                                            diagnostic
+                                                range
+                                                $"the computation builder value '{builderName}' is ambiguous"
+                                        | [ getter ] ->
+                                            let builderType = getter.ReturnType
+
+                                            let builderOwner =
+                                                match builderType with
+                                                | CliNamedType typeReference ->
+                                                    Some(typeReference, [])
+                                                | CliGenericType(typeReference, typeArguments) ->
+                                                    Some(typeReference, typeArguments)
+                                                | _ -> None
+
+                                            let functionTypeReference =
+                                                match binderType with
+                                                | CliGenericType(typeReference, [ _; _ ]) when
+                                                    isFSharpFunctionTypeReference typeReference
+                                                    ->
+                                                    Some typeReference
+                                                | _ -> None
+
+                                            match builderOwner, functionTypeReference with
+                                            | None, _ ->
+                                                diagnostic
+                                                    range
+                                                    $"the computation builder '{builderName}' does not have a named CLI type"
+                                            | _, None ->
+                                                diagnostic
+                                                    range
+                                                    "valueTask bind requires an F# function binder"
+                                            | Some(builderTypeReference, builderTypeArguments),
+                                              Some functionTypeReference ->
+                                                let unitType = CliNamedType fsharpUnitType
+
+                                                let continuationType =
+                                                    CliGenericType(
+                                                        functionTypeReference,
+                                                        [ inputType; outputValueTaskType ]
+                                                    )
+
+                                                let delayFunctionType =
+                                                    CliGenericType(
+                                                        functionTypeReference,
+                                                        [ unitType; outputValueTaskType ]
+                                                    )
+
+                                                let resolveOperation name argumentTypes expectedReturnType =
+                                                    let candidates =
+                                                        references.Methods(
+                                                            builderTypeReference.DeclarationId,
+                                                            name,
+                                                            false
+                                                        )
+                                                        |> List.choose (fun methodDefinition ->
+                                                            tryInferReferenceStaticMethod
+                                                                builderType
+                                                                builderTypeArguments
+                                                                methodDefinition
+                                                                argumentTypes
+                                                                expectedReturnType
+                                                        )
+                                                        |> List.distinctBy (fun
+                                                                               (target,
+                                                                                genericArguments,
+                                                                                resultType) ->
+                                                            target.StableId,
+                                                            genericArguments,
+                                                            resultType
+                                                        )
+
+                                                    match candidates with
+                                                    | [ target, genericArguments, resultType ] ->
+                                                        Ok {
+                                                            Target = target
+                                                            GenericArguments = genericArguments
+                                                            ResultType = resultType
+                                                        }
+                                                    | [] ->
+                                                        diagnostic
+                                                            range
+                                                            $"the computation builder '{builderName}' has no matching '{name}' member"
+                                                    | _ ->
+                                                        diagnostic
+                                                            range
+                                                            $"the computation builder member '{builderName}.{name}' is ambiguous"
+
+                                                resolveOperation
+                                                    "Bind"
+                                                    [ sourceType; continuationType ]
+                                                    (Some outputValueTaskType)
+                                                |> Result.bind (fun bind ->
+                                                    let returnName =
+                                                        match returnKind with
+                                                        | ComputationReturn -> "Return"
+                                                        | ComputationReturnFrom -> "ReturnFrom"
+
+                                                    resolveOperation
+                                                        returnName
+                                                        [ binderResultType ]
+                                                        (Some outputValueTaskType)
+                                                    |> Result.bind (fun returnOperation ->
+                                                        resolveOperation
+                                                            "Delay"
+                                                            [ delayFunctionType ]
+                                                            None
+                                                        |> Result.bind (fun delay ->
+                                                            resolveOperation
+                                                                "Run"
+                                                                [ delay.ResultType ]
+                                                                (Some outputValueTaskType)
+                                                            |> Result.map (fun run -> {
+                                                                BuilderGetter = {
+                                                                    DeclaringType =
+                                                                        CliNamedType getter.DeclaringType
+                                                                    StableId = getter.StableId
+                                                                    Name = getter.Name
+                                                                    GenericArity = getter.GenericArity
+                                                                    ParameterTypes = getter.ParameterTypes
+                                                                    ReturnType = getter.ReturnType
+                                                                }
+                                                                BuilderGetterGenericArguments = []
+                                                                BuilderType = builderType
+                                                                FSharpFunctionTypeReference =
+                                                                    functionTypeReference
+                                                                ConverterTypeReference =
+                                                                    converterTypeReference
+                                                                UnitType = unitType
+                                                                Bind = bind
+                                                                ReturnOperation = returnOperation
+                                                                Delay = delay
+                                                                Run = run
+                                                            })
+                                                        )
+                                                    )
+                                                )
+
                                     match expression with
                                     | IntegerLiteral value ->
                                         Ok(TypedIntegerLiteral value, CliInt32, nextLocalIndex)
@@ -5385,6 +5567,7 @@ type internal CompilerService() =
                                                             valueTaskTypeReference,
                                                             inputType,
                                                             outputType,
+                                                            binderOutputType,
                                                             outputValueTaskType
                                                         )
                                                     | ComputationReturn, outputType ->
@@ -5392,6 +5575,7 @@ type internal CompilerService() =
                                                             valueTaskTypeReference,
                                                             inputType,
                                                             outputType,
+                                                            binderOutputType,
                                                             CliGenericType(
                                                                 valueTaskTypeReference,
                                                                 [ outputType ]
@@ -5404,6 +5588,7 @@ type internal CompilerService() =
                                             | ValueTaskComputationTypes(_,
                                                                         inputType,
                                                                         outputType,
+                                                                        binderResultType,
                                                                         outputValueTaskType) ->
                                                 let resolveTypeReference arity namespaceName name =
                                                     resolveNamedType
@@ -5478,9 +5663,10 @@ type internal CompilerService() =
                                                         "System"
                                                         "OperationCanceledException"
                                                     resolveTypeReference 0 "System" "Exception"
+                                                    resolveTypeReference 2 "System" "Converter"
                                                 ]
                                                 |> collectResults []
-                                                |> Result.map (fun requiredTypes ->
+                                                |> Result.bind (fun requiredTypes ->
                                                     match requiredTypes with
                                                     | [ taskTypeReference
                                                         taskAwaiterTypeReference
@@ -5491,46 +5677,60 @@ type internal CompilerService() =
                                                         taskExtensionsTypeReference
                                                         nonGenericTaskTypeReference
                                                         operationCanceledExceptionTypeReference
-                                                        exceptionTypeReference ] ->
-                                                        TypedComputationExpression.awaitableBind {
-                                                            BuilderName = builderName
-                                                            ReturnKind = returnKind
-                                                            BinderParameterIndex =
-                                                                binderParameterIndex
-                                                            SourceParameterIndex =
-                                                                sourceParameterIndex
-                                                            InputType = inputType
-                                                            OutputType = outputType
-                                                            BinderType = binderType
-                                                            InputValueTaskType = sourceType
-                                                            OutputValueTaskType =
-                                                                outputValueTaskType
-                                                            TaskTypeReference = taskTypeReference
-                                                            TaskAwaiterTypeReference =
-                                                                taskAwaiterTypeReference
-                                                            FuncTypeReference = funcTypeReference
-                                                            CancellationTokenType =
-                                                                CliNamedType
-                                                                    cancellationTokenTypeReference
-                                                            TaskContinuationOptionsType =
-                                                                CliNamedType
-                                                                    taskContinuationOptionsTypeReference
-                                                            TaskSchedulerType =
-                                                                CliNamedType
-                                                                    taskSchedulerTypeReference
-                                                            TaskExtensionsTypeReference =
-                                                                taskExtensionsTypeReference
-                                                            NonGenericTaskTypeReference =
-                                                                nonGenericTaskTypeReference
-                                                            OperationCanceledExceptionType =
-                                                                CliNamedType
-                                                                    operationCanceledExceptionTypeReference
-                                                            ExceptionType =
-                                                                CliNamedType exceptionTypeReference
-                                                            Range = range
-                                                        },
-                                                        outputValueTaskType,
-                                                        nextLocalIndex
+                                                        exceptionTypeReference
+                                                        converterTypeReference ] ->
+                                                        resolveBuilderBindOperations
+                                                            builderName
+                                                            inputType
+                                                            binderResultType
+                                                            binderType
+                                                            sourceType
+                                                            outputValueTaskType
+                                                            returnKind
+                                                            converterTypeReference
+                                                            range
+                                                        |> Result.map (fun builderOperations ->
+                                                            TypedComputationExpression.awaitableBind {
+                                                                BuilderName = builderName
+                                                                ReturnKind = returnKind
+                                                                BinderParameterIndex =
+                                                                    binderParameterIndex
+                                                                SourceParameterIndex =
+                                                                    sourceParameterIndex
+                                                                InputType = inputType
+                                                                OutputType = outputType
+                                                                BinderType = binderType
+                                                                InputValueTaskType = sourceType
+                                                                OutputValueTaskType =
+                                                                    outputValueTaskType
+                                                                TaskTypeReference = taskTypeReference
+                                                                TaskAwaiterTypeReference =
+                                                                    taskAwaiterTypeReference
+                                                                FuncTypeReference = funcTypeReference
+                                                                CancellationTokenType =
+                                                                    CliNamedType
+                                                                        cancellationTokenTypeReference
+                                                                TaskContinuationOptionsType =
+                                                                    CliNamedType
+                                                                        taskContinuationOptionsTypeReference
+                                                                TaskSchedulerType =
+                                                                    CliNamedType
+                                                                        taskSchedulerTypeReference
+                                                                TaskExtensionsTypeReference =
+                                                                    taskExtensionsTypeReference
+                                                                NonGenericTaskTypeReference =
+                                                                    nonGenericTaskTypeReference
+                                                                OperationCanceledExceptionType =
+                                                                    CliNamedType
+                                                                        operationCanceledExceptionTypeReference
+                                                                ExceptionType =
+                                                                    CliNamedType exceptionTypeReference
+                                                                BuilderOperations = builderOperations
+                                                                Range = range
+                                                            },
+                                                            outputValueTaskType,
+                                                            nextLocalIndex
+                                                        )
                                                     | _ ->
                                                         invalidOp
                                                             "the value-task computation type set is incomplete"
@@ -12927,6 +13127,29 @@ type internal CompilerService() =
                     DeclaringType = methodTypeParametersToTypeParameters target.DeclaringType
             }
 
+            let mapResolvedBuilderMethod (methodCall: TypedResolvedBuilderMethod) = {
+                methodCall with
+                    Target = mapTypedStaticMethodTarget methodCall.Target
+                    GenericArguments =
+                        methodCall.GenericArguments
+                        |> List.map methodTypeParametersToTypeParameters
+                    ResultType = methodTypeParametersToTypeParameters methodCall.ResultType
+            }
+
+            let mapBuilderBindOperations (operations: TypedBuilderBindOperations) = {
+                operations with
+                    BuilderGetter = mapTypedStaticMethodTarget operations.BuilderGetter
+                    BuilderGetterGenericArguments =
+                        operations.BuilderGetterGenericArguments
+                        |> List.map methodTypeParametersToTypeParameters
+                    BuilderType = methodTypeParametersToTypeParameters operations.BuilderType
+                    UnitType = methodTypeParametersToTypeParameters operations.UnitType
+                    Bind = mapResolvedBuilderMethod operations.Bind
+                    ReturnOperation = mapResolvedBuilderMethod operations.ReturnOperation
+                    Delay = mapResolvedBuilderMethod operations.Delay
+                    Run = mapResolvedBuilderMethod operations.Run
+            }
+
             let mapTypedObjectConstructionTarget (target: TypedObjectConstructionTarget) = {
                 target with
                     DeclaringType = methodTypeParametersToTypeParameters target.DeclaringType
@@ -13135,6 +13358,8 @@ type internal CompilerService() =
                                     expression.OperationCanceledExceptionType
                             ExceptionType =
                                 methodTypeParametersToTypeParameters expression.ExceptionType
+                            BuilderOperations =
+                                mapBuilderBindOperations expression.BuilderOperations
                     }
                 | TypedComputation (AwaitableApplyLowering expression) ->
                     TypedComputationExpression.awaitableApply {
@@ -13817,6 +14042,67 @@ type internal CompilerService() =
                     ContinuationStableId =
                         stableId
                         + "/method:Continue"
+                |}
+
+            let builderBindClosureLayout
+                (methodDeclaration: TypedMethodDeclaration)
+                (expression: TypedAwaitableBindLowering)
+                =
+                let stableId =
+                    methodDeclaration.StableId
+                    + "/value-task-bind:"
+                    + expression.Range.Start.Offset.ToString(CultureInfo.InvariantCulture)
+
+                let name =
+                    methodDeclaration.Name
+                    + "@ValueTaskBind"
+                    + expression.Range.Start.Line.ToString(CultureInfo.InvariantCulture)
+
+                let typeReference = {
+                    DeclarationId = stableId
+                    AssemblyName = String.Empty
+                    TypeName = {
+                        Namespace = String.Empty
+                        Name =
+                            if List.isEmpty methodDeclaration.GenericParameters then
+                                name
+                            else
+                                name
+                                + "`"
+                                + methodDeclaration.GenericParameters.Length.ToString(
+                                    CultureInfo.InvariantCulture
+                                )
+                    }
+                    IsValueType = false
+                }
+
+                let methodArguments =
+                    methodDeclaration.GenericParameters
+                    |> List.mapi (fun index _ -> CliMethodTypeParameter index)
+
+                let definitionArguments =
+                    methodDeclaration.GenericParameters
+                    |> List.mapi (fun index _ -> CliTypeParameter index)
+
+                {|
+                    StableId = stableId
+                    Name = name
+                    MethodType = instantiateClosure typeReference methodArguments
+                    DefinitionType = instantiateClosure typeReference definitionArguments
+                    DefinitionExpression =
+                        match
+                            methodExpressionTypesToTypeParameters (
+                                TypedComputationExpression.awaitableBind expression
+                            )
+                        with
+                        | TypedComputation(AwaitableBindLowering mapped) -> mapped
+                        | _ -> invalidOp "the builder bind expression mapping changed its shape"
+                    BuilderFieldStableId = stableId + "/field:builder"
+                    BinderFieldStableId = stableId + "/field:binder"
+                    SourceFieldStableId = stableId + "/field:source"
+                    ConstructorStableId = stableId + "/constructor"
+                    InvokeStableId = stableId + "/method:Invoke"
+                    ContinuationStableId = stableId + "/method:InvokeContinuation"
                 |}
 
             let valueTaskApplyHelperLayout
@@ -14596,6 +14882,150 @@ type internal CompilerService() =
                     LoadFunctionPointer invoke
                     NewObject delegateConstructor
                     CallMethod fromConverter
+                ]
+
+            let builderMethodReference isInstance (target: TypedStaticMethodCallTarget) = {
+                DeclaringType = CliDeclaringType target.DeclaringType
+                Name = target.Name
+                GenericArity = target.GenericArity
+                IsInstance = isInstance
+                ParameterTypes = target.ParameterTypes
+                ReturnType = target.ReturnType
+                TargetStableId = Some target.StableId
+            }
+
+            let builderMethodCall isInstance (methodCall: TypedResolvedBuilderMethod) =
+                let methodReference = builderMethodReference isInstance methodCall.Target
+
+                match methodCall.GenericArguments with
+                | [] -> CallMethod methodReference
+                | genericArguments -> CallGenericMethod(methodReference, genericArguments)
+
+            let functionConversionReferences functionType converterType invoke =
+                let delegateConstructor = {
+                    DeclaringType = CliDeclaringType converterType
+                    Name = ".ctor"
+                    GenericArity = 0
+                    IsInstance = true
+                    ParameterTypes = [
+                        CliObject
+                        CliNativeInt
+                    ]
+                    ReturnType = CliVoid
+                    TargetStableId = None
+                }
+
+                let fromConverter =
+                    match functionType, converterType with
+                    | CliGenericType(functionReference, _),
+                      CliGenericType(converterReference, _) -> {
+                        DeclaringType = CliDeclaringType functionType
+                        Name = "FromConverter"
+                        GenericArity = 0
+                        IsInstance = false
+                        ParameterTypes = [
+                            CliGenericType(
+                                converterReference,
+                                [
+                                    CliTypeParameter 0
+                                    CliTypeParameter 1
+                                ]
+                            )
+                        ]
+                        ReturnType =
+                            CliGenericType(
+                                functionReference,
+                                [
+                                    CliTypeParameter 0
+                                    CliTypeParameter 1
+                                ]
+                            )
+                        TargetStableId = None
+                      }
+                    | _ -> invalidOp "builder function conversion requires generic types"
+
+                invoke, delegateConstructor, fromConverter
+
+            let builderBindInstructions
+                (methodDeclaration: TypedMethodDeclaration)
+                kind
+                (expression: TypedAwaitableBindLowering)
+                =
+                let layout = builderBindClosureLayout methodDeclaration expression
+                let definition = layout.DefinitionExpression
+                let operations = expression.BuilderOperations
+                let definitionOperations = definition.BuilderOperations
+
+                let delayFunctionType =
+                    CliGenericType(
+                        operations.FSharpFunctionTypeReference,
+                        [ operations.UnitType; expression.OutputValueTaskType ]
+                    )
+
+                let delayConverterType =
+                    CliGenericType(
+                        operations.ConverterTypeReference,
+                        [ operations.UnitType; expression.OutputValueTaskType ]
+                    )
+
+                let constructor = {
+                    DeclaringType = CliDeclaringType layout.MethodType
+                    Name = ".ctor"
+                    GenericArity = 0
+                    IsInstance = true
+                    ParameterTypes = [
+                        definitionOperations.BuilderType
+                        definition.BinderType
+                        definition.InputValueTaskType
+                    ]
+                    ReturnType = CliVoid
+                    TargetStableId = Some layout.ConstructorStableId
+                }
+
+                let invoke = {
+                    DeclaringType = CliDeclaringType layout.MethodType
+                    Name = "Invoke"
+                    GenericArity = 0
+                    IsInstance = true
+                    ParameterTypes = [ definitionOperations.UnitType ]
+                    ReturnType = definition.OutputValueTaskType
+                    TargetStableId = Some layout.InvokeStableId
+                }
+
+                let invoke, delegateConstructor, fromConverter =
+                    functionConversionReferences
+                        delayFunctionType
+                        delayConverterType
+                        invoke
+
+                let getter =
+                    builderMethodReference false operations.BuilderGetter
+
+                [
+                    match operations.BuilderGetterGenericArguments with
+                    | [] -> CallMethod getter
+                    | genericArguments -> CallGenericMethod(getter, genericArguments)
+
+                    StoreLocal 0
+                    LoadLocal 0
+                    LoadLocal 0
+                    LoadLocal 0
+                    LoadArgument(methodArgumentIndex kind expression.BinderParameterIndex)
+                    LoadArgument(methodArgumentIndex kind expression.SourceParameterIndex)
+                    NewObject constructor
+                    LoadFunctionPointer invoke
+                    NewObject delegateConstructor
+                    CallMethod fromConverter
+                    builderMethodCall true operations.Delay
+                    builderMethodCall true operations.Run
+                    Return
+                ],
+                [
+                    {
+                        Index = 0
+                        Name = expression.BuilderName
+                        Type = operations.BuilderType
+                    }
                 ]
 
             let delegateLambdaConstructionInstructions
@@ -16136,6 +16566,10 @@ type internal CompilerService() =
                     valueTaskOfUnitInstructions methodDeclaration kind expression
                     @ [ Return ],
                     []
+                | TypedComputation (AwaitableBindLowering expression) when
+                    expression.BuilderOperations.BuilderType <> CliVoid
+                    ->
+                    builderBindInstructions methodDeclaration kind expression
                 | TypedComputation (AwaitableBindLowering expression) ->
                     let layout = valueTaskBindHelperLayout methodDeclaration expression
                     let definition = layout.DefinitionExpression
@@ -18149,6 +18583,226 @@ type internal CompilerService() =
                                         Range = expression.Range
                                     }
 
+                                    let builderLayout =
+                                        builderBindClosureLayout methodDeclaration expression
+
+                                    let operations = expression.BuilderOperations
+
+                                    let builderField = {
+                                        DeclaringType = CliDeclaringType builderLayout.DefinitionType
+                                        Name = "builder"
+                                        FieldType = operations.BuilderType
+                                        TargetStableId = Some builderLayout.BuilderFieldStableId
+                                    }
+
+                                    let binderField = {
+                                        DeclaringType = CliDeclaringType builderLayout.DefinitionType
+                                        Name = "binder"
+                                        FieldType = expression.BinderType
+                                        TargetStableId = Some builderLayout.BinderFieldStableId
+                                    }
+
+                                    let sourceField = {
+                                        DeclaringType = CliDeclaringType builderLayout.DefinitionType
+                                        Name = "source"
+                                        FieldType = expression.InputValueTaskType
+                                        TargetStableId = Some builderLayout.SourceFieldStableId
+                                    }
+
+                                    let objectConstructor = {
+                                        DeclaringType =
+                                            CoreDeclaringType {
+                                                Namespace = "System"
+                                                Name = "Object"
+                                            }
+                                        Name = ".ctor"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = []
+                                        ReturnType = CliVoid
+                                        TargetStableId = None
+                                    }
+
+                                    let builderConstructorInstructions = [
+                                        LoadArgument 0
+                                        CallMethod objectConstructor
+                                        LoadArgument 0
+                                        LoadArgument 1
+                                        StoreField builderField
+                                        LoadArgument 0
+                                        LoadArgument 2
+                                        StoreField binderField
+                                        LoadArgument 0
+                                        LoadArgument 3
+                                        StoreField sourceField
+                                        Return
+                                    ]
+
+                                    let builderConstructor = {
+                                        SchemaVersion = querySchema
+                                        StableId = builderLayout.ConstructorStableId
+                                        Name = ".ctor"
+                                        Kind = ClosureConstructor
+                                        GenericParameters = []
+                                        Constraints = []
+                                        GenericParameterConstraints = []
+                                        Attributes = []
+                                        Parameters = [
+                                            {
+                                                Name = "builder"
+                                                Type = operations.BuilderType
+                                                Attributes = []
+                                            }
+                                            {
+                                                Name = "binder"
+                                                Type = expression.BinderType
+                                                Attributes = []
+                                            }
+                                            {
+                                                Name = "source"
+                                                Type = expression.InputValueTaskType
+                                                Attributes = []
+                                            }
+                                        ]
+                                        Locals = []
+                                        ReturnType = CliVoid
+                                        Instructions = builderConstructorInstructions
+                                        EmitDefaultSequencePoint = true
+                                        MaxStack = 2
+                                        DependencyIds =
+                                            instructionDependencyIds builderConstructorInstructions
+                                        ContentHash =
+                                            Fingerprint.parts [
+                                                builderLayout.ConstructorStableId
+                                                methodImplementationHash methodDeclaration
+                                            ]
+                                        DocumentIndex = typed.DocumentIndex
+                                        DocumentChecksum = typed.SourceChecksum
+                                        Range = expression.Range
+                                    }
+
+                                    let builderContinuationInstructions = [
+                                        LoadArgument 0
+                                        LoadField builderField
+                                        LoadArgument 0
+                                        LoadField binderField
+                                        LoadArgument 1
+                                        CallVirtualMethod binderInvoke
+                                        builderMethodCall true operations.ReturnOperation
+                                        Return
+                                    ]
+
+                                    let builderContinuation = {
+                                        SchemaVersion = querySchema
+                                        StableId = builderLayout.ContinuationStableId
+                                        Name = "InvokeContinuation"
+                                        Kind = ClosureInvoke
+                                        GenericParameters = []
+                                        Constraints = []
+                                        GenericParameterConstraints = []
+                                        Attributes = []
+                                        Parameters = [
+                                            {
+                                                Name = "value"
+                                                Type = expression.InputType
+                                                Attributes = []
+                                            }
+                                        ]
+                                        Locals = []
+                                        ReturnType = expression.OutputValueTaskType
+                                        Instructions = builderContinuationInstructions
+                                        EmitDefaultSequencePoint = false
+                                        MaxStack = 3
+                                        DependencyIds =
+                                            instructionDependencyIds
+                                                builderContinuationInstructions
+                                        ContentHash =
+                                            Fingerprint.parts [
+                                                builderLayout.ContinuationStableId
+                                                methodImplementationHash methodDeclaration
+                                            ]
+                                        DocumentIndex = typed.DocumentIndex
+                                        DocumentChecksum = typed.SourceChecksum
+                                        Range = expression.Range
+                                    }
+
+                                    let continuationFunctionType =
+                                        CliGenericType(
+                                            operations.FSharpFunctionTypeReference,
+                                            [ expression.InputType; expression.OutputValueTaskType ]
+                                        )
+
+                                    let continuationConverterType =
+                                        CliGenericType(
+                                            operations.ConverterTypeReference,
+                                            [ expression.InputType; expression.OutputValueTaskType ]
+                                        )
+
+                                    let continuationTarget = {
+                                        DeclaringType =
+                                            CliDeclaringType builderLayout.DefinitionType
+                                        Name = "InvokeContinuation"
+                                        GenericArity = 0
+                                        IsInstance = true
+                                        ParameterTypes = [ expression.InputType ]
+                                        ReturnType = expression.OutputValueTaskType
+                                        TargetStableId = Some builderLayout.ContinuationStableId
+                                    }
+
+                                    let (continuationTarget,
+                                         continuationDelegateConstructor,
+                                         continuationFromConverter) =
+                                        functionConversionReferences
+                                            continuationFunctionType
+                                            continuationConverterType
+                                            continuationTarget
+
+                                    let builderInvokeInstructions = [
+                                        LoadArgument 0
+                                        LoadField builderField
+                                        LoadArgument 0
+                                        LoadField sourceField
+                                        LoadArgument 0
+                                        LoadFunctionPointer continuationTarget
+                                        NewObject continuationDelegateConstructor
+                                        CallMethod continuationFromConverter
+                                        builderMethodCall true operations.Bind
+                                        Return
+                                    ]
+
+                                    let builderInvoke = {
+                                        SchemaVersion = querySchema
+                                        StableId = builderLayout.InvokeStableId
+                                        Name = "Invoke"
+                                        Kind = ClosureInvoke
+                                        GenericParameters = []
+                                        Constraints = []
+                                        GenericParameterConstraints = []
+                                        Attributes = []
+                                        Parameters = [
+                                            {
+                                                Name = "unitValue"
+                                                Type = operations.UnitType
+                                                Attributes = []
+                                            }
+                                        ]
+                                        Locals = []
+                                        ReturnType = expression.OutputValueTaskType
+                                        Instructions = builderInvokeInstructions
+                                        EmitDefaultSequencePoint = false
+                                        MaxStack = 4
+                                        DependencyIds =
+                                            instructionDependencyIds builderInvokeInstructions
+                                        ContentHash =
+                                            Fingerprint.parts [
+                                                builderLayout.InvokeStableId
+                                                methodImplementationHash methodDeclaration
+                                            ]
+                                        DocumentIndex = typed.DocumentIndex
+                                        DocumentChecksum = typed.SourceChecksum
+                                        Range = expression.Range
+                                    }
+
 
                                     Some {
                                         SchemaVersion = querySchema
@@ -18161,10 +18815,42 @@ type internal CompilerService() =
                                         GenericParameters = methodDeclaration.GenericParameters
                                         Attributes = []
                                         LiteralFields = []
-                                        InstanceFields = []
+                                        InstanceFields = [
+                                            {
+                                                SchemaVersion = querySchema
+                                                StableId = builderLayout.BuilderFieldStableId
+                                                Name = "builder"
+                                                Type = operations.BuilderType
+                                                Attributes = []
+                                                ContentHash =
+                                                    TypeIdentity.cliType operations.BuilderType
+                                            }
+                                            {
+                                                SchemaVersion = querySchema
+                                                StableId = builderLayout.BinderFieldStableId
+                                                Name = "binder"
+                                                Type = expression.BinderType
+                                                Attributes = []
+                                                ContentHash =
+                                                    TypeIdentity.cliType expression.BinderType
+                                            }
+                                            {
+                                                SchemaVersion = querySchema
+                                                StableId = builderLayout.SourceFieldStableId
+                                                Name = "source"
+                                                Type = expression.InputValueTaskType
+                                                Attributes = []
+                                                ContentHash =
+                                                    TypeIdentity.cliType
+                                                        expression.InputValueTaskType
+                                            }
+                                        ]
                                         StaticFields = []
                                         Properties = []
                                         Methods = [
+                                            builderConstructor
+                                            builderInvoke
+                                            builderContinuation
                                             completedMethod
                                             continuationMethod
                                         ]

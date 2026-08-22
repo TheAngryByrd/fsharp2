@@ -208,9 +208,11 @@ type internal ReferenceTypeIndex
         types: Dictionary<TypeNameArity, ResolvedTypeName>,
         typesBySimpleName: Dictionary<TypeNameArity, ResolvedTypeName list>,
         fsharpDelegateDeclarationIds: HashSet<string>,
+        autoOpenTypeDeclarationIds: HashSet<string>,
         typeLocations: Dictionary<string, ReferenceTypeLocation list>
     ) =
     let methodCache = Dictionary<string, ReferenceMethodDefinition list>()
+    let sourceMethodCache = Dictionary<string, ReferenceMethodDefinition list>()
     let fieldCache = Dictionary<string, ReferenceFieldDefinition list>()
     let baseTypeCache = Dictionary<string, CliType option>()
     let interfaceCache = Dictionary<string, CliType list>()
@@ -594,6 +596,24 @@ type internal ReferenceTypeIndex
                     candidates
             )
 
+    member _.SourceMethods(name: string) =
+        lock
+            sourceMethodCache
+            (fun () ->
+                match sourceMethodCache.TryGetValue(name) with
+                | true, candidates -> candidates
+                | false, _ ->
+                    let candidates =
+                        autoOpenTypeDeclarationIds
+                        |> Seq.collect (fun declarationId -> loadMethods declarationId name true)
+                        |> Seq.distinctBy _.StableId
+                        |> Seq.sortBy _.StableId
+                        |> List.ofSeq
+
+                    sourceMethodCache.Add(name, candidates)
+                    candidates
+            )
+
     member _.Fields(declarationId: string, name: string, isStatic: bool) =
         let key = ReferenceFieldKey.create declarationId name isStatic
 
@@ -746,6 +766,8 @@ type internal ReferenceTypeIndex
         let bySimpleName = Dictionary<TypeNameArity, ResizeArray<ResolvedTypeName>>()
 
         let fsharpDelegateDeclarationIds = HashSet<string>(StringComparer.Ordinal)
+
+        let autoOpenTypeDeclarationIds = HashSet<string>(StringComparer.Ordinal)
 
         let typeLocations = Dictionary<string, ResizeArray<ReferenceTypeLocation>>()
 
@@ -1137,6 +1159,18 @@ type internal ReferenceTypeIndex
                         )
                     | _ -> false
 
+                let isAutoOpenType (definition: TypeDefinition) =
+                    definition.GetCustomAttributes()
+                    |> Seq.exists (fun handle ->
+                        handle
+                        |> metadata.GetCustomAttribute
+                        |> customAttributeTypeName
+                        |> Option.exists (fun attributeType ->
+                            attributeType.Namespace = "Microsoft.FSharp.Core"
+                            && attributeType.Name = "AutoOpenAttribute"
+                        )
+                    )
+
                 let rec metadataTypeName handle =
                     let definition = metadata.GetTypeDefinition(handle)
                     let metadataName = metadata.GetString(definition.Name)
@@ -1190,6 +1224,10 @@ type internal ReferenceTypeIndex
                     match types.TryGetValue(key) with
                     | false, _ -> ()
                     | true, resolved ->
+                        if isAutoOpenType definition then
+                            autoOpenTypeDeclarationIds.Add(resolved.DeclarationId)
+                            |> ignore
+
                         let location = {
                             ReferencePath = path
                             TypeRow = MetadataTokens.GetRowNumber(handle)
@@ -1255,6 +1293,7 @@ type internal ReferenceTypeIndex
                     types,
                     frozenBySimpleName,
                     fsharpDelegateDeclarationIds,
+                    autoOpenTypeDeclarationIds,
                     frozenTypeLocations
                 )
             )

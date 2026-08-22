@@ -4,6 +4,7 @@ open System
 open System.Diagnostics
 open System.IO
 open System.Reflection
+open System.Threading.Tasks
 open Expecto
 
 module CompilerContractTests =
@@ -255,6 +256,230 @@ module ValueTaskCase =
                     Expect.isTrue
                         (File.Exists(outputPath))
                         "the compiler should emit the output assembly"
+                finally
+                    Directory.Delete(root, true)
+
+            testCase "builder operations are observable"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-contract-builder-operations",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let builderSourcePath = Path.Combine(root, "Builder.fs")
+                    let builderOutputPath = Path.Combine(root, "Builder.dll")
+
+                    File.WriteAllText(
+                        builderSourcePath,
+                        """namespace ContractBuilders
+
+open System.Threading.Tasks
+
+[<RequireQualifiedAccess>]
+module Probe =
+    let mutable private calls = 0
+
+    let record operation =
+        calls <- calls ||| operation
+
+    let reset () =
+        calls <- 0
+
+    let mask () = calls
+
+type ProbeBuilder() =
+    member _.Bind(source: ValueTask<'T>, continuation: 'T -> ValueTask<'U>) : ValueTask<'U> =
+        Probe.record 4
+        ValueTask<'U>(task {
+            let! value = source.AsTask()
+            return! (continuation value).AsTask()
+        })
+
+    member _.ReturnFrom(source: ValueTask<'T>) =
+        Probe.record 8
+        source
+
+    member _.Delay(generator: unit -> ValueTask<'T>) =
+        Probe.record 1
+        generator
+
+    member _.Run(generator: unit -> ValueTask<'T>) =
+        Probe.record 2
+        generator()
+
+[<AutoOpen>]
+module Builders =
+    let probe = ProbeBuilder()
+"""
+                    )
+
+                    let builderResult =
+                        compileWithOracle root "builder.rsp" builderOutputPath builderSourcePath
+
+                    Expect.equal
+                        builderResult.ExitCode
+                        0
+                        (builderResult.StandardOutput
+                         + builderResult.StandardError)
+
+                    let sourcePath = Path.Combine(root, "ValueTaskCase.fs")
+
+                    File.WriteAllText(
+                        sourcePath,
+                        """namespace ContractCases
+
+open System.Threading.Tasks
+open ContractBuilders
+
+[<RequireQualifiedAccess>]
+module ValueTaskCase =
+    let inline bind
+        ([<InlineIfLambda>] (binder: 'input -> ValueTask<'output>))
+        (source: ValueTask<'input>)
+        =
+        probe {
+            let! value = source
+            return! binder value
+        }
+"""
+                    )
+
+                    let oracleOutputPath = Path.Combine(root, "OracleValueTaskCase.dll")
+                    let oracleResponsePath = Path.Combine(root, "oracle-case.rsp")
+
+                    File.WriteAllLines(
+                        oracleResponsePath,
+                        [|
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--reference:{builderOutputPath}"
+                            $"--out:{oracleOutputPath}"
+                            sourcePath
+                        |]
+                    )
+
+                    let oracleResult =
+                        invokeProcess root 30_000 "dotnet" [
+                            compatibilityOraclePath ()
+                            "@"
+                            + oracleResponsePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let fsharp2OutputPath = Path.Combine(root, "FSharp2ValueTaskCase.dll")
+
+                    let fsharp2Result =
+                        compileWithFSharp2 root fsharp2OutputPath sourcePath [
+                            builderOutputPath
+                            typeof<ValueTask<int>>.Assembly.Location
+                        ] []
+
+                    Expect.equal
+                        fsharp2Result.ExitCode
+                        0
+                        (fsharp2Result.StandardOutput
+                         + fsharp2Result.StandardError)
+
+                    let methodFlags =
+                        BindingFlags.Public
+                        ||| BindingFlags.NonPublic
+                        ||| BindingFlags.Static
+
+                    let execute outputPath =
+                        let loadContext =
+                            new System.Runtime.Loader.AssemblyLoadContext(
+                                $"fsharp2-builder-operations-{Guid.NewGuid():N}",
+                                isCollectible = true
+                            )
+
+                        let loadAssembly path =
+                            use stream = new MemoryStream(File.ReadAllBytes(path), writable = false)
+                            loadContext.LoadFromStream(stream)
+
+                        try
+                            let builderAssembly = loadAssembly builderOutputPath
+                            let assembly = loadAssembly outputPath
+                            let probeType = builderAssembly.GetType("ContractBuilders.Probe", true)
+                            let reset = probeType.GetMethod("reset", methodFlags)
+                            let mask = probeType.GetMethod("mask", methodFlags)
+
+                            reset.Invoke(null, Array.empty<obj>)
+                            |> ignore
+
+                            let bind =
+                                assembly
+                                    .GetType("ContractCases.ValueTaskCase", true)
+                                    .GetMethod("bind", methodFlags)
+                                    .MakeGenericMethod(
+                                        [|
+                                            typeof<int>
+                                            typeof<int>
+                                        |]
+                                    )
+
+                            let binder =
+                                Microsoft.FSharp.Core.FSharpFunc<int, ValueTask<int>>
+                                    .FromConverter(
+                                        Converter<int, ValueTask<int>>(fun value ->
+                                            ValueTask<int>(value + 1)
+                                        )
+                                    )
+
+                            let value =
+                                try
+                                    bind.Invoke(
+                                        null,
+                                        [|
+                                            box binder
+                                            box (ValueTask<int>(41))
+                                        |]
+                                    )
+                                with :? TargetInvocationException as error ->
+                                    raise error.InnerException
+                                |> unbox<ValueTask<int>>
+                                |> _.AsTask()
+                                |> _.GetAwaiter()
+                                |> _.GetResult()
+
+                            value,
+                            (mask.Invoke(null, Array.empty<obj>)
+                             |> unbox<int>)
+                        finally
+                            loadContext.Unload()
+
+                    let oracleValue, oracleMask = execute oracleOutputPath
+                    let fsharp2Value, fsharp2Mask = execute fsharp2OutputPath
+
+                    Expect.equal oracleValue 42 "The Compatibility Oracle output must execute."
+
+                    Expect.equal
+                        fsharp2Value
+                        oracleValue
+                        "FSharp2 must preserve the computed value."
+
+                    Expect.equal
+                        oracleMask
+                        15
+                        "The Compatibility Oracle must execute every builder operation."
+
+                    Expect.equal
+                        fsharp2Mask
+                        oracleMask
+                        "FSharp2 must execute the selected builder operations."
                 finally
                     Directory.Delete(root, true)
 

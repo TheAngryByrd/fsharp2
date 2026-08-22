@@ -1125,6 +1125,29 @@ and internal TypedDelegateLambdaExpression = {
 
     override _.ToString() = "TypedDelegateLambdaExpression"
 
+and internal TypedResolvedBuilderMethod = {
+    Target: TypedStaticMethodCallTarget
+    GenericArguments: CliType list
+    ResultType: CliType
+} with
+
+    override _.ToString() = "TypedResolvedBuilderMethod"
+
+and internal TypedBuilderBindOperations = {
+    BuilderGetter: TypedStaticMethodCallTarget
+    BuilderGetterGenericArguments: CliType list
+    BuilderType: CliType
+    FSharpFunctionTypeReference: CliTypeReference
+    ConverterTypeReference: CliTypeReference
+    UnitType: CliType
+    Bind: TypedResolvedBuilderMethod
+    ReturnOperation: TypedResolvedBuilderMethod
+    Delay: TypedResolvedBuilderMethod
+    Run: TypedResolvedBuilderMethod
+} with
+
+    override _.ToString() = "TypedBuilderBindOperations"
+
 and internal TypedAwaitableBindLowering = {
     BuilderName: string
     ReturnKind: ComputationReturnKind
@@ -1145,6 +1168,7 @@ and internal TypedAwaitableBindLowering = {
     NonGenericTaskTypeReference: CliTypeReference
     OperationCanceledExceptionType: CliType
     ExceptionType: CliType
+    BuilderOperations: TypedBuilderBindOperations
     Range: SourceRange
 } with
 
