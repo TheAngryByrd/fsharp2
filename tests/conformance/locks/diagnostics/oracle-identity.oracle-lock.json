@@ -1,0 +1,108 @@
+{
+  "documentKind": "oracle-lock-v1",
+  "schemaVersion": 1,
+  "lockId": "diagnostics.oracle-identity",
+  "family": "diagnostics",
+  "caseId": "language.bindings.value-function-parse-negative",
+  "caseHash": "sha256:37c15b1d795e554a3b8456107ca12f739e4beb856eda5624f0c069c3d5800ed4",
+  "oracleIdentity": {
+    "sdkVersion": "10.0.110",
+    "sdkCommit": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd",
+    "compiler": {
+      "logicalPath": "sdk/10.0.110/FSharp/fsc.dll",
+      "sha256": "sha256:8cb573be4b7f70886929a572024ab26fc1893cfdd795ef124c58627610ddbf22",
+      "productVersion": "14.0.110-servicing.26326.116\u002Bf7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "msbuildTask": {
+      "logicalPath": "sdk/10.0.110/FSharp/FSharp.Build.dll",
+      "sha256": "sha256:ab62157b2111ae5f172e863d086f7035503f83c0bdb9a9efc2e2450891df6e1a",
+      "productVersion": "14.0.110-servicing.26326.116\u002Bf7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "fsharpCore": {
+      "logicalPath": "sdk/10.0.110/FSharp/FSharp.Core.dll",
+      "sha256": "sha256:ff83cead5566c9111b69e920c2703e6d8d125305d6ac1ac08692cafee3890968",
+      "productVersion": "10.0.110-servicing.26326.116\u002Bf7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "culture": "en-US",
+    "encoding": "utf-8",
+    "optionHash": "sha256:60de2312acc6a20a2a641c2587860cc38705089aafdadae9d8063ceff7e08e36"
+  },
+  "streams": {
+    "stdout": {
+      "base64": "",
+      "byteLength": 0,
+      "byteHash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "text": "",
+      "textHash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "stderr": {
+      "base64": "CkM6XFVzZXJzXGppbW15XFJlcG9zaXRvcmllc1xwdWJsaWNcVGhlQW5ncnlCeXJkXGZzaGFycDJcdGVzdHNcY29uZm9ybWFuY2VcZml4dHVyZXNcbGFuZ3VhZ2UuYmluZGluZ3MudmFsdWUtZnVuY3Rpb24tcGFyc2UtbmVnYXRpdmVcUHJvZ3JhbS5mcygzLDE3KTogZXJyb3IgRlMwMDEwOiBVbmV4cGVjdGVkIHN5bWJvbCAnKScgaW4gYmluZGluZw0K",
+      "byteLength": 198,
+      "byteHash": "sha256:5391241c98c871a98b12d8d293b6ed75e11c8612efc25c32748d310b6e659b04",
+      "text": "\nC:\\Users\\jimmy\\Repositories\\public\\TheAngryByrd\\fsharp2\\tests\\conformance\\fixtures\\language.bindings.value-function-parse-negative\\Program.fs(3,17): error FS0010: Unexpected symbol \u0027)\u0027 in binding\r\n",
+      "textHash": "sha256:5391241c98c871a98b12d8d293b6ed75e11c8612efc25c32748d310b6e659b04"
+    }
+  },
+  "process": {
+    "exitCode": 1,
+    "targetResult": "failed"
+  },
+  "diagnostics": [
+    {
+      "identity": "diagnostic.fs0010.0",
+      "code": "FS0010",
+      "subcategory": "parse",
+      "message": "Unexpected symbol \u0027)\u0027 in binding",
+      "logicalSource": "/src/Program.fs",
+      "range": {
+        "startLine": 3,
+        "startColumn": 17,
+        "endLine": 3,
+        "endColumn": 18
+      },
+      "recoveryContext": "binding-expression",
+      "originalSeverity": "error",
+      "adjustedSeverity": "error",
+      "stream": "stderr",
+      "sequence": 0,
+      "occurrenceCount": 1,
+      "related": [],
+      "warningLevel": 5,
+      "suppressed": false,
+      "promoted": false,
+      "languageGate": null
+    }
+  ],
+  "artifacts": {
+    "preRun": [
+      {
+        "logicalPath": "/output/case.dll",
+        "state": "absent",
+        "sha256": null
+      },
+      {
+        "logicalPath": "/output/case.pdb",
+        "state": "absent",
+        "sha256": null
+      }
+    ],
+    "postRun": [
+      {
+        "logicalPath": "/output/case.dll",
+        "state": "absent",
+        "sha256": null
+      },
+      {
+        "logicalPath": "/output/case.pdb",
+        "state": "absent",
+        "sha256": null
+      }
+    ]
+  },
+  "review": {
+    "owner": "compiler-compatibility",
+    "sourceIssue": "#27",
+    "capturedAt": "2026-08-21T09:47:00Z",
+    "expiryCondition": "Refresh when the case hash, Oracle SDK identity, complete options, culture, or encoding changes."
+  }
+}

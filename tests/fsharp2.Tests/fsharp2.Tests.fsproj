@@ -19,6 +19,7 @@
     </ItemGroup>
     <ItemGroup>
         <Compile Include="CompilerContractTests.fs" />
+        <Compile Include="DiagnosticCompatibilityTests.fs" />
         <Compile Include="CompilerTargetTests.fs" />
         <Compile Include="Tests.fs" />
         <Compile Include="Main.fs" />
