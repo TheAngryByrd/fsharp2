@@ -18,6 +18,8 @@
         <PackageReference Include="altcover" />
     </ItemGroup>
     <ItemGroup>
+        <Compile Include="MetadataReferenceFixtures.fs" />
+        <Compile Include="MetadataEcma335ImporterTests.fs" />
         <Compile Include="CompilerContractTests.fs" />
         <Compile Include="DiagnosticCompatibilityTests.fs" />
         <Compile Include="CompilerTargetTests.fs" />
