@@ -7,6 +7,20 @@ open System.Security.Cryptography
 open System.Threading
 
 module CompilerHost =
+    let private writeRenderedDiagnostic (diagnostic: RenderedDiagnostic) =
+        let bytes = diagnostic.Bytes
+
+        match diagnostic.Stream with
+        | Some DiagnosticStream.StandardOutput ->
+            let output = Console.OpenStandardOutput()
+            output.Write(bytes, 0, bytes.Length)
+            output.Flush()
+        | Some DiagnosticStream.StandardError ->
+            let error = Console.OpenStandardError()
+            error.Write(bytes, 0, bytes.Length)
+            error.Flush()
+        | None -> ()
+
     let private writeTrace
         (invocation: CompilerInvocation)
         (path: string)
@@ -78,8 +92,19 @@ module CompilerHost =
         let result = Compiler().Compile(request, CancellationToken.None)
         CompilationPipeline.completeInvocation compileStarted invocation result
 
+    let private sourceTextForPath (sources: SourceInput list) path =
+        let comparison =
+            if OperatingSystem.IsWindows() then
+                StringComparison.OrdinalIgnoreCase
+            else
+                StringComparison.Ordinal
+
+        sources
+        |> List.tryFind (fun source -> String.Equals(source.Path, path, comparison))
+        |> Option.map _.Text
+
     let private runCompilation (arguments: string array) =
-        match CommandLine.parse arguments with
+        match CommandLine.diagnosticOptions arguments with
         | Error message ->
             Console.Error.WriteLine(
                 "FSC2P0001: "
@@ -87,33 +112,46 @@ module CompilerHost =
             )
 
             1
-        | Ok invocation ->
-            let sources =
-                invocation.SourcePaths
-                |> List.map (fun sourcePath -> {
-                    Path = sourcePath
-                    Text = File.ReadAllText(sourcePath)
-                })
+        | Ok diagnosticOptions ->
+            match CommandLine.parse arguments with
+            | Error message ->
+                Console.Error.WriteLine(
+                    "FSC2P0001: "
+                    + message
+                )
 
-            let response =
-                try
-                    match invocation.ServerName with
-                    | Some pipeName -> ServiceHost.compileRemote pipeName invocation sources
-                    | None -> compileLocally invocation sources
-                finally
-                    if invocation.StrongNameKey.Length > 0 then
-                        CryptographicOperations.ZeroMemory(invocation.StrongNameKey.AsSpan())
+                1
+            | Ok invocation ->
+                let sources =
+                    invocation.SourcePaths
+                    |> List.map (fun sourcePath -> {
+                        Path = sourcePath
+                        Text = File.ReadAllText(sourcePath)
+                    })
 
-            invocation.TracePath
-            |> Option.iter (fun path -> writeTrace invocation path response)
+                let response =
+                    try
+                        match invocation.ServerName with
+                        | Some pipeName -> ServiceHost.compileRemote pipeName invocation sources
+                        | None -> compileLocally invocation sources
+                    finally
+                        if invocation.StrongNameKey.Length > 0 then
+                            CryptographicOperations.ZeroMemory(invocation.StrongNameKey.AsSpan())
 
-            if
+                invocation.TracePath
+                |> Option.iter (fun path -> writeTrace invocation path response)
+
+                if
+                    response.ExitCode
+                    <> 0
+                then
+                    DiagnosticRendering.renderFormattedError
+                        diagnosticOptions
+                        response.Error
+                        (sourceTextForPath sources)
+                    |> writeRenderedDiagnostic
+
                 response.ExitCode
-                <> 0
-            then
-                Console.Error.WriteLine(response.Error)
-
-            response.ExitCode
 
     let run (arguments: string array) =
         try

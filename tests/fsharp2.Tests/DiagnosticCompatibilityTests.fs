@@ -4,6 +4,9 @@ open System
 open System.Collections.Generic
 open System.Diagnostics
 open System.IO
+open System.Resources
+open System.Runtime.Loader
+open System.Text
 open System.Text.Json
 open System.Text.RegularExpressions
 open Expecto
@@ -273,6 +276,164 @@ module DiagnosticCompatibilityTests =
             |> Seq.map (fun family -> family.GetProperty("familyId").GetString())
             |> Seq.choose Option.ofObj
             |> Seq.toArray
+
+    let private diagnosticOptions
+        preferredUICulture
+        style
+        flatErrors
+        colorMode
+        lcid
+        preferredUILanguage
+        standardOutputRedirected
+        standardErrorRedirected
+        =
+        DiagnosticOptions.Create(
+            Some 5,
+            [||],
+            [||],
+            false,
+            [||],
+            [||],
+            None,
+            false,
+            preferredUICulture,
+            [||],
+            false,
+            flatErrors,
+            true,
+            style,
+            colorMode,
+            lcid,
+            preferredUILanguage,
+            false,
+            standardOutputRedirected,
+            standardErrorRedirected
+        )
+
+    let private diagnostic code numericCode subcategory severity message path range stream =
+        CompilationDiagnostic.Create(
+            0L,
+            code,
+            numericCode,
+            subcategory,
+            DiagnosticStage.Compilation CompilationPhase.Syntax,
+            severity,
+            severity,
+            DiagnosticDisposition.Emitted,
+            None,
+            message,
+            Some path,
+            Some range,
+            [||],
+            [||],
+            Some stream
+        )
+
+    let private renderedDiagnostic (rendered: obj) =
+        let instanceMembers =
+            Reflection.BindingFlags.Public
+            ||| Reflection.BindingFlags.NonPublic
+            ||| Reflection.BindingFlags.Instance
+
+        let property name =
+            rendered.GetType().GetProperty(name, instanceMembers).GetValue(rendered)
+
+        property "Stream" :?> DiagnosticStream option, property "Bytes" :?> byte array
+
+    let private renderingMethod name failureMessage =
+        let renderingType =
+            typeof<Compiler>.Assembly.GetType("FSharp2.Compiler.DiagnosticRendering", false)
+
+        Expect.isNotNull renderingType "The compiler must define the diagnostic rendering boundary."
+
+        let methodInfo =
+            renderingType.GetMethod(
+                name,
+                Reflection.BindingFlags.Public
+                ||| Reflection.BindingFlags.NonPublic
+                ||| Reflection.BindingFlags.Static
+            )
+
+        Expect.isNotNull methodInfo failureMessage
+        methodInfo
+
+    let private renderDiagnostic options diagnostic sourceLine =
+        let renderMethod =
+            renderingMethod "render" "The diagnostic rendering boundary must define render."
+
+        let rendered =
+            renderMethod.Invoke(
+                null,
+                [|
+                    box options
+                    box diagnostic
+                    box sourceLine
+                |]
+            )
+
+        renderedDiagnostic rendered
+
+    let private renderDiagnosticWithResources resources options diagnostic sourceLine =
+        let renderMethod =
+            renderingMethod
+                "renderWithResources"
+                "The diagnostic rendering boundary must accept an isolated resource manager."
+
+        renderMethod.Invoke(
+            null,
+            [|
+                box resources
+                box options
+                box diagnostic
+                box sourceLine
+            |]
+        )
+        |> renderedDiagnostic
+
+    let private renderFormattedDiagnostic
+        options
+        error
+        (sourceTextForPath: string -> string option)
+        =
+        let renderMethod =
+            renderingMethod
+                "renderFormattedError"
+                "The diagnostic rendering boundary must render adapter errors."
+
+        renderMethod.Invoke(
+            null,
+            [|
+                box options
+                box error
+                box sourceTextForPath
+            |]
+        )
+        |> renderedDiagnostic
+
+    let private commandLineResult methodName arguments =
+        let commandLineType =
+            typeof<Compiler>.Assembly.GetType("FSharp2.Compiler.CommandLine", false)
+
+        Expect.isNotNull commandLineType "The compiler must define the command-line boundary."
+
+        let methodInfo =
+            commandLineType.GetMethod(
+                methodName,
+                Reflection.BindingFlags.Public
+                ||| Reflection.BindingFlags.NonPublic
+                ||| Reflection.BindingFlags.Static
+            )
+
+        Expect.isNotNull methodInfo $"The command-line boundary must define {methodName}."
+
+        let result = methodInfo.Invoke(null, [| box arguments |])
+
+        Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(
+            result,
+            result.GetType(),
+            Reflection.BindingFlags.Public
+            ||| Reflection.BindingFlags.NonPublic
+        )
 
     [<Tests>]
     let tests =
@@ -1048,6 +1209,547 @@ module DiagnosticCompatibilityTests =
                 Expect.isFalse
                     (adapterError.Contains("FS0058", StringComparison.Ordinal))
                     "The adapter must not report a suppressed occurrence as the failure."
+
+            testCase "rendering bytes match every pinned style"
+            <| fun _ ->
+                let parseRange = {
+                    Start = { Offset = 0; Line = 3; Column = 17 }
+                    End = { Offset = 1; Line = 3; Column = 18 }
+                }
+
+                let parseDiagnostic =
+                    diagnostic
+                        "FS0010"
+                        10
+                        (Some "parse")
+                        DiagnosticSeverity.Error
+                        "Unexpected symbol ')' in binding"
+                        "Program.fs"
+                        parseRange
+                        DiagnosticStream.StandardError
+
+                let plainDefault =
+                    "\nProgram.fs(3,17): error FS0010: Unexpected symbol ')' in binding\r\n"
+
+                let cases = [
+                    DiagnosticStyle.Default, plainDefault
+                    DiagnosticStyle.VisualStudio,
+                    "\nProgram.fs(3,17,3,18): parse error FS0010: Unexpected symbol ')' in binding\r\n"
+                    DiagnosticStyle.Gcc,
+                    "\nProgram.fs:3:17: error FS0010: Unexpected symbol ')' in binding\r\n"
+                    DiagnosticStyle.Emacs,
+                    "\nFile \"Program.fs\", line 3, characters 16-17: error FS0010: Unexpected symbol ')' in binding\r\n"
+                    DiagnosticStyle.Rich,
+                    "\nerror FS0010: Unexpected symbol ')' in binding\n"
+                    + "  --> Program.fs (3,17)\n"
+                    + "  3 | let answer () = )\n"
+                    + String(' ', 22)
+                    + "^\r\n"
+                ]
+
+                for style, expectedText in cases do
+                    let stream, bytes =
+                        renderDiagnostic
+                            (diagnosticOptions
+                                None
+                                style
+                                false
+                                ConsoleColorMode.Disabled
+                                None
+                                None
+                                true
+                                true)
+                            parseDiagnostic
+                            (Some "let answer () = )")
+
+                    Expect.equal stream (Some DiagnosticStream.StandardError) $"{style}: stream"
+
+                    Expect.sequenceEqual
+                        bytes
+                        (Encoding.UTF8.GetBytes(expectedText))
+                        $"{style}: exact UTF-8 bytes"
+
+                let windowsPathDiagnostic =
+                    diagnostic
+                        "FS0010"
+                        10
+                        (Some "parse")
+                        DiagnosticSeverity.Error
+                        "Unexpected symbol ')' in binding"
+                        "C:\\repo\\Program.fs"
+                        parseRange
+                        DiagnosticStream.StandardError
+
+                let _, windowsPathBytes =
+                    renderDiagnostic
+                        (diagnosticOptions
+                            None
+                            DiagnosticStyle.Emacs
+                            false
+                            ConsoleColorMode.Disabled
+                            None
+                            None
+                            true
+                            true)
+                        windowsPathDiagnostic
+                        None
+
+                Expect.sequenceEqual
+                    windowsPathBytes
+                    (Encoding.UTF8.GetBytes(
+                        "\nFile \"C:/repo/Program.fs\", line 3, characters 16-17: error FS0010: Unexpected symbol ')' in binding\r\n"
+                    ))
+                    "Emacs output must normalize Windows path separators."
+
+                let logicalPath = "folder/Program.fs"
+
+                let logicalPathDiagnostic =
+                    diagnostic
+                        "FS0010"
+                        10
+                        (Some "parse")
+                        DiagnosticSeverity.Error
+                        "Unexpected symbol ')' in binding"
+                        logicalPath
+                        parseRange
+                        DiagnosticStream.StandardError
+
+                let operatingSystemPath = logicalPath.Replace('/', Path.DirectorySeparatorChar)
+
+                let pathCases = [
+                    DiagnosticStyle.Default,
+                    $"\n{operatingSystemPath}(3,17): error FS0010: Unexpected symbol ')' in binding\r\n"
+                    DiagnosticStyle.VisualStudio,
+                    "\nfolder\\Program.fs(3,17,3,18): parse error FS0010: Unexpected symbol ')' in binding\r\n"
+                    DiagnosticStyle.Gcc,
+                    $"\n{operatingSystemPath}:3:17: error FS0010: Unexpected symbol ')' in binding\r\n"
+                    DiagnosticStyle.Emacs,
+                    "\nFile \"folder/Program.fs\", line 3, characters 16-17: error FS0010: Unexpected symbol ')' in binding\r\n"
+                    DiagnosticStyle.Rich,
+                    "\nerror FS0010: Unexpected symbol ')' in binding\n"
+                    + $"  --> {operatingSystemPath} (3,17)\r\n"
+                ]
+
+                for style, expectedText in pathCases do
+                    let _, bytes =
+                        renderDiagnostic
+                            (diagnosticOptions
+                                None
+                                style
+                                false
+                                ConsoleColorMode.Disabled
+                                None
+                                None
+                                true
+                                true)
+                            logicalPathDiagnostic
+                            None
+
+                    Expect.sequenceEqual
+                        bytes
+                        (Encoding.UTF8.GetBytes(expectedText))
+                        $"{style}: path separators"
+
+                let multiColumnRange = {
+                    Start = { Offset = 0; Line = 5; Column = 9 }
+                    End = { Offset = 5; Line = 5; Column = 14 }
+                }
+
+                let multiColumnDiagnostic =
+                    diagnostic
+                        "FS0001"
+                        1
+                        (Some "typecheck")
+                        DiagnosticSeverity.Error
+                        "Type mismatch"
+                        "Program.fs"
+                        multiColumnRange
+                        DiagnosticStream.StandardError
+
+                let _, multiColumnBytes =
+                    renderDiagnostic
+                        (diagnosticOptions
+                            None
+                            DiagnosticStyle.Rich
+                            false
+                            ConsoleColorMode.Disabled
+                            None
+                            None
+                            true
+                            true)
+                        multiColumnDiagnostic
+                        (Some "let x = mismatch")
+
+                Expect.sequenceEqual
+                    multiColumnBytes
+                    (Encoding.UTF8.GetBytes(
+                        "\nerror FS0001: Type mismatch\n"
+                        + "  --> Program.fs (5,9)\n"
+                        + "  5 | let x = mismatch\n"
+                        + String(' ', 14)
+                        + "^^^^^\r\n"
+                    ))
+                    "Rich output must mark every covered column."
+
+                let typeRange = {
+                    Start = { Offset = 0; Line = 5; Column = 26 }
+                    End = { Offset = 1; Line = 5; Column = 37 }
+                }
+
+                let typeDiagnostic =
+                    diagnostic
+                        "FS0001"
+                        1
+                        (Some "typecheck")
+                        DiagnosticSeverity.Error
+                        "This expression was expected to have type\n    'int'    \nbut here has type\n    'string'"
+                        "Program.fs"
+                        typeRange
+                        DiagnosticStream.StandardError
+
+                let flatStream, flatBytes =
+                    renderDiagnostic
+                        (diagnosticOptions
+                            None
+                            DiagnosticStyle.Flat
+                            true
+                            ConsoleColorMode.Disabled
+                            None
+                            None
+                            true
+                            true)
+                        typeDiagnostic
+                        None
+
+                Expect.equal flatStream (Some DiagnosticStream.StandardError) "Flat: stream"
+
+                Expect.sequenceEqual
+                    flatBytes
+                    (Encoding.UTF8.GetBytes(
+                        "\nProgram.fs(5,26): error FS0001: This expression was expected to have type\u001d    'int'    \u001dbut here has type\u001d    'string'\r\n"
+                    ))
+                    "Flat: embedded newlines must become ASCII 29."
+
+                let coloredText =
+                    "\nProgram.fs(3,17): \u001b[31merror FS0010\u001b[0m: Unexpected symbol ')' in binding\r\n"
+
+                for name, colorMode, redirected, expectedText in
+                    [
+                        "explicit color", ConsoleColorMode.Enabled, true, coloredText
+                        "automatic terminal color", ConsoleColorMode.Automatic, false, coloredText
+                        "automatic redirected output",
+                        ConsoleColorMode.Automatic,
+                        true,
+                        plainDefault
+                        "disabled color", ConsoleColorMode.Disabled, false, plainDefault
+                    ] do
+                    let _, bytes =
+                        renderDiagnostic
+                            (diagnosticOptions
+                                None
+                                DiagnosticStyle.Default
+                                false
+                                colorMode
+                                None
+                                None
+                                redirected
+                                redirected)
+                            parseDiagnostic
+                            None
+
+                    Expect.sequenceEqual bytes (Encoding.UTF8.GetBytes(expectedText)) name
+
+                let standardOutputDiagnostic =
+                    diagnostic
+                        "FS0010"
+                        10
+                        (Some "parse")
+                        DiagnosticSeverity.Error
+                        "Unexpected symbol ')' in binding"
+                        "Program.fs"
+                        parseRange
+                        DiagnosticStream.StandardOutput
+
+                for name, standardOutputRedirected, standardErrorRedirected, expectedText in
+                    [
+                        "stdout terminal color", false, true, coloredText
+                        "stdout redirected color", true, false, plainDefault
+                    ] do
+                    let stream, bytes =
+                        renderDiagnostic
+                            (diagnosticOptions
+                                None
+                                DiagnosticStyle.Default
+                                false
+                                ConsoleColorMode.Automatic
+                                None
+                                None
+                                standardOutputRedirected
+                                standardErrorRedirected)
+                            standardOutputDiagnostic
+                            None
+
+                    Expect.equal stream (Some DiagnosticStream.StandardOutput) $"{name}: stream"
+                    Expect.sequenceEqual bytes (Encoding.UTF8.GetBytes(expectedText)) name
+
+                let richOptions =
+                    diagnosticOptions
+                        None
+                        DiagnosticStyle.Rich
+                        false
+                        ConsoleColorMode.Disabled
+                        None
+                        None
+                        true
+                        true
+
+                let multiSourceStream, multiSourceBytes =
+                    renderFormattedDiagnostic
+                        richOptions
+                        "\nSecond.fs(3,17): error FS0010: Unexpected symbol ')' in binding"
+                        (fun path ->
+                            if path = "Second.fs" then
+                                Some "module Second\n\nlet answer () = )"
+                            else
+                                Some "module First\n\nlet wrongSource = 1"
+                        )
+
+                Expect.equal
+                    multiSourceStream
+                    (Some DiagnosticStream.StandardError)
+                    "Rich multi-source: stream"
+
+                Expect.sequenceEqual
+                    multiSourceBytes
+                    (Encoding.UTF8.GetBytes(
+                        "\nerror FS0010: Unexpected symbol ')' in binding\n"
+                        + "  --> Second.fs (3,17)\n"
+                        + "  3 | let answer () = )\n"
+                        + String(' ', 22)
+                        + "^\r\n"
+                    ))
+                    "Rich multi-source output must use the diagnostic source text."
+
+                let optionCase, optionFields =
+                    commandLineResult "diagnosticOptions" [| "--gnu-style-errors" |]
+
+                Expect.equal optionCase.Name "Ok" "The GNU style option must select output options."
+
+                let emacsOptions = optionFields[0] :?> DiagnosticOptions
+
+                Expect.equal
+                    emacsOptions.DiagnosticStyle
+                    DiagnosticStyle.Emacs
+                    "The GNU style option must select Emacs rendering."
+
+                let colorCase, colorFields =
+                    commandLineResult "diagnosticOptions" [| "--consolecolors" |]
+
+                Expect.equal colorCase.Name "Ok" "The bare console-color option must parse."
+
+                let colorOptions = colorFields[0] :?> DiagnosticOptions
+
+                Expect.equal
+                    colorOptions.ConsoleColorMode
+                    ConsoleColorMode.Enabled
+                    "The bare console-color option must enable color."
+
+                let emacsOutputPath = Path.Combine(Path.GetTempPath(), "wave4-emacs.dll")
+
+                let parseCase, _ =
+                    commandLineResult "parse" [|
+                        "--target:library"
+                        "--deterministic+"
+                        "--debug:portable"
+                        "--gnu-style-errors"
+                        "--consolecolors"
+                        $"--out:{emacsOutputPath}"
+                        "Program.fs"
+                    |]
+
+                Expect.equal parseCase.Name "Ok" "The main parser must accept GNU style output."
+
+            testCase "culture matrix matches satellites and fallback"
+            <| fun _ ->
+                let range = {
+                    Start = { Offset = 0; Line = 3; Column = 17 }
+                    End = { Offset = 1; Line = 3; Column = 18 }
+                }
+
+                let parseDiagnostic =
+                    diagnostic
+                        "FS0010"
+                        10
+                        (Some "parse")
+                        DiagnosticSeverity.Error
+                        "Unexpected symbol ')' in binding"
+                        "Program.fs"
+                        range
+                        DiagnosticStream.StandardError
+
+                let expected message =
+                    Encoding.UTF8.GetBytes($"\nProgram.fs(3,17): error FS0010: {message}\r\n")
+
+                let cultures = [
+                    "neutral", None, None, None, "Unexpected symbol ')' in binding"
+                    "French satellite",
+                    Some "fr-FR",
+                    None,
+                    None,
+                    "symbole ')' inattendu dans la liaison"
+                    "French parent fallback",
+                    Some "fr-CA",
+                    None,
+                    None,
+                    "symbole ')' inattendu dans la liaison"
+                    "German satellite",
+                    Some "de-DE",
+                    None,
+                    None,
+                    "Unerwartete(s/r) Symbol \")\". in Bindung"
+                    "missing satellite",
+                    Some "zz-ZZ",
+                    None,
+                    None,
+                    "Unexpected symbol ')' in binding"
+                    "invalid culture",
+                    Some "not a culture",
+                    None,
+                    None,
+                    "Unexpected symbol ')' in binding"
+                    "LCID no-op", None, Some 1036, None, "Unexpected symbol ')' in binding"
+                    "preferred UI language over LCID",
+                    None,
+                    Some 1031,
+                    Some "fr-FR",
+                    "symbole ')' inattendu dans la liaison"
+                    "explicit culture precedence",
+                    Some "de-DE",
+                    Some 1036,
+                    Some "fr-FR",
+                    "Unerwartete(s/r) Symbol \")\". in Bindung"
+                ]
+
+                for name, culture, lcid, preferredLanguage, expectedMessage in cultures do
+                    let stream, bytes =
+                        renderDiagnostic
+                            (diagnosticOptions
+                                culture
+                                DiagnosticStyle.Default
+                                false
+                                ConsoleColorMode.Disabled
+                                lcid
+                                preferredLanguage
+                                true
+                                true)
+                            parseDiagnostic
+                            None
+
+                    Expect.equal stream (Some DiagnosticStream.StandardError) $"{name}: stream"
+
+                    Expect.sequenceEqual
+                        bytes
+                        (expected expectedMessage)
+                        $"{name}: exact UTF-8 bytes"
+
+                let compilerAssembly = typeof<Compiler>.Assembly
+
+                let fixtureDirectory =
+                    Path.Combine(Path.GetTempPath(), $"fsharp2-wave4-resources-{Guid.NewGuid():N}")
+
+                let corruptSatelliteDirectory = Path.Combine(fixtureDirectory, "nl-NL")
+
+                let corruptSatellitePath =
+                    Path.Combine(
+                        corruptSatelliteDirectory,
+                        compilerAssembly.GetName().Name
+                        + ".resources.dll"
+                    )
+
+                Directory.CreateDirectory(corruptSatelliteDirectory)
+                |> ignore
+
+                File.WriteAllBytes(
+                    corruptSatellitePath,
+                    [|
+                        0x46uy
+                        0x53uy
+                        0x32uy
+                    |]
+                )
+
+                let loadContext = new AssemblyLoadContext($"fsharp2-wave4-{Guid.NewGuid():N}", true)
+
+                let resolveSatellite =
+                    Func<AssemblyLoadContext, Reflection.AssemblyName, Reflection.Assembly>(fun
+                                                                                                context
+                                                                                                assemblyName ->
+                        if
+                            String.Equals(
+                                assemblyName.Name,
+                                compilerAssembly.GetName().Name
+                                + ".resources",
+                                StringComparison.Ordinal
+                            )
+                            && String.Equals(
+                                assemblyName.CultureName,
+                                "nl-NL",
+                                StringComparison.OrdinalIgnoreCase
+                            )
+                        then
+                            use stream = File.OpenRead(corruptSatellitePath)
+                            context.LoadFromStream(stream)
+                        else
+                            null
+                    )
+
+                loadContext.add_Resolving resolveSatellite
+
+                try
+                    use assemblyStream =
+                        new MemoryStream(File.ReadAllBytes(compilerAssembly.Location), false)
+
+                    let isolatedAssembly = loadContext.LoadFromStream(assemblyStream)
+
+                    let resources =
+                        new ResourceManager(
+                            "FSharp2.Compiler.Resources.Diagnostics",
+                            isolatedAssembly
+                        )
+
+                    try
+                        let stream, bytes =
+                            renderDiagnosticWithResources
+                                resources
+                                (diagnosticOptions
+                                    (Some "nl-NL")
+                                    DiagnosticStyle.Default
+                                    false
+                                    ConsoleColorMode.Disabled
+                                    None
+                                    None
+                                    true
+                                    true)
+                                parseDiagnostic
+                                None
+
+                        Expect.equal
+                            stream
+                            (Some DiagnosticStream.StandardError)
+                            "corrupt satellite: stream"
+
+                        Expect.sequenceEqual
+                            bytes
+                            (expected "Unexpected symbol ')' in binding")
+                            "corrupt satellite: neutral UTF-8 fallback"
+                    finally
+                        resources.ReleaseAllResources()
+                finally
+                    loadContext.remove_Resolving resolveSatellite
+                    loadContext.Unload()
+                    File.Delete(corruptSatellitePath)
+                    Directory.Delete(corruptSatelliteDirectory)
+                    Directory.Delete(fixtureDirectory)
 
             testCase "inventory discovers every pinned candidate"
             <| fun _ ->

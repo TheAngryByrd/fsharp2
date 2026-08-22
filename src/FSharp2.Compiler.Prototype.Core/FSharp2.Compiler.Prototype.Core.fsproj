@@ -13,6 +13,10 @@
     <PackageReference Include="FSharp.Core" />
   </ItemGroup>
   <ItemGroup>
+    <EmbeddedResource Include="../fsc2.Prototype/Resources/Diagnostics*.resx"
+                      Link="Resources/%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup>
     <Compile Include="../fsc2.Prototype/Contracts.fs" Link="Contracts.fs" />
     <Compile Include="../fsc2.Prototype/Model.fs" Link="Model.fs" />
     <Compile Include="../fsc2.Prototype/Diagnostics.fs" Link="Diagnostics.fs" />

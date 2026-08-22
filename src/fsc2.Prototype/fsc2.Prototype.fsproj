@@ -17,4 +17,8 @@
   <ItemGroup>
     <Compile Include="Program.fs" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Update="Resources/Diagnostics*.resx"
+                      Link="Resources/%(Filename)%(Extension)" />
+  </ItemGroup>
 </Project>

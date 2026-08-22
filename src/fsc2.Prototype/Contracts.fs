@@ -241,6 +241,7 @@ type DiagnosticStyle =
     | Default
     | VisualStudio
     | Gcc
+    | Emacs
     | Rich
     | Flat
 

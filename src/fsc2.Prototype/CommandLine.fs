@@ -2,6 +2,7 @@ namespace FSharp2.Compiler
 
 open System
 open System.Collections.Generic
+open System.Globalization
 open System.IO
 
 module internal CommandLine =
@@ -11,6 +12,15 @@ module internal CommandLine =
     } with
 
         override _.ToString() = "PathMap"
+
+    type private RenderingOption =
+        | PreferredUILanguage of string
+        | LocaleIdentifier of string
+        | FullPaths
+        | FlatErrors
+        | Utf8Output
+        | Style of DiagnosticStyle
+        | Colors of ConsoleColorMode
 
     let private trimQuotes (value: string) =
         if
@@ -56,6 +66,93 @@ module internal CommandLine =
             )
         else
             None
+
+    let private expandArguments (arguments: string array) =
+        let expanded = ResizeArray<string>()
+
+        for argument in arguments do
+            expandArgument expanded argument
+
+        expanded
+
+    let private tryRenderingOption (argument: string) =
+        match optionValue "--preferreduilang:" argument with
+        | Some value -> Some(PreferredUILanguage value)
+        | None ->
+            match optionValue "--LCID:" argument with
+            | Some value -> Some(LocaleIdentifier value)
+            | None when argument.Equals("--fullpaths", StringComparison.OrdinalIgnoreCase) ->
+                Some FullPaths
+            | None when argument.Equals("--flaterrors", StringComparison.OrdinalIgnoreCase) ->
+                Some FlatErrors
+            | None when argument.Equals("--utf8output", StringComparison.OrdinalIgnoreCase) ->
+                Some Utf8Output
+            | None when argument.Equals("--vserrors", StringComparison.OrdinalIgnoreCase) ->
+                Some(Style DiagnosticStyle.VisualStudio)
+            | None when argument.Equals("--gccerrors", StringComparison.OrdinalIgnoreCase) ->
+                Some(Style DiagnosticStyle.Gcc)
+            | None when argument.Equals("--gnu-style-errors", StringComparison.OrdinalIgnoreCase) ->
+                Some(Style DiagnosticStyle.Emacs)
+            | None when argument.Equals("--richerrors", StringComparison.OrdinalIgnoreCase) ->
+                Some(Style DiagnosticStyle.Rich)
+            | None when argument.Equals("--consolecolors", StringComparison.OrdinalIgnoreCase) ->
+                Some(Colors ConsoleColorMode.Enabled)
+            | None when argument.Equals("--consolecolors+", StringComparison.OrdinalIgnoreCase) ->
+                Some(Colors ConsoleColorMode.Enabled)
+            | None when argument.Equals("--consolecolors-", StringComparison.OrdinalIgnoreCase) ->
+                Some(Colors ConsoleColorMode.Disabled)
+            | None -> None
+
+    let diagnosticOptions (arguments: string array) =
+        try
+            let mutable preferredUILanguage: string option = None
+            let mutable fullPaths = false
+            let mutable flatErrors = false
+            let mutable utf8Output = false
+            let mutable diagnosticStyle = DiagnosticStyle.Default
+            let mutable consoleColorMode = ConsoleColorMode.Automatic
+            let mutable lcid: int option = None
+
+            for argument in expandArguments arguments do
+                match tryRenderingOption argument with
+                | Some(PreferredUILanguage value) -> preferredUILanguage <- Some value
+                | Some(LocaleIdentifier value) ->
+                    lcid <-
+                        Int32.Parse(value, CultureInfo.InvariantCulture)
+                        |> Some
+                | Some FullPaths -> fullPaths <- true
+                | Some FlatErrors -> flatErrors <- true
+                | Some Utf8Output -> utf8Output <- true
+                | Some(Style value) -> diagnosticStyle <- value
+                | Some(Colors value) -> consoleColorMode <- value
+                | None -> ()
+
+            Ok(
+                DiagnosticOptions.Create(
+                    None,
+                    [||],
+                    [||],
+                    false,
+                    [||],
+                    [||],
+                    None,
+                    false,
+                    None,
+                    [||],
+                    fullPaths,
+                    flatErrors,
+                    utf8Output,
+                    diagnosticStyle,
+                    consoleColorMode,
+                    lcid,
+                    preferredUILanguage,
+                    false,
+                    Console.IsOutputRedirected,
+                    Console.IsErrorRedirected
+                )
+            )
+        with ex ->
+            Error ex.Message
 
     let private splitValues (value: string) =
         value.Split(
@@ -192,10 +289,7 @@ module internal CommandLine =
 
     let parse (arguments: string array) =
         try
-            let expanded = ResizeArray<string>()
-
-            for argument in arguments do
-                expandArgument expanded argument
+            let expanded = expandArguments arguments
 
             let mutable assemblyPath: string option = None
             let mutable pdbPath: string option = None
@@ -490,26 +584,19 @@ module internal CommandLine =
                                                     ->
                                                     portablePdb <- true
                                                 | None when
-                                                    argument.Equals(
-                                                        "--fullpaths",
-                                                        StringComparison.OrdinalIgnoreCase
-                                                    )
+                                                    tryRenderingOption argument = Some FullPaths
                                                     ->
                                                     fullPaths <- true
                                                 | None when
-                                                    argument.Equals(
-                                                        "--flaterrors",
-                                                        StringComparison.OrdinalIgnoreCase
-                                                    )
+                                                    tryRenderingOption argument = Some FlatErrors
                                                     ->
                                                     flatErrors <- true
                                                 | None when
-                                                    argument.Equals(
-                                                        "--utf8output",
-                                                        StringComparison.OrdinalIgnoreCase
-                                                    )
+                                                    tryRenderingOption argument = Some Utf8Output
                                                     ->
                                                     utf8Output <- true
+                                                | None when (tryRenderingOption argument).IsSome ->
+                                                    ()
                                                 | None when
                                                     argument.Equals(
                                                         "--nologo",
