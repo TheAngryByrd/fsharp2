@@ -83,6 +83,43 @@ let other = 2
 
                 Expect.isEmpty result.Diagnostics "Commented directives are balanced"
 
+            testCase "reports unmatched conditional directives with Oracle messages"
+            <| fun _ ->
+                let diagnosticsFor text =
+                    (prepare "10.0" [] text).Diagnostics
+                    |> Seq.map (fun diagnostic ->
+                        diagnostic.Code,
+                        diagnostic.Message,
+                        diagnostic.Range.Start.Line,
+                        diagnostic.Range.Start.Column
+                    )
+                    |> Seq.toList
+
+                Expect.equal
+                    (diagnosticsFor "#endif\nlet x = 1")
+                    [
+                        "FS0010",
+                        "#endif has no matching #if in definition. Expected incomplete structured construct at or before this point or other token.",
+                        1,
+                        1
+                    ]
+                    "An unmatched #endif"
+
+                Expect.equal
+                    (diagnosticsFor "#elif A\nlet x = 1")
+                    [
+                        "FS0010",
+                        "Unexpected keyword 'elif' in directive. Expected identifier or other token.",
+                        1,
+                        2
+                    ]
+                    "An unmatched #elif"
+
+                Expect.equal
+                    (diagnosticsFor "#if A\nlet x = 1")
+                    [ "FS0513", "End of file in #if section begun at or after here", 1, 1 ]
+                    "An unterminated #if"
+
             testCase "reports malformed conditional expressions at the Oracle position"
             <| fun _ ->
                 let diagnosticFor expression =
@@ -213,7 +250,7 @@ let value = 1
                     [
                         "FS0010"
                         "FS0010"
-                        "FS0010"
+                        "FS0513"
                     ]
                     "All directive faults are retained"
 

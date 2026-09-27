@@ -415,7 +415,20 @@ module internal Directives =
                 add DirectiveKind.Conditional
 
                 match frames with
-                | [] -> addDiagnostic "FS0010" "Unexpected '#elif'." directiveRange
+                | [] ->
+                    let keywordStart =
+                        SourceMap.positionAt
+                            source.Map
+                            (directiveStart
+                             + 1)
+
+                    addDiagnostic
+                        "FS0010"
+                        "Unexpected keyword 'elif' in directive. Expected identifier or other token."
+                        {
+                            Start = keywordStart
+                            End = keywordStart
+                        }
                 | frame :: tail ->
                     let condition =
                         let value = conditionAt 6
@@ -470,7 +483,11 @@ module internal Directives =
                 add DirectiveKind.Conditional
 
                 match frames with
-                | [] -> addDiagnostic "FS0010" "Unexpected '#endif'." directiveRange
+                | [] ->
+                    addDiagnostic
+                        "FS0010"
+                        "#endif has no matching #if in definition. Expected incomplete structured construct at or before this point or other token."
+                        directiveRange
                 | frame :: tail ->
                     frames <- tail
                     active <- frame.ParentActive
@@ -544,7 +561,7 @@ module internal Directives =
         for frame in
             frames
             |> List.rev do
-            addDiagnostic "FS0010" "Incomplete conditional directive." frame.Range
+            addDiagnostic "FS0513" "End of file in #if section begun at or after here" frame.Range
 
         let warningScopes =
             warnings
