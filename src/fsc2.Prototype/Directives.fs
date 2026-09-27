@@ -42,6 +42,182 @@ module internal Directives =
         Range: SourceRange
     }
 
+    type private ConditionToken =
+        | ConditionIdentifier of string
+        | ConditionNot
+        | ConditionAnd
+        | ConditionOr
+        | ConditionOpen
+        | ConditionClose
+        | ConditionEnd
+
+    type internal ConditionError = {
+        Code: string
+        Message: string
+        Index: int
+    }
+
+    let private tokenizeCondition (text: string) =
+        let tokens = ResizeArray<ConditionToken * int>()
+        let mutable index = 0
+        let mutable error = None
+
+        while error.IsNone
+              && index < text.Length do
+            let current = text[index]
+
+            if Char.IsWhiteSpace current then
+                index <- index + 1
+            elif
+                Char.IsLetter current
+                || current = '_'
+            then
+                let start = index
+
+                while index < text.Length
+                      && (Char.IsLetterOrDigit text[index]
+                          || text[index] = '_') do
+                    index <- index + 1
+
+                tokens.Add(
+                    ConditionIdentifier(
+                        text.Substring(
+                            start,
+                            index
+                            - start
+                        )
+                    ),
+                    start
+                )
+            elif current = '!' then
+                tokens.Add(ConditionNot, index)
+                index <- index + 1
+            elif current = '(' then
+                tokens.Add(ConditionOpen, index)
+                index <- index + 1
+            elif current = ')' then
+                tokens.Add(ConditionClose, index)
+                index <- index + 1
+            elif
+                current = '&'
+                && index + 1 < text.Length
+                && text[index + 1] = '&'
+            then
+                tokens.Add(ConditionAnd, index)
+                index <- index + 2
+            elif
+                current = '|'
+                && index + 1 < text.Length
+                && text[index + 1] = '|'
+            then
+                tokens.Add(ConditionOr, index)
+                index <- index + 2
+            else
+                error <-
+                    Some {
+                        Code = "FS3182"
+                        Message = $"Unexpected character '{current}' in preprocessor expression"
+                        Index = index + 1
+                    }
+
+        match error with
+        | Some error -> Error error
+        | None ->
+            tokens.Add(ConditionEnd, text.Length)
+            Ok(tokens.ToArray())
+
+    let internal evaluateCondition (defines: Set<string>) (text: string) =
+        let incomplete index = {
+            Code = "FS3184"
+            Message = "Incomplete preprocessor expression"
+            Index = index
+        }
+
+        tokenizeCondition text
+        |> Result.bind (fun tokens ->
+            let mutable position = 0
+            let current () = tokens[position]
+
+            let rec parseOr () =
+                parseAnd ()
+                |> Result.bind (fun left ->
+                    match fst (current ()) with
+                    | ConditionOr ->
+                        position <-
+                            position
+                            + 1
+
+                        parseOr ()
+                        |> Result.map (fun right ->
+                            left
+                            || right
+                        )
+                    | _ -> Ok left
+                )
+
+            and parseAnd () =
+                parseUnary ()
+                |> Result.bind (fun left ->
+                    match fst (current ()) with
+                    | ConditionAnd ->
+                        position <-
+                            position
+                            + 1
+
+                        parseAnd ()
+                        |> Result.map (fun right ->
+                            left
+                            && right
+                        )
+                    | _ -> Ok left
+                )
+
+            and parseUnary () =
+                match current () with
+                | ConditionNot, _ ->
+                    position <-
+                        position
+                        + 1
+
+                    parseUnary ()
+                    |> Result.map not
+                | ConditionIdentifier name, _ ->
+                    position <-
+                        position
+                        + 1
+
+                    Ok(defines.Contains name)
+                | ConditionOpen, _ ->
+                    position <-
+                        position
+                        + 1
+
+                    parseOr ()
+                    |> Result.bind (fun value ->
+                        match current () with
+                        | ConditionClose, _ ->
+                            position <-
+                                position
+                                + 1
+
+                            Ok value
+                        | _, index ->
+                            Error {
+                                Code = "FS3185"
+                                Message = "Missing token ')' in preprocessor expression"
+                                Index = index
+                            }
+                    )
+                | _, index -> Error(incomplete index)
+
+            parseOr ()
+            |> Result.bind (fun value ->
+                match current () with
+                | ConditionEnd, _ -> Ok value
+                | _, index -> Error(incomplete index)
+            )
+        )
+
     let analyze language (defines: Set<string>) (source: DecodedSource) (lexed: LexerResult) =
         let output = source.Text.ToCharArray()
         let directives = ResizeArray<LexicalDirective>()
@@ -168,7 +344,29 @@ module internal Directives =
                 End = SourceMap.positionAt source.Map contentEnd
             }
 
+            let conditionAt prefixLength =
+                match evaluateCondition defines (trimmed.Substring(prefixLength)) with
+                | Ok value -> value
+                | Error error ->
+                    let position =
+                        SourceMap.positionAt
+                            source.Map
+                            (directiveStart
+                             + prefixLength
+                             + error.Index)
+
+                    addDiagnostic error.Code error.Message { Start = position; End = position }
+                    false
+
             let add kind =
+                diagnostics.RemoveAll(fun diagnostic ->
+                    diagnostic.Order < int64 lexed.Diagnostics.Length
+                    && diagnostic.Range.Start.Offset
+                       >= startOffset
+                    && diagnostic.Range.Start.Offset < contentEnd
+                )
+                |> ignore
+
                 directives.Add {
                     Kind = kind
                     Text = trimmed
@@ -178,7 +376,7 @@ module internal Directives =
             if trimmed.StartsWith("#if ", StringComparison.Ordinal) then
                 blank startOffset contentEnd
                 add DirectiveKind.Conditional
-                let condition = defines.Contains(trimmed.Substring(4).Trim())
+                let condition = conditionAt 4
 
                 frames <-
                     {
@@ -203,8 +401,10 @@ module internal Directives =
                 | [] -> addDiagnostic "FS0010" "Unexpected '#elif'." directiveRange
                 | frame :: tail ->
                     let condition =
+                        let value = conditionAt 6
+
                         not frame.AnyTaken
-                        && defines.Contains(trimmed.Substring(6).Trim())
+                        && value
 
                     let next = {
                         frame with

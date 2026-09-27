@@ -39,6 +39,62 @@ module DirectiveTests =
 
                 Expect.isEmpty result.Diagnostics "Balanced directives are valid"
 
+            testCase "evaluates Boolean conditional expressions"
+            <| fun _ ->
+                let text =
+                    "#if A && !(B || C)
+let selected = 1
+#else
+let other = 2
+#endif"
+
+                let result = prepare "10.0" [ "A" ] text
+
+                Expect.stringContains
+                    result.CompatibilityText
+                    "let selected = 1"
+                    "The expression selects the if branch"
+
+                Expect.isFalse
+                    (result.CompatibilityText.Contains "let other = 2")
+                    "The else branch is blank"
+
+                Expect.isEmpty result.Diagnostics "A complete expression is valid"
+
+            testCase "reports malformed conditional expressions at the Oracle position"
+            <| fun _ ->
+                let diagnosticFor expression =
+                    let result =
+                        prepare
+                            "10.0"
+                            []
+                            $"#if {expression}
+let value = 1
+#endif"
+
+                    result.Diagnostics
+                    |> Seq.map (fun diagnostic ->
+                        diagnostic.Code, diagnostic.Range.Start.Line, diagnostic.Range.Start.Column
+                    )
+                    |> Seq.toList
+
+                Expect.equal
+                    (diagnosticFor "A &&")
+                    [ "FS3184", 1, 9 ]
+                    "A trailing operator is incomplete"
+
+                Expect.equal
+                    (diagnosticFor "A B")
+                    [ "FS3184", 1, 7 ]
+                    "Adjacent identifiers are incomplete"
+
+                Expect.equal (diagnosticFor "(A") [ "FS3185", 1, 7 ] "An open group requires ')'"
+
+                Expect.equal
+                    (diagnosticFor "A $")
+                    [ "FS3182", 1, 8 ]
+                    "An unknown character is unexpected"
+
             testCase "records line light and indent directives"
             <| fun _ ->
                 let result =
