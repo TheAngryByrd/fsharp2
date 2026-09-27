@@ -12,7 +12,20 @@ module LayoutTests =
         let source = SourceText.fromString text
         let lexed = Lexer.tokenize language source
         let directives = Directives.analyze language Set.empty source lexed
-        Layout.apply source directives lexed
+
+        let active =
+            Lexer.tokenize language {
+                source with
+                    Text = directives.CompatibilityText
+            }
+
+        Layout.apply
+            source
+            {
+                directives with
+                    Diagnostics = active.Diagnostics.AddRange(directives.Diagnostics)
+            }
+            active
 
     [<Tests>]
     let tests =

@@ -186,7 +186,7 @@ let selected = 1
                     (None, 2)
                     "An ignored malformed directive"
 
-            testCase "reports warning directive arguments at Oracle positions"
+            testCase "parses warning directive arguments"
             <| fun _ ->
                 let lines (values: string list) = String.concat "\n" values
 
@@ -212,8 +212,8 @@ let selected = 1
                             "let x = 1"
                         ]
                     ))
-                    [ "FS0203", 9 ]
-                    "An unquoted invalid argument"
+                    []
+                    "An unquoted invalid argument does not stop the compilation"
 
                 Expect.equal
                     (diagnosticsFor (
@@ -222,8 +222,8 @@ let selected = 1
                             "let x = 1"
                         ]
                     ))
-                    [ "FS0203", 9 ]
-                    "A quoted invalid argument"
+                    []
+                    "A quoted invalid argument does not stop the compilation"
 
                 Expect.sequenceEqual
                     ((prepare
@@ -241,6 +241,32 @@ let selected = 1
                         "25"
                     ]
                     "Every argument becomes a warning directive"
+
+            testCase "keeps later directives after a string that closes in inactive text"
+            <| fun _ ->
+                let text =
+                    String.concat "@" [
+                        "#if NEVER"
+                        "let s = \""
+                        "#endif"
+                        "let t = \"a\""
+                        "#if OTHER"
+                        "let u = 1"
+                        "#endif"
+                    ]
+
+                let result = prepare "10.0" [] (text.Replace('@', '\n'))
+
+                Expect.stringContains
+                    result.CompatibilityText
+                    "let t = \"a\""
+                    "The active string stays"
+
+                Expect.isFalse
+                    (result.CompatibilityText.Contains "let u = 1")
+                    "The later inactive branch is blanked"
+
+                Expect.isEmpty result.Diagnostics "The directives stay balanced"
 
             testCase "reports malformed conditional expressions at the Oracle position"
             <| fun _ ->

@@ -219,11 +219,140 @@ module internal Directives =
             )
         )
 
+    type private LiteralState =
+        | Code
+        | RegularString
+        | VerbatimString
+        | TripleQuotedString
+        | BlockComment of depth: int * inString: bool
+
+    let private scanLiteralState (text: string) startOffset endOffset initialState =
+        let mutable state = initialState
+        let mutable index = startOffset
+
+        let at offset character =
+            offset < endOffset
+            && text[offset] = character
+
+        while index < endOffset do
+            match state with
+            | Code ->
+                if
+                    at index '/'
+                    && at (index + 1) '/'
+                then
+                    index <- endOffset
+                elif
+                    at index '('
+                    && at (index + 1) '*'
+                    && not (at (index + 2) ')')
+                then
+                    state <- BlockComment(1, false)
+                    index <- index + 2
+                elif
+                    at index '"'
+                    && at (index + 1) '"'
+                    && at (index + 2) '"'
+                then
+                    state <- TripleQuotedString
+                    index <- index + 3
+                elif
+                    at index '@'
+                    && at (index + 1) '"'
+                then
+                    state <- VerbatimString
+                    index <- index + 2
+                elif at index '"' then
+                    state <- RegularString
+                    index <- index + 1
+                elif
+                    at index '\''
+                    && at (index + 1) '\\'
+                then
+                    let closing = text.IndexOf('\'', index + 2)
+
+                    index <-
+                        if
+                            closing > 0
+                            && closing < endOffset
+                            && closing
+                               - index
+                               <= 11
+                        then
+                            closing
+                            + 1
+                        else
+                            index + 1
+                elif
+                    at index '\''
+                    && at (index + 2) '\''
+                then
+                    index <- index + 3
+                else
+                    index <- index + 1
+            | RegularString ->
+                if at index '\\' then
+                    index <- index + 2
+                elif at index '"' then
+                    state <- Code
+                    index <- index + 1
+                else
+                    index <- index + 1
+            | VerbatimString ->
+                if
+                    at index '"'
+                    && at (index + 1) '"'
+                then
+                    index <- index + 2
+                elif at index '"' then
+                    state <- Code
+                    index <- index + 1
+                else
+                    index <- index + 1
+            | TripleQuotedString ->
+                if
+                    at index '"'
+                    && at (index + 1) '"'
+                    && at (index + 2) '"'
+                then
+                    state <- Code
+                    index <- index + 3
+                else
+                    index <- index + 1
+            | BlockComment(depth, true) ->
+                if at index '\\' then
+                    index <- index + 2
+                elif at index '"' then
+                    state <- BlockComment(depth, false)
+                    index <- index + 1
+                else
+                    index <- index + 1
+            | BlockComment(depth, false) ->
+                if
+                    at index '('
+                    && at (index + 1) '*'
+                then
+                    state <- BlockComment(depth + 1, false)
+                    index <- index + 2
+                elif
+                    at index '*'
+                    && at (index + 1) ')'
+                then
+                    state <- (if depth = 1 then Code else BlockComment(depth - 1, false))
+                    index <- index + 2
+                elif at index '"' then
+                    state <- BlockComment(depth, true)
+                    index <- index + 1
+                else
+                    index <- index + 1
+
+        state
+
     let analyze language (defines: Set<string>) (source: DecodedSource) (lexed: LexerResult) =
         let output = source.Text.ToCharArray()
         let directives = ResizeArray<LexicalDirective>()
         let warnings = ResizeArray<PathNeutralWarningDirective>()
-        let diagnostics = ResizeArray<SourceLexicalDiagnostic>(lexed.Diagnostics)
+        let diagnostics = ResizeArray<SourceLexicalDiagnostic>()
         let mutable sourceMap = source.Map
         let mutable frames: ConditionalFrame list = []
         let mutable active = true
@@ -272,40 +401,24 @@ module internal Directives =
             else
                 None
 
-        let protectedSpans = [|
-            yield!
-                lexed.Trivia
-                |> Seq.filter (fun trivia -> trivia.Kind = LexicalTriviaKind.BlockComment)
-                |> Seq.map _.Range
-            yield!
-                lexed.Tokens
-                |> Seq.filter (fun token ->
-                    token.Kind = LexicalTokenKind.StringLiteral
-                    || token.Kind = LexicalTokenKind.ByteStringLiteral
-                )
-                |> Seq.map _.Range
-        |]
-
-        let inactiveLines = HashSet<int>()
-
-        let isProtected offset =
-            protectedSpans
-            |> Array.exists (fun range ->
-                range.Start.Offset < offset
-                && offset < range.End.Offset
-                && not (inactiveLines.Contains range.Start.Line)
-            )
+        let mutable literalState = Code
+        let mutable previousLine: (int * int * bool * int) option = None
 
         for lineIndex = 0 to source.Map.LineStarts.Length
                              - 1 do
             let startOffset = source.Map.LineStarts[lineIndex]
 
-            if not active then
-                inactiveLines.Add(
-                    lineIndex
-                    + 1
-                )
-                |> ignore
+            match previousLine with
+            | Some(previousStart, previousEnd, wasActive, directiveCount) when
+                wasActive
+                && directives.Count = directiveCount
+                ->
+                literalState <- scanLiteralState source.Text previousStart previousEnd literalState
+            | _ -> ()
+
+            let lineStartsInLiteral =
+                literalState
+                <> Code
 
             let endOffset =
                 if
@@ -316,6 +429,8 @@ module internal Directives =
                                           + 1]
                 else
                     source.Text.Length
+
+            previousLine <- Some(startOffset, endOffset, active, directives.Count)
 
             let mutable contentEnd = endOffset
 
@@ -343,7 +458,7 @@ module internal Directives =
                     + lineText.Length
                     - text.Length
 
-                if isProtected start then String.Empty else text
+                if lineStartsInLiteral then String.Empty else text
 
             let directiveStart =
                 startOffset
@@ -387,13 +502,6 @@ module internal Directives =
                     false
 
             let add kind =
-                diagnostics.RemoveAll(fun diagnostic ->
-                    diagnostic.Order < int64 lexed.Diagnostics.Length
-                    && diagnostic.Range.Start.Offset
-                       >= startOffset
-                    && diagnostic.Range.Start.Offset < contentEnd
-                )
-                |> ignore
 
                 directives.Add {
                     Kind = kind
@@ -596,15 +704,8 @@ module internal Directives =
                         "Warn directives must have warning number(s) as argument(s)"
                         { Start = position; End = position }
 
-                for code, argumentOffset in arguments do
-                    if not (isWarningNumber code) then
-                        let position = SourceMap.positionAt source.Map argumentOffset
-
-                        addDiagnostic "FS0203" $"Invalid warning number '{code}'" {
-                            Start = position
-                            End = position
-                        }
-                    else
+                for code, _ in arguments do
+                    if isWarningNumber code then
                         let action =
                             if trimmed.StartsWith("#warnon", StringComparison.Ordinal) then
                                 LocalWarningDirectiveAction.Enable
@@ -659,15 +760,6 @@ module internal Directives =
             )
             |> ImmutableArray.CreateRange
 
-        diagnostics.RemoveAll(fun diagnostic ->
-            let offset = diagnostic.Range.Start.Offset
-
-            diagnostic.Order < int64 lexed.Diagnostics.Length
-            && offset < output.Length
-            && output[offset]
-               <> source.Text[offset]
-        )
-        |> ignore
 
         {
             CompatibilityText = String output

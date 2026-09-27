@@ -117,17 +117,10 @@ module internal LexicalPipeline =
                     Text = directives.CompatibilityText
             }
 
-        let directiveDiagnostics =
-            directives.Diagnostics
-            |> Seq.filter (fun diagnostic ->
-                diagnostic.Order
-                >= int64 lexed.Diagnostics.Length
-            )
-
         let activeDirectives = {
             directives with
                 Diagnostics =
-                    Seq.append activeLexed.Diagnostics directiveDiagnostics
+                    Seq.append activeLexed.Diagnostics directives.Diagnostics
                     |> Seq.mapi (fun index diagnostic -> { diagnostic with Order = int64 index })
                     |> ImmutableArray.CreateRange
         }
