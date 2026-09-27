@@ -115,13 +115,8 @@ module LayoutTests =
                 Expect.sequenceEqual
                     (result.Diagnostics
                      |> Seq.map _.Code)
-                    [
-                        "FS0588"
-                        "FS0010"
-                        "FS3118"
-                        "FS0010"
-                    ]
-                    "Bad dedent recovery diagnostics"
+                    [ "FS0058" ]
+                    "The layout pass reports one offside diagnostic without parser context"
 
                 Expect.equal
                     (result.Tokens

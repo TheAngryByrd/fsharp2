@@ -256,66 +256,14 @@ module internal Layout =
                             Column = column
                         }
 
-                        if
-                            closedOpeners.Count
-                            >= 2
-                            && trimmed.StartsWith("let ", StringComparison.Ordinal)
-                        then
-                            let declarationRange startPosition = {
-                                Start = startPosition
-                                End = {
-                                    startPosition with
-                                        Offset =
-                                            startPosition.Offset
-                                            + 3
-                                        Column =
-                                            startPosition.Column
-                                            + 3
-                                }
-                            }
+                        diagnostics.Add {
+                            Code = "FS0058"
+                            Message = "Unexpected syntax or possible incorrect indentation."
+                            Range = { Start = position; End = position }
+                            Order = order
+                        }
 
-                            let add code message range =
-                                diagnostics.Add {
-                                    Code = code
-                                    Message = message
-                                    Range = range
-                                    Order = order
-                                }
-
-                                order <- order + 1L
-
-                            add
-                                "FS0588"
-                                "The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
-                                (declarationRange closedOpeners[0])
-
-                            add
-                                "FS0010"
-                                "Unexpected keyword 'let' or 'use' in binding. Expected incomplete structured construct at or before this point or other token."
-                                (declarationRange position)
-
-                            add
-                                "FS3118"
-                                "Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
-                                (declarationRange
-                                    closedOpeners[closedOpeners.Count
-                                                  - 1])
-
-                            let eof = SourceMap.positionAt source.Map endOffset
-
-                            add
-                                "FS0010"
-                                "Incomplete structured construct at or before this point in definition. Expected incomplete structured construct at or before this point or other token."
-                                { Start = eof; End = eof }
-                        else
-                            diagnostics.Add {
-                                Code = "FS0058"
-                                Message = "Unexpected syntax or possible incorrect indentation."
-                                Range = { Start = position; End = position }
-                                Order = order
-                            }
-
-                            order <- order + 1L
+                        order <- order + 1L
 
                 previousSignificantStart <-
                     Some {

@@ -267,112 +267,6 @@ module internal CompilationPipeline =
                     |> ImmutableArray.CreateRange
         }
 
-    let private incompletePatternWarnings (preparedSources: LexicalDocument list) =
-        preparedSources
-        |> Seq.collect (fun source ->
-            source.SourceMap.LineStarts
-            |> Seq.mapi (fun lineIndex startOffset ->
-                let endOffset =
-                    if
-                        lineIndex
-                        + 1 < source.SourceMap.LineStarts.Length
-                    then
-                        source.SourceMap.LineStarts[lineIndex
-                                                    + 1]
-                    else
-                        source.CompatibilityText.Length
-
-                let lineText =
-                    source.CompatibilityText.Substring(
-                        startOffset,
-                        endOffset
-                        - startOffset
-                    )
-
-                if lineText.TrimStart().StartsWith("| Some ", StringComparison.Ordinal) then
-                    let matchLineIndex =
-                        max
-                            0
-                            (lineIndex
-                             - 1)
-
-                    let matchStartOffset = source.SourceMap.LineStarts[matchLineIndex]
-
-                    let matchOffset =
-                        source.CompatibilityText.IndexOf(
-                            "match ",
-                            matchStartOffset,
-                            StringComparison.Ordinal
-                        )
-
-                    let inputStartOffset =
-                        if matchOffset < 0 then
-                            startOffset
-                        else
-                            matchOffset
-                            + 6
-
-                    let withOffset =
-                        source.CompatibilityText.IndexOf(
-                            " with",
-                            inputStartOffset,
-                            StringComparison.Ordinal
-                        )
-
-                    let inputEndOffset = if withOffset < 0 then inputStartOffset else withOffset
-                    let startPosition = SourceMap.positionAt source.SourceMap inputStartOffset
-                    let endPosition = SourceMap.positionAt source.SourceMap inputEndOffset
-
-                    Some(
-                        CompilationDiagnostic.Create(
-                            0L,
-                            "FS0025",
-                            25,
-                            None,
-                            DiagnosticStage.Compilation CompilationPhase.TypedDeclarations,
-                            DiagnosticSeverity.Warning,
-                            DiagnosticSeverity.Warning,
-                            DiagnosticDisposition.Emitted,
-                            None,
-                            "Incomplete pattern matches on this expression. For example, the value 'None' may indicate a case not covered by the pattern(s).",
-                            Some source.LogicalPath,
-                            Some {
-                                Start = startPosition
-                                End = endPosition
-                            },
-                            [||],
-                            [||],
-                            Some DiagnosticStream.StandardError
-                        )
-                    )
-                else
-                    None
-            )
-            |> Seq.choose id
-        )
-        |> Seq.mapi (fun order diagnostic ->
-            CompilationDiagnostic.Create(
-                int64 order,
-                diagnostic.Code,
-                diagnostic.NumericCode,
-                diagnostic.Subcategory,
-                diagnostic.Stage,
-                diagnostic.OriginalSeverity,
-                diagnostic.EffectiveSeverity,
-                diagnostic.Disposition,
-                diagnostic.Suppression,
-                diagnostic.Message,
-                diagnostic.LogicalPath,
-                diagnostic.Range,
-                diagnostic.RelatedInformation
-                |> Seq.toArray,
-                diagnostic.Suggestions
-                |> Seq.toArray,
-                diagnostic.Stream
-            )
-        )
-        |> ImmutableArray.CreateRange
-
     let compileRequest (service: CompilerService) (request: CompilationRequest) =
         match
             ReferenceTypeIndex.Create(request.TargetReferences),
@@ -452,7 +346,7 @@ module internal CompilationPipeline =
                                     sourceDiagnosticOptions request preparedSources
 
                                 let diagnostics =
-                                    incompletePatternWarnings preparedSources
+                                    Seq.empty<CompilationDiagnostic>
                                     |> Seq.map (DiagnosticPolicy.input None false true)
                                     |> DiagnosticPolicy.apply diagnosticOptions
                                     |> Seq.filter (fun diagnostic ->
