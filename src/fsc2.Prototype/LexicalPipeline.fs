@@ -117,7 +117,22 @@ module internal LexicalPipeline =
                     Text = directives.CompatibilityText
             }
 
-        let layout = Layout.apply source directives activeLexed
+        let directiveDiagnostics =
+            directives.Diagnostics
+            |> Seq.filter (fun diagnostic ->
+                diagnostic.Order
+                >= int64 lexed.Diagnostics.Length
+            )
+
+        let activeDirectives = {
+            directives with
+                Diagnostics =
+                    Seq.append activeLexed.Diagnostics directiveDiagnostics
+                    |> Seq.mapi (fun index diagnostic -> { diagnostic with Order = int64 index })
+                    |> ImmutableArray.CreateRange
+        }
+
+        let layout = Layout.apply source activeDirectives activeLexed
 
         {
             LanguageCacheIdentity = language.CacheIdentity

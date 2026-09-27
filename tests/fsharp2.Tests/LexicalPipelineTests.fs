@@ -168,6 +168,24 @@ module LexicalPipelineTests =
                     "let"
                     "Block event precedes its first token"
 
+            testCase "reports active lexical errors after an unclosed inactive literal"
+            <| fun _ ->
+                let text =
+                    "#if NEVER
+let s = \"
+#endif
+let value = 1x"
+
+                let document =
+                    snapshot "source-inactive" "src/Inactive.fs" text "content-inactive"
+                    |> LexicalPipeline.prepare (language "10.0") [||]
+
+                Expect.sequenceEqual
+                    (document.Diagnostics
+                     |> Seq.map (fun diagnostic -> diagnostic.Code, diagnostic.Range.Start.Line))
+                    [ "FS1156", 4 ]
+                    "The inactive literal does not hide the malformed active literal"
+
             testCase "merges recoverable diagnostics in source order"
             <| fun _ ->
                 let document =
