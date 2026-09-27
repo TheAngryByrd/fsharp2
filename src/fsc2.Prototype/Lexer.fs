@@ -223,6 +223,7 @@ module internal Lexer =
                         closed <- true
                 elif
                     not verbatim
+                    && delimiterLength = 1
                     && text[cursor] = '\\'
                     && cursor + 1 < text.Length
                 then
@@ -270,6 +271,7 @@ module internal Lexer =
                     cursor <- cursor + 2
                 elif
                     not verbatim
+                    && delimiterLength = 1
                     && text[cursor] = '\\'
                     && cursor + 1 < text.Length
                 then

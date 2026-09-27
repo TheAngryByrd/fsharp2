@@ -137,12 +137,23 @@ module internal LexicalPipeline =
 
         let layout = Layout.apply source directives lexed
 
+        let isActive offset =
+            offset
+            >= source.Text.Length
+            || directives.CompatibilityText[offset] = source.Text[offset]
+
         {
             LanguageCacheIdentity = language.CacheIdentity
             Defines = normalizedDefines
             SourceMap = directives.SourceMap
-            Tokens = lexed.Tokens
-            Trivia = lexed.Trivia
+            Tokens =
+                lexed.Tokens
+                |> Seq.filter (fun token -> isActive token.Range.Start.Offset)
+                |> ImmutableArray.CreateRange
+            Trivia =
+                lexed.Trivia
+                |> Seq.filter (fun trivia -> isActive trivia.Range.Start.Offset)
+                |> ImmutableArray.CreateRange
             Directives = directives.Directives
             WarningDirectives = directives.WarningDirectives
             LayoutTokens = orderedLayoutTokens layout.Tokens

@@ -96,6 +96,24 @@ module LexerTests =
                     "after"
                     "Lexing continues after the comment"
 
+            testCase "keeps backslashes literal in triple-quoted strings"
+            <| fun _ ->
+                let result = tokenize "let path = \"\"\"C:\\\"\"\" + $\"\"\"D:\\\"\"\""
+
+                Expect.isEmpty
+                    result.Diagnostics
+                    "A trailing backslash does not escape the closing delimiter"
+
+                Expect.sequenceEqual
+                    (result.Tokens
+                     |> Seq.filter (fun token -> token.Kind = LexicalTokenKind.StringLiteral)
+                     |> Seq.map _.Text)
+                    [
+                        "\"\"\"C:\\\"\"\""
+                        "$\"\"\"D:\\\"\"\""
+                    ]
+                    "Each triple-quoted string closes at its delimiter"
+
             testCase "lexes interpolated strings as one literal"
             <| fun _ ->
                 let result = tokenize "let text = $\"a {1 + 2} \\\" b\" + $\"\"\"x {\"y\"} z\"\"\""
