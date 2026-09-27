@@ -10,8 +10,7 @@ module LayoutTests =
             |> Result.defaultWith failtest
 
         let source = SourceText.fromString text
-        let lexed = Lexer.tokenize language source
-        let directives = Directives.analyze language Set.empty source lexed
+        let directives = Directives.analyze language Set.empty source
 
         let active =
             Lexer.tokenize language {

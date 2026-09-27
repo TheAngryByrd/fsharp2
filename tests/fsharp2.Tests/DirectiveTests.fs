@@ -10,8 +10,7 @@ module DirectiveTests =
             |> Result.defaultWith failtest
 
         let source = SourceText.fromString text
-        let lexed = Lexer.tokenize language source
-        Directives.analyze language (Set.ofList defines) source lexed
+        Directives.analyze language (Set.ofList defines) source
 
     [<Tests>]
     let tests =
@@ -265,6 +264,47 @@ let selected = 1
                 Expect.isFalse
                     (result.CompatibilityText.Contains "let u = 1")
                     "The later inactive branch is blanked"
+
+                Expect.isEmpty result.Diagnostics "The directives stay balanced"
+
+            testCase "reports a duplicate else at the Oracle position"
+            <| fun _ ->
+                let text =
+                    String.concat "\n" [
+                        "#if A"
+                        "#else"
+                        "#else"
+                        "#endif"
+                    ]
+
+                Expect.equal
+                    ((prepare "10.0" [] text).Diagnostics
+                     |> Seq.map (fun diagnostic ->
+                         diagnostic.Code, diagnostic.Message, diagnostic.Range.Start.Line
+                     )
+                     |> Seq.toList)
+                    [
+                        "FS0010",
+                        "#endif required for #else in definition. Expected incomplete structured construct at or before this point or other token.",
+                        3
+                    ]
+                    "The second else reports the Oracle message"
+
+            testCase "keeps directives after an interpolated verbatim string"
+            <| fun _ ->
+                let text =
+                    String.concat "\n" [
+                        "let path = @$\"C:\\\""
+                        "#if NEVER"
+                        "let hidden = 1"
+                        "#endif"
+                    ]
+
+                let result = prepare "10.0" [] text
+
+                Expect.isFalse
+                    (result.CompatibilityText.Contains "let hidden = 1")
+                    "The directive after the string is recognized"
 
                 Expect.isEmpty result.Diagnostics "The directives stay balanced"
 

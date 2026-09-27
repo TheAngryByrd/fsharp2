@@ -1,7 +1,6 @@
 namespace FSharp2.Compiler
 
 open System
-open System.Collections.Generic
 open System.Collections.Immutable
 
 [<RequireQualifiedAccess>]
@@ -262,6 +261,15 @@ module internal Directives =
                 then
                     state <- VerbatimString
                     index <- index + 2
+                elif
+                    (at index '@'
+                     && at (index + 1) '$'
+                     || at index '$'
+                        && at (index + 1) '@')
+                    && at (index + 2) '"'
+                then
+                    state <- VerbatimString
+                    index <- index + 3
                 elif at index '"' then
                     state <- RegularString
                     index <- index + 1
@@ -340,6 +348,44 @@ module internal Directives =
                 then
                     state <- (if depth = 1 then Code else BlockComment(depth - 1, false))
                     index <- index + 2
+                elif
+                    at index '"'
+                    && at (index + 1) '"'
+                    && at (index + 2) '"'
+                then
+                    let closing = text.IndexOf("\"\"\"", index + 3, StringComparison.Ordinal)
+
+                    index <-
+                        if
+                            closing
+                            >= 0
+                            && closing < endOffset
+                        then
+                            closing
+                            + 3
+                        else
+                            endOffset
+                elif
+                    at index '@'
+                    && at (index + 1) '"'
+                then
+                    let mutable cursor = index + 2
+                    let mutable closed = false
+
+                    while cursor < endOffset
+                          && not closed do
+                        if
+                            at cursor '"'
+                            && at (cursor + 1) '"'
+                        then
+                            cursor <- cursor + 2
+                        elif at cursor '"' then
+                            closed <- true
+                            cursor <- cursor + 1
+                        else
+                            cursor <- cursor + 1
+
+                    index <- cursor
                 elif at index '"' then
                     state <- BlockComment(depth, true)
                     index <- index + 1
@@ -348,7 +394,7 @@ module internal Directives =
 
         state
 
-    let analyze language (defines: Set<string>) (source: DecodedSource) (lexed: LexerResult) =
+    let analyze language (defines: Set<string>) (source: DecodedSource) =
         let output = source.Text.ToCharArray()
         let directives = ResizeArray<LexicalDirective>()
         let warnings = ResizeArray<PathNeutralWarningDirective>()
@@ -581,7 +627,10 @@ module internal Directives =
                         "#else has no matching #if in definition. Expected incomplete structured construct at or before this point or other token."
                         directiveRange
                 | frame :: _ when frame.HasElse ->
-                    addDiagnostic "FS0010" "Duplicate '#else'." directiveRange
+                    addDiagnostic
+                        "FS0010"
+                        "#endif required for #else in definition. Expected incomplete structured construct at or before this point or other token."
+                        directiveRange
                 | frame :: tail ->
                     let next = {
                         frame with

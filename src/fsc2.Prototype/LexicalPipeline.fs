@@ -106,10 +106,7 @@ module internal LexicalPipeline =
 
     let prepareCore language defines source =
         let normalizedDefines = normalizeDefines defines
-        let lexed = Lexer.tokenize language source
-
-        let directives =
-            Directives.analyze language (Set.ofSeq normalizedDefines) source lexed
+        let directives = Directives.analyze language (Set.ofSeq normalizedDefines) source
 
         let activeLexed =
             Lexer.tokenize language {
