@@ -3246,9 +3246,7 @@ module internal Frontend =
                             ((bindReturn, computationRange),
                              (ordinaryBindings
                               |> List.rev))
-                            ||> List.fold (fun
-                                               (body, bodyRange)
-                                               (name, value, _, bindingRange) ->
+                            ||> List.fold (fun (body, bodyRange) (name, value, _, bindingRange) ->
                                 LetExpression(
                                     name,
                                     false,

@@ -1302,8 +1302,7 @@ and internal TypedSequenceAggregationLowering = {
     Range: SourceRange
 } with
 
-    override _.ToString() =
-        "TypedSequenceAggregationLowering"
+    override _.ToString() = "TypedSequenceAggregationLowering"
 
 and internal TypedAwaitableUnitConversionLowering = {
     BuilderName: string

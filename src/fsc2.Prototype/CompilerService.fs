@@ -382,7 +382,7 @@ module private TypeIdentity =
                 cliType expression.LambdaReturnType
                 inlineBody expression.LambdaBody
             ]
-        | TypedComputation (AwaitableBindLowering expression) ->
+        | TypedComputation(AwaitableBindLowering expression) ->
             Fingerprint.parts [
                 "value-task-bind"
                 expression.BuilderName
@@ -412,7 +412,7 @@ module private TypeIdentity =
                     |> List.collect _.GenericArguments
                     |> List.map cliType
             ]
-        | TypedComputation (AwaitableApplyLowering expression) ->
+        | TypedComputation(AwaitableApplyLowering expression) ->
             Fingerprint.parts [
                 "value-task-apply"
                 expression.BuilderName
@@ -425,7 +425,7 @@ module private TypeIdentity =
                 cliType expression.InputValueTaskType
                 cliType expression.OutputValueTaskType
             ]
-        | TypedComputation (AwaitableZipLowering expression) ->
+        | TypedComputation(AwaitableZipLowering expression) ->
             Fingerprint.parts [
                 "value-task-zip"
                 expression.BuilderName
@@ -438,13 +438,13 @@ module private TypeIdentity =
                 cliType expression.RightValueTaskType
                 cliType expression.OutputValueTaskType
             ]
-        | TypedComputation (FunctionParallelZipLowering expression) ->
+        | TypedComputation(FunctionParallelZipLowering expression) ->
             Fingerprint.parts [
                 "function-parallel-zip"
                 inlineBody (TypedFunctionLambda expression.Function)
                 inlineBody (TypedComputationExpression.awaitableZip expression.Zip)
             ]
-        | TypedComputation (AwaitableTryFinallyLowering expression) ->
+        | TypedComputation(AwaitableTryFinallyLowering expression) ->
             Fingerprint.parts [
                 "task-try-finally"
                 expression.BuilderName
@@ -456,7 +456,7 @@ module private TypeIdentity =
                 cliType expression.OutputTaskType
                 cliType expression.CompensationType
             ]
-        | TypedComputation (ComputationWhileLowering expression) ->
+        | TypedComputation(ComputationWhileLowering expression) ->
             Fingerprint.parts [
                 "async-while"
                 expression.BuilderName
@@ -465,7 +465,7 @@ module private TypeIdentity =
                 cliType expression.AsyncBooleanType
                 cliType expression.AsyncUnitType
             ]
-        | TypedComputation (SequenceAggregationLowering expression) ->
+        | TypedComputation(SequenceAggregationLowering expression) ->
             Fingerprint.parts [
                 "cancellable-task-sequential"
                 expression.SequenceParameterIndex.ToString(CultureInfo.InvariantCulture)
@@ -474,7 +474,7 @@ module private TypeIdentity =
                 cliType expression.OutputFunctionType
                 cliType expression.UnitType
             ]
-        | TypedComputation (AwaitableUnitConversionLowering expression) ->
+        | TypedComputation(AwaitableUnitConversionLowering expression) ->
             Fingerprint.parts [
                 "value-task-of-unit"
                 expression.BuilderName
@@ -4677,13 +4677,14 @@ type internal CompilerService() =
                                     let rec rewrite =
                                         function
                                         | TypedParameterReference index when
-                                            index >= lambdaParameterCount
+                                            index
+                                            >= lambdaParameterCount
                                             ->
                                             match
                                                 captures
                                                 |> List.tryFind (fun capture ->
-                                                    capture.OuterParameterIndex =
-                                                        index - lambdaParameterCount
+                                                    capture.OuterParameterIndex = index
+                                                                                  - lambdaParameterCount
                                                 )
                                             with
                                             | Some capture ->
@@ -4971,14 +4972,9 @@ type internal CompilerService() =
                                                         | _ -> None
                                             )
 
-                                let isSingleValueMemberCall
-                                    expectedReceiver
-                                    expectedValue
-                                    =
+                                let isSingleValueMemberCall expectedReceiver expectedValue =
                                     function
-                                    | MemberCall(actualReceiver,
-                                                 _,
-                                                 [ ValueReference actualValue ])
+                                    | MemberCall(actualReceiver, _, [ ValueReference actualValue ])
                                     | ExpressionMemberCall(ValueReference actualReceiver,
                                                            _,
                                                            [ ValueReference actualValue ]) ->
@@ -4989,9 +4985,7 @@ type internal CompilerService() =
                                 let isUnitMemberCall expectedReceiver =
                                     function
                                     | MemberCall(actualReceiver, _, [])
-                                    | ExpressionMemberCall(ValueReference actualReceiver,
-                                                           _,
-                                                           []) ->
+                                    | ExpressionMemberCall(ValueReference actualReceiver, _, []) ->
                                         actualReceiver = expectedReceiver
                                     | _ -> false
 
@@ -5088,7 +5082,8 @@ type internal CompilerService() =
                                         let getterCandidates =
                                             [
                                                 builderName
-                                                "get_" + builderName
+                                                "get_"
+                                                + builderName
                                             ]
                                             |> List.collect references.SourceMethods
                                             |> List.filter (fun methodDefinition ->
@@ -5142,16 +5137,26 @@ type internal CompilerService() =
                                                 let continuationType =
                                                     CliGenericType(
                                                         functionTypeReference,
-                                                        [ inputType; outputValueTaskType ]
+                                                        [
+                                                            inputType
+                                                            outputValueTaskType
+                                                        ]
                                                     )
 
                                                 let delayFunctionType =
                                                     CliGenericType(
                                                         functionTypeReference,
-                                                        [ unitType; outputValueTaskType ]
+                                                        [
+                                                            unitType
+                                                            outputValueTaskType
+                                                        ]
                                                     )
 
-                                                let resolveOperation name argumentTypes expectedReturnType =
+                                                let resolveOperation
+                                                    name
+                                                    argumentTypes
+                                                    expectedReturnType
+                                                    =
                                                     let candidates =
                                                         references.Methods(
                                                             builderTypeReference.DeclarationId,
@@ -5167,9 +5172,9 @@ type internal CompilerService() =
                                                                 expectedReturnType
                                                         )
                                                         |> List.distinctBy (fun
-                                                                               (target,
-                                                                                genericArguments,
-                                                                                resultType) ->
+                                                                                (target,
+                                                                                 genericArguments,
+                                                                                 resultType) ->
                                                             target.StableId,
                                                             genericArguments,
                                                             resultType
@@ -5193,7 +5198,10 @@ type internal CompilerService() =
 
                                                 resolveOperation
                                                     "Bind"
-                                                    [ sourceType; continuationType ]
+                                                    [
+                                                        sourceType
+                                                        continuationType
+                                                    ]
                                                     (Some outputValueTaskType)
                                                 |> Result.bind (fun bind ->
                                                     let returnName =
@@ -5218,12 +5226,16 @@ type internal CompilerService() =
                                                             |> Result.map (fun run -> {
                                                                 BuilderGetter = {
                                                                     DeclaringType =
-                                                                        CliNamedType getter.DeclaringType
+                                                                        CliNamedType
+                                                                            getter.DeclaringType
                                                                     StableId = getter.StableId
                                                                     Name = getter.Name
-                                                                    GenericArity = getter.GenericArity
-                                                                    ParameterTypes = getter.ParameterTypes
-                                                                    ReturnType = getter.ReturnType
+                                                                    GenericArity =
+                                                                        getter.GenericArity
+                                                                    ParameterTypes =
+                                                                        getter.ParameterTypes
+                                                                    ReturnType =
+                                                                        getter.ReturnType
                                                                 }
                                                                 BuilderGetterGenericArguments = []
                                                                 BuilderType = builderType
@@ -5233,7 +5245,8 @@ type internal CompilerService() =
                                                                     converterTypeReference
                                                                 UnitType = unitType
                                                                 Bind = bind
-                                                                ReturnOperation = returnOperation
+                                                                ReturnOperation =
+                                                                    returnOperation
                                                                 Delay = delay
                                                                 Run = run
                                                             })
@@ -5460,43 +5473,50 @@ type internal CompilerService() =
                                                                 ]
                                                             )
 
-                                                        TypedComputationExpression.sequenceAggregation {
-                                                            BuilderName = builderName
-                                                            SequenceParameterIndex =
-                                                                sequenceParameterIndex
-                                                            ElementType = elementType
-                                                            SequenceType = sequenceType
-                                                            InputFunctionType = inputFunctionType
-                                                            InputTaskType = inputTaskType
-                                                            OutputArrayType = outputArrayType
-                                                            OutputTaskType = outputTaskType
-                                                            OutputFunctionType = outputFunctionType
-                                                            CancellationTokenType =
-                                                                cancellationTokenType
-                                                            UnitType = CliNamedType fsharpUnitType
-                                                            EnumerableTypeReference =
-                                                                enumerableTypeReference
-                                                            FSharpFunctionTypeReference =
-                                                                functionTypeReference
-                                                            TaskTypeReference = taskTypeReference
-                                                            AsyncTypeReference = asyncTypeReference
-                                                            AsyncModuleTypeReference =
-                                                                asyncModuleTypeReference
-                                                            AsyncBuilderTypeReference =
-                                                                asyncBuilderTypeReference
-                                                            ExtraTopLevelOperatorsTypeReference =
-                                                                extraTopLevelOperatorsTypeReference
-                                                            SeqModuleTypeReference =
-                                                                seqModuleTypeReference
-                                                            EnumeratorTypeReference =
-                                                                enumeratorTypeReference
-                                                            ListTypeReference = listTypeReference
-                                                            OptionTypeReference =
-                                                                optionTypeReference
-                                                            ConverterTypeReference =
-                                                                converterTypeReference
-                                                            Range = range
-                                                        },
+                                                        TypedComputationExpression.sequenceAggregation
+                                                            {
+                                                                BuilderName = builderName
+                                                                SequenceParameterIndex =
+                                                                    sequenceParameterIndex
+                                                                ElementType = elementType
+                                                                SequenceType = sequenceType
+                                                                InputFunctionType =
+                                                                    inputFunctionType
+                                                                InputTaskType = inputTaskType
+                                                                OutputArrayType = outputArrayType
+                                                                OutputTaskType = outputTaskType
+                                                                OutputFunctionType =
+                                                                    outputFunctionType
+                                                                CancellationTokenType =
+                                                                    cancellationTokenType
+                                                                UnitType =
+                                                                    CliNamedType fsharpUnitType
+                                                                EnumerableTypeReference =
+                                                                    enumerableTypeReference
+                                                                FSharpFunctionTypeReference =
+                                                                    functionTypeReference
+                                                                TaskTypeReference =
+                                                                    taskTypeReference
+                                                                AsyncTypeReference =
+                                                                    asyncTypeReference
+                                                                AsyncModuleTypeReference =
+                                                                    asyncModuleTypeReference
+                                                                AsyncBuilderTypeReference =
+                                                                    asyncBuilderTypeReference
+                                                                ExtraTopLevelOperatorsTypeReference =
+                                                                    extraTopLevelOperatorsTypeReference
+                                                                SeqModuleTypeReference =
+                                                                    seqModuleTypeReference
+                                                                EnumeratorTypeReference =
+                                                                    enumeratorTypeReference
+                                                                ListTypeReference =
+                                                                    listTypeReference
+                                                                OptionTypeReference =
+                                                                    optionTypeReference
+                                                                ConverterTypeReference =
+                                                                    converterTypeReference
+                                                                Range = range
+                                                            },
                                                         outputFunctionType,
                                                         nextLocalIndex
                                                     | _ ->
@@ -5690,44 +5710,50 @@ type internal CompilerService() =
                                                             converterTypeReference
                                                             range
                                                         |> Result.map (fun builderOperations ->
-                                                            TypedComputationExpression.awaitableBind {
-                                                                BuilderName = builderName
-                                                                ReturnKind = returnKind
-                                                                BinderParameterIndex =
-                                                                    binderParameterIndex
-                                                                SourceParameterIndex =
-                                                                    sourceParameterIndex
-                                                                InputType = inputType
-                                                                OutputType = outputType
-                                                                BinderType = binderType
-                                                                InputValueTaskType = sourceType
-                                                                OutputValueTaskType =
-                                                                    outputValueTaskType
-                                                                TaskTypeReference = taskTypeReference
-                                                                TaskAwaiterTypeReference =
-                                                                    taskAwaiterTypeReference
-                                                                FuncTypeReference = funcTypeReference
-                                                                CancellationTokenType =
-                                                                    CliNamedType
-                                                                        cancellationTokenTypeReference
-                                                                TaskContinuationOptionsType =
-                                                                    CliNamedType
-                                                                        taskContinuationOptionsTypeReference
-                                                                TaskSchedulerType =
-                                                                    CliNamedType
-                                                                        taskSchedulerTypeReference
-                                                                TaskExtensionsTypeReference =
-                                                                    taskExtensionsTypeReference
-                                                                NonGenericTaskTypeReference =
-                                                                    nonGenericTaskTypeReference
-                                                                OperationCanceledExceptionType =
-                                                                    CliNamedType
-                                                                        operationCanceledExceptionTypeReference
-                                                                ExceptionType =
-                                                                    CliNamedType exceptionTypeReference
-                                                                BuilderOperations = builderOperations
-                                                                Range = range
-                                                            },
+                                                            TypedComputationExpression.awaitableBind
+                                                                {
+                                                                    BuilderName = builderName
+                                                                    ReturnKind = returnKind
+                                                                    BinderParameterIndex =
+                                                                        binderParameterIndex
+                                                                    SourceParameterIndex =
+                                                                        sourceParameterIndex
+                                                                    InputType = inputType
+                                                                    OutputType = outputType
+                                                                    BinderType = binderType
+                                                                    InputValueTaskType =
+                                                                        sourceType
+                                                                    OutputValueTaskType =
+                                                                        outputValueTaskType
+                                                                    TaskTypeReference =
+                                                                        taskTypeReference
+                                                                    TaskAwaiterTypeReference =
+                                                                        taskAwaiterTypeReference
+                                                                    FuncTypeReference =
+                                                                        funcTypeReference
+                                                                    CancellationTokenType =
+                                                                        CliNamedType
+                                                                            cancellationTokenTypeReference
+                                                                    TaskContinuationOptionsType =
+                                                                        CliNamedType
+                                                                            taskContinuationOptionsTypeReference
+                                                                    TaskSchedulerType =
+                                                                        CliNamedType
+                                                                            taskSchedulerTypeReference
+                                                                    TaskExtensionsTypeReference =
+                                                                        taskExtensionsTypeReference
+                                                                    NonGenericTaskTypeReference =
+                                                                        nonGenericTaskTypeReference
+                                                                    OperationCanceledExceptionType =
+                                                                        CliNamedType
+                                                                            operationCanceledExceptionTypeReference
+                                                                    ExceptionType =
+                                                                        CliNamedType
+                                                                            exceptionTypeReference
+                                                                    BuilderOperations =
+                                                                        builderOperations
+                                                                    Range = range
+                                                                },
                                                             outputValueTaskType,
                                                             nextLocalIndex
                                                         )
@@ -6262,39 +6288,43 @@ type internal CompilerService() =
                                                                 [ unitType ]
                                                             )
 
-                                                        TypedComputationExpression.awaitableUnitConversion {
-                                                            BuilderName = builderName
-                                                            SourceParameterIndex =
-                                                                sourceParameterIndex
-                                                            SourceValueTaskType =
-                                                                sourceValueTaskType
-                                                            UnitType = unitType
-                                                            OutputValueTaskType =
-                                                                outputValueTaskType
-                                                            TaskTypeReference = taskTypeReference
-                                                            NonGenericTaskTypeReference =
-                                                                nonGenericTaskTypeReference
-                                                            NonGenericTaskAwaiterTypeReference =
-                                                                nonGenericTaskAwaiterTypeReference
-                                                            FuncTypeReference = funcTypeReference
-                                                            CancellationTokenType =
-                                                                CliNamedType
-                                                                    cancellationTokenTypeReference
-                                                            TaskContinuationOptionsType =
-                                                                CliNamedType
-                                                                    taskContinuationOptionsTypeReference
-                                                            TaskSchedulerType =
-                                                                CliNamedType
-                                                                    taskSchedulerTypeReference
-                                                            TaskExtensionsTypeReference =
-                                                                taskExtensionsTypeReference
-                                                            OperationCanceledExceptionType =
-                                                                CliNamedType
-                                                                    operationCanceledExceptionTypeReference
-                                                            ExceptionType =
-                                                                CliNamedType exceptionTypeReference
-                                                            Range = range
-                                                        },
+                                                        TypedComputationExpression.awaitableUnitConversion
+                                                            {
+                                                                BuilderName = builderName
+                                                                SourceParameterIndex =
+                                                                    sourceParameterIndex
+                                                                SourceValueTaskType =
+                                                                    sourceValueTaskType
+                                                                UnitType = unitType
+                                                                OutputValueTaskType =
+                                                                    outputValueTaskType
+                                                                TaskTypeReference =
+                                                                    taskTypeReference
+                                                                NonGenericTaskTypeReference =
+                                                                    nonGenericTaskTypeReference
+                                                                NonGenericTaskAwaiterTypeReference =
+                                                                    nonGenericTaskAwaiterTypeReference
+                                                                FuncTypeReference =
+                                                                    funcTypeReference
+                                                                CancellationTokenType =
+                                                                    CliNamedType
+                                                                        cancellationTokenTypeReference
+                                                                TaskContinuationOptionsType =
+                                                                    CliNamedType
+                                                                        taskContinuationOptionsTypeReference
+                                                                TaskSchedulerType =
+                                                                    CliNamedType
+                                                                        taskSchedulerTypeReference
+                                                                TaskExtensionsTypeReference =
+                                                                    taskExtensionsTypeReference
+                                                                OperationCanceledExceptionType =
+                                                                    CliNamedType
+                                                                        operationCanceledExceptionTypeReference
+                                                                ExceptionType =
+                                                                    CliNamedType
+                                                                        exceptionTypeReference
+                                                                Range = range
+                                                            },
                                                         outputValueTaskType,
                                                         nextLocalIndex
                                                     | _ ->
@@ -6681,11 +6711,13 @@ type internal CompilerService() =
                                                             Range = range
                                                         }
 
-                                                        TypedComputationExpression.functionParallelZip {
-                                                            Function = functionExpression
-                                                            Zip = zipExpression
-                                                            IsCancellationTokenBased = isCancellable
-                                                        },
+                                                        TypedComputationExpression.functionParallelZip
+                                                            {
+                                                                Function = functionExpression
+                                                                Zip = zipExpression
+                                                                IsCancellationTokenBased =
+                                                                    isCancellable
+                                                            },
                                                         outputFunctionType,
                                                         nextLocalIndex
                                                     | _ ->
@@ -6851,42 +6883,48 @@ type internal CompilerService() =
                                                         taskExtensionsTypeReference
                                                         operationCanceledExceptionTypeReference
                                                         exceptionTypeReference ] ->
-                                                        TypedComputationExpression.awaitableTryFinally {
-                                                            BuilderName = builderName
-                                                            WaitParameterIndex = waitParameterIndex
-                                                            WorkParameterIndex = workParameterIndex
-                                                            CompensationParameterIndex =
-                                                                compensationParameterIndex
-                                                            ResultType = resultType
-                                                            NonGenericTaskType = waitType
-                                                            OutputTaskType = workType
-                                                            CompensationType = compensationType
-                                                            TaskTypeReference = taskTypeReference
-                                                            NonGenericTaskTypeReference =
-                                                                nonGenericTaskTypeReference
-                                                            NonGenericTaskAwaiterTypeReference =
-                                                                nonGenericTaskAwaiterTypeReference
-                                                            TaskAwaiterTypeReference =
-                                                                taskAwaiterTypeReference
-                                                            FuncTypeReference = funcTypeReference
-                                                            CancellationTokenType =
-                                                                CliNamedType
-                                                                    cancellationTokenTypeReference
-                                                            TaskContinuationOptionsType =
-                                                                CliNamedType
-                                                                    taskContinuationOptionsTypeReference
-                                                            TaskSchedulerType =
-                                                                CliNamedType
-                                                                    taskSchedulerTypeReference
-                                                            TaskExtensionsTypeReference =
-                                                                taskExtensionsTypeReference
-                                                            OperationCanceledExceptionType =
-                                                                CliNamedType
-                                                                    operationCanceledExceptionTypeReference
-                                                            ExceptionType =
-                                                                CliNamedType exceptionTypeReference
-                                                            Range = range
-                                                        },
+                                                        TypedComputationExpression.awaitableTryFinally
+                                                            {
+                                                                BuilderName = builderName
+                                                                WaitParameterIndex =
+                                                                    waitParameterIndex
+                                                                WorkParameterIndex =
+                                                                    workParameterIndex
+                                                                CompensationParameterIndex =
+                                                                    compensationParameterIndex
+                                                                ResultType = resultType
+                                                                NonGenericTaskType = waitType
+                                                                OutputTaskType = workType
+                                                                CompensationType = compensationType
+                                                                TaskTypeReference =
+                                                                    taskTypeReference
+                                                                NonGenericTaskTypeReference =
+                                                                    nonGenericTaskTypeReference
+                                                                NonGenericTaskAwaiterTypeReference =
+                                                                    nonGenericTaskAwaiterTypeReference
+                                                                TaskAwaiterTypeReference =
+                                                                    taskAwaiterTypeReference
+                                                                FuncTypeReference =
+                                                                    funcTypeReference
+                                                                CancellationTokenType =
+                                                                    CliNamedType
+                                                                        cancellationTokenTypeReference
+                                                                TaskContinuationOptionsType =
+                                                                    CliNamedType
+                                                                        taskContinuationOptionsTypeReference
+                                                                TaskSchedulerType =
+                                                                    CliNamedType
+                                                                        taskSchedulerTypeReference
+                                                                TaskExtensionsTypeReference =
+                                                                    taskExtensionsTypeReference
+                                                                OperationCanceledExceptionType =
+                                                                    CliNamedType
+                                                                        operationCanceledExceptionTypeReference
+                                                                ExceptionType =
+                                                                    CliNamedType
+                                                                        exceptionTypeReference
+                                                                Range = range
+                                                            },
                                                         workType,
                                                         nextLocalIndex
                                                     | _ ->
@@ -10634,14 +10672,14 @@ type internal CompilerService() =
                                     | TypedResumableCode _
                                     | TypedResumableTryFinally _
                                     | TypedTraitCall _ -> []
-                                    | TypedComputation (AwaitableBindLowering _)
-                                    | TypedComputation (AwaitableApplyLowering _)
-                                    | TypedComputation (AwaitableZipLowering _)
-                                    | TypedComputation (FunctionParallelZipLowering _)
-                                    | TypedComputation (AwaitableTryFinallyLowering _)
-                                    | TypedComputation (ComputationWhileLowering _)
-                                    | TypedComputation (SequenceAggregationLowering _)
-                                    | TypedComputation (AwaitableUnitConversionLowering _) -> []
+                                    | TypedComputation(AwaitableBindLowering _)
+                                    | TypedComputation(AwaitableApplyLowering _)
+                                    | TypedComputation(AwaitableZipLowering _)
+                                    | TypedComputation(FunctionParallelZipLowering _)
+                                    | TypedComputation(AwaitableTryFinallyLowering _)
+                                    | TypedComputation(ComputationWhileLowering _)
+                                    | TypedComputation(SequenceAggregationLowering _)
+                                    | TypedComputation(AwaitableUnitConversionLowering _) -> []
 
                                 let typedBody =
                                     typeStaticExpression Map.empty 0 methodDeclaration.Body
@@ -10687,7 +10725,7 @@ type internal CompilerService() =
                                                     expression.ConstructionRange
                                                 | TypedDelegateLambda expression ->
                                                     expression.ConstructionRange
-                                                | TypedComputation (AwaitableTryFinallyLowering expression) ->
+                                                | TypedComputation(AwaitableTryFinallyLowering expression) ->
                                                     let taskStart = expression.Range.Start
 
                                                     {
@@ -10702,7 +10740,7 @@ type internal CompilerService() =
                                                                     + expression.BuilderName.Length
                                                         }
                                                     }
-                                                | TypedComputation (SequenceAggregationLowering expression) ->
+                                                | TypedComputation(SequenceAggregationLowering expression) ->
                                                     let builderStart = expression.Range.Start
 
                                                     {
@@ -12090,8 +12128,9 @@ type internal CompilerService() =
                                 let range =
                                     match body with
                                     | TypedResumableCode expression -> expression.Range
-                                    | TypedComputation (ComputationWhileLowering expression) -> expression.Range
-                                    | TypedComputation (SequenceAggregationLowering expression) ->
+                                    | TypedComputation(ComputationWhileLowering expression) ->
+                                        expression.Range
+                                    | TypedComputation(SequenceAggregationLowering expression) ->
                                         let builderStart = expression.Range.Start
 
                                         {
@@ -12125,12 +12164,12 @@ type internal CompilerService() =
                                     | TypedUnitLambda _
                                     | TypedFunctionLambda _
                                     | TypedDelegateLambda _
-                                    | TypedComputation (AwaitableBindLowering _)
-                                    | TypedComputation (AwaitableApplyLowering _)
-                                    | TypedComputation (AwaitableZipLowering _)
-                                    | TypedComputation (FunctionParallelZipLowering _)
-                                    | TypedComputation (AwaitableTryFinallyLowering _)
-                                    | TypedComputation (AwaitableUnitConversionLowering _)
+                                    | TypedComputation(AwaitableBindLowering _)
+                                    | TypedComputation(AwaitableApplyLowering _)
+                                    | TypedComputation(AwaitableZipLowering _)
+                                    | TypedComputation(FunctionParallelZipLowering _)
+                                    | TypedComputation(AwaitableTryFinallyLowering _)
+                                    | TypedComputation(AwaitableUnitConversionLowering _)
                                     | TypedConditional _
                                     | TypedUpcast _
                                     | TypedSequential _
@@ -13335,7 +13374,7 @@ type internal CompilerService() =
                                 methodTypeParametersToTypeParameters expression.LambdaReturnType
                             LambdaBody = methodExpressionTypesToTypeParameters expression.LambdaBody
                     }
-                | TypedComputation (AwaitableBindLowering expression) ->
+                | TypedComputation(AwaitableBindLowering expression) ->
                     TypedComputationExpression.awaitableBind {
                         expression with
                             InputType = methodTypeParametersToTypeParameters expression.InputType
@@ -13361,7 +13400,7 @@ type internal CompilerService() =
                             BuilderOperations =
                                 mapBuilderBindOperations expression.BuilderOperations
                     }
-                | TypedComputation (AwaitableApplyLowering expression) ->
+                | TypedComputation(AwaitableApplyLowering expression) ->
                     TypedComputationExpression.awaitableApply {
                         expression with
                             InputType = methodTypeParametersToTypeParameters expression.InputType
@@ -13389,7 +13428,7 @@ type internal CompilerService() =
                             ExceptionType =
                                 methodTypeParametersToTypeParameters expression.ExceptionType
                     }
-                | TypedComputation (AwaitableZipLowering expression) ->
+                | TypedComputation(AwaitableZipLowering expression) ->
                     TypedComputationExpression.awaitableZip {
                         expression with
                             LeftType = methodTypeParametersToTypeParameters expression.LeftType
@@ -13415,7 +13454,7 @@ type internal CompilerService() =
                             ExceptionType =
                                 methodTypeParametersToTypeParameters expression.ExceptionType
                     }
-                | TypedComputation (FunctionParallelZipLowering expression) ->
+                | TypedComputation(FunctionParallelZipLowering expression) ->
                     let mappedFunction =
                         match
                             methodExpressionTypesToTypeParameters (
@@ -13424,14 +13463,15 @@ type internal CompilerService() =
                         with
                         | TypedFunctionLambda mapped -> mapped
                         | _ ->
-                            invalidOp
-                                "the function parallel zip function mapping changed its shape"
+                            invalidOp "the function parallel zip function mapping changed its shape"
 
                     let mappedZip =
                         match
-                            methodExpressionTypesToTypeParameters (TypedComputationExpression.awaitableZip expression.Zip)
+                            methodExpressionTypesToTypeParameters (
+                                TypedComputationExpression.awaitableZip expression.Zip
+                            )
                         with
-                        | TypedComputation (AwaitableZipLowering mapped) -> mapped
+                        | TypedComputation(AwaitableZipLowering mapped) -> mapped
                         | _ ->
                             invalidOp
                                 "the function parallel zip awaitable mapping changed its shape"
@@ -13441,7 +13481,7 @@ type internal CompilerService() =
                         Zip = mappedZip
                         IsCancellationTokenBased = expression.IsCancellationTokenBased
                     }
-                | TypedComputation (AwaitableTryFinallyLowering expression) ->
+                | TypedComputation(AwaitableTryFinallyLowering expression) ->
                     TypedComputationExpression.awaitableTryFinally {
                         expression with
                             ResultType = methodTypeParametersToTypeParameters expression.ResultType
@@ -13465,7 +13505,7 @@ type internal CompilerService() =
                             ExceptionType =
                                 methodTypeParametersToTypeParameters expression.ExceptionType
                     }
-                | TypedComputation (ComputationWhileLowering expression) ->
+                | TypedComputation(ComputationWhileLowering expression) ->
                     TypedComputationExpression.computationWhile {
                         expression with
                             UnitType = methodTypeParametersToTypeParameters expression.UnitType
@@ -13474,7 +13514,7 @@ type internal CompilerService() =
                             AsyncUnitType =
                                 methodTypeParametersToTypeParameters expression.AsyncUnitType
                     }
-                | TypedComputation (SequenceAggregationLowering expression) ->
+                | TypedComputation(SequenceAggregationLowering expression) ->
                     TypedComputationExpression.sequenceAggregation {
                         expression with
                             ElementType =
@@ -13496,7 +13536,7 @@ type internal CompilerService() =
                                     expression.CancellationTokenType
                             UnitType = methodTypeParametersToTypeParameters expression.UnitType
                     }
-                | TypedComputation (AwaitableUnitConversionLowering expression) ->
+                | TypedComputation(AwaitableUnitConversionLowering expression) ->
                     TypedComputationExpression.awaitableUnitConversion {
                         expression with
                             SourceValueTaskType =
@@ -14032,9 +14072,11 @@ type internal CompilerService() =
                     DefinitionType = instantiateClosure typeReference definitionArguments
                     DefinitionExpression =
                         match
-                            methodExpressionTypesToTypeParameters (TypedComputationExpression.awaitableBind expression)
+                            methodExpressionTypesToTypeParameters (
+                                TypedComputationExpression.awaitableBind expression
+                            )
                         with
-                        | TypedComputation (AwaitableBindLowering mapped) -> mapped
+                        | TypedComputation(AwaitableBindLowering mapped) -> mapped
                         | _ -> invalidOp "the value-task bind expression mapping changed its shape"
                     CompletedStableId =
                         stableId
@@ -14097,12 +14139,24 @@ type internal CompilerService() =
                         with
                         | TypedComputation(AwaitableBindLowering mapped) -> mapped
                         | _ -> invalidOp "the builder bind expression mapping changed its shape"
-                    BuilderFieldStableId = stableId + "/field:builder"
-                    BinderFieldStableId = stableId + "/field:binder"
-                    SourceFieldStableId = stableId + "/field:source"
-                    ConstructorStableId = stableId + "/constructor"
-                    InvokeStableId = stableId + "/method:Invoke"
-                    ContinuationStableId = stableId + "/method:InvokeContinuation"
+                    BuilderFieldStableId =
+                        stableId
+                        + "/field:builder"
+                    BinderFieldStableId =
+                        stableId
+                        + "/field:binder"
+                    SourceFieldStableId =
+                        stableId
+                        + "/field:source"
+                    ConstructorStableId =
+                        stableId
+                        + "/constructor"
+                    InvokeStableId =
+                        stableId
+                        + "/method:Invoke"
+                    ContinuationStableId =
+                        stableId
+                        + "/method:InvokeContinuation"
                 |}
 
             let valueTaskApplyHelperLayout
@@ -14152,9 +14206,11 @@ type internal CompilerService() =
                     DefinitionType = instantiateClosure typeReference definitionArguments
                     DefinitionExpression =
                         match
-                            methodExpressionTypesToTypeParameters (TypedComputationExpression.awaitableApply expression)
+                            methodExpressionTypesToTypeParameters (
+                                TypedComputationExpression.awaitableApply expression
+                            )
                         with
-                        | TypedComputation (AwaitableApplyLowering mapped) -> mapped
+                        | TypedComputation(AwaitableApplyLowering mapped) -> mapped
                         | _ -> invalidOp "the value-task apply expression mapping changed its shape"
                     CompletedStableId =
                         stableId
@@ -14214,9 +14270,11 @@ type internal CompilerService() =
                     DefinitionType = instantiateClosure typeReference definitionArguments
                     DefinitionExpression =
                         match
-                            methodExpressionTypesToTypeParameters (TypedComputationExpression.awaitableZip expression)
+                            methodExpressionTypesToTypeParameters (
+                                TypedComputationExpression.awaitableZip expression
+                            )
                         with
-                        | TypedComputation (AwaitableZipLowering mapped) -> mapped
+                        | TypedComputation(AwaitableZipLowering mapped) -> mapped
                         | _ -> invalidOp "the value-task zip expression mapping changed its shape"
                     CompletedStableId =
                         stableId
@@ -14276,9 +14334,11 @@ type internal CompilerService() =
                     DefinitionType = instantiateClosure typeReference definitionArguments
                     DefinitionExpression =
                         match
-                            methodExpressionTypesToTypeParameters (TypedComputationExpression.awaitableUnitConversion expression)
+                            methodExpressionTypesToTypeParameters (
+                                TypedComputationExpression.awaitableUnitConversion expression
+                            )
                         with
-                        | TypedComputation (AwaitableUnitConversionLowering mapped) -> mapped
+                        | TypedComputation(AwaitableUnitConversionLowering mapped) -> mapped
                         | _ -> invalidOp "the value-task unit expression mapping changed its shape"
                     ContinuationStableId =
                         stableId
@@ -14327,9 +14387,11 @@ type internal CompilerService() =
 
                 let definitionExpression =
                     match
-                        methodExpressionTypesToTypeParameters (TypedComputationExpression.awaitableTryFinally expression)
+                        methodExpressionTypesToTypeParameters (
+                            TypedComputationExpression.awaitableTryFinally expression
+                        )
                     with
-                    | TypedComputation (AwaitableTryFinallyLowering mapped) -> mapped
+                    | TypedComputation(AwaitableTryFinallyLowering mapped) -> mapped
                     | _ -> invalidOp "the task try-finally expression mapping changed its shape"
 
                 {|
@@ -14486,10 +14548,8 @@ type internal CompilerService() =
                             TypedComputationExpression.sequenceAggregation expression
                         )
                     with
-                    | TypedComputation (SequenceAggregationLowering mapped) -> mapped
-                    | _ ->
-                        invalidOp
-                            "the sequence aggregation expression mapping changed its shape"
+                    | TypedComputation(SequenceAggregationLowering mapped) -> mapped
+                    | _ -> invalidOp "the sequence aggregation expression mapping changed its shape"
 
                 {|
                     StableId = stableId
@@ -14917,8 +14977,7 @@ type internal CompilerService() =
 
                 let fromConverter =
                     match functionType, converterType with
-                    | CliGenericType(functionReference, _),
-                      CliGenericType(converterReference, _) -> {
+                    | CliGenericType(functionReference, _), CliGenericType(converterReference, _) -> {
                         DeclaringType = CliDeclaringType functionType
                         Name = "FromConverter"
                         GenericArity = 0
@@ -14959,13 +15018,19 @@ type internal CompilerService() =
                 let delayFunctionType =
                     CliGenericType(
                         operations.FSharpFunctionTypeReference,
-                        [ operations.UnitType; expression.OutputValueTaskType ]
+                        [
+                            operations.UnitType
+                            expression.OutputValueTaskType
+                        ]
                     )
 
                 let delayConverterType =
                     CliGenericType(
                         operations.ConverterTypeReference,
-                        [ operations.UnitType; expression.OutputValueTaskType ]
+                        [
+                            operations.UnitType
+                            expression.OutputValueTaskType
+                        ]
                     )
 
                 let constructor = {
@@ -14993,13 +15058,9 @@ type internal CompilerService() =
                 }
 
                 let invoke, delegateConstructor, fromConverter =
-                    functionConversionReferences
-                        delayFunctionType
-                        delayConverterType
-                        invoke
+                    functionConversionReferences delayFunctionType delayConverterType invoke
 
-                let getter =
-                    builderMethodReference false operations.BuilderGetter
+                let getter = builderMethodReference false operations.BuilderGetter
 
                 [
                     match operations.BuilderGetterGenericArguments with
@@ -15915,9 +15976,9 @@ type internal CompilerService() =
                             Type = valueType
                         }
                     ]
-                | TypedComputation (AwaitableUnitConversionLowering expression) ->
+                | TypedComputation(AwaitableUnitConversionLowering expression) ->
                     valueTaskOfUnitInstructions methodDeclaration kind expression, []
-                | TypedComputation (ComputationWhileLowering expression) ->
+                | TypedComputation(ComputationWhileLowering expression) ->
                     asyncWhileInstructions methodDeclaration kind expression, []
                 | TypedFunctionApplication(functionType,
                                            domainType,
@@ -16506,17 +16567,17 @@ type internal CompilerService() =
                     functionLambdaConstructionInstructions kind expression, []
                 | TypedDelegateLambda expression ->
                     delegateLambdaConstructionInstructions kind expression, []
-                | TypedComputation (FunctionParallelZipLowering expression) ->
+                | TypedComputation(FunctionParallelZipLowering expression) ->
                     functionLambdaConstructionInstructions kind expression.Function, []
-                | TypedComputation (AwaitableTryFinallyLowering expression) ->
+                | TypedComputation(AwaitableTryFinallyLowering expression) ->
                     taskTryFinallyInstructions methodDeclaration kind expression, []
                 | TypedBoundInstanceMethod _
                 | TypedUnitLambda _
-                | TypedComputation (AwaitableBindLowering _)
-                | TypedComputation (AwaitableApplyLowering _)
-                | TypedComputation (AwaitableZipLowering _)
-                | TypedComputation (SequenceAggregationLowering _)
-                | TypedComputation (AwaitableUnitConversionLowering _)
+                | TypedComputation(AwaitableBindLowering _)
+                | TypedComputation(AwaitableApplyLowering _)
+                | TypedComputation(AwaitableZipLowering _)
+                | TypedComputation(SequenceAggregationLowering _)
+                | TypedComputation(AwaitableUnitConversionLowering _)
                 | TypedResumableCode _
                 | TypedResumableTryFinally _
                 | TypedTraitCall _ -> invalidOp "this expression cannot be lowered as a local value"
@@ -16546,31 +16607,32 @@ type internal CompilerService() =
                         Return
                     ],
                     []
-                | TypedComputation (FunctionParallelZipLowering expression) ->
+                | TypedComputation(FunctionParallelZipLowering expression) ->
                     functionLambdaConstructionInstructions kind expression.Function
                     @ [ Return ],
                     []
-                | TypedComputation (AwaitableTryFinallyLowering expression) ->
+                | TypedComputation(AwaitableTryFinallyLowering expression) ->
                     taskTryFinallyInstructions methodDeclaration kind expression
                     @ [ Return ],
                     []
-                | TypedComputation (ComputationWhileLowering expression) ->
+                | TypedComputation(ComputationWhileLowering expression) ->
                     asyncWhileInstructions methodDeclaration kind expression
                     @ [ Return ],
                     []
-                | TypedComputation (SequenceAggregationLowering expression) ->
+                | TypedComputation(SequenceAggregationLowering expression) ->
                     sequenceAggregationInstructions methodDeclaration kind expression
                     @ [ Return ],
                     []
-                | TypedComputation (AwaitableUnitConversionLowering expression) ->
+                | TypedComputation(AwaitableUnitConversionLowering expression) ->
                     valueTaskOfUnitInstructions methodDeclaration kind expression
                     @ [ Return ],
                     []
-                | TypedComputation (AwaitableBindLowering expression) when
-                    expression.BuilderOperations.BuilderType <> CliVoid
+                | TypedComputation(AwaitableBindLowering expression) when
+                    expression.BuilderOperations.BuilderType
+                    <> CliVoid
                     ->
                     builderBindInstructions methodDeclaration kind expression
-                | TypedComputation (AwaitableBindLowering expression) ->
+                | TypedComputation(AwaitableBindLowering expression) ->
                     let layout = valueTaskBindHelperLayout methodDeclaration expression
                     let definition = layout.DefinitionExpression
                     let slowPath = freshLabel ()
@@ -16774,7 +16836,7 @@ type internal CompilerService() =
                         Return
                     ],
                     []
-                | TypedComputation (AwaitableApplyLowering expression) ->
+                | TypedComputation(AwaitableApplyLowering expression) ->
                     let layout = valueTaskApplyHelperLayout methodDeclaration expression
                     let definition = layout.DefinitionExpression
                     let slowPath = freshLabel ()
@@ -16992,7 +17054,7 @@ type internal CompilerService() =
                         Return
                     ],
                     []
-                | TypedComputation (AwaitableZipLowering expression) ->
+                | TypedComputation(AwaitableZipLowering expression) ->
                     let layout = valueTaskZipHelperLayout methodDeclaration expression
                     let definition = layout.DefinitionExpression
                     let slowPath = freshLabel ()
@@ -17553,14 +17615,14 @@ type internal CompilerService() =
                         | TypedUnitLambda _
                         | TypedFunctionLambda _
                         | TypedDelegateLambda _
-                        | TypedComputation (AwaitableBindLowering _)
-                        | TypedComputation (AwaitableApplyLowering _)
-                        | TypedComputation (AwaitableZipLowering _)
-                        | TypedComputation (FunctionParallelZipLowering _)
-                        | TypedComputation (AwaitableTryFinallyLowering _)
-                        | TypedComputation (ComputationWhileLowering _)
-                        | TypedComputation (SequenceAggregationLowering _)
-                        | TypedComputation (AwaitableUnitConversionLowering _)
+                        | TypedComputation(AwaitableBindLowering _)
+                        | TypedComputation(AwaitableApplyLowering _)
+                        | TypedComputation(AwaitableZipLowering _)
+                        | TypedComputation(FunctionParallelZipLowering _)
+                        | TypedComputation(AwaitableTryFinallyLowering _)
+                        | TypedComputation(ComputationWhileLowering _)
+                        | TypedComputation(SequenceAggregationLowering _)
+                        | TypedComputation(AwaitableUnitConversionLowering _)
                         | TypedResumableTryFinally _ -> 8
                         | TypedIntegerLiteral _
                         | TypedStringLiteral _
@@ -18157,7 +18219,7 @@ type internal CompilerService() =
                             moduleDeclaration.Methods
                             |> List.choose (fun methodDeclaration ->
                                 match methodDeclaration.Body with
-                                | TypedComputation (AwaitableBindLowering expression) ->
+                                | TypedComputation(AwaitableBindLowering expression) ->
                                     let layout =
                                         valueTaskBindHelperLayout methodDeclaration expression
 
@@ -18589,21 +18651,24 @@ type internal CompilerService() =
                                     let operations = expression.BuilderOperations
 
                                     let builderField = {
-                                        DeclaringType = CliDeclaringType builderLayout.DefinitionType
+                                        DeclaringType =
+                                            CliDeclaringType builderLayout.DefinitionType
                                         Name = "builder"
                                         FieldType = operations.BuilderType
                                         TargetStableId = Some builderLayout.BuilderFieldStableId
                                     }
 
                                     let binderField = {
-                                        DeclaringType = CliDeclaringType builderLayout.DefinitionType
+                                        DeclaringType =
+                                            CliDeclaringType builderLayout.DefinitionType
                                         Name = "binder"
                                         FieldType = expression.BinderType
                                         TargetStableId = Some builderLayout.BinderFieldStableId
                                     }
 
                                     let sourceField = {
-                                        DeclaringType = CliDeclaringType builderLayout.DefinitionType
+                                        DeclaringType =
+                                            CliDeclaringType builderLayout.DefinitionType
                                         Name = "source"
                                         FieldType = expression.InputValueTaskType
                                         TargetStableId = Some builderLayout.SourceFieldStableId
@@ -18670,7 +18735,8 @@ type internal CompilerService() =
                                         EmitDefaultSequencePoint = true
                                         MaxStack = 2
                                         DependencyIds =
-                                            instructionDependencyIds builderConstructorInstructions
+                                            instructionDependencyIds
+                                                builderConstructorInstructions
                                         ContentHash =
                                             Fingerprint.parts [
                                                 builderLayout.ConstructorStableId
@@ -18729,13 +18795,19 @@ type internal CompilerService() =
                                     let continuationFunctionType =
                                         CliGenericType(
                                             operations.FSharpFunctionTypeReference,
-                                            [ expression.InputType; expression.OutputValueTaskType ]
+                                            [
+                                                expression.InputType
+                                                expression.OutputValueTaskType
+                                            ]
                                         )
 
                                     let continuationConverterType =
                                         CliGenericType(
                                             operations.ConverterTypeReference,
-                                            [ expression.InputType; expression.OutputValueTaskType ]
+                                            [
+                                                expression.InputType
+                                                expression.OutputValueTaskType
+                                            ]
                                         )
 
                                     let continuationTarget = {
@@ -18876,7 +18948,7 @@ type internal CompilerService() =
                             moduleDeclaration.Methods
                             |> List.choose (fun methodDeclaration ->
                                 match methodDeclaration.Body with
-                                | TypedComputation (AwaitableApplyLowering applyExpression) ->
+                                | TypedComputation(AwaitableApplyLowering applyExpression) ->
                                     let layout =
                                         valueTaskApplyHelperLayout
                                             methodDeclaration
@@ -19661,8 +19733,9 @@ type internal CompilerService() =
 
             let rec tryFindValueTaskZip =
                 function
-                | TypedComputation (AwaitableZipLowering expression) -> Some expression
-                | TypedComputation (FunctionParallelZipLowering { Zip = expression }) -> Some expression
+                | TypedComputation(AwaitableZipLowering expression) -> Some expression
+                | TypedComputation(FunctionParallelZipLowering { Zip = expression }) ->
+                    Some expression
                 | TypedLet(_, _, _, _, value, body, _, _) ->
                     tryFindValueTaskZip value
                     |> Option.orElseWith (fun () -> tryFindValueTaskZip body)
@@ -20460,7 +20533,7 @@ type internal CompilerService() =
 
             let rec tryFindFunctionParallelZip =
                 function
-                | TypedComputation (FunctionParallelZipLowering expression) -> Some expression
+                | TypedComputation(FunctionParallelZipLowering expression) -> Some expression
                 | TypedLet(_, _, _, _, value, body, _, _) ->
                     tryFindFunctionParallelZip value
                     |> Option.orElseWith (fun () -> tryFindFunctionParallelZip body)
@@ -21003,7 +21076,7 @@ type internal CompilerService() =
 
             let rec valueTaskOfUnitExpressions =
                 function
-                | TypedComputation (AwaitableUnitConversionLowering expression) -> [ expression ]
+                | TypedComputation(AwaitableUnitConversionLowering expression) -> [ expression ]
                 | TypedLet(_, _, _, _, value, body, _, _) ->
                     valueTaskOfUnitExpressions value
                     @ valueTaskOfUnitExpressions body
@@ -21084,13 +21157,13 @@ type internal CompilerService() =
                 | TypedDefaultValue _
                 | TypedBoundInstanceMethod _
                 | TypedUnitLambda _
-                | TypedComputation (AwaitableBindLowering _)
-                | TypedComputation (AwaitableApplyLowering _)
-                | TypedComputation (AwaitableZipLowering _)
-                | TypedComputation (FunctionParallelZipLowering _)
-                | TypedComputation (AwaitableTryFinallyLowering _)
-                | TypedComputation (ComputationWhileLowering _)
-                | TypedComputation (SequenceAggregationLowering _)
+                | TypedComputation(AwaitableBindLowering _)
+                | TypedComputation(AwaitableApplyLowering _)
+                | TypedComputation(AwaitableZipLowering _)
+                | TypedComputation(FunctionParallelZipLowering _)
+                | TypedComputation(AwaitableTryFinallyLowering _)
+                | TypedComputation(ComputationWhileLowering _)
+                | TypedComputation(SequenceAggregationLowering _)
                 | TypedResumableCode _
                 | TypedResumableTryFinally _
                 | TypedTraitCall _ -> []
@@ -21364,7 +21437,7 @@ type internal CompilerService() =
                         |> declarationMethods
                         |> List.collect (fun methodDeclaration ->
                             match methodDeclaration.Body with
-                            | TypedComputation (ComputationWhileLowering expression) ->
+                            | TypedComputation(ComputationWhileLowering expression) ->
                                 let layout = asyncWhileHelperLayout methodDeclaration expression
 
                                 let objectConstructor = {
@@ -22204,7 +22277,7 @@ type internal CompilerService() =
                         |> declarationMethods
                         |> List.collect (fun (methodDeclaration, enclosingTypeStableId) ->
                             match methodDeclaration.Body with
-                            | TypedComputation (SequenceAggregationLowering sourceExpression) ->
+                            | TypedComputation(SequenceAggregationLowering sourceExpression) ->
                                 let layout =
                                     sequenceAggregationHelperLayout
                                         methodDeclaration
@@ -23215,7 +23288,7 @@ type internal CompilerService() =
                                 let methodDeclaration = objectMethodDeclaration.Method
 
                                 match methodDeclaration.Body with
-                                | TypedComputation (AwaitableTryFinallyLowering sourceExpression) ->
+                                | TypedComputation(AwaitableTryFinallyLowering sourceExpression) ->
                                     let layout =
                                         taskTryFinallyHelperLayout
                                             methodDeclaration
@@ -23878,14 +23951,14 @@ type internal CompilerService() =
                 | TypedDefaultValue _
                 | TypedBoundInstanceMethod _
                 | TypedUnitLambda _
-                | TypedComputation (AwaitableBindLowering _)
-                | TypedComputation (AwaitableApplyLowering _)
-                | TypedComputation (AwaitableZipLowering _)
-                | TypedComputation (FunctionParallelZipLowering _)
-                | TypedComputation (AwaitableTryFinallyLowering _)
-                | TypedComputation (ComputationWhileLowering _)
-                | TypedComputation (SequenceAggregationLowering _)
-                | TypedComputation (AwaitableUnitConversionLowering _)
+                | TypedComputation(AwaitableBindLowering _)
+                | TypedComputation(AwaitableApplyLowering _)
+                | TypedComputation(AwaitableZipLowering _)
+                | TypedComputation(FunctionParallelZipLowering _)
+                | TypedComputation(AwaitableTryFinallyLowering _)
+                | TypedComputation(ComputationWhileLowering _)
+                | TypedComputation(SequenceAggregationLowering _)
+                | TypedComputation(AwaitableUnitConversionLowering _)
                 | TypedResumableCode _
                 | TypedResumableTryFinally _
                 | TypedTraitCall _ -> []
@@ -23972,14 +24045,14 @@ type internal CompilerService() =
                 | TypedDefaultValue _
                 | TypedBoundInstanceMethod _
                 | TypedUnitLambda _
-                | TypedComputation (AwaitableBindLowering _)
-                | TypedComputation (AwaitableApplyLowering _)
-                | TypedComputation (AwaitableZipLowering _)
-                | TypedComputation (FunctionParallelZipLowering _)
-                | TypedComputation (AwaitableTryFinallyLowering _)
-                | TypedComputation (ComputationWhileLowering _)
-                | TypedComputation (SequenceAggregationLowering _)
-                | TypedComputation (AwaitableUnitConversionLowering _)
+                | TypedComputation(AwaitableBindLowering _)
+                | TypedComputation(AwaitableApplyLowering _)
+                | TypedComputation(AwaitableZipLowering _)
+                | TypedComputation(FunctionParallelZipLowering _)
+                | TypedComputation(AwaitableTryFinallyLowering _)
+                | TypedComputation(ComputationWhileLowering _)
+                | TypedComputation(SequenceAggregationLowering _)
+                | TypedComputation(AwaitableUnitConversionLowering _)
                 | TypedResumableCode _
                 | TypedResumableTryFinally _
                 | TypedTraitCall _ -> []
@@ -24066,14 +24139,14 @@ type internal CompilerService() =
                 | TypedDefaultValue _
                 | TypedBoundInstanceMethod _
                 | TypedUnitLambda _
-                | TypedComputation (AwaitableBindLowering _)
-                | TypedComputation (AwaitableApplyLowering _)
-                | TypedComputation (AwaitableZipLowering _)
-                | TypedComputation (FunctionParallelZipLowering _)
-                | TypedComputation (AwaitableTryFinallyLowering _)
-                | TypedComputation (ComputationWhileLowering _)
-                | TypedComputation (SequenceAggregationLowering _)
-                | TypedComputation (AwaitableUnitConversionLowering _)
+                | TypedComputation(AwaitableBindLowering _)
+                | TypedComputation(AwaitableApplyLowering _)
+                | TypedComputation(AwaitableZipLowering _)
+                | TypedComputation(FunctionParallelZipLowering _)
+                | TypedComputation(AwaitableTryFinallyLowering _)
+                | TypedComputation(ComputationWhileLowering _)
+                | TypedComputation(SequenceAggregationLowering _)
+                | TypedComputation(AwaitableUnitConversionLowering _)
                 | TypedResumableCode _
                 | TypedResumableTryFinally _
                 | TypedTraitCall _ -> []
@@ -24547,14 +24620,14 @@ type internal CompilerService() =
                                     | TypedUnitLambda _
                                     | TypedFunctionLambda _
                                     | TypedDelegateLambda _
-                                    | TypedComputation (AwaitableBindLowering _)
-                                    | TypedComputation (AwaitableApplyLowering _)
-                                    | TypedComputation (AwaitableZipLowering _)
-                                    | TypedComputation (FunctionParallelZipLowering _)
-                                    | TypedComputation (AwaitableTryFinallyLowering _)
-                                    | TypedComputation (ComputationWhileLowering _)
-                                    | TypedComputation (SequenceAggregationLowering _)
-                                    | TypedComputation (AwaitableUnitConversionLowering _)
+                                    | TypedComputation(AwaitableBindLowering _)
+                                    | TypedComputation(AwaitableApplyLowering _)
+                                    | TypedComputation(AwaitableZipLowering _)
+                                    | TypedComputation(FunctionParallelZipLowering _)
+                                    | TypedComputation(AwaitableTryFinallyLowering _)
+                                    | TypedComputation(ComputationWhileLowering _)
+                                    | TypedComputation(SequenceAggregationLowering _)
+                                    | TypedComputation(AwaitableUnitConversionLowering _)
                                     | TypedConditional _
                                     | TypedUpcast _
                                     | TypedSequential _
@@ -24955,14 +25028,14 @@ type internal CompilerService() =
                                 | TypedUnitLambda _
                                 | TypedFunctionLambda _
                                 | TypedDelegateLambda _
-                                | TypedComputation (AwaitableBindLowering _)
-                                | TypedComputation (AwaitableApplyLowering _)
-                                | TypedComputation (AwaitableZipLowering _)
-                                | TypedComputation (FunctionParallelZipLowering _)
-                                | TypedComputation (AwaitableTryFinallyLowering _)
-                                | TypedComputation (ComputationWhileLowering _)
-                                | TypedComputation (SequenceAggregationLowering _)
-                                | TypedComputation (AwaitableUnitConversionLowering _)
+                                | TypedComputation(AwaitableBindLowering _)
+                                | TypedComputation(AwaitableApplyLowering _)
+                                | TypedComputation(AwaitableZipLowering _)
+                                | TypedComputation(FunctionParallelZipLowering _)
+                                | TypedComputation(AwaitableTryFinallyLowering _)
+                                | TypedComputation(ComputationWhileLowering _)
+                                | TypedComputation(SequenceAggregationLowering _)
+                                | TypedComputation(AwaitableUnitConversionLowering _)
                                 | TypedConditional _
                                 | TypedUpcast _
                                 | TypedSequential _
@@ -25161,14 +25234,14 @@ type internal CompilerService() =
                                 | TypedBoundInstanceMethod _
                                 | TypedFunctionLambda _
                                 | TypedDelegateLambda _
-                                | TypedComputation (AwaitableBindLowering _)
-                                | TypedComputation (AwaitableApplyLowering _)
-                                | TypedComputation (AwaitableZipLowering _)
-                                | TypedComputation (FunctionParallelZipLowering _)
-                                | TypedComputation (AwaitableTryFinallyLowering _)
-                                | TypedComputation (ComputationWhileLowering _)
-                                | TypedComputation (SequenceAggregationLowering _)
-                                | TypedComputation (AwaitableUnitConversionLowering _)
+                                | TypedComputation(AwaitableBindLowering _)
+                                | TypedComputation(AwaitableApplyLowering _)
+                                | TypedComputation(AwaitableZipLowering _)
+                                | TypedComputation(FunctionParallelZipLowering _)
+                                | TypedComputation(AwaitableTryFinallyLowering _)
+                                | TypedComputation(ComputationWhileLowering _)
+                                | TypedComputation(SequenceAggregationLowering _)
+                                | TypedComputation(AwaitableUnitConversionLowering _)
                                 | TypedConditional _
                                 | TypedUpcast _
                                 | TypedSequential _
