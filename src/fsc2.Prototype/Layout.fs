@@ -160,37 +160,6 @@ module internal Layout =
                     not (directive.Text.Contains("\"off\"", StringComparison.Ordinal))
                 )
 
-            let hasLexicalDiagnostic =
-                directives.Diagnostics
-                |> Seq.exists (fun diagnostic -> diagnostic.Range.Start.Line = line)
-
-            if
-                trimmed.Length > 0
-                && depthBefore = 0
-                && delimiterDepth > 0
-                && hasLexicalDiagnostic
-            then
-                let startPosition =
-                    SourceMap.positionAt
-                        source.Map
-                        (startOffset
-                         + charIndex)
-
-                let endPosition = SourceMap.positionAt source.Map contentEnd
-
-                diagnostics.Add {
-                    Code = "FS0058"
-                    Message =
-                        $"Unexpected syntax or possible incorrect indentation: this token is offside of context started at position ({line}:{charIndex
-                                                                                                                                             + 1}). Try indenting this further.\u001dTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
-                    Range = {
-                        Start = startPosition
-                        End = endPosition
-                    }
-                    Order = order
-                }
-
-                order <- order + 1L
 
             if
                 lineTokens.Length > 0

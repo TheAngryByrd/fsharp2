@@ -162,31 +162,21 @@ module LayoutTests =
                     2
                     "Both open blocks close"
 
-            testCase "reports offside recovery after an invalid character opens a delimiter"
+            testCase "reports an invalid character without inventing offside recovery"
             <| fun _ ->
-                let result = prepare "module Program\nlet value =\uFFFD("
+                let result =
+                    prepare
+                        "module Program
+let value =�("
 
                 Expect.sequenceEqual
                     (result.Diagnostics
                      |> Seq.map (fun diagnostic ->
                          diagnostic.Code,
+                         diagnostic.Message,
                          diagnostic.Range.Start.Line,
-                         diagnostic.Range.Start.Column,
-                         diagnostic.Range.End.Line,
-                         diagnostic.Range.End.Column
+                         diagnostic.Range.Start.Column
                      ))
-                    [
-                        "FS0010", 2, 12, 2, 13
-                        "FS0058", 2, 1, 2, 14
-                    ]
-                    "The parser recovery diagnostics remain ordered"
-
-                Expect.sequenceEqual
-                    (result.Diagnostics
-                     |> Seq.map _.Message)
-                    [
-                        "Unexpected character '�'."
-                        "Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\u001dTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
-                    ]
-                    "The lexical and layout messages carry no parser context"
+                    [ "FS0010", "Unexpected character '�'.", 2, 12 ]
+                    "The layout pass adds no parser recovery diagnostics"
         ]

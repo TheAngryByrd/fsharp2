@@ -99,32 +99,8 @@ module internal LexicalPipeline =
         |> ImmutableArray.CreateRange
 
     let private orderedDiagnostics (diagnostics: ImmutableArray<SourceLexicalDiagnostic>) =
-        let effectiveOffset (diagnostic: SourceLexicalDiagnostic) =
-            if diagnostic.Code = "FS0058" then
-                diagnostics
-                |> Seq.filter (fun (candidate: SourceLexicalDiagnostic) ->
-                    candidate.Order < diagnostic.Order
-                    && candidate.Range.Start.Line = diagnostic.Range.Start.Line
-                    && candidate.Range.Start.Offset
-                       >= diagnostic.Range.Start.Offset
-                    && candidate.Range.Start.Offset < diagnostic.Range.End.Offset
-                )
-                |> Seq.map _.Range.End.Offset
-                |> Seq.fold max diagnostic.Range.Start.Offset
-            else
-                diagnostic.Range.Start.Offset
-
-        let hasStructuredRecovery =
-            diagnostics
-            |> Seq.exists (fun diagnostic -> diagnostic.Code = "FS3118")
-
         diagnostics
-        |> Seq.sortBy (fun diagnostic ->
-            if hasStructuredRecovery then
-                0, diagnostic.Order
-            else
-                effectiveOffset diagnostic, diagnostic.Order
-        )
+        |> Seq.sortBy (fun diagnostic -> diagnostic.Range.Start.Offset, diagnostic.Order)
         |> Seq.mapi (fun index diagnostic -> { diagnostic with Order = int64 index })
         |> ImmutableArray.CreateRange
 
