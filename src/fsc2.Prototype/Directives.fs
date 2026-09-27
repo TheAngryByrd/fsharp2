@@ -344,8 +344,25 @@ module internal Directives =
                 End = SourceMap.positionAt source.Map contentEnd
             }
 
+            let withoutLineComment (text: string) =
+                match text.IndexOf("//", StringComparison.Ordinal) with
+                | -1 -> text
+                | index -> text.Substring(0, index)
+
+            let isDirective (name: string) requiresArgument =
+                trimmed.StartsWith(name, StringComparison.Ordinal)
+                && (let rest = trimmed.Substring(name.Length)
+
+                    if requiresArgument then
+                        rest.Length > 0
+                        && Char.IsWhiteSpace rest[0]
+                    else
+                        String.IsNullOrWhiteSpace(withoutLineComment rest))
+
             let conditionAt prefixLength =
-                match evaluateCondition defines (trimmed.Substring(prefixLength)) with
+                match
+                    evaluateCondition defines (withoutLineComment (trimmed.Substring(prefixLength)))
+                with
                 | Ok value -> value
                 | Error error ->
                     let position =
@@ -373,7 +390,7 @@ module internal Directives =
                     Range = directiveRange
                 }
 
-            if trimmed.StartsWith("#if ", StringComparison.Ordinal) then
+            if isDirective "#if" true then
                 blank startOffset contentEnd
                 add DirectiveKind.Conditional
                 let condition = conditionAt 4
@@ -393,7 +410,7 @@ module internal Directives =
                 active <-
                     active
                     && condition
-            elif trimmed.StartsWith("#elif ", StringComparison.Ordinal) then
+            elif isDirective "#elif" true then
                 blank startOffset contentEnd
                 add DirectiveKind.Conditional
 
@@ -421,7 +438,7 @@ module internal Directives =
                         :: tail
 
                     active <- next.CurrentActive
-            elif trimmed = "#else" then
+            elif isDirective "#else" false then
                 blank startOffset contentEnd
                 add DirectiveKind.Conditional
 
@@ -448,7 +465,7 @@ module internal Directives =
                         :: tail
 
                     active <- next.CurrentActive
-            elif trimmed = "#endif" then
+            elif isDirective "#endif" false then
                 blank startOffset contentEnd
                 add DirectiveKind.Conditional
 

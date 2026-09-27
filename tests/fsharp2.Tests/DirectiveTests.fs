@@ -61,6 +61,28 @@ let other = 2
 
                 Expect.isEmpty result.Diagnostics "A complete expression is valid"
 
+            testCase "accepts tab separators and trailing line comments on conditional directives"
+            <| fun _ ->
+                let text =
+                    "#if	A // enabled
+let selected = 1
+#else  // other
+let other = 2
+#endif   // done"
+
+                let result = prepare "10.0" [ "A" ] text
+
+                Expect.stringContains
+                    result.CompatibilityText
+                    "let selected = 1"
+                    "The tab-separated condition is evaluated"
+
+                Expect.isFalse
+                    (result.CompatibilityText.Contains "let other = 2")
+                    "The commented else directive closes the active branch"
+
+                Expect.isEmpty result.Diagnostics "Commented directives are balanced"
+
             testCase "reports malformed conditional expressions at the Oracle position"
             <| fun _ ->
                 let diagnosticFor expression =
