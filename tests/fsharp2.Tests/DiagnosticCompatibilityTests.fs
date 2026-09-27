@@ -2206,6 +2206,12 @@ module DiagnosticCompatibilityTests =
                         [|
                             box invocationSourcePath
                             box (File.ReadAllText(sourcePath))
+                            box (
+                                File.ReadAllBytes(sourcePath)
+                                |> Security.Cryptography.SHA256.HashData
+                                |> Convert.ToHexString
+                                |> _.ToLowerInvariant()
+                            )
                         |],
                         visibility
                     )

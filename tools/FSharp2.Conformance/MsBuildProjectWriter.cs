@@ -225,7 +225,7 @@ public static class MsBuildProjectWriter
                 .FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value))
                 ?? logicalRoot;
         }
-        return $"$(MSBuildProjectDirectory)={logicalRoot}";
+        return $".={logicalRoot}";
     }
 
     private static ImmutableArray<string> OtherFlags(MaterializedCase materializedCase)

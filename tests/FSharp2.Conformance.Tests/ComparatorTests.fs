@@ -871,6 +871,19 @@ module ComparatorTests =
                     "QueryRunExtensions+LowPriority"
                     "The difference retains the nested QueryRunExtensions identity"
 
+            testCase
+                "Conformance Comparators resolve Portable PDB local signatures through PE metadata"
+            <| fun _ ->
+                let pdbPath = Path.ChangeExtension(testAssemblyPath, ".pdb")
+                let assembly = File.ReadAllBytes(testAssemblyPath).ToImmutableArray()
+                let pdb = File.ReadAllBytes(pdbPath).ToImmutableArray()
+                let rule = json """{"id":"portable-pdb-v1","class":"canonical-semantic"}"""
+                let comparison = PortablePdbComparator.Compare(assembly, pdb, assembly, pdb, rule)
+
+                Expect.isTrue
+                    comparison.Passed
+                    $"A valid PE local signature compares normally. Difference: {comparison.Difference}"
+
             testCase "Conformance Comparators preserve Portable PDB local metadata"
             <| fun _ ->
                 let point = {
@@ -1289,6 +1302,54 @@ module ComparatorTests =
                                 Expect.isTrue
                                     (File.Exists(path))
                                     $"The bundle retains the {lane} repeat for requested artifact '{artifact}'"
+
+                            let readInvocation name =
+                                JsonDocument.Parse(
+                                    File.ReadAllBytes(
+                                        Path.Combine(bundleRoot, name, "invocation.json")
+                                    )
+                                )
+
+                            use primaryInvocation = readInvocation lane
+
+                            use repeatInvocation =
+                                readInvocation (
+                                    lane
+                                    + "-repeat"
+                                )
+
+                            let primary = primaryInvocation.RootElement
+                            let repeat = repeatInvocation.RootElement
+
+                            Expect.equal
+                                (repeat.GetProperty("projectPath").GetString())
+                                (primary.GetProperty("projectPath").GetString())
+                                $"The {lane} repeat uses the primary physical project root"
+
+                            for propertyName in
+                                [
+                                    "BaseIntermediateOutputPath"
+                                    "BaseOutputPath"
+                                ] do
+                                Expect.equal
+                                    (repeat
+                                        .GetProperty("properties")
+                                        .GetProperty(propertyName)
+                                        .GetString())
+                                    (primary
+                                        .GetProperty("properties")
+                                        .GetProperty(propertyName)
+                                        .GetString())
+                                    $"The {lane} repeat preserves {propertyName}"
+
+                            let repeatArguments =
+                                repeat.GetProperty("arguments").EnumerateArray()
+                                |> Seq.map _.GetString()
+
+                            Expect.contains
+                                repeatArguments
+                                "/t:Rebuild"
+                                $"The {lane} repeat forces a physical compilation"
                     )
 
             testCase "Conformance Probes verify IL load API metadata PDB and runtime behavior"

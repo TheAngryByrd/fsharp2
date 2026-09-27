@@ -1,0 +1,132 @@
+{
+  "documentKind": "oracle-lock-v1",
+  "schemaVersion": 1,
+  "lockId": "source.lexical-recovery",
+  "family": "source",
+  "caseId": "language.source.lexical-recovery-negative",
+  "caseHash": "sha256:dabf8ff4e082623bf48b1c611afc780eec9bf6c42e6bede3bbaa8b06ca8cb456",
+  "oracleIdentity": {
+    "sdkVersion": "10.0.110",
+    "sdkCommit": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd",
+    "compiler": {
+      "logicalPath": "sdk/10.0.110/FSharp/fsc.dll",
+      "sha256": "sha256:8cb573be4b7f70886929a572024ab26fc1893cfdd795ef124c58627610ddbf22",
+      "productVersion": "14.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "msbuildTask": {
+      "logicalPath": "sdk/10.0.110/FSharp/FSharp.Build.dll",
+      "sha256": "sha256:ab62157b2111ae5f172e863d086f7035503f83c0bdb9a9efc2e2450891df6e1a",
+      "productVersion": "14.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "fsharpCore": {
+      "logicalPath": "sdk/10.0.110/FSharp/FSharp.Core.dll",
+      "sha256": "sha256:ff83cead5566c9111b69e920c2703e6d8d125305d6ac1ac08692cafee3890968",
+      "productVersion": "10.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "culture": "en-US",
+    "encoding": "utf-8",
+    "optionHash": "sha256:d7dbe1efda313d1a91cbc6dc849b0056e288ffee3695befae1cd44fb044861a0"
+  },
+  "streams": {
+    "stdout": {
+      "base64": "TWljcm9zb2Z0IChSKSBGIyBDb21waWxlciB2ZXJzaW9uIDE0LjAuMTEwLjAgZm9yIEYjIDEwLjANCkNvcHlyaWdodCAoYykgTWljcm9zb2Z0IENvcnBvcmF0aW9uLiBBbGwgUmlnaHRzIFJlc2VydmVkLg0K",
+      "byteLength": 117,
+      "byteHash": "sha256:4d9efaf1c69fd2f1088ecef67012b9f589c03ca1700275fd67b10d914f009f33",
+      "text": "Microsoft (R) F# Compiler version 14.0.110.0 for F# 10.0\r\nCopyright (c) Microsoft Corporation. All Rights Reserved.\r\n",
+      "textHash": "sha256:4d9efaf1c69fd2f1088ecef67012b9f589c03ca1700275fd67b10d914f009f33"
+    },
+    "stderr": {
+      "base64": "DQpDOlxVc2Vyc1xqaW1teVxSZXBvc2l0b3JpZXNccHVibGljXFRoZUFuZ3J5QnlyZFxmc2hhcnAyXC5vbW9cdGVhbXNcdGVhbS1jZDE1ODUwZFxhcnRpZmFjdHNcaXNzdWUyOC1leGVjdXRpb25cMjctb3JhY2xlLWNhcHR1cmVzXG9yYWNsZS1sYW5ndWFnZS1zb3VyY2UtbGV4aWNhbC1yZWNvdmVyeS1uZWdhdGl2ZS0yMDI2MDgyMlQxNjMwMjc4MzFaLTc1MWVhODhhOWNhNjQ2M2FiYWIxODYwMjYzY2JmY2RjXGxhbmVzXG9yYWNsZVx3b3JrXHNyY1xQcm9ncmFtLmZzKDIsMTQsMiwxNSk6IHBhcnNlIGVycm9yIEZTMDAxMDogVW5leHBlY3RlZCBjaGFyYWN0ZXIgJwAnIGluIGJpbmRpbmcuIEV4cGVjdGVkIGluY29tcGxldGUgc3RydWN0dXJlZCBjb25zdHJ1Y3QgYXQgb3IgYmVmb3JlIHRoaXMgcG9pbnQgb3Igb3RoZXIgdG9rZW4uDQoNCkM6XFVzZXJzXGppbW15XFJlcG9zaXRvcmllc1xwdWJsaWNcVGhlQW5ncnlCeXJkXGZzaGFycDJcLm9tb1x0ZWFtc1x0ZWFtLWNkMTU4NTBkXGFydGlmYWN0c1xpc3N1ZTI4LWV4ZWN1dGlvblwyNy1vcmFjbGUtY2FwdHVyZXNcb3JhY2xlLWxhbmd1YWdlLXNvdXJjZS1sZXhpY2FsLXJlY292ZXJ5LW5lZ2F0aXZlLTIwMjYwODIyVDE2MzAyNzgzMVotNzUxZWE4OGE5Y2E2NDYzYWJhYjE4NjAyNjNjYmZjZGNcbGFuZXNcb3JhY2xlXHdvcmtcc3JjXFByb2dyYW0uZnMoMywxNiwzLDE3KTogcGFyc2UgZXJyb3IgRlMwMDEwOiBVbmV4cGVjdGVkIGNoYXJhY3RlciAn77+9JyBpbiBiaW5kaW5nLiBFeHBlY3RlZCBpbmNvbXBsZXRlIHN0cnVjdHVyZWQgY29uc3RydWN0IGF0IG9yIGJlZm9yZSB0aGlzIHBvaW50IG9yIG90aGVyIHRva2VuLg0K",
+      "byteLength": 834,
+      "byteHash": "sha256:69a052ac945885c3a07c0be10bbe08eac8051723d7abcde054c5a24c1634214f",
+      "text": "\r\nC:\\Users\\jimmy\\Repositories\\public\\TheAngryByrd\\fsharp2\\.omo\\teams\\team-cd15850d\\artifacts\\issue28-execution\\27-oracle-captures\\oracle-language-source-lexical-recovery-negative-20260822T163027831Z-751ea88a9ca6463abab1860263cbfcdc\\lanes\\oracle\\work\\src\\Program.fs(2,14,2,15): parse error FS0010: Unexpected character '\u0000' in binding. Expected incomplete structured construct at or before this point or other token.\r\n\r\nC:\\Users\\jimmy\\Repositories\\public\\TheAngryByrd\\fsharp2\\.omo\\teams\\team-cd15850d\\artifacts\\issue28-execution\\27-oracle-captures\\oracle-language-source-lexical-recovery-negative-20260822T163027831Z-751ea88a9ca6463abab1860263cbfcdc\\lanes\\oracle\\work\\src\\Program.fs(3,16,3,17): parse error FS0010: Unexpected character '�' in binding. Expected incomplete structured construct at or before this point or other token.\r\n",
+      "textHash": "sha256:69a052ac945885c3a07c0be10bbe08eac8051723d7abcde054c5a24c1634214f"
+    }
+  },
+  "process": {
+    "exitCode": 1,
+    "targetResult": "failed"
+  },
+  "diagnostics": [
+    {
+      "identity": "diagnostic.fs0010.0",
+      "code": "FS0010",
+      "subcategory": "parse",
+      "message": "Unexpected character '\u0000' in binding. Expected incomplete structured construct at or before this point or other token.",
+      "logicalSource": "/src/Program.fs",
+      "range": {
+        "startLine": 2,
+        "startColumn": 14,
+        "endLine": 2,
+        "endColumn": 15
+      },
+      "recoveryContext": "source-recovery",
+      "originalSeverity": "error",
+      "adjustedSeverity": "error",
+      "stream": "stderr",
+      "sequence": 0,
+      "occurrenceCount": 1,
+      "related": [],
+      "warningLevel": 5,
+      "suppressed": false,
+      "promoted": false,
+      "languageGate": null
+    },
+    {
+      "identity": "diagnostic.fs0010.1",
+      "code": "FS0010",
+      "subcategory": "parse",
+      "message": "Unexpected character '�' in binding. Expected incomplete structured construct at or before this point or other token.",
+      "logicalSource": "/src/Program.fs",
+      "range": {
+        "startLine": 3,
+        "startColumn": 16,
+        "endLine": 3,
+        "endColumn": 17
+      },
+      "recoveryContext": "source-recovery",
+      "originalSeverity": "error",
+      "adjustedSeverity": "error",
+      "stream": "stderr",
+      "sequence": 1,
+      "occurrenceCount": 1,
+      "related": [],
+      "warningLevel": 5,
+      "suppressed": false,
+      "promoted": false,
+      "languageGate": null
+    }
+  ],
+  "artifacts": {
+    "preRun": [
+      {
+        "logicalPath": "/output/case.dll",
+        "state": "absent",
+        "sha256": null
+      },
+      {
+        "logicalPath": "/output/case.pdb",
+        "state": "absent",
+        "sha256": null
+      }
+    ],
+    "postRun": [
+      {
+        "logicalPath": "/output/case.dll",
+        "state": "absent",
+        "sha256": null
+      },
+      {
+        "logicalPath": "/output/case.pdb",
+        "state": "absent",
+        "sha256": null
+      }
+    ]
+  },
+  "review": {
+    "owner": "source-compatibility",
+    "sourceIssue": "#28",
+    "capturedAt": "2026-08-22T10:30:33.540858-06:00",
+    "expiryCondition": "Refresh when the case hash, Oracle SDK identity, options, culture, encoding, or source fixture changes."
+  }
+}

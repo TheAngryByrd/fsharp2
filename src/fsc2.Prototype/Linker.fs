@@ -2085,38 +2085,56 @@ module internal Linker =
             |> CodedIndex.TypeDefOrRef
             |> importDefinitions.WriteCompressedInteger
 
-        for namespaceName in [ "Microsoft"; "Microsoft.FSharp" ] do
+        for namespaceName in
+            [
+                "Microsoft"
+                "Microsoft.FSharp"
+            ] do
             addNamespaceImport namespaceName
 
         addTypeImport "Microsoft.FSharp.Core" "LanguagePrimitives+IntrinsicOperators"
 
-        for namespaceName in [
-            "Microsoft.FSharp.Core"
-            "Microsoft.FSharp.Collections"
-            "Microsoft.FSharp.Control"
-        ] do
+        for namespaceName in
+            [
+                "Microsoft.FSharp.Core"
+                "Microsoft.FSharp.Collections"
+                "Microsoft.FSharp.Control"
+            ] do
             addNamespaceImport namespaceName
 
-        for namespaceName, typeName in [
-            "Microsoft.FSharp.Control.TaskBuilderExtensions", "LowPriority"
-            "Microsoft.FSharp.Control.TaskBuilderExtensions", "LowPlusPriority"
-            "Microsoft.FSharp.Control.TaskBuilderExtensions", "MediumPriority"
-            "Microsoft.FSharp.Control.TaskBuilderExtensions", "HighPriority"
-            "Microsoft.FSharp.Linq.QueryRunExtensions", "LowPriority"
-            "Microsoft.FSharp.Linq.QueryRunExtensions", "HighPriority"
-        ] do
+        for namespaceName, typeName in
+            [
+                "Microsoft.FSharp.Control.TaskBuilderExtensions", "LowPriority"
+                "Microsoft.FSharp.Control.TaskBuilderExtensions", "LowPlusPriority"
+                "Microsoft.FSharp.Control.TaskBuilderExtensions", "MediumPriority"
+                "Microsoft.FSharp.Control.TaskBuilderExtensions", "HighPriority"
+                "Microsoft.FSharp.Linq.QueryRunExtensions", "LowPriority"
+                "Microsoft.FSharp.Linq.QueryRunExtensions", "HighPriority"
+            ] do
             addTypeImport namespaceName typeName
 
         let importScope =
-            pdbMetadata.AddImportScope(
-                rootImportScope,
-                pdbMetadata.GetOrAddBlob(importDefinitions)
-            )
+            pdbMetadata.AddImportScope(rootImportScope, pdbMetadata.GetOrAddBlob(importDefinitions))
 
         for methodIndex, (methodFragment, _, methodCodeSize, _, _) in List.indexed encodedMethods do
+            let hasCompilerGeneratedLocals =
+                methodFragment.Locals
+                |> List.exists (fun local ->
+                    local.Name.StartsWith("$fsharp2", StringComparison.Ordinal)
+                )
+
+            let firstLocalVariable =
+                MetadataTokens.LocalVariableHandle(
+                    pdbMetadata.GetRowCount(TableIndex.LocalVariable)
+                    + 1
+                )
+
             let localVariables =
                 methodFragment.Locals
                 |> List.sortBy _.Index
+                |> List.filter (fun local ->
+                    not (local.Name.StartsWith("$fsharp2", StringComparison.Ordinal))
+                )
                 |> List.map (fun local ->
                     pdbMetadata.AddLocalVariable(
                         LocalVariableAttributes.None,
@@ -2125,23 +2143,30 @@ module internal Linker =
                     )
                 )
 
-            let firstLocalVariable =
-                localVariables
-                |> List.tryHead
-                |> Option.defaultValue Unchecked.defaultof<LocalVariableHandle>
-
-            pdbMetadata.AddLocalScope(
+            let methodHandle =
                 MetadataTokens.MethodDefinitionHandle(
                     methodIndex
                     + 1
-                ),
-                importScope,
-                firstLocalVariable,
-                Unchecked.defaultof<LocalConstantHandle>,
-                0,
-                methodCodeSize
-            )
-            |> ignore
+                )
+
+            let addLocalScope () =
+                pdbMetadata.AddLocalScope(
+                    methodHandle,
+                    importScope,
+                    firstLocalVariable,
+                    Unchecked.defaultof<LocalConstantHandle>,
+                    0,
+                    methodCodeSize
+                )
+                |> ignore
+
+            addLocalScope ()
+
+            if
+                hasCompilerGeneratedLocals
+                && not (List.isEmpty localVariables)
+            then
+                addLocalScope ()
 
         if request.EmissionOptions.SourceLinkJson.Length > 0 then
             pdbMetadata.AddCustomDebugInformation(
@@ -2218,10 +2243,8 @@ module internal Linker =
                         imageBase = executableHeader.ImageBase,
                         majorLinkerVersion = executableHeader.MajorLinkerVersion,
                         minorLinkerVersion = executableHeader.MinorLinkerVersion,
-                        majorOperatingSystemVersion =
-                            executableHeader.MajorOperatingSystemVersion,
-                        minorOperatingSystemVersion =
-                            executableHeader.MinorOperatingSystemVersion,
+                        majorOperatingSystemVersion = executableHeader.MajorOperatingSystemVersion,
+                        minorOperatingSystemVersion = executableHeader.MinorOperatingSystemVersion,
                         majorImageVersion = executableHeader.MajorImageVersion,
                         minorImageVersion = executableHeader.MinorImageVersion,
                         majorSubsystemVersion = executableHeader.MajorSubsystemVersion,

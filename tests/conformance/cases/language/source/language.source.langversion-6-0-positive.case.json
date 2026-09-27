@@ -1,0 +1,456 @@
+{
+  "documentKind": "case-v1",
+  "schemaVersion": 1,
+  "caseId": "language.source.langversion-6-0-positive",
+  "kind": "language",
+  "family": "source",
+  "featureRow": "source.language-version-selection",
+  "polarity": "positive",
+  "title": "Language version 6.0 selects source",
+  "tags": [
+    "language",
+    "source",
+    "positive",
+    "issue28"
+  ],
+  "owners": {
+    "owner": "source-compatibility",
+    "requirements": [
+      "#28"
+    ]
+  },
+  "envelope": {
+    "state": "supported",
+    "compilerContractVersions": [
+      1
+    ],
+    "languageVersions": [
+      "6.0"
+    ],
+    "targetFrameworks": [
+      "net10.0"
+    ],
+    "exclusions": []
+  },
+  "matrix": {
+    "operatingSystems": {
+      "required": [
+        "windows",
+        "linux",
+        "macos"
+      ],
+      "excluded": []
+    },
+    "runtimeIdentifiers": {
+      "required": [
+        "win-x64",
+        "linux-x64",
+        "osx-x64"
+      ],
+      "excluded": []
+    },
+    "cultures": {
+      "required": [
+        "en-US"
+      ],
+      "excluded": []
+    },
+    "configurations": {
+      "required": [
+        "Debug",
+        "Release"
+      ],
+      "excluded": []
+    },
+    "debugFormats": {
+      "required": [
+        "portable"
+      ],
+      "excluded": []
+    }
+  },
+  "project": {
+    "projectType": "exe",
+    "target": "CoreCompile",
+    "assemblyName": "LanguageSourcelangversion-6-0-positive",
+    "properties": [
+      {
+        "name": "TargetFramework",
+        "value": "net10.0"
+      },
+      {
+        "name": "Configuration",
+        "value": "Debug"
+      },
+      {
+        "name": "DebugType",
+        "value": "portable"
+      },
+      {
+        "name": "Deterministic",
+        "value": true
+      }
+    ],
+    "items": [],
+    "packageInputs": [],
+    "outputOwnership": {
+      "compilerOwned": [
+        "implementation-assembly",
+        "portable-pdb"
+      ],
+      "sdkOwned": [
+        "deps-json",
+        "runtimeconfig-json"
+      ]
+    }
+  },
+  "sources": [
+    {
+      "order": 0,
+      "stableId": "source.program",
+      "kind": "implementation",
+      "logicalPath": "/src/Program.fs",
+      "fixturePath": "fixtures/language.source.langversion-basic/Program.fs",
+      "sha256": "sha256:f44253b4559baa3b72845916350bab763679284243623713dd830d1bf623df3f"
+    }
+  ],
+  "targetReferences": {
+    "closurePath": "expectations/source/net10.0.closure.json",
+    "comparison": "exact-ordered-closure"
+  },
+  "options": {
+    "semantic": {
+      "languageVersion": "6.0",
+      "defines": [
+        "TRACE"
+      ],
+      "optimization": "disabled",
+      "tailCalls": "disabled",
+      "checkedArithmetic": false,
+      "targetProfile": "netcore"
+    },
+    "diagnostic": {
+      "warningLevel": 5,
+      "noWarn": [],
+      "warnAsError": [],
+      "warnAsWarn": [],
+      "fullPaths": true,
+      "flatErrors": true,
+      "consoleColors": false,
+      "culture": "en-US"
+    },
+    "emission": {
+      "debugFormat": "portable",
+      "deterministic": true,
+      "documentation": false,
+      "referenceAssembly": false,
+      "outputType": "exe",
+      "pathMap": [
+        {
+          "name": "physical-root",
+          "value": "/_fsharp2_conformance/root"
+        }
+      ]
+    },
+    "signing": {
+      "mode": "none",
+      "publicSign": false
+    },
+    "resources": {
+      "embedded": [],
+      "linked": [],
+      "native": []
+    },
+    "msbuild": {
+      "noFramework": false,
+      "simpleResolution": false,
+      "explicitReferences": true
+    },
+    "compilerArguments": [
+      "--debug:portable",
+      "--deterministic+",
+      "--fullpaths",
+      "--flaterrors",
+      "--consolecolors-",
+      "--optimize-",
+      "--tailcalls-"
+    ]
+  },
+  "expectedDiagnostics": {
+    "mode": "none",
+    "lockPath": null,
+    "inlineFacts": []
+  },
+  "expectedArtifacts": [
+    {
+      "kind": "implementation-assembly",
+      "logicalIdentity": "output.implementation",
+      "state": "required",
+      "producer": "compiler",
+      "comparisonClass": "canonical-semantic",
+      "validators": [
+        "ilverify",
+        "managed-load",
+        "metadata"
+      ],
+      "consumerProbes": [
+        "managed-load",
+        "runtime",
+        "downstream-fsharp",
+        "downstream-csharp"
+      ]
+    },
+    {
+      "kind": "portable-pdb",
+      "logicalIdentity": "output.portable-pdb",
+      "state": "required",
+      "producer": "compiler",
+      "comparisonClass": "canonical-semantic",
+      "validators": [
+        "portable-pdb"
+      ],
+      "consumerProbes": [
+        "portable-pdb"
+      ]
+    }
+  ],
+  "phaseExpectations": {
+    "stopPhase": null,
+    "phases": [
+      {
+        "phase": "source",
+        "status": "completed",
+        "fingerprintRequired": true,
+        "traceRequired": true,
+        "observableProofs": [
+          "core-phase"
+        ]
+      },
+      {
+        "phase": "syntax",
+        "status": "completed",
+        "fingerprintRequired": true,
+        "traceRequired": true,
+        "observableProofs": [
+          "core-phase"
+        ]
+      },
+      {
+        "phase": "resolved-symbols",
+        "status": "completed",
+        "fingerprintRequired": true,
+        "traceRequired": true,
+        "observableProofs": [
+          "core-phase"
+        ]
+      },
+      {
+        "phase": "typed-declarations",
+        "status": "completed",
+        "fingerprintRequired": true,
+        "traceRequired": true,
+        "observableProofs": [
+          "core-phase"
+        ]
+      },
+      {
+        "phase": "lowered-code",
+        "status": "completed",
+        "fingerprintRequired": true,
+        "traceRequired": true,
+        "observableProofs": [
+          "core-phase"
+        ]
+      },
+      {
+        "phase": "optimized-code",
+        "status": "completed",
+        "fingerprintRequired": true,
+        "traceRequired": true,
+        "observableProofs": [
+          "core-phase"
+        ]
+      },
+      {
+        "phase": "symbolic-emission",
+        "status": "completed",
+        "fingerprintRequired": true,
+        "traceRequired": true,
+        "observableProofs": [
+          "core-phase"
+        ]
+      },
+      {
+        "phase": "final-linking",
+        "status": "completed",
+        "fingerprintRequired": true,
+        "traceRequired": true,
+        "observableProofs": [
+          "core-phase"
+        ]
+      },
+      {
+        "phase": "load",
+        "status": "completed",
+        "fingerprintRequired": false,
+        "traceRequired": true,
+        "observableProofs": [
+          "probe-load"
+        ]
+      },
+      {
+        "phase": "execution",
+        "status": "completed",
+        "fingerprintRequired": false,
+        "traceRequired": true,
+        "observableProofs": [
+          "probe-execution"
+        ]
+      }
+    ]
+  },
+  "probes": [
+    {
+      "id": "probe.ilverify",
+      "kind": "ilverify",
+      "required": true,
+      "configuration": []
+    },
+    {
+      "id": "probe.load",
+      "kind": "managed-load",
+      "required": true,
+      "configuration": []
+    },
+    {
+      "id": "probe.api",
+      "kind": "public-api",
+      "required": true,
+      "configuration": []
+    },
+    {
+      "id": "probe.metadata",
+      "kind": "metadata",
+      "required": true,
+      "configuration": []
+    },
+    {
+      "id": "probe.pdb",
+      "kind": "portable-pdb",
+      "required": true,
+      "configuration": []
+    },
+    {
+      "id": "probe.runtime",
+      "kind": "runtime",
+      "required": true,
+      "configuration": [
+        {
+          "name": "expectedExitCode",
+          "value": 0
+        },
+        {
+          "name": "expectedStdout",
+          "value": "42\n"
+        }
+      ]
+    },
+    {
+      "id": "probe.downstream-fsharp",
+      "kind": "downstream-fsharp",
+      "required": true,
+      "configuration": [
+        {
+          "name": "targetFramework",
+          "value": "net10.0"
+        },
+        {
+          "name": "source",
+          "value": "module Consumer\n\n[<EntryPoint>]\nlet main _ =\n    if Program.answer () = 42 then 0 else 1\n"
+        },
+        {
+          "name": "expectedExitCode",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "id": "probe.downstream-csharp",
+      "kind": "downstream-csharp",
+      "required": true,
+      "configuration": [
+        {
+          "name": "targetFramework",
+          "value": "net10.0"
+        },
+        {
+          "name": "source",
+          "value": "internal static class Consumer\n{\n    private static int Main() => global::Program.answer() == 42 ? 0 : 1;\n}\n"
+        },
+        {
+          "name": "expectedExitCode",
+          "value": 0
+        }
+      ]
+    },
+    {
+      "id": "probe.repeat",
+      "kind": "within-compiler-repeat",
+      "required": true,
+      "configuration": []
+    }
+  ],
+  "comparisons": [
+    {
+      "path": "observations.diagnostics",
+      "class": "exact",
+      "comparator": "diagnostic-exact",
+      "rule": "exact-v1"
+    },
+    {
+      "path": "observations.paths",
+      "class": "normalized",
+      "comparator": "path-newline-normalized",
+      "rule": "logical-root-v1"
+    },
+    {
+      "path": "observations.metadata",
+      "class": "canonical-semantic",
+      "comparator": "managed-metadata-semantic",
+      "rule": "metadata-v1"
+    },
+    {
+      "path": "observations.runtime",
+      "class": "behavioral",
+      "comparator": "runtime-behavior",
+      "rule": "behavior-v1"
+    },
+    {
+      "path": "observations.repeat",
+      "class": "within-compiler-exact",
+      "comparator": "artifact-repeat",
+      "rule": "repeat-v1"
+    }
+  ],
+  "cleanup": {
+    "retention": "on-failure",
+    "delete": [
+      "lanes/*/tmp",
+      "lanes/*/service",
+      "lanes/*/cache"
+    ],
+    "retain": [
+      "run-result.json",
+      "comparison.json",
+      "lanes/*/stdout.bin",
+      "lanes/*/stderr.bin"
+    ],
+    "lateFailure": "compare-declared-leftovers"
+  },
+  "timeout": {
+    "evaluationMs": 30000,
+    "compileMs": 120000,
+    "probeMs": 60000,
+    "cleanupMs": 30000
+  }
+}

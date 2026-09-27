@@ -211,8 +211,8 @@ type Compiler() =
         | _ ->
             match request.SemanticOptions.LanguageVersion with
             | Some languageVersion when
-                languageVersion
-                <> "9.0"
+                LanguageVersion.normalize (Some languageVersion)
+                |> Result.isError
                 ->
                 Some(
                     unsupportedFailure
@@ -527,6 +527,40 @@ type Compiler() =
             Some DiagnosticStream.StandardError
         )
 
+    let effectiveDiagnosticOptions (request: CompilationRequest) =
+        let language =
+            LanguageVersion.normalize request.SemanticOptions.LanguageVersion
+            |> Result.defaultWith invalidOp
+
+        let existing = request.DiagnosticOptions.LocalWarningDirectives
+
+        let firstSourceOrder =
+            existing
+            |> Seq.map _.Order
+            |> Seq.fold max -1L
+            |> (+) 1L
+
+        let sourceDirectives =
+            request.Sources
+            |> Seq.collect (fun source ->
+                service
+                    .PrepareSource(language, request.SemanticOptions.Defines, source)
+                    .Document.WarningDirectives
+            )
+            |> Seq.mapi (fun index directive -> {
+                directive with
+                    Order =
+                        firstSourceOrder
+                        + int64 index
+            })
+
+        {
+            request.DiagnosticOptions with
+                LocalWarningDirectives =
+                    Seq.append existing sourceDirectives
+                    |> ImmutableArray.CreateRange
+        }
+
     member _.Compile(request: CompilationRequest, cancellationToken: CancellationToken) =
         if cancellationToken.IsCancellationRequested then
             cancelledResult request
@@ -541,8 +575,10 @@ type Compiler() =
 
                 unsupportedResult failure phaseResults
             | None ->
+                let diagnosticOptions = effectiveDiagnosticOptions request
+
                 match CompilationPipeline.compileRequest service request with
-                | Error diagnostic when diagnostic.Code = "FSC2C2002" ->
+                | Error [ diagnostic ] when diagnostic.Code = "FSC2C2002" ->
                     let failure = {
                         Code = diagnostic.Code
                         Message = diagnostic.Message
@@ -553,7 +589,9 @@ type Compiler() =
                     unsupportedResult
                         failure
                         (unsupportedPhaseResults request failure.StoppingPhase)
-                | Error diagnostic ->
+                | Error compilerDiagnostics ->
+                    let diagnostic = List.head compilerDiagnostics
+
                     let failedPhase =
                         if diagnostic.Code = "FS0001" then
                             CompilationPhase.TypedDeclarations
@@ -563,9 +601,10 @@ type Compiler() =
                             CompilationPhase.Syntax
 
                     let diagnostics =
-                        [| failureDiagnostic failedPhase diagnostic |]
+                        compilerDiagnostics
+                        |> Seq.map (failureDiagnostic failedPhase)
                         |> Seq.map (DiagnosticPolicy.input None false true)
-                        |> DiagnosticPolicy.apply request.DiagnosticOptions
+                        |> DiagnosticPolicy.apply diagnosticOptions
 
                     {
                         Outcome = CompilationOutcome.Failed
@@ -579,9 +618,14 @@ type Compiler() =
                     let compilationArtifacts = artifacts request compilation.Artifacts
                     let phaseResults = successPhaseResults request compilation compilationArtifacts
 
+                    let diagnostics =
+                        compilation.Diagnostics
+                        |> Seq.map (DiagnosticPolicy.input None false true)
+                        |> DiagnosticPolicy.apply compilation.DiagnosticOptions
+
                     {
-                        Outcome = CompilationOutcome.Succeeded
-                        Diagnostics = ImmutableArray.Empty
+                        Outcome = DiagnosticPolicy.outcome CompilationOutcome.Succeeded diagnostics
+                        Diagnostics = diagnostics
                         Artifacts = compilationArtifacts
                         Fingerprints =
                             compilationArtifacts

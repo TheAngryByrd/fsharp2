@@ -325,10 +325,10 @@ module MaterializationTests =
                                 value
                                 $"The generated project applies normalized option '{name}'"
 
-                        Expect.stringContains
+                        Expect.equal
                             (property "PathMap")
-                            "/_mapped/root"
-                            "The generated project applies the normalized path map"
+                            ".=/_mapped/root"
+                            "The generated project applies root-neutral path maps"
 
                         let otherFlags = property "OtherFlags"
 

@@ -1322,6 +1322,89 @@ let main _ =
                     "_arg1"
                     "The entry-point wildcard must use the Oracle metadata name."
 
+            testCase "reused parsing rebinds the physical source checksum"
+            <| fun _ ->
+                let sourceText = "module Program\nlet answer () = 42\n"
+
+                let baseline =
+                    createRequest
+                        (defaultSemanticOptions ())
+                        (defaultDiagnosticOptions ())
+                        (EmissionOptions.Create(
+                            true,
+                            false,
+                            DebugFormat.Portable,
+                            [||],
+                            [| "Program.fs" |],
+                            [||]
+                        ))
+                        (defaultSigningOptions ())
+                        (emptyResources ())
+                        [|
+                            RequestedArtifact.ImplementationAssembly
+                            RequestedArtifact.PortablePdb
+                        |]
+                        sourceText
+
+                let utf16Bytes = Text.Encoding.Unicode.GetBytes(sourceText)
+
+                let reboundSource =
+                    SourceSnapshot.Create(
+                        baseline.Sources[0].StableId,
+                        baseline.Sources[0].LogicalPath,
+                        sourceText,
+                        fingerprint utf16Bytes
+                    )
+
+                let rebound =
+                    CompilationRequest.Create(
+                        baseline.ContractVersion,
+                        baseline.RequestIdentity,
+                        baseline.AssemblyIdentity,
+                        [| reboundSource |],
+                        baseline.TargetReferences
+                        |> Seq.toArray,
+                        baseline.SemanticOptions,
+                        baseline.DiagnosticOptions,
+                        baseline.EmissionOptions,
+                        baseline.SigningOptions,
+                        baseline.Resources,
+                        baseline.RequestedArtifacts
+                        |> Seq.toArray
+                    )
+
+                let compiler = Compiler()
+                let first = compiler.Compile(baseline, CancellationToken.None)
+                let second = compiler.Compile(rebound, CancellationToken.None)
+
+                Expect.equal
+                    first.Outcome
+                    CompilationOutcome.Succeeded
+                    "The first compilation succeeds"
+
+                Expect.equal
+                    second.Outcome
+                    CompilationOutcome.Succeeded
+                    "The reused compilation succeeds"
+
+                let portablePdb =
+                    second.Artifacts
+                    |> Seq.find (fun artifact -> artifact.Kind = RequestedArtifact.PortablePdb)
+
+                use pdbStream = new MemoryStream(bytes portablePdb.Bytes, false)
+                use pdbProvider = MetadataReaderProvider.FromPortablePdbStream(pdbStream)
+                let pdb = pdbProvider.GetMetadataReader()
+
+                let document =
+                    pdb.Documents
+                    |> Seq.exactlyOne
+                    |> pdb.GetDocument
+
+                Expect.sequenceEqual
+                    (pdb.GetBlobBytes(document.Hash))
+                    (SHA256.HashData utf16Bytes)
+                    "The reused PDB uses the current physical source checksum"
+
             testCase "portable PDB preserves Oracle FSharp import scopes"
             <| fun _ ->
                 let sourceText =
@@ -2085,13 +2168,57 @@ let first = 42
                     result.Artifacts
                     "An unsupported compilation must not contain an artifact."
 
-            testCase "unsupported language version stops at Syntax"
+            testCase "supported language versions complete the source phase"
+            <| fun _ ->
+                for mode in
+                    [
+                        "preview"
+                        "default"
+                        "latest"
+                        "latestmajor"
+                        "4.6"
+                        "4.7"
+                        "5.0"
+                        "6.0"
+                        "7.0"
+                        "8.0"
+                        "9.0"
+                        "10.0"
+                    ] do
+                    let request =
+                        createRequest
+                            (SemanticOptions.Create(
+                                [||],
+                                Some mode,
+                                OptimizationMode.Disabled,
+                                false,
+                                false,
+                                None
+                            ))
+                            (defaultDiagnosticOptions ())
+                            (defaultEmissionOptions ())
+                            (defaultSigningOptions ())
+                            (emptyResources ())
+                            defaultRequestedArtifacts
+                            "module Tracer\nlet answer () = 42\n"
+
+                    let result = compileRequest request
+                    Expect.equal result.Outcome CompilationOutcome.Succeeded $"Language mode {mode}"
+
+                    Expect.equal
+                        (result.PhaseResults
+                         |> Seq.find (fun phase -> phase.Phase = CompilationPhase.Source)
+                         |> _.Status)
+                        PhaseStatus.Completed
+                        $"Source phase {mode}"
+
+            testCase "unknown language version stops at Syntax"
             <| fun _ ->
                 let request =
                     createRequest
                         (SemanticOptions.Create(
                             [||],
-                            Some "8.0",
+                            Some "11.0",
                             OptimizationMode.Disabled,
                             false,
                             false,
@@ -2108,7 +2235,7 @@ let first = 42
                 |> assertUnsupported
                     "FSC2C2001"
                     CompilationPhase.Syntax
-                    "semantic.language-version=8.0"
+                    "semantic.language-version=11.0"
 
             testCase "signature source inputs stop at Syntax as unsupported"
             <| fun _ ->

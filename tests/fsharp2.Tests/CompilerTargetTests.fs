@@ -12981,7 +12981,7 @@ module CompilerTargetTests =
 
                     Expect.equal
                         baseline.["querySchema"]
-                        "73"
+                        "74"
                         "query cache evidence should be versioned"
 
                     Expect.equal

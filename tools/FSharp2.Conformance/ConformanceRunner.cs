@@ -6,6 +6,11 @@ namespace FSharp2.Conformance;
 
 public static class ConformanceRunner
 {
+    private sealed record RepeatRunEvidence(
+        CoreCompilePlan Plan,
+        CoreCompileLaneResult Oracle,
+        CoreCompileLaneResult FSharp2);
+
     private static readonly JsonSerializerOptions EvidenceJson = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -94,6 +99,7 @@ public static class ConformanceRunner
         CoreCompilePlan? plan = null;
         CoreCompileLaneResult? oracle = null;
         CoreCompileLaneResult? fsharp2 = null;
+        RepeatRunEvidence? repeat = null;
         var comparisons = ImmutableArray.CreateBuilder<ComparisonResult>();
         var probes = ImmutableArray.CreateBuilder<ProbeEvidence>();
         var missingEvidence = ImmutableArray.CreateBuilder<string>();
@@ -150,7 +156,7 @@ public static class ConformanceRunner
                 {
                     missingEvidence.Add($"direct compiler outcome was '{coreEvidence.Outcome}', expected 'succeeded'");
                 }
-                await AddPositiveEvidenceAsync(
+                repeat = await AddPositiveEvidenceAsync(
                     runRoot,
                     runId,
                     repository,
@@ -223,6 +229,7 @@ public static class ConformanceRunner
             plan,
             oracle,
             fsharp2,
+            repeat,
             probes.ToImmutable(),
             comparisons.ToImmutable(),
             verdict,
@@ -269,7 +276,7 @@ public static class ConformanceRunner
         }
     }
 
-    private static async Task AddPositiveEvidenceAsync(
+    private static async Task<RepeatRunEvidence?> AddPositiveEvidenceAsync(
         string runRoot,
         string runId,
         ConformanceRepository repository,
@@ -287,7 +294,7 @@ public static class ConformanceRunner
         if (!File.Exists(oraclePaths.Implementation) || !File.Exists(fsharp2Paths.Implementation))
         {
             missingEvidence.Add("a positive lane did not publish its implementation assembly");
-            return;
+            return null;
         }
         comparisons.Add(ManagedMetadataComparator.Compare(
             [.. File.ReadAllBytes(oraclePaths.Implementation)],
@@ -335,82 +342,106 @@ public static class ConformanceRunner
             missingEvidence.Add("runtime behavior comparison evidence is missing");
         }
 
-        var repeatRunId = $"rpt-{runId[4..]}";
-        var repeatRunRoot = Path.Combine(Path.GetDirectoryName(runRoot)!, repeatRunId);
-        var repeatRoots = LaneRoots.Create(repeatRunRoot, repeatRunId);
-        CoreCompileLaneResult? oracleRepeat = null;
-        CoreCompileLaneResult? fsharp2Repeat = null;
-        try
+        var oracleSnapshot = SnapshotArtifacts(materialized.RequestedArtifacts, oraclePaths);
+        var fsharp2Snapshot = SnapshotArtifacts(materialized.RequestedArtifacts, fsharp2Paths);
+        var repeatRoots = LaneRoots.Create(runRoot, runId);
+        var repeatPlan = CreateRepeatPlan(
+            CoreCompileRunner.CreatePlan(materialized, repeatRoots, sdk, fsharp2Host));
+        ThrowIfInvalid(CoreCompileRunner.ValidateLaneEquality(repeatPlan));
+        var repeatTasks = new[]
         {
-            var repeatPlan = CoreCompileRunner.CreatePlan(materialized, repeatRoots, sdk, fsharp2Host);
-            ThrowIfInvalid(CoreCompileRunner.ValidateLaneEquality(repeatPlan));
-            var repeatTasks = new[]
-            {
-                CoreCompileRunner.RunAsync(repeatPlan.Oracle, cancellationToken),
-                CoreCompileRunner.RunAsync(repeatPlan.FSharp2, cancellationToken),
-            };
-            var repeatLanes = await Task.WhenAll(repeatTasks).ConfigureAwait(false);
-            oracleRepeat = repeatLanes[0];
-            fsharp2Repeat = repeatLanes[1];
-            RequirePhysicalCompilerTask("oracle-repeat", oracleRepeat, missingEvidence);
-            RequirePhysicalCompilerTask("fsharp2-repeat", fsharp2Repeat, missingEvidence);
-            if (oracleRepeat.Process.TimedOut || fsharp2Repeat.Process.TimedOut)
-            {
-                missingEvidence.Add("a deterministic repeat lane timed out");
-            }
-            if (DetectFallback(repeatPlan.FSharp2, fsharp2Repeat))
-            {
-                missingEvidence.Add("the FSharp2 deterministic repeat selected a forbidden compiler fallback");
-            }
-            var oracleRepeatPaths = ArtifactPaths(repeatRoots.Oracle, materialized);
-            var fsharp2RepeatPaths = ArtifactPaths(repeatRoots.FSharp2, materialized);
-            var repeatPassed = true;
-            var repeatHashes = new Dictionary<string, string>(StringComparer.Ordinal);
-            CompareRepeatArtifacts(
-                "oracle",
-                materialized.RequestedArtifacts,
-                oraclePaths,
-                oracleRepeatPaths,
-                comparisons,
-                missingEvidence,
-                repeatHashes,
-                ref repeatPassed);
-            CompareRepeatArtifacts(
-                "fsharp2",
-                materialized.RequestedArtifacts,
-                fsharp2Paths,
-                fsharp2RepeatPaths,
-                comparisons,
-                missingEvidence,
-                repeatHashes,
-                ref repeatPassed);
-            probes.Add(new ProbeEvidence(
-                "within-compiler-repeat",
-                repeatPassed,
-                JsonSerializer.SerializeToElement(repeatHashes, EvidenceJson),
-                repeatPassed ? null : "A deterministic repeat changed or omitted a requested artifact."));
-            AddArtifactFiles("oracle-repeat", oracleRepeatPaths, artifacts);
-            AddArtifactFiles("fsharp2-repeat", fsharp2RepeatPaths, artifacts);
-        }
-        finally
+            CoreCompileRunner.RunAsync(repeatPlan.Oracle, cancellationToken),
+            CoreCompileRunner.RunAsync(repeatPlan.FSharp2, cancellationToken),
+        };
+        var repeatLanes = await Task.WhenAll(repeatTasks).ConfigureAwait(false);
+        var oracleRepeat = repeatLanes[0];
+        var fsharp2Repeat = repeatLanes[1];
+        RequirePhysicalCompilerTask("oracle-repeat", oracleRepeat, missingEvidence);
+        RequirePhysicalCompilerTask("fsharp2-repeat", fsharp2Repeat, missingEvidence);
+        if (oracleRepeat.Process.TimedOut || fsharp2Repeat.Process.TimedOut)
         {
-            var repeatProcesses = (oracleRepeat?.Process.Processes ?? [])
-                .Concat(fsharp2Repeat?.Process.Processes ?? [])
-                .ToImmutableArray();
-            var cleanupTimeout = TimeSpan.FromMilliseconds(
-                materialized.ResolvedDocument.GetProperty("timeout").GetProperty("cleanupMs").GetInt32());
-            await CleanupManager.CleanupAsync(
-                repeatRunRoot,
-                repeatProcesses,
-                new CleanupPolicy(true, [], cleanupTimeout),
-                CancellationToken.None).ConfigureAwait(false);
+            missingEvidence.Add("a deterministic repeat lane timed out");
         }
+        if (DetectFallback(repeatPlan.FSharp2, fsharp2Repeat))
+        {
+            missingEvidence.Add("the FSharp2 deterministic repeat selected a forbidden compiler fallback");
+        }
+        var oracleRepeatPaths = ArtifactPaths(repeatRoots.Oracle, materialized);
+        var fsharp2RepeatPaths = ArtifactPaths(repeatRoots.FSharp2, materialized);
+        var repeatPassed = true;
+        var repeatHashes = new Dictionary<string, string>(StringComparer.Ordinal);
+        CompareRepeatArtifacts(
+            "oracle",
+            materialized.RequestedArtifacts,
+            oracleSnapshot,
+            oracleRepeatPaths,
+            comparisons,
+            missingEvidence,
+            repeatHashes,
+            ref repeatPassed);
+        CompareRepeatArtifacts(
+            "fsharp2",
+            materialized.RequestedArtifacts,
+            fsharp2Snapshot,
+            fsharp2RepeatPaths,
+            comparisons,
+            missingEvidence,
+            repeatHashes,
+            ref repeatPassed);
+        probes.Add(new ProbeEvidence(
+            "within-compiler-repeat",
+            repeatPassed,
+            JsonSerializer.SerializeToElement(repeatHashes, EvidenceJson),
+            repeatPassed ? null : "A deterministic repeat changed or omitted a requested artifact."));
+        AddArtifactFiles("oracle-repeat", oracleRepeatPaths, artifacts);
+        AddArtifactFiles("fsharp2-repeat", fsharp2RepeatPaths, artifacts);
+        return new RepeatRunEvidence(repeatPlan, oracleRepeat, fsharp2Repeat);
+    }
+
+    private static ImmutableDictionary<string, ImmutableArray<byte>> SnapshotArtifacts(
+        ImmutableArray<string> requestedArtifacts,
+        ArtifactPathSet paths)
+    {
+        var snapshot = ImmutableDictionary.CreateBuilder<string, ImmutableArray<byte>>(StringComparer.Ordinal);
+        foreach (var kind in requestedArtifacts)
+        {
+            var path = paths.Path(kind);
+            if (File.Exists(path))
+            {
+                snapshot[kind] = [.. File.ReadAllBytes(path)];
+            }
+        }
+        return snapshot.ToImmutable();
+    }
+
+    private static CoreCompilePlan CreateRepeatPlan(CoreCompilePlan plan) => plan with
+    {
+        Oracle = CreateRepeatInvocation(plan.Oracle),
+        FSharp2 = CreateRepeatInvocation(plan.FSharp2),
+    };
+
+    private static LaneInvocation CreateRepeatInvocation(LaneInvocation invocation)
+    {
+        var laneRoot = Directory.GetParent(Path.GetDirectoryName(invocation.ProjectPath)!)!.FullName;
+        var laneName = invocation.Kind == LaneKind.Oracle ? "oracle" : "fsharp2";
+        var repeatBinlog = Path.Combine(laneRoot, $"{laneName}-repeat.binlog");
+        var arguments = invocation.Arguments.Select(argument =>
+        {
+            if (string.Equals(argument, "/t:Build", StringComparison.Ordinal))
+            {
+                return "/t:Rebuild";
+            }
+            return argument.StartsWith("/bl:", StringComparison.Ordinal)
+                ? $"/bl:{repeatBinlog}"
+                : argument;
+        }).ToImmutableArray();
+        return invocation with { Arguments = arguments };
     }
 
     private static void CompareRepeatArtifacts(
         string lane,
         ImmutableArray<string> requestedArtifacts,
-        ArtifactPathSet first,
+        ImmutableDictionary<string, ImmutableArray<byte>> first,
         ArtifactPathSet second,
         ImmutableArray<ComparisonResult>.Builder comparisons,
         ImmutableArray<string>.Builder missingEvidence,
@@ -419,15 +450,14 @@ public static class ConformanceRunner
     {
         foreach (var kind in requestedArtifacts)
         {
-            var firstPath = first.Path(kind);
             var secondPath = second.Path(kind);
-            if (!File.Exists(firstPath) || !File.Exists(secondPath))
+            if (!first.TryGetValue(kind, out var firstBytes) || !File.Exists(secondPath))
             {
                 var difference = $"The {lane} deterministic repeat did not publish requested artifact '{kind}'.";
                 var firstEvidence = CanonicalJson.Canonicalize(JsonSerializer.SerializeToElement(new
                 {
                     kind,
-                    present = File.Exists(firstPath),
+                    present = first.ContainsKey(kind),
                 }));
                 var secondEvidence = CanonicalJson.Canonicalize(JsonSerializer.SerializeToElement(new
                 {
@@ -450,11 +480,11 @@ public static class ConformanceRunner
             }
 
             var comparison = DeterminismComparator.Compare(
-                [.. File.ReadAllBytes(firstPath)],
+                firstBytes,
                 [.. File.ReadAllBytes(secondPath)]);
             comparisons.Add(comparison);
             repeatPassed &= comparison.Passed;
-            hashes[$"{lane}:{kind}:first"] = Hashing.Sha256File(firstPath);
+            hashes[$"{lane}:{kind}:first"] = Hashing.Sha256(firstBytes.AsSpan());
             hashes[$"{lane}:{kind}:second"] = Hashing.Sha256File(secondPath);
         }
     }
@@ -727,6 +757,7 @@ public static class ConformanceRunner
         CoreCompilePlan? plan,
         CoreCompileLaneResult? oracle,
         CoreCompileLaneResult? fsharp2,
+        RepeatRunEvidence? repeat,
         ImmutableArray<ProbeEvidence> probes,
         ImmutableArray<ComparisonResult> comparisons,
         VerdictResult verdict,
@@ -773,15 +804,19 @@ public static class ConformanceRunner
         }
         AddLaneFiles(files, "oracle", plan?.Oracle, oracle);
         AddLaneFiles(files, "fsharp2", plan?.FSharp2, fsharp2);
+        AddLaneFiles(files, "oracle-repeat", repeat?.Plan.Oracle, repeat?.Oracle);
+        AddLaneFiles(files, "fsharp2-repeat", repeat?.Plan.FSharp2, repeat?.FSharp2);
         var oracleCleanup = await CleanupLaneAsync(
             materialized,
             plan?.Oracle,
             oracle,
+            repeat?.Oracle,
             cancellationToken).ConfigureAwait(false);
         var fsharp2Cleanup = await CleanupLaneAsync(
             materialized,
             plan?.FSharp2,
             fsharp2,
+            repeat?.FSharp2,
             cancellationToken).ConfigureAwait(false);
         AddCleanupReceipt(files, "oracle", oracleCleanup);
         AddCleanupReceipt(files, "fsharp2", fsharp2Cleanup);
@@ -827,6 +862,7 @@ public static class ConformanceRunner
         MaterializedCase materialized,
         LaneInvocation? invocation,
         CoreCompileLaneResult? result,
+        CoreCompileLaneResult? repeatResult,
         CancellationToken cancellationToken)
     {
         if (invocation is null || result is null)
@@ -847,7 +883,9 @@ public static class ConformanceRunner
             materialized.ResolvedDocument.GetProperty("timeout").GetProperty("cleanupMs").GetInt32());
         return await CleanupManager.CleanupAsync(
             laneRoot,
-            result.Process.Processes,
+            result.Process.Processes
+                .Concat(repeatResult?.Process.Processes ?? [])
+                .ToImmutableArray(),
             new CleanupPolicy(false, retainedPaths, timeout),
             cancellationToken).ConfigureAwait(false);
     }

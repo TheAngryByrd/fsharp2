@@ -1,0 +1,108 @@
+{
+  "documentKind": "oracle-lock-v1",
+  "schemaVersion": 1,
+  "lockId": "source.scoped-warnon-9",
+  "family": "source",
+  "caseId": "language.source.scoped-warnon-9-negative",
+  "caseHash": "sha256:5412dc81eed5c0dc3cd962450e2b655a7693267131d692a4222a574f14db3882",
+  "oracleIdentity": {
+    "sdkVersion": "10.0.110",
+    "sdkCommit": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd",
+    "compiler": {
+      "logicalPath": "sdk/10.0.110/FSharp/fsc.dll",
+      "sha256": "sha256:8cb573be4b7f70886929a572024ab26fc1893cfdd795ef124c58627610ddbf22",
+      "productVersion": "14.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "msbuildTask": {
+      "logicalPath": "sdk/10.0.110/FSharp/FSharp.Build.dll",
+      "sha256": "sha256:ab62157b2111ae5f172e863d086f7035503f83c0bdb9a9efc2e2450891df6e1a",
+      "productVersion": "14.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "fsharpCore": {
+      "logicalPath": "sdk/10.0.110/FSharp/FSharp.Core.dll",
+      "sha256": "sha256:ff83cead5566c9111b69e920c2703e6d8d125305d6ac1ac08692cafee3890968",
+      "productVersion": "10.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "culture": "en-US",
+    "encoding": "utf-8",
+    "optionHash": "sha256:3b73df2bbf7b769f81e9cad9de3c86d62999ab1d56a8b08b6c56f0a1ffaf191f"
+  },
+  "streams": {
+    "stdout": {
+      "base64": "TWljcm9zb2Z0IChSKSBGIyBDb21waWxlciB2ZXJzaW9uIDE0LjAuMTEwLjAgZm9yIEYjIDEwLjANCkNvcHlyaWdodCAoYykgTWljcm9zb2Z0IENvcnBvcmF0aW9uLiBBbGwgUmlnaHRzIFJlc2VydmVkLg0K",
+      "byteLength": 117,
+      "byteHash": "sha256:4d9efaf1c69fd2f1088ecef67012b9f589c03ca1700275fd67b10d914f009f33",
+      "text": "Microsoft (R) F# Compiler version 14.0.110.0 for F# 10.0\r\nCopyright (c) Microsoft Corporation. All Rights Reserved.\r\n",
+      "textHash": "sha256:4d9efaf1c69fd2f1088ecef67012b9f589c03ca1700275fd67b10d914f009f33"
+    },
+    "stderr": {
+      "base64": "DQpDOlxVc2Vyc1xqaW1teVxSZXBvc2l0b3JpZXNccHVibGljXFRoZUFuZ3J5QnlyZFxmc2hhcnAyXC5vbW9cdGVhbXNcdGVhbS1jZDE1ODUwZFxhcnRpZmFjdHNcaXNzdWUyOC1leGVjdXRpb25cMjctb3JhY2xlLWNhcHR1cmVzXG9yYWNsZS1sYW5ndWFnZS1zb3VyY2Utc2NvcGVkLXdhcm5vbi05LW5lZ2F0aXZlLTIwMjYwODIyVDE2MjA1MjQwNlotYzM1NjhkMWQ4NzlhNDQ4NTllNTdhOGZhMTI0Y2QxNDlcbGFuZXNcb3JhY2xlXHdvcmtcc3JjXFByb2dyYW0uZnMoMTMsMSwxMywxMyk6IHBhcnNlIGVycm9yIEZTMzM1MDogRmVhdHVyZSAnU3VwcG9ydCBmb3Igc2NvcGVkIGVuYWJsaW5nIC8gZGlzYWJsaW5nIG9mIHdhcm5pbmdzIGJ5ICN3YXJuIGFuZCAjbm93YXJuIGRpcmVjdGl2ZXMsIGFsc28gaW5zaWRlIG1vZHVsZXMnIGlzIG5vdCBhdmFpbGFibGUgaW4gRiMgOS4wLiBQbGVhc2UgdXNlIGxhbmd1YWdlIHZlcnNpb24gMTAuMCBvciBncmVhdGVyLg0K",
+      "byteLength": 486,
+      "byteHash": "sha256:14dd9eac1e4b2159037316d09ed86112d9fefc450afbf35f4e5023c03c8f21e4",
+      "text": "\r\nC:\\Users\\jimmy\\Repositories\\public\\TheAngryByrd\\fsharp2\\.omo\\teams\\team-cd15850d\\artifacts\\issue28-execution\\27-oracle-captures\\oracle-language-source-scoped-warnon-9-negative-20260822T162052406Z-c3568d1d879a44859e57a8fa124cd149\\lanes\\oracle\\work\\src\\Program.fs(13,1,13,13): parse error FS3350: Feature 'Support for scoped enabling / disabling of warnings by #warn and #nowarn directives, also inside modules' is not available in F# 9.0. Please use language version 10.0 or greater.\r\n",
+      "textHash": "sha256:14dd9eac1e4b2159037316d09ed86112d9fefc450afbf35f4e5023c03c8f21e4"
+    }
+  },
+  "process": {
+    "exitCode": 1,
+    "targetResult": "failed"
+  },
+  "diagnostics": [
+    {
+      "identity": "diagnostic.fs3350.0",
+      "code": "FS3350",
+      "subcategory": "parse",
+      "message": "Feature 'Support for scoped enabling / disabling of warnings by #warn and #nowarn directives, also inside modules' is not available in F# 9.0. Please use language version 10.0 or greater.",
+      "logicalSource": "/src/Program.fs",
+      "range": {
+        "startLine": 13,
+        "startColumn": 1,
+        "endLine": 13,
+        "endColumn": 13
+      },
+      "recoveryContext": "source-recovery",
+      "originalSeverity": "error",
+      "adjustedSeverity": "error",
+      "stream": "stderr",
+      "sequence": 0,
+      "occurrenceCount": 1,
+      "related": [],
+      "warningLevel": 5,
+      "suppressed": false,
+      "promoted": false,
+      "languageGate": null
+    }
+  ],
+  "artifacts": {
+    "preRun": [
+      {
+        "logicalPath": "/output/case.dll",
+        "state": "absent",
+        "sha256": null
+      },
+      {
+        "logicalPath": "/output/case.pdb",
+        "state": "absent",
+        "sha256": null
+      }
+    ],
+    "postRun": [
+      {
+        "logicalPath": "/output/case.dll",
+        "state": "absent",
+        "sha256": null
+      },
+      {
+        "logicalPath": "/output/case.pdb",
+        "state": "absent",
+        "sha256": null
+      }
+    ]
+  },
+  "review": {
+    "owner": "source-compatibility",
+    "sourceIssue": "#28",
+    "capturedAt": "2026-08-22T10:20:58.0736164-06:00",
+    "expiryCondition": "Refresh when the case hash, Oracle SDK identity, options, culture, encoding, or source fixture changes."
+  }
+}

@@ -6,7 +6,7 @@ open System.Globalization
 
 module internal CompilerSchema =
     [<Literal>]
-    let Query = 73
+    let Query = 74
 
 module private DiagnosticFactValidation =
     let text name (value: string) =
@@ -197,6 +197,7 @@ type internal CompilerDiagnostic = {
 type internal SourceInput = {
     Path: string
     Text: string
+    ContentFingerprint: string
 } with
 
     override _.ToString() = "SourceInput"
@@ -538,6 +539,7 @@ type internal ParsedMethodConstraint =
 type internal ParsedMethodKind =
     | Regular
     | RegularFunction of parameterName: string
+    | RegularTypedFunction of parameterName: string * parameterType: ParsedTypeExpression
     | EntryPoint of parameterName: string
 
 type internal ParsedMethodDeclaration = {

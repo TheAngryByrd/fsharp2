@@ -117,6 +117,70 @@ module CompilerContractEvidenceTests =
                             "The positive direct-core request publishes an implementation assembly"
                     )
 
+            testCase "Conformance Contract maps invalid UTF-8 with replacement decoding"
+            <| fun _ ->
+                withCopiedRoot
+                    "contract-invalid-utf8"
+                    (fun root ->
+                        let repository = ManifestLoader.Load(root)
+
+                        let materialized =
+                            CaseMaterializer.Materialize(
+                                repository,
+                                caseById
+                                    repository
+                                    "language.source.encoding-invalid-utf8-negative"
+                            )
+
+                        let request = CompilerContractProbe.CreateRequest(materialized)
+
+                        Expect.stringContains
+                            request.Sources[0].Text
+                            "\uFFFD("
+                            "Invalid UTF-8 uses replacement decoding"
+                    )
+
+            testCase "Conformance Contract preserves separated lexical diagnostics"
+            <| fun _ ->
+                withCopiedRoot
+                    "contract-lexical-recovery"
+                    (fun root ->
+                        let repository = ManifestLoader.Load(root)
+
+                        let materialized =
+                            CaseMaterializer.Materialize(
+                                repository,
+                                caseById repository "language.source.lexical-recovery-negative"
+                            )
+
+                        let result =
+                            Compiler()
+                                .Compile(
+                                    CompilerContractProbe.CreateRequest(materialized),
+                                    CancellationToken.None
+                                )
+
+                        Expect.sequenceEqual
+                            (result.Diagnostics
+                             |> Seq.map (fun diagnostic ->
+                                 let range = diagnostic.Range.Value
+
+                                 diagnostic.Code,
+                                 range.Start.Offset,
+                                 range.Start.Line,
+                                 range.Start.Column,
+                                 range.End.Offset,
+                                 range.End.Line,
+                                 range.End.Column
+                             )
+                             |> Seq.toArray)
+                            [|
+                                "FS0010", 28, 2, 14, 29, 2, 15
+                                "FS0010", 45, 3, 16, 46, 3, 17
+                            |]
+                            "Separated lexical diagnostics remain ordered"
+                    )
+
             testCase "Conformance Contract records ordered phase evidence"
             <| fun _ ->
                 let result: CompilationResult = {

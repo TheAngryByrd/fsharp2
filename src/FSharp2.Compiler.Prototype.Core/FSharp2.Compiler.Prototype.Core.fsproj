@@ -23,6 +23,12 @@
     <Compile Include="../fsc2.Prototype/Contracts.fs" Link="Contracts.fs" />
     <Compile Include="../fsc2.Prototype/Model.fs" Link="Model.fs" />
     <Compile Include="../fsc2.Prototype/Diagnostics.fs" Link="Diagnostics.fs" />
+    <Compile Include="../fsc2.Prototype/SourceText.fs" Link="SourceText.fs" />
+    <Compile Include="../fsc2.Prototype/LanguageVersion.fs" Link="LanguageVersion.fs" />
+    <Compile Include="../fsc2.Prototype/Lexer.fs" Link="Lexer.fs" />
+    <Compile Include="../fsc2.Prototype/Directives.fs" Link="Directives.fs" />
+    <Compile Include="../fsc2.Prototype/Layout.fs" Link="Layout.fs" />
+    <Compile Include="../fsc2.Prototype/LexicalPipeline.fs" Link="LexicalPipeline.fs" />
     <Compile Include="../fsc2.Prototype/CommandLine.fs" Link="CommandLine.fs" />
     <Compile Include="../fsc2.Prototype/Frontend.fs" Link="Frontend.fs" />
     <Compile Include="../fsc2.Prototype/ReferenceModel.fs" Link="ReferenceModel.fs" />
