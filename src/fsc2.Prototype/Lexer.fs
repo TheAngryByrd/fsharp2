@@ -475,6 +475,125 @@ module internal Lexer =
                         startOffset
                         offset
             elif
+                current = '$'
+                && offset + 1 < text.Length
+                && text[offset + 1] = '$'
+            then
+                let mutable dollarCount = 0
+
+                while startOffset
+                      + dollarCount < text.Length
+                      && text[startOffset
+                              + dollarCount] = '$' do
+                    dollarCount <-
+                        dollarCount
+                        + 1
+
+                let quoteStart =
+                    startOffset
+                    + dollarCount
+
+                let isTripleQuoted =
+                    quoteStart
+                    + 2 < text.Length
+                    && text[quoteStart] = '"'
+                    && text[quoteStart
+                            + 1] = '"'
+                    && text[quoteStart
+                            + 2] = '"'
+
+                if not isTripleQuoted then
+                    offset <- quoteStart
+                    addToken LexicalTokenKind.Invalid startOffset offset
+
+                    addDiagnostic "FS0010" (unexpectedCharacterMessage current) startOffset offset
+                else
+                    let braceRun position character =
+                        let mutable length = 0
+
+                        while position
+                              + length < text.Length
+                              && text[position
+                                      + length] = character do
+                            length <- length + 1
+
+                        length
+
+                    let mutable cursor =
+                        quoteStart
+                        + 3
+
+                    let mutable closed = false
+
+                    while cursor < text.Length
+                          && not closed do
+                        if
+                            cursor + 2 < text.Length
+                            && text[cursor] = '"'
+                            && text[cursor + 1] = '"'
+                            && text[cursor + 2] = '"'
+                        then
+                            cursor <- cursor + 3
+                            closed <- true
+                        elif text[cursor] = '{' then
+                            let run = braceRun cursor '{'
+
+                            cursor <-
+                                cursor
+                                + run
+
+                            if
+                                run
+                                >= dollarCount
+                            then
+                                let mutable depth = 0
+                                let mutable holeClosed = false
+
+                                while cursor < text.Length
+                                      && not holeClosed do
+                                    match text[cursor] with
+                                    | '{' ->
+                                        depth <- depth + 1
+                                        cursor <- cursor + 1
+                                    | '}' when depth > 0 ->
+                                        depth <- depth - 1
+                                        cursor <- cursor + 1
+                                    | '}' ->
+                                        let closing = braceRun cursor '}'
+
+                                        cursor <-
+                                            cursor
+                                            + closing
+
+                                        holeClosed <-
+                                            closing
+                                            >= dollarCount
+                                    | '"' ->
+                                        let nestedLength =
+                                            if
+                                                cursor + 2 < text.Length
+                                                && text[cursor + 1] = '"'
+                                                && text[cursor + 2] = '"'
+                                            then
+                                                3
+                                            else
+                                                1
+
+                                        cursor <- fst (scanQuoted cursor nestedLength false)
+                                    | _ -> cursor <- cursor + 1
+                        else
+                            cursor <- cursor + 1
+
+                    offset <- cursor
+                    addToken LexicalTokenKind.StringLiteral startOffset offset
+
+                    if not closed then
+                        addDiagnostic
+                            "FS0514"
+                            "End of file in string begun at or before here."
+                            startOffset
+                            offset
+            elif
                 (current = '$'
                  || current = '@')
                 && offset + 2 < text.Length

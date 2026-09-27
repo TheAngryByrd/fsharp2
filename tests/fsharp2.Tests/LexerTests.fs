@@ -114,6 +114,19 @@ module LexerTests =
                     ]
                     "Each triple-quoted string closes at its delimiter"
 
+            testCase "lexes extended interpolated strings as one literal"
+            <| fun _ ->
+                let result = tokenize "let a = $$\"\"\"{x} {{x}} {{{x}}} \"text\" \"\"\" + 1"
+
+                Expect.isEmpty result.Diagnostics "Extended interpolation is valid"
+
+                Expect.sequenceEqual
+                    (result.Tokens
+                     |> Seq.filter (fun token -> token.Kind = LexicalTokenKind.StringLiteral)
+                     |> Seq.map _.Text)
+                    [ "$$\"\"\"{x} {{x}} {{{x}}} \"text\" \"\"\"" ]
+                    "The extended interpolated string is one literal token"
+
             testCase "lexes interpolated strings as one literal"
             <| fun _ ->
                 let result = tokenize "let text = $\"a {1 + 2} \\\" b\" + $\"\"\"x {\"y\"} z\"\"\""
