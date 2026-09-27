@@ -549,6 +549,16 @@ module internal Directives =
             )
             |> ImmutableArray.CreateRange
 
+        diagnostics.RemoveAll(fun diagnostic ->
+            let offset = diagnostic.Range.Start.Offset
+
+            diagnostic.Order < int64 lexed.Diagnostics.Length
+            && offset < output.Length
+            && output[offset]
+               <> source.Text[offset]
+        )
+        |> ignore
+
         {
             CompatibilityText = String output
             SourceMap = sourceMap

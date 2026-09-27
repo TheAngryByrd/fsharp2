@@ -31,6 +31,18 @@ module internal Layout =
         let mutable delimiterDepth = 0
         let mutable order = int64 diagnostics.Count
 
+        let isActive (token: LexicalToken) =
+            let offset = token.Range.Start.Offset
+
+            offset
+            >= source.Text.Length
+            || directives.CompatibilityText[offset] = source.Text[offset]
+
+        let activeTokens =
+            lexed.Tokens
+            |> Seq.filter isActive
+            |> Seq.toArray
+
         let event kind line column offset =
             let position = {
                 Offset = offset
@@ -98,7 +110,7 @@ module internal Layout =
                 + 1
 
             let lineTokens =
-                lexed.Tokens
+                activeTokens
                 |> Seq.filter (fun token ->
                     token.Kind
                     <> LexicalTokenKind.EndOfFile
@@ -149,7 +161,7 @@ module internal Layout =
                 )
 
             let hasLexicalDiagnostic =
-                lexed.Diagnostics
+                directives.Diagnostics
                 |> Seq.exists (fun diagnostic -> diagnostic.Range.Start.Line = line)
 
             if
@@ -285,7 +297,7 @@ module internal Layout =
                 Range = { Start = eof; End = eof }
             }
 
-        for token in lexed.Tokens do
+        for token in activeTokens do
             tokens.Add {
                 Kind = LayoutTokenKind.SourceToken
                 Token = Some token

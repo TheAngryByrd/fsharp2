@@ -108,6 +108,43 @@ module LayoutTests =
                     ]
                     "Offside events apply only while light syntax is enabled"
 
+            testCase "ignores inactive conditional text"
+            <| fun _ ->
+                let result =
+                    prepare
+                        "let value =
+#if NEVER
+        $
+    ignored
+#endif
+    1"
+
+                Expect.isEmpty
+                    result.Diagnostics
+                    "Inactive text reports no lexical or layout diagnostics"
+
+                Expect.isFalse
+                    (result.Tokens
+                     |> Seq.exists (fun token ->
+                         token.Token
+                         |> Option.exists (fun source -> source.Text = "ignored")
+                     ))
+                    "Inactive tokens do not reach the layout stream"
+
+                Expect.sequenceEqual
+                    (result.Tokens
+                     |> Seq.choose (fun token ->
+                         if token.Kind = LayoutTokenKind.SourceToken then
+                             None
+                         else
+                             Some(token.Kind, token.Range.Start.Line)
+                     ))
+                    [
+                        LayoutTokenKind.BeginBlock, 6
+                        LayoutTokenKind.EndBlock, 6
+                    ]
+                    "Only active lines create offside events"
+
             testCase "reports bad dedent and still closes blocks at EOF"
             <| fun _ ->
                 let result = prepare "let outer =\n    let inner =\n        1\n  let bad = 2"
