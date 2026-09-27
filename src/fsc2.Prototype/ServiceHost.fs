@@ -515,6 +515,11 @@ module internal ServiceHost =
             (sources
              |> List.map _.Text)
 
+        writeStrings
+            writer
+            (sources
+             |> List.map _.ContentFingerprint)
+
     let private readInvocation (reader: BinaryReader) =
         let sourceLinkJson = readBytes reader
 
@@ -554,12 +559,15 @@ module internal ServiceHost =
         let debugDocumentPaths = readStrings reader
         let diagnosticOptions = readDiagnosticOptions reader
         let sourceTexts = readStrings reader
+        let sourceFingerprints = readStrings reader
 
         if
             sourcePaths.Length
             <> sourceTexts.Length
+            || sourcePaths.Length
+               <> sourceFingerprints.Length
         then
-            raise (InvalidDataException("source path/text cardinality mismatch"))
+            raise (InvalidDataException("source path/text/fingerprint cardinality mismatch"))
 
         {
             Target = target
@@ -603,7 +611,12 @@ module internal ServiceHost =
             TracePath = None
         },
         diagnosticOptions,
-        List.map2 (fun path text -> { Path = path; Text = text }) sourcePaths sourceTexts
+        (sourcePaths, sourceTexts, sourceFingerprints)
+        |||> List.map3 (fun path text contentFingerprint -> {
+            Path = path
+            Text = text
+            ContentFingerprint = contentFingerprint
+        })
 
     let private writeResponse (writer: BinaryWriter) (response: CompilationPipeline.Response) =
         writer.Write(ProtocolMagic)
@@ -691,7 +704,8 @@ module internal ServiceHost =
             ExportFingerprint = reader.ReadString()
             FragmentHash = reader.ReadString()
             Emitted = reader.ReadBoolean()
-        }: CompilationPipeline.Response
+        }
+        : CompilationPipeline.Response
 
     let private failure code numericCode message =
         CompilationPipeline.serviceFailure
@@ -753,6 +767,7 @@ module internal ServiceHost =
                     let response =
                         try
                             let compileStarted = System.Diagnostics.Stopwatch.GetTimestamp()
+
                             let request =
                                 CompilationPipeline.createRequestWithDiagnosticOptions
                                     invocation
@@ -777,9 +792,7 @@ module internal ServiceHost =
                 if server.IsConnected then
                     use writer = new BinaryWriter(server, Encoding.UTF8, true)
 
-                    writeResponse
-                        writer
-                        (failure "FSC2P2004" 2004 ex.Message)
+                    writeResponse writer (failure "FSC2P2004" 2004 ex.Message)
 
         0
 

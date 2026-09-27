@@ -4,7 +4,7 @@
   "lockId": "source.scoped-warnon-9",
   "family": "source",
   "caseId": "language.source.scoped-warnon-9-negative",
-  "caseHash": "sha256:b8264eef4ca9bdbcec84f58d47010efebc7270fadbfd11d8b64f7fb80af7ba45",
+  "caseHash": "sha256:5412dc81eed5c0dc3cd962450e2b655a7693267131d692a4222a574f14db3882",
   "oracleIdentity": {
     "sdkVersion": "10.0.110",
     "sdkCommit": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd",

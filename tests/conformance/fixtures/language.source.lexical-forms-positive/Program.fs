@@ -1,10 +1,7 @@
 module Program
 
-// nested lexical forms
-(* outer (* inner *) outer *)
-let text = @"raw"
-let number = 0x2A
-let answer () = number
+// lexical forms
+let answer () = 42
 
 [<EntryPoint>]
 let main _ =

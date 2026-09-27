@@ -164,14 +164,21 @@ module CompilerHost =
                 let sources =
                     invocation.SourcePaths
                     |> List.map (fun sourcePath ->
+                        let bytes = File.ReadAllBytes(sourcePath)
+
                         let decoded =
-                            File.ReadAllBytes(sourcePath)
+                            bytes
                             |> ImmutableArray.CreateRange
                             |> SourceText.decode
 
                         {
                             Path = sourcePath
                             Text = decoded.Text
+                            ContentFingerprint =
+                                bytes
+                                |> SHA256.HashData
+                                |> Convert.ToHexString
+                                |> _.ToLowerInvariant()
                         }
                     )
 

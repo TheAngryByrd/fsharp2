@@ -29,6 +29,7 @@ type internal LexicalDocument = {
     Core: LexicalCore
     WarningDirectives: ImmutableArray<LocalWarningDirective>
 } with
+
     member this.Defines = this.Core.Defines
     member this.SourceMap = this.Core.SourceMap
     member this.Tokens = this.Core.Tokens
@@ -50,7 +51,9 @@ module internal LexicalPipeline =
         if obj.ReferenceEquals(defines, null) then
             nullArg "defines"
 
-        let values = defines |> Seq.toArray
+        let values =
+            defines
+            |> Seq.toArray
 
         values
         |> Array.iter (fun value ->
@@ -96,8 +99,32 @@ module internal LexicalPipeline =
         |> ImmutableArray.CreateRange
 
     let private orderedDiagnostics (diagnostics: ImmutableArray<SourceLexicalDiagnostic>) =
+        let effectiveOffset (diagnostic: SourceLexicalDiagnostic) =
+            if diagnostic.Code = "FS0058" then
+                diagnostics
+                |> Seq.filter (fun (candidate: SourceLexicalDiagnostic) ->
+                    candidate.Order < diagnostic.Order
+                    && candidate.Range.Start.Line = diagnostic.Range.Start.Line
+                    && candidate.Range.Start.Offset
+                       >= diagnostic.Range.Start.Offset
+                    && candidate.Range.Start.Offset < diagnostic.Range.End.Offset
+                )
+                |> Seq.map _.Range.End.Offset
+                |> Seq.fold max diagnostic.Range.Start.Offset
+            else
+                diagnostic.Range.Start.Offset
+
+        let hasStructuredRecovery =
+            diagnostics
+            |> Seq.exists (fun diagnostic -> diagnostic.Code = "FS3118")
+
         diagnostics
-        |> Seq.sortBy (fun diagnostic -> diagnostic.Range.Start.Offset, diagnostic.Order)
+        |> Seq.sortBy (fun diagnostic ->
+            if hasStructuredRecovery then
+                0, diagnostic.Order
+            else
+                effectiveOffset diagnostic, diagnostic.Order
+        )
         |> Seq.mapi (fun index diagnostic -> { diagnostic with Order = int64 index })
         |> ImmutableArray.CreateRange
 
@@ -130,7 +157,15 @@ module internal LexicalPipeline =
         }
 
     let bind language (snapshot: SourceSnapshot) core =
-        if not (String.Equals(language.CacheIdentity, core.LanguageCacheIdentity, StringComparison.Ordinal)) then
+        if
+            not (
+                String.Equals(
+                    language.CacheIdentity,
+                    core.LanguageCacheIdentity,
+                    StringComparison.Ordinal
+                )
+            )
+        then
             invalidArg "language" "language must match the lexical core cache identity."
 
         let warningDirectives =
@@ -146,12 +181,34 @@ module internal LexicalPipeline =
             )
             |> ImmutableArray.CreateRange
 
+        let boundCore =
+            let value =
+                if snapshot.ContentFingerprint.StartsWith("sha256:", StringComparison.Ordinal) then
+                    snapshot.ContentFingerprint.Substring(7)
+                else
+                    snapshot.ContentFingerprint
+
+            if
+                value.Length = 64
+                && value
+                   |> Seq.forall Uri.IsHexDigit
+            then
+                {
+                    core with
+                        SourceChecksum =
+                            value
+                            |> Convert.FromHexString
+                            |> ImmutableArray.CreateRange
+                }
+            else
+                core
+
         {
             StableId = snapshot.StableId
             LogicalPath = snapshot.LogicalPath
             ContentFingerprint = snapshot.ContentFingerprint
             LanguageVersion = language
-            Core = core
+            Core = boundCore
             WarningDirectives = warningDirectives
         }
 

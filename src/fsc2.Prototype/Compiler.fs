@@ -210,7 +210,10 @@ type Compiler() =
             )
         | _ ->
             match request.SemanticOptions.LanguageVersion with
-            | Some languageVersion when LanguageVersion.normalize (Some languageVersion) |> Result.isError ->
+            | Some languageVersion when
+                LanguageVersion.normalize (Some languageVersion)
+                |> Result.isError
+                ->
                 Some(
                     unsupportedFailure
                         "FSC2C2001"
@@ -540,11 +543,16 @@ type Compiler() =
         let sourceDirectives =
             request.Sources
             |> Seq.collect (fun source ->
-                service.PrepareSource(language, request.SemanticOptions.Defines, source).Document.WarningDirectives
+                service
+                    .PrepareSource(language, request.SemanticOptions.Defines, source)
+                    .Document.WarningDirectives
             )
-            |> Seq.mapi (fun index directive ->
-                { directive with Order = firstSourceOrder + int64 index }
-            )
+            |> Seq.mapi (fun index directive -> {
+                directive with
+                    Order =
+                        firstSourceOrder
+                        + int64 index
+            })
 
         {
             request.DiagnosticOptions with
@@ -570,7 +578,7 @@ type Compiler() =
                 let diagnosticOptions = effectiveDiagnosticOptions request
 
                 match CompilationPipeline.compileRequest service request with
-                | Error diagnostic when diagnostic.Code = "FSC2C2002" ->
+                | Error [ diagnostic ] when diagnostic.Code = "FSC2C2002" ->
                     let failure = {
                         Code = diagnostic.Code
                         Message = diagnostic.Message
@@ -581,7 +589,9 @@ type Compiler() =
                     unsupportedResult
                         failure
                         (unsupportedPhaseResults request failure.StoppingPhase)
-                | Error diagnostic ->
+                | Error compilerDiagnostics ->
+                    let diagnostic = List.head compilerDiagnostics
+
                     let failedPhase =
                         if diagnostic.Code = "FS0001" then
                             CompilationPhase.TypedDeclarations
@@ -591,7 +601,8 @@ type Compiler() =
                             CompilationPhase.Syntax
 
                     let diagnostics =
-                        [| failureDiagnostic failedPhase diagnostic |]
+                        compilerDiagnostics
+                        |> Seq.map (failureDiagnostic failedPhase)
                         |> Seq.map (DiagnosticPolicy.input None false true)
                         |> DiagnosticPolicy.apply diagnosticOptions
 
@@ -607,9 +618,14 @@ type Compiler() =
                     let compilationArtifacts = artifacts request compilation.Artifacts
                     let phaseResults = successPhaseResults request compilation compilationArtifacts
 
+                    let diagnostics =
+                        compilation.Diagnostics
+                        |> Seq.map (DiagnosticPolicy.input None false true)
+                        |> DiagnosticPolicy.apply compilation.DiagnosticOptions
+
                     {
-                        Outcome = CompilationOutcome.Succeeded
-                        Diagnostics = ImmutableArray.Empty
+                        Outcome = DiagnosticPolicy.outcome CompilationOutcome.Succeeded diagnostics
+                        Diagnostics = diagnostics
                         Artifacts = compilationArtifacts
                         Fingerprints =
                             compilationArtifacts

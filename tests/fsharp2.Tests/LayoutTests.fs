@@ -68,15 +68,60 @@ module LayoutTests =
                      |> Seq.exists (fun token -> token.Kind = LayoutTokenKind.BeginBlock))
                     "Delimited indentation is not an offside block"
 
+            testCase "ignores delimiters inside literals and comments"
+            <| fun _ ->
+                let result =
+                    prepare
+                        "let outer =\n    let text = \"(\"\n    (* [ *)\n    let value = 1\nlet after = 2"
+
+                Expect.sequenceEqual
+                    (result.Tokens
+                     |> Seq.choose (fun token ->
+                         if token.Kind = LayoutTokenKind.SourceToken then
+                             None
+                         else
+                             Some(token.Kind, token.Range.Start.Line)
+                     ))
+                    [
+                        LayoutTokenKind.BeginBlock, 2
+                        LayoutTokenKind.Separator, 4
+                        LayoutTokenKind.EndBlock, 5
+                    ]
+                    "Literal and comment delimiters do not change layout depth"
+
+            testCase "applies light syntax directives to offside events"
+            <| fun _ ->
+                let result =
+                    prepare "#light \"off\"\nlet first =\n    1\n#light \"on\"\nlet second =\n    2"
+
+                Expect.sequenceEqual
+                    (result.Tokens
+                     |> Seq.choose (fun token ->
+                         if token.Kind = LayoutTokenKind.SourceToken then
+                             None
+                         else
+                             Some(token.Kind, token.Range.Start.Line)
+                     ))
+                    [
+                        LayoutTokenKind.BeginBlock, 6
+                        LayoutTokenKind.EndBlock, 6
+                    ]
+                    "Offside events apply only while light syntax is enabled"
+
             testCase "reports bad dedent and still closes blocks at EOF"
             <| fun _ ->
                 let result = prepare "let outer =\n    let inner =\n        1\n  let bad = 2"
 
-                Expect.contains
+                Expect.sequenceEqual
                     (result.Diagnostics
                      |> Seq.map _.Code)
-                    "FS0058"
-                    "Bad dedent diagnostic"
+                    [
+                        "FS0588"
+                        "FS0010"
+                        "FS3118"
+                        "FS0010"
+                    ]
+                    "Bad dedent recovery diagnostics"
 
                 Expect.equal
                     (result.Tokens
@@ -84,4 +129,32 @@ module LayoutTests =
                      |> Seq.length)
                     2
                     "Both open blocks close"
+
+            testCase "reports offside recovery after an invalid character opens a delimiter"
+            <| fun _ ->
+                let result = prepare "module Program\nlet value =\uFFFD("
+
+                Expect.sequenceEqual
+                    (result.Diagnostics
+                     |> Seq.map (fun diagnostic ->
+                         diagnostic.Code,
+                         diagnostic.Range.Start.Line,
+                         diagnostic.Range.Start.Column,
+                         diagnostic.Range.End.Line,
+                         diagnostic.Range.End.Column
+                     ))
+                    [
+                        "FS0010", 2, 12, 2, 13
+                        "FS0058", 2, 1, 2, 14
+                    ]
+                    "The parser recovery diagnostics remain ordered"
+
+                Expect.sequenceEqual
+                    (result.Diagnostics
+                     |> Seq.map _.Message)
+                    [
+                        "Unexpected character '�' in binding"
+                        "Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\u001dTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+                    ]
+                    "The parser recovery messages match the Compatibility Oracle"
         ]

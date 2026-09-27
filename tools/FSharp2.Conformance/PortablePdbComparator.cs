@@ -284,7 +284,8 @@ public static class PortablePdbComparator
         {
             return $"row:{MetadataTokens.GetRowNumber(handle)}";
         }
-        var locals = peReader.GetStandaloneSignature(handle)
+        var peHandle = MetadataTokens.StandaloneSignatureHandle(MetadataTokens.GetRowNumber(handle));
+        var locals = peReader.GetStandaloneSignature(peHandle)
             .DecodeLocalSignature(new MetadataTypeNameProvider(), null);
         return $"locals:({string.Join(',', locals)})";
     }

@@ -650,6 +650,8 @@ module internal DiagnosticRendering =
                 else
                     localizedMessage
 
+            let message = message.Replace('\u0000', ' ')
+
             let text =
                 match options.DiagnosticStyle with
                 | DiagnosticStyle.Default

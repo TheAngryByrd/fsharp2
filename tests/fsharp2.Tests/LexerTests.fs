@@ -70,6 +70,32 @@ module LexerTests =
                     |]
                     "Literal projection"
 
+            testCase "separates range operators and recovers after malformed numeric literals"
+            <| fun _ ->
+                let range = tokenize "1..2"
+                let malformed = tokenize "12abc let after = 3"
+
+                Expect.sequenceEqual
+                    (range.Tokens
+                     |> Seq.map (fun token -> token.Kind, token.Text))
+                    [
+                        LexicalTokenKind.NumericLiteral, "1"
+                        LexicalTokenKind.Operator, ".."
+                        LexicalTokenKind.NumericLiteral, "2"
+                        LexicalTokenKind.EndOfFile, ""
+                    ]
+                    "A range operator is not part of either numeric literal"
+
+                Expect.isNonEmpty
+                    malformed.Diagnostics
+                    "A malformed numeric literal reports a diagnostic"
+
+                Expect.contains
+                    (malformed.Tokens
+                     |> Seq.map _.Text)
+                    "after"
+                    "Lexing continues after a malformed numeric literal"
+
             testCase "uses longest operator match and preserves comment trivia"
             <| fun _ ->
                 let result = tokenize "value<|||other // tail\n(* outer (* nested *) end *) next"

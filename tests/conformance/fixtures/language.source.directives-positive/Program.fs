@@ -2,10 +2,12 @@ module Program
 
 #if TRACE
 let answer () = 42
-#elif OTHER
+#else
+#if OTHER
 let answer () = )
 #else
 let answer () = )
+#endif
 #endif
 
 [<EntryPoint>]

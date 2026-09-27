@@ -111,7 +111,7 @@
       "kind": "implementation",
       "logicalPath": "/src/Program.fs",
       "fixturePath": "fixtures/language.source.layout-positive/Program.fs",
-      "sha256": "sha256:fc3d2e12500bdf7b409bf8054f313df2882af9d32c84edebe98798a31de67331"
+      "sha256": "sha256:f44253b4559baa3b72845916350bab763679284243623713dd830d1bf623df3f"
     }
   ],
   "targetReferences": {

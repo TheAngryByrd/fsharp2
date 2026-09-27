@@ -197,6 +197,7 @@ type internal CompilerDiagnostic = {
 type internal SourceInput = {
     Path: string
     Text: string
+    ContentFingerprint: string
 } with
 
     override _.ToString() = "SourceInput"
@@ -538,6 +539,7 @@ type internal ParsedMethodConstraint =
 type internal ParsedMethodKind =
     | Regular
     | RegularFunction of parameterName: string
+    | RegularTypedFunction of parameterName: string * parameterType: ParsedTypeExpression
     | EntryPoint of parameterName: string
 
 type internal ParsedMethodDeclaration = {

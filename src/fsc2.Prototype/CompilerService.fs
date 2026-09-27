@@ -2,6 +2,7 @@ namespace FSharp2.Compiler
 
 open System
 open System.Collections.Generic
+open System.Collections.Immutable
 open System.Diagnostics
 open System.Globalization
 open System.IO
@@ -1173,8 +1174,7 @@ type internal CompilerService() =
         |> Seq.toArray
 
     let prepareSource (language: LanguageVersionIdentity) defines (snapshot: SourceSnapshot) =
-        let normalizedDefines =
-            normalizeDefines defines
+        let normalizedDefines = normalizeDefines defines
 
         let key =
             Fingerprint.parts [
@@ -1187,11 +1187,10 @@ type internal CompilerService() =
             ]
 
         match lexicalCache.TryGetValue(key) with
-        | true, core ->
-            {
-                Document = LexicalPipeline.bind language snapshot core
-                Decision = "hit"
-            }
+        | true, core -> {
+            Document = LexicalPipeline.bind language snapshot core
+            Decision = "hit"
+          }
         | false, _ ->
             let core =
                 snapshot.Text
@@ -1212,7 +1211,10 @@ type internal CompilerService() =
         {
             Code = diagnostic.Code
             Message = diagnostic.Message
-            Path = startPosition.LogicalPath |> Option.defaultValue source.LogicalPath |> Some
+            Path =
+                startPosition.LogicalPath
+                |> Option.defaultValue source.LogicalPath
+                |> Some
             Range =
                 Some {
                     Start = {
@@ -1228,6 +1230,33 @@ type internal CompilerService() =
                 }
         }
 
+    let mappedCompilerDiagnostic (source: LexicalDocument) (diagnostic: CompilerDiagnostic) =
+        match diagnostic.Range with
+        | None -> diagnostic
+        | Some range ->
+            let startPosition = SourceMap.mapPosition source.SourceMap range.Start
+            let endPosition = SourceMap.mapPosition source.SourceMap range.End
+
+            {
+                diagnostic with
+                    Path =
+                        startPosition.LogicalPath
+                        |> Option.orElse diagnostic.Path
+                    Range =
+                        Some {
+                            Start = {
+                                Offset = startPosition.Offset
+                                Line = startPosition.Line
+                                Column = startPosition.Column
+                            }
+                            End = {
+                                Offset = endPosition.Offset
+                                Line = endPosition.Line
+                                Column = endPosition.Column
+                            }
+                        }
+            }
+
     let parse (source: LexicalDocument) =
         let key =
             Fingerprint.parts [
@@ -1242,7 +1271,14 @@ type internal CompilerService() =
                 parseHits
                 + 1
 
-            Ok(parsed, key)
+            Ok(
+                parsed
+                |> List.map (fun parsedModule -> {
+                    parsedModule with
+                        SourceChecksum = source.SourceChecksum
+                }),
+                key
+            )
         | false, _ ->
             parseMisses <-
                 parseMisses
@@ -1251,16 +1287,18 @@ type internal CompilerService() =
             let compatibilitySource = {
                 Path = source.LogicalPath
                 Text = source.CompatibilityText
+                ContentFingerprint = source.ContentFingerprint
             }
 
             match Frontend.parse [] compatibilitySource with
-            | Error error -> Error error
+            | Error error -> Error(mappedCompilerDiagnostic source error)
             | Ok parsed ->
                 let rebound =
                     parsed
-                    |> List.map (fun parsedModule ->
-                        { parsedModule with SourceChecksum = source.SourceChecksum }
-                    )
+                    |> List.map (fun parsedModule -> {
+                        parsedModule with
+                            SourceChecksum = source.SourceChecksum
+                    })
 
                 parseCache.Add(key, rebound)
                 Ok(rebound, key)
@@ -1286,26 +1324,27 @@ type internal CompilerService() =
         | EqualityExpression(functionExpression, argumentExpression, _)
         | LetExpression(_, _, _, functionExpression, argumentExpression, _, _)
         | ComputationBindingExpression(_, functionExpression, argumentExpression, _, _)
-        | WhileExpression(functionExpression, argumentExpression, _, _, _) ->
-            [
-                functionExpression
-                argumentExpression
-            ]
-        | ExpressionMemberCall(receiver, _, arguments) -> receiver :: arguments
+        | WhileExpression(functionExpression, argumentExpression, _, _, _) -> [
+            functionExpression
+            argumentExpression
+          ]
+        | ExpressionMemberCall(receiver, _, arguments) ->
+            receiver
+            :: arguments
         | ExpressionMemberAccess(receiver, _) -> [ receiver ]
-        | ConditionalExpression(condition, ifTrue, ifFalse, _, _, _) ->
-            [
-                condition
-                ifTrue
-                ifFalse
-            ]
-        | SequentialValueExpression expressions -> expressions |> List.map fst
+        | ConditionalExpression(condition, ifTrue, ifFalse, _, _, _) -> [
+            condition
+            ifTrue
+            ifFalse
+          ]
+        | SequentialValueExpression expressions ->
+            expressions
+            |> List.map fst
         | TryWithExpression(body, _, handler, _, _, _, _, _)
-        | TryFinallyExpression(body, handler, _, _, _, _, _) ->
-            [
-                body
-                handler
-            ]
+        | TryFinallyExpression(body, handler, _, _, _, _, _) -> [
+            body
+            handler
+          ]
         | MatchExpression(input, clauses, _, _) ->
             input
             :: (clauses
@@ -1317,11 +1356,10 @@ type internal CompilerService() =
 
                     body
                 ]))
-        | ForExpression(_, sequence, body, _, _, _, _) ->
-            [
-                sequence
-                body
-            ]
+        | ForExpression(_, sequence, body, _, _, _, _) -> [
+            sequence
+            body
+          ]
         | LambdaExpression(_, _, body, _) -> [ body ]
         | BindReturnFromComputation(_, bindings, _, returnFrom, _) ->
             (bindings
@@ -1347,9 +1385,9 @@ type internal CompilerService() =
         | ParsedNamedPattern(name, _) -> Set.singleton name
         | ParsedTuplePattern(elements, _) ->
             elements
-            |> List.fold (fun bindings element ->
-                Set.union bindings (matchPatternBindings element)
-            ) Set.empty
+            |> List.fold
+                (fun bindings element -> Set.union bindings (matchPatternBindings element))
+                Set.empty
         | ParsedUnionCasePattern(_, argument, _) -> matchPatternBindings argument
         | ParsedNullPattern _
         | ParsedUnitPattern _ -> Set.empty
@@ -1416,8 +1454,7 @@ type internal CompilerService() =
             | None ->
                 clauses
                 |> List.tryPick (fun (pattern, guard, body, _) ->
-                    let clauseBindings =
-                        Set.union boundNames (matchPatternBindings pattern)
+                    let clauseBindings = Set.union boundNames (matchPatternBindings pattern)
 
                     match
                         guard
@@ -1429,24 +1466,14 @@ type internal CompilerService() =
                         )
                     with
                     | Some reference -> Some reference
-                    | None ->
-                        tryFindLaterModuleReference
-                            laterModuleNames
-                            clauseBindings
-                            body
+                    | None -> tryFindLaterModuleReference laterModuleNames clauseBindings body
                 )
         | BindReturnFromComputation(_, bindings, _, returnFrom, _) ->
             let rec tryFindBindings currentBindings =
                 function
-                | [] ->
-                    tryFindLaterModuleReference
-                        laterModuleNames
-                        currentBindings
-                        returnFrom
+                | [] -> tryFindLaterModuleReference laterModuleNames currentBindings returnFrom
                 | (bindingName, input) :: remaining ->
-                    match
-                        tryFindLaterModuleReference laterModuleNames currentBindings input
-                    with
+                    match tryFindLaterModuleReference laterModuleNames currentBindings input with
                     | Some reference -> Some reference
                     | None ->
                         tryFindBindings
@@ -1463,11 +1490,13 @@ type internal CompilerService() =
                 |> List.tryPick (fun memberDeclaration ->
                     let memberBindings =
                         memberDeclaration.ParameterNames
-                        |> List.fold (fun bindings parameterName ->
-                            bindings
-                            |> Set.add parameterName
-                        ) (boundNames
-                           |> Set.add memberDeclaration.ReceiverName)
+                        |> List.fold
+                            (fun bindings parameterName ->
+                                bindings
+                                |> Set.add parameterName
+                            )
+                            (boundNames
+                             |> Set.add memberDeclaration.ReceiverName)
 
                     tryFindLaterModuleReference
                         laterModuleNames
@@ -1482,7 +1511,13 @@ type internal CompilerService() =
     let editDistance (left: string) (right: string) =
         let left = left.ToLowerInvariant()
         let right = right.ToLowerInvariant()
-        let distances = Array2D.zeroCreate<int> (left.Length + 1) (right.Length + 1)
+
+        let distances =
+            Array2D.zeroCreate<int>
+                (left.Length
+                 + 1)
+                (right.Length
+                 + 1)
 
         for leftIndex = 0 to left.Length do
             distances.[leftIndex, 0] <- leftIndex
@@ -1493,27 +1528,50 @@ type internal CompilerService() =
         for leftIndex = 1 to left.Length do
             for rightIndex = 1 to right.Length do
                 let substitutionCost =
-                    if left.[leftIndex - 1] = right.[rightIndex - 1] then 0 else 1
+                    if
+                        left.[leftIndex
+                              - 1] = right.[rightIndex
+                                            - 1]
+                    then
+                        0
+                    else
+                        1
 
                 distances.[leftIndex, rightIndex] <-
                     min
                         (min
-                            (distances.[leftIndex - 1, rightIndex] + 1)
-                            (distances.[leftIndex, rightIndex - 1] + 1))
-                        (distances.[leftIndex - 1, rightIndex - 1] + substitutionCost)
+                            (distances.[leftIndex
+                                        - 1,
+                                        rightIndex]
+                             + 1)
+                            (distances.[leftIndex,
+                                        rightIndex
+                                        - 1]
+                             + 1))
+                        (distances.[leftIndex
+                                    - 1,
+                                    rightIndex
+                                    - 1]
+                         + substitutionCost)
 
         distances.[left.Length, right.Length]
 
     let undefinedModuleMessage (references: ReferenceTypeIndex) (name: string) =
         let message = $"The value, namespace, type or module '{name}' is not defined."
-        let maximumDistance = max 1 (name.Length / 2)
+
+        let maximumDistance =
+            max
+                1
+                (name.Length
+                 / 2)
 
         let suggestions =
             references.SourceSuggestionNames
-            |> List.mapi (fun index candidate ->
-                candidate, editDistance name candidate, index
+            |> List.mapi (fun index candidate -> candidate, editDistance name candidate, index)
+            |> List.filter (fun (_, distance, _) ->
+                distance
+                <= maximumDistance
             )
-            |> List.filter (fun (_, distance, _) -> distance <= maximumDistance)
             |> List.sortBy (fun (_, distance, index) -> distance, index)
             |> List.truncate 3
             |> List.map (fun (candidate, _, _) -> candidate)
@@ -1524,7 +1582,10 @@ type internal CompilerService() =
             message
             + " Maybe you want one of the following:"
             + (suggestions
-               |> List.map (fun suggestion -> "\u001d   " + suggestion)
+               |> List.map (fun suggestion ->
+                   "\u001d   "
+                   + suggestion
+               )
                |> String.concat String.Empty)
 
     let resolve
@@ -1546,18 +1607,22 @@ type internal CompilerService() =
             | declaration :: remaining ->
                 let unresolvedValue =
                     match declaration with
-                    | ParsedMethod ({
-                                        Body = ValueReference name
-                                        BodyRange = range
-                                    } as methodDeclaration) when
+                    | ParsedMethod({
+                                       Body = ValueReference name
+                                       BodyRange = range
+                                   } as methodDeclaration) when
                         visibleValues
                         |> Map.containsKey name
                         |> not
-                        && (match methodDeclaration.Kind with
+                        && (
+                            match methodDeclaration.Kind with
                             | ParsedMethodKind.EntryPoint parameterName
-                            | ParsedMethodKind.RegularFunction parameterName ->
-                                parameterName <> name
-                            | ParsedMethodKind.Regular -> true)
+                            | ParsedMethodKind.RegularFunction parameterName
+                            | ParsedMethodKind.RegularTypedFunction(parameterName, _) ->
+                                parameterName
+                                <> name
+                            | ParsedMethodKind.Regular -> true
+                        )
                         ->
                         Some(name, range, $"The value or constructor '{name}' is not defined.")
                     | ParsedMethod methodDeclaration ->
@@ -1569,7 +1634,8 @@ type internal CompilerService() =
                         let boundNames =
                             match methodDeclaration.Kind with
                             | ParsedMethodKind.EntryPoint parameterName
-                            | ParsedMethodKind.RegularFunction parameterName ->
+                            | ParsedMethodKind.RegularFunction parameterName
+                            | ParsedMethodKind.RegularTypedFunction(parameterName, _) ->
                                 boundNames
                                 |> Set.add parameterName
                             | ParsedMethodKind.Regular -> boundNames
@@ -1832,7 +1898,20 @@ type internal CompilerService() =
                     let typedGenericType =
                         match genericType with
                         | ParsedNamedType(typeName, range) ->
-                            resolveNamedType arguments.Length typeName range
+                            let resolvedTypeName =
+                                if
+                                    arguments.Length = 1
+                                    && String.IsNullOrEmpty(typeName.Namespace)
+                                    && typeName.Name = "option"
+                                then
+                                    {
+                                        Namespace = "Microsoft.FSharp.Core"
+                                        Name = "FSharpOption"
+                                    }
+                                else
+                                    typeName
+
+                            resolveNamedType arguments.Length resolvedTypeName range
                         | _ -> resolveType declaredParameters genericType
 
                     match typedGenericType with
@@ -3067,6 +3146,7 @@ type internal CompilerService() =
                     match declaration.Kind, declaration.Body with
                     | ParsedMethodKind.EntryPoint _, _
                     | ParsedMethodKind.RegularFunction _, _
+                    | ParsedMethodKind.RegularTypedFunction _, _
                     | ParsedMethodKind.Regular, FunctionApplication _ -> true
                     | _ -> false
                     ->
@@ -3074,12 +3154,16 @@ type internal CompilerService() =
                         match declaration.Kind with
                         | ParsedMethodKind.EntryPoint _ -> true
                         | ParsedMethodKind.Regular
-                        | ParsedMethodKind.RegularFunction _ -> false
+                        | ParsedMethodKind.RegularFunction _
+                        | ParsedMethodKind.RegularTypedFunction _ -> false
 
-                    let parameterName =
+                    let parameter =
                         match declaration.Kind with
                         | ParsedMethodKind.EntryPoint parameterName
-                        | ParsedMethodKind.RegularFunction parameterName -> Some parameterName
+                        | ParsedMethodKind.RegularFunction parameterName ->
+                            Some(parameterName, ParsedWildcardType declaration.Range)
+                        | ParsedMethodKind.RegularTypedFunction(parameterName, parameterType) ->
+                            Some(parameterName, parameterType)
                         | ParsedMethodKind.Regular -> None
 
                     let syntheticObjectType =
@@ -3097,17 +3181,17 @@ type internal CompilerService() =
                                     TypeParameters = []
                                     Constraints = []
                                     ArgumentCounts =
-                                        match parameterName with
+                                        match parameter with
                                         | Some _ -> [ 1 ]
                                         | None -> []
                                     Parameters =
-                                        match parameterName with
-                                        | Some parameterName -> [
+                                        match parameter with
+                                        | Some(parameterName, parameterType) -> [
                                             {
                                                 Attributes = []
                                                 Name = parameterName
-                                                Type = ParsedWildcardType declaration.Range
-                                                Range = declaration.Range
+                                                Type = parameterType
+                                                Range = parameterType.Range
                                             }
                                           ]
                                         | None -> []
@@ -3125,9 +3209,7 @@ type internal CompilerService() =
                     |> Result.bind (fun typedDeclaration ->
                         match typedDeclaration with
                         | TypedObjectType {
-                                              Methods = [
-                                                  TypedStaticObjectMethod typedMethod
-                                              ]
+                                              Methods = [ TypedStaticObjectMethod typedMethod ]
                                           } when not isEntryPoint ->
                             match declaration.DeclaredType, typedMethod.ReturnType with
                             | None, _
@@ -3171,13 +3253,9 @@ type internal CompilerService() =
                                     declaration.BodyRange
                                     "the method body does not match its declared integer type"
                         | TypedObjectType {
-                                              Methods = [
-                                                  TypedStaticObjectMethod(
-                                                      {
-                                                          ReturnType = CliInt32
-                                                      } as typedMethod
-                                                  )
-                                              ]
+                                              Methods = [ TypedStaticObjectMethod({
+                                                                                      ReturnType = CliInt32
+                                                                                  } as typedMethod) ]
                                           } ->
                             Ok(
                                 TypedMethod {
@@ -3193,9 +3271,7 @@ type internal CompilerService() =
                                 }
                             )
                         | TypedObjectType {
-                                              Methods = [
-                                                  TypedStaticObjectMethod _
-                                              ]
+                                              Methods = [ TypedStaticObjectMethod _ ]
                                           } ->
                             diagnostic
                                 declaration.BodyRange
@@ -5625,7 +5701,11 @@ type internal CompilerService() =
                                                 (constraintWitnesses
                                                  |> Seq.toList)
                                         )
-                                        |> Seq.distinctBy (fun (target, genericArguments, returnType, _) ->
+                                        |> Seq.distinctBy (fun
+                                                               (target,
+                                                                genericArguments,
+                                                                returnType,
+                                                                _) ->
                                             target.StableId, genericArguments, returnType
                                         )
                                         |> List.ofSeq
@@ -5634,7 +5714,11 @@ type internal CompilerService() =
                                     | [] -> None
                                     | [ target, genericArguments, returnType, appliedConstraints ] ->
                                         for appliedConstraint in appliedConstraints do
-                                            if not (constraintWitnesses.Contains(appliedConstraint)) then
+                                            if
+                                                not (
+                                                    constraintWitnesses.Contains(appliedConstraint)
+                                                )
+                                            then
                                                 constraintWitnesses.Add(appliedConstraint)
 
                                         Some(Ok(target, genericArguments, returnType))
@@ -5645,7 +5729,12 @@ type internal CompilerService() =
                                                 $"the callable value '{name}' is ambiguous"
                                         )
 
-                                let resolveSourceModuleMethod name argumentTypes expectedReturnType range =
+                                let resolveSourceModuleMethod
+                                    name
+                                    argumentTypes
+                                    expectedReturnType
+                                    range
+                                    =
                                     resolveSourceModuleMethodCandidates
                                         name
                                         (visibleSourceModuleMethods name)
@@ -5664,7 +5753,9 @@ type internal CompilerService() =
                                         checkedSourceModuleMethods
                                         |> Seq.filter (fun sourceMethod ->
                                             let qualifiedModuleName =
-                                                if String.IsNullOrEmpty(sourceMethod.Namespace) then
+                                                if
+                                                    String.IsNullOrEmpty(sourceMethod.Namespace)
+                                                then
                                                     sourceMethod.ModuleName
                                                 else
                                                     sourceMethod.Namespace
@@ -5690,36 +5781,35 @@ type internal CompilerService() =
                                             && (Char.IsDigit(formatText[index])
                                                 || "-+0 #.".Contains(formatText[index]))
                                         then
-                                            skipSpecifierOptions (
-                                                index
-                                                + 1
-                                            )
+                                            skipSpecifierOptions (index + 1)
                                         else
                                             index
 
                                     let rec scan index argumentTypes =
-                                        if index >= formatText.Length then
+                                        if
+                                            index
+                                            >= formatText.Length
+                                        then
                                             Some(List.rev argumentTypes)
-                                        elif formatText[index] <> '%' then
-                                            scan
-                                                (index
-                                                 + 1)
-                                                argumentTypes
-                                        elif index + 1 >= formatText.Length then
+                                        elif
+                                            formatText[index]
+                                            <> '%'
+                                        then
+                                            scan (index + 1) argumentTypes
+                                        elif
+                                            index + 1
+                                            >= formatText.Length
+                                        then
                                             None
                                         elif formatText[index + 1] = '%' then
-                                            scan
-                                                (index
-                                                 + 2)
-                                                argumentTypes
+                                            scan (index + 2) argumentTypes
                                         else
-                                            let specifierIndex =
-                                                skipSpecifierOptions (
-                                                    index
-                                                    + 1
-                                                )
+                                            let specifierIndex = skipSpecifierOptions (index + 1)
 
-                                            if specifierIndex >= formatText.Length then
+                                            if
+                                                specifierIndex
+                                                >= formatText.Length
+                                            then
                                                 None
                                             else
                                                 match formatText[specifierIndex] with
@@ -5781,7 +5871,8 @@ type internal CompilerService() =
                                             | FunctionApplication(functionExpression,
                                                                   argumentExpression) ->
                                                 collect
-                                                    (argumentExpression :: arguments)
+                                                    (argumentExpression
+                                                     :: arguments)
                                                     functionExpression
                                             | ValueReference name when
                                                 not (isBoundExpressionName name)
@@ -5798,8 +5889,12 @@ type internal CompilerService() =
                                     let (|ImportedFormattedApplication|_|) candidateExpression =
                                         let rec collect arguments =
                                             function
-                                            | FunctionApplication(functionExpression, argumentExpression) ->
-                                                collect (argumentExpression :: arguments) functionExpression
+                                            | FunctionApplication(functionExpression,
+                                                                  argumentExpression) ->
+                                                collect
+                                                    (argumentExpression
+                                                     :: arguments)
+                                                    functionExpression
                                             | ValueReference name -> Some(name, arguments)
                                             | _ -> None
 
@@ -5807,24 +5902,17 @@ type internal CompilerService() =
                                         | Some(name, StringLiteral formatText :: arguments) when
                                             not (isBoundExpressionName name)
                                             && not (hasVisibleSourceModuleMethod name)
-                                            &&
-                                            not (List.isEmpty arguments)
+                                            && not (List.isEmpty arguments)
                                             ->
                                             let candidates =
                                                 references.SourceMethods(name)
                                                 |> List.choose (fun methodDefinition ->
                                                     match methodDefinition.ParameterTypes with
                                                     | [ CliGenericType(formatTypeReference,
-                                                                       (CliMethodTypeParameter 0
-                                                                        :: _
-                                                                        :: _
-                                                                        :: _
-                                                                        :: [] as formatTypeArguments)) ] when
+                                                                       (CliMethodTypeParameter 0 :: _ :: _ :: _ :: [] as formatTypeArguments)) ] when
                                                         formatTypeReference.AssemblyName = "FSharp.Core"
-                                                        && formatTypeReference.TypeName.Namespace
-                                                           = "Microsoft.FSharp.Core"
-                                                        && formatTypeReference.TypeName.Name
-                                                           = "PrintfFormat`4"
+                                                        && formatTypeReference.TypeName.Namespace = "Microsoft.FSharp.Core"
+                                                        && formatTypeReference.TypeName.Name = "PrintfFormat`4"
                                                         ->
                                                         Some(
                                                             methodDefinition,
@@ -9258,13 +9346,18 @@ type internal CompilerService() =
                                                         argumentExpression
                                                 with
                                                 | Error error -> Error error
-                                                | Ok(typedArgument, argumentType, nextArgumentLocalIndex) ->
+                                                | Ok(typedArgument,
+                                                     argumentType,
+                                                     nextArgumentLocalIndex) ->
                                                     typeArguments
-                                                        ((typedArgument, argumentType) :: completed)
+                                                        ((typedArgument, argumentType)
+                                                         :: completed)
                                                         nextArgumentLocalIndex
                                                         remaining
 
-                                        match typeArguments [] nextLocalIndex argumentExpressions with
+                                        match
+                                            typeArguments [] nextLocalIndex argumentExpressions
+                                        with
                                         | Error error -> Error error
                                         | Ok(typedArguments, nextArgumentLocalIndex) ->
                                             match
@@ -9277,7 +9370,10 @@ type internal CompilerService() =
                                             with
                                             | Some result ->
                                                 result
-                                                |> Result.map (fun (target, genericArguments, returnType) ->
+                                                |> Result.map (fun
+                                                                   (target,
+                                                                    genericArguments,
+                                                                    returnType) ->
                                                     TypedStaticMethodCall(
                                                         target,
                                                         genericArguments,
@@ -9306,14 +9402,18 @@ type internal CompilerService() =
                                                         argumentExpression
                                                 with
                                                 | Error error -> Error error
-                                                | Ok(typedArgument, argumentType, nextArgumentLocalIndex) ->
+                                                | Ok(typedArgument,
+                                                     argumentType,
+                                                     nextArgumentLocalIndex) ->
                                                     typeArguments
                                                         ((typedArgument, argumentType)
                                                          :: completed)
                                                         nextArgumentLocalIndex
                                                         remaining
 
-                                        match typeArguments [] nextLocalIndex argumentExpressions with
+                                        match
+                                            typeArguments [] nextLocalIndex argumentExpressions
+                                        with
                                         | Error error -> Error error
                                         | Ok(typedArguments, nextArgumentLocalIndex) ->
                                             let formatMatchesArguments =
@@ -9336,15 +9436,18 @@ type internal CompilerService() =
                                                     "the format string does not match the argument types"
                                             else
                                                 let buildCandidate
-                                                    ((methodDefinition: ReferenceMethodDefinition),
-                                                     (formatTypeReference: CliTypeReference),
-                                                     (formatTypeArguments: CliType list))
-                                                    =
+                                                    (
+                                                        (methodDefinition: ReferenceMethodDefinition),
+                                                        (formatTypeReference: CliTypeReference),
+                                                        (formatTypeArguments: CliType list)
+                                                    ) =
                                                     let resultType = List.last formatTypeArguments
 
                                                     let callableType =
                                                         (typedArguments, resultType)
-                                                        ||> List.foldBack (fun (_, argumentType) rangeType ->
+                                                        ||> List.foldBack (fun
+                                                                               (_, argumentType)
+                                                                               rangeType ->
                                                             CliGenericType(
                                                                 fsharpFunctionType,
                                                                 [
@@ -9384,7 +9487,9 @@ type internal CompilerService() =
                                                         )
                                                         |> List.filter (fun constructor ->
                                                             constructor.GenericArity = 0
-                                                            && constructor.ParameterTypes = [ CliString ]
+                                                            && constructor.ParameterTypes = [
+                                                                CliString
+                                                            ]
                                                         )
 
                                                     match
@@ -9420,17 +9525,20 @@ type internal CompilerService() =
                                                                 [ formattedArgument ]
                                                             )
 
-                                                        ((initialExpression,
-                                                          inferredCallableType)
+                                                        ((initialExpression, inferredCallableType)
                                                          |> Some,
                                                          typedArguments)
-                                                        ||> List.fold (fun state typedArgumentAndType ->
+                                                        ||> List.fold (fun
+                                                                           state
+                                                                           typedArgumentAndType ->
                                                             let typedArgument, argumentType =
                                                                 typedArgumentAndType
 
                                                             state
-                                                            |> Option.bind (fun functionExpressionAndType ->
-                                                                let functionExpression, functionType =
+                                                            |> Option.bind (fun
+                                                                                functionExpressionAndType ->
+                                                                let (functionExpression,
+                                                                     functionType) =
                                                                     functionExpressionAndType
 
                                                                 match functionType with
@@ -9576,7 +9684,8 @@ type internal CompilerService() =
                                         with
                                         | Some result ->
                                             result
-                                            |> Result.map (fun (target, genericArguments, returnType) ->
+                                            |> Result.map (fun
+                                                               (target, genericArguments, returnType) ->
                                                 TypedStaticMethodCall(target, genericArguments, []),
                                                 returnType,
                                                 nextLocalIndex
@@ -10922,6 +11031,45 @@ type internal CompilerService() =
                                                                              argument,
                                                                              patternRange) ->
                                                         match patternInputType with
+                                                        | CliGenericType(optionTypeReference, [ _ ]) when
+                                                            optionTypeReference.AssemblyName = "FSharp.Core"
+                                                            && optionTypeReference.TypeName.Namespace = "Microsoft.FSharp.Core"
+                                                            && optionTypeReference.TypeName.Name = "FSharpOption`1"
+                                                            && caseName = "Some"
+                                                            ->
+                                                            match
+                                                                readableProperty
+                                                                    patternInput
+                                                                    patternInputType
+                                                                    "Value"
+                                                                    argument.Range
+                                                            with
+                                                            | Error error -> Error error
+                                                            | Ok(itemInput, itemType) ->
+                                                                match
+                                                                    preparePattern
+                                                                        bindings
+                                                                        (patternLocalIndex
+                                                                         + 1)
+                                                                        itemInput
+                                                                        itemType
+                                                                        argument
+                                                                with
+                                                                | Error error -> Error error
+                                                                | Ok(argumentPlan,
+                                                                     nextBindings,
+                                                                     nextPatternLocalIndex) ->
+                                                                    Ok(
+                                                                        TypedPatternTypeTest(
+                                                                            patternInput,
+                                                                            patternInputType,
+                                                                            patternLocalIndex,
+                                                                            "$fsharp2Some"
+                                                                        )
+                                                                        :: argumentPlan,
+                                                                        nextBindings,
+                                                                        nextPatternLocalIndex
+                                                                    )
                                                         | CliGenericType(choiceTypeReference,
                                                                          choiceArguments) when
                                                             choiceTypeReference.AssemblyName = "FSharp.Core"
@@ -11348,7 +11496,8 @@ type internal CompilerService() =
                                         with
                                         | Some result ->
                                             result
-                                            |> Result.map (fun (target, genericArguments, returnType) ->
+                                            |> Result.map (fun
+                                                               (target, genericArguments, returnType) ->
                                                 TypedStaticMethodCall(target, genericArguments, []),
                                                 returnType,
                                                 nextLocalIndex
@@ -26223,8 +26372,11 @@ type internal CompilerService() =
             lowerCache.Add(key, lowered)
             lowered, key
 
-    member _.PrepareSource(language, defines, source) =
-        prepareSource language defines source
+    member _.PrepareSource(language, defines, source) = prepareSource language defines source
+
+    member _.LexicalDiagnostics(source: LexicalDocument) : CompilerDiagnostic seq =
+        source.Diagnostics
+        |> Seq.map (lexicalDiagnostic source)
 
     member _.Compile
         (

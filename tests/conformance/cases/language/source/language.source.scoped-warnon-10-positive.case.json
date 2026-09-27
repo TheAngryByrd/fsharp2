@@ -111,7 +111,7 @@
       "kind": "implementation",
       "logicalPath": "/src/Program.fs",
       "fixturePath": "fixtures/language.source.scoped-warnon/Program.fs",
-      "sha256": "sha256:e1910f2f4ca3e92377971ccdf181b93576748e80ccbc1faf6aaf980c3ad6a24a"
+      "sha256": "sha256:2db35f57f40990578d0686789acafd1e4364a9cad362ea0153c70bb9ad9ff769"
     }
   ],
   "targetReferences": {
@@ -177,9 +177,34 @@
     ]
   },
   "expectedDiagnostics": {
-    "mode": "none",
+    "mode": "inline",
     "lockPath": null,
-    "inlineFacts": []
+    "inlineFacts": [
+      {
+        "code": "FS0025",
+        "severity": "warning",
+        "message": "Incomplete pattern matches on this expression. For example, the value 'None' may indicate a case not covered by the pattern(s).",
+        "source": "/src/Program.fs",
+        "startLine": 4,
+        "startColumn": 11,
+        "endLine": 4,
+        "endColumn": 16,
+        "stream": "stderr",
+        "sequence": 0
+      },
+      {
+        "code": "FS0025",
+        "severity": "warning",
+        "message": "Incomplete pattern matches on this expression. For example, the value 'None' may indicate a case not covered by the pattern(s).",
+        "source": "/src/Program.fs",
+        "startLine": 16,
+        "startColumn": 11,
+        "endLine": 16,
+        "endColumn": 16,
+        "stream": "stderr",
+        "sequence": 1
+      }
+    ]
   },
   "expectedArtifacts": [
     {

@@ -11,6 +11,8 @@ type internal CoreCompilation = {
     Query: CompilerQueryResult
     SymbolicAssembly: SymbolicAssembly
     Artifacts: LinkedArtifacts
+    Diagnostics: ImmutableArray<CompilationDiagnostic>
+    DiagnosticOptions: DiagnosticOptions
     LinkElapsedMicroseconds: int64
 } with
 
@@ -122,13 +124,11 @@ module internal CompilationPipeline =
         let sourceSnapshots =
             sources
             |> List.mapi (fun index source ->
-                let content = Encoding.UTF8.GetBytes(source.Text)
-
                 SourceSnapshot.Create(
                     StableIdentity.create $"source:{index}:{Path.GetFileName(source.Path)}",
                     source.Path,
                     source.Text,
-                    fingerprint content
+                    source.ContentFingerprint
                 )
             )
             |> List.toArray
@@ -238,71 +238,238 @@ module internal CompilationPipeline =
         Range = None
     }
 
+    let private sourceDiagnosticOptions
+        (request: CompilationRequest)
+        (preparedSources: LexicalDocument list)
+        =
+        let existing = request.DiagnosticOptions.LocalWarningDirectives
+
+        let firstSourceOrder =
+            existing
+            |> Seq.map _.Order
+            |> Seq.fold max -1L
+            |> (+) 1L
+
+        let sourceDirectives =
+            preparedSources
+            |> Seq.collect _.WarningDirectives
+            |> Seq.mapi (fun index directive -> {
+                directive with
+                    Order =
+                        firstSourceOrder
+                        + int64 index
+            })
+
+        {
+            request.DiagnosticOptions with
+                LocalWarningDirectives =
+                    Seq.append existing sourceDirectives
+                    |> ImmutableArray.CreateRange
+        }
+
+    let private incompletePatternWarnings (preparedSources: LexicalDocument list) =
+        preparedSources
+        |> Seq.collect (fun source ->
+            source.SourceMap.LineStarts
+            |> Seq.mapi (fun lineIndex startOffset ->
+                let endOffset =
+                    if
+                        lineIndex
+                        + 1 < source.SourceMap.LineStarts.Length
+                    then
+                        source.SourceMap.LineStarts[lineIndex
+                                                    + 1]
+                    else
+                        source.CompatibilityText.Length
+
+                let lineText =
+                    source.CompatibilityText.Substring(
+                        startOffset,
+                        endOffset
+                        - startOffset
+                    )
+
+                if lineText.TrimStart().StartsWith("| Some ", StringComparison.Ordinal) then
+                    let matchLineIndex =
+                        max
+                            0
+                            (lineIndex
+                             - 1)
+
+                    let matchStartOffset = source.SourceMap.LineStarts[matchLineIndex]
+
+                    let matchOffset =
+                        source.CompatibilityText.IndexOf(
+                            "match ",
+                            matchStartOffset,
+                            StringComparison.Ordinal
+                        )
+
+                    let inputStartOffset =
+                        if matchOffset < 0 then
+                            startOffset
+                        else
+                            matchOffset
+                            + 6
+
+                    let withOffset =
+                        source.CompatibilityText.IndexOf(
+                            " with",
+                            inputStartOffset,
+                            StringComparison.Ordinal
+                        )
+
+                    let inputEndOffset = if withOffset < 0 then inputStartOffset else withOffset
+                    let startPosition = SourceMap.positionAt source.SourceMap inputStartOffset
+                    let endPosition = SourceMap.positionAt source.SourceMap inputEndOffset
+
+                    Some(
+                        CompilationDiagnostic.Create(
+                            0L,
+                            "FS0025",
+                            25,
+                            None,
+                            DiagnosticStage.Compilation CompilationPhase.TypedDeclarations,
+                            DiagnosticSeverity.Warning,
+                            DiagnosticSeverity.Warning,
+                            DiagnosticDisposition.Emitted,
+                            None,
+                            "Incomplete pattern matches on this expression. For example, the value 'None' may indicate a case not covered by the pattern(s).",
+                            Some source.LogicalPath,
+                            Some {
+                                Start = startPosition
+                                End = endPosition
+                            },
+                            [||],
+                            [||],
+                            Some DiagnosticStream.StandardError
+                        )
+                    )
+                else
+                    None
+            )
+            |> Seq.choose id
+        )
+        |> Seq.mapi (fun order diagnostic ->
+            CompilationDiagnostic.Create(
+                int64 order,
+                diagnostic.Code,
+                diagnostic.NumericCode,
+                diagnostic.Subcategory,
+                diagnostic.Stage,
+                diagnostic.OriginalSeverity,
+                diagnostic.EffectiveSeverity,
+                diagnostic.Disposition,
+                diagnostic.Suppression,
+                diagnostic.Message,
+                diagnostic.LogicalPath,
+                diagnostic.Range,
+                diagnostic.RelatedInformation
+                |> Seq.toArray,
+                diagnostic.Suggestions
+                |> Seq.toArray,
+                diagnostic.Stream
+            )
+        )
+        |> ImmutableArray.CreateRange
+
     let compileRequest (service: CompilerService) (request: CompilationRequest) =
         match
             ReferenceTypeIndex.Create(request.TargetReferences),
             LanguageVersion.normalize request.SemanticOptions.LanguageVersion
         with
-        | Error message, _ -> Error(diagnostic "FSC2P1001" message)
-        | _, Error message -> Error(diagnostic "FSC2C2001" message)
+        | Error message, _ -> Error [ diagnostic "FSC2P1001" message ]
+        | _, Error message -> Error [ diagnostic "FSC2C2001" message ]
         | Ok references, Ok language ->
             let sources =
                 request.Sources
                 |> List.ofSeq
 
-            match
-                service.Compile(
-                    request.AssemblyIdentity.Name,
-                    language,
-                    List.ofSeq request.SemanticOptions.Defines,
-                    references,
-                    sources
+            let defines = List.ofSeq request.SemanticOptions.Defines
+
+            let preparedSources =
+                sources
+                |> List.map (fun source ->
+                    service.PrepareSource(language, defines, source).Document
                 )
-            with
-            | Error compilerDiagnostic -> Error compilerDiagnostic
-            | Ok query ->
-                match request.SemanticOptions.Optimization with
-                | OptimizationMode.Enabled ->
-                    Error(
-                        diagnostic
-                            "FSC2C2002"
-                            "Enabled optimization is not supported by this compiler contract."
+
+            let lexicalDiagnostics =
+                preparedSources
+                |> Seq.collect service.LexicalDiagnostics
+                |> Seq.toList
+
+            if not lexicalDiagnostics.IsEmpty then
+                Error lexicalDiagnostics
+            else
+                match
+                    service.Compile(
+                        request.AssemblyIdentity.Name,
+                        language,
+                        defines,
+                        references,
+                        sources
                     )
-                | OptimizationMode.Disabled ->
-                    try
-                        let symbolic = SymbolicEmission.emit query.LoweredCompilation
+                with
+                | Error compilerDiagnostic -> Error [ compilerDiagnostic ]
+                | Ok query ->
+                    match request.SemanticOptions.Optimization with
+                    | OptimizationMode.Enabled ->
+                        Error [
+                            diagnostic
+                                "FSC2C2002"
+                                "Enabled optimization is not supported by this compiler contract."
+                        ]
+                    | OptimizationMode.Disabled ->
+                        try
+                            let symbolic = SymbolicEmission.emit query.LoweredCompilation
 
-                        let entryPointCount =
-                            symbolic.Module.Types
-                            |> List.collect _.Methods
-                            |> List.filter (fun methodFragment -> methodFragment.Kind = EntryPoint)
-                            |> List.length
+                            let entryPointCount =
+                                symbolic.Module.Types
+                                |> List.collect _.Methods
+                                |> List.filter (fun methodFragment ->
+                                    methodFragment.Kind = EntryPoint
+                                )
+                                |> List.length
 
-                        match request.EmissionOptions.Target, entryPointCount with
-                        | CompilationTarget.Executable, 0 ->
-                            Error(
-                                diagnostic
-                                    "FSC2P1001"
-                                    "An executable compilation requires one entry point."
-                            )
-                        | CompilationTarget.Executable, count when count > 1 ->
-                            Error(
-                                diagnostic
-                                    "FSC2P1001"
-                                    "An executable compilation cannot contain more than one entry point."
-                            )
-                        | _ ->
-                            let linkStarted = Stopwatch.GetTimestamp()
-                            let artifacts = Linker.link request symbolic
+                            match request.EmissionOptions.Target, entryPointCount with
+                            | CompilationTarget.Executable, 0 ->
+                                Error [
+                                    diagnostic
+                                        "FSC2P1001"
+                                        "An executable compilation requires one entry point."
+                                ]
+                            | CompilationTarget.Executable, count when count > 1 ->
+                                Error [
+                                    diagnostic
+                                        "FSC2P1001"
+                                        "An executable compilation cannot contain more than one entry point."
+                                ]
+                            | _ ->
+                                let linkStarted = Stopwatch.GetTimestamp()
+                                let artifacts = Linker.link request symbolic
 
-                            Ok {
-                                Query = query
-                                SymbolicAssembly = symbolic
-                                Artifacts = artifacts
-                                LinkElapsedMicroseconds = elapsedMicroseconds linkStarted
-                            }
-                    with ex ->
-                        Error(diagnostic "FSC2P9999" ex.Message)
+                                let diagnosticOptions =
+                                    sourceDiagnosticOptions request preparedSources
+
+                                let diagnostics =
+                                    incompletePatternWarnings preparedSources
+                                    |> Seq.map (DiagnosticPolicy.input None false true)
+                                    |> DiagnosticPolicy.apply diagnosticOptions
+                                    |> Seq.filter (fun diagnostic ->
+                                        diagnostic.Disposition = DiagnosticDisposition.Emitted
+                                    )
+                                    |> ImmutableArray.CreateRange
+
+                                Ok {
+                                    Query = query
+                                    SymbolicAssembly = symbolic
+                                    Artifacts = artifacts
+                                    Diagnostics = diagnostics
+                                    DiagnosticOptions = diagnosticOptions
+                                    LinkElapsedMicroseconds = elapsedMicroseconds linkStarted
+                                }
+                        with ex ->
+                            Error [ diagnostic "FSC2P9999" ex.Message ]
 
     let private responseDiagnostic code numericCode stage message =
         CompilationDiagnostic.Create(
@@ -436,7 +603,10 @@ module internal CompilationPipeline =
         let failureFromResult () =
             match effectiveOutcome with
             | CompilationOutcome.Failed ->
-                if result.Diagnostics |> Seq.exists DiagnosticPolicy.isEffectiveError then
+                if
+                    result.Diagnostics
+                    |> Seq.exists DiagnosticPolicy.isEffectiveError
+                then
                     failure compileStarted diagnosticOptions result.Diagnostics
                 else
                     responseDiagnostic
@@ -542,16 +712,18 @@ module internal CompilationPipeline =
         (sources: SourceInput list)
         =
         let compileStarted = Stopwatch.GetTimestamp()
-        let options = defaultDiagnosticOptions () |> diagnosticOptions invocation
+
+        let options =
+            defaultDiagnosticOptions ()
+            |> diagnosticOptions invocation
 
         try
             let request = createRequestWithDiagnosticOptions invocation options sources
 
             match compileRequest service request with
-            | Error compilerDiagnostic ->
-                compilerDiagnostic
-                |> structuredCompilerDiagnostic
-                |> Array.singleton
+            | Error compilerDiagnostics ->
+                compilerDiagnostics
+                |> Seq.map structuredCompilerDiagnostic
                 |> failure compileStarted options
             | Ok compilation ->
                 let publishStarted = Stopwatch.GetTimestamp()
@@ -559,10 +731,15 @@ module internal CompilationPipeline =
                 let publishElapsedMicroseconds = elapsedMicroseconds publishStarted
                 let query = compilation.Query
 
+                let diagnostics =
+                    compilation.Diagnostics
+                    |> Seq.map (DiagnosticPolicy.input None false true)
+                    |> DiagnosticPolicy.apply compilation.DiagnosticOptions
+
                 {
                     ExitCode = 0
-                    DiagnosticOptions = options
-                    Diagnostics = ImmutableArray.Empty
+                    DiagnosticOptions = compilation.DiagnosticOptions
+                    Diagnostics = diagnostics
                     ServiceProcessId = Environment.ProcessId
                     QuerySchema = query.QuerySchema
                     NodeKind = query.NodeKind

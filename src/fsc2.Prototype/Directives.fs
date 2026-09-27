@@ -5,9 +5,17 @@ open System.Collections.Immutable
 
 [<RequireQualifiedAccess>]
 type internal DirectiveKind =
-    | Line | Light | Indent | Conditional | Warning
+    | Line
+    | Light
+    | Indent
+    | Conditional
+    | Warning
 
-type internal LexicalDirective = { Kind: DirectiveKind; Text: string; Range: SourceRange }
+type internal LexicalDirective = {
+    Kind: DirectiveKind
+    Text: string
+    Range: SourceRange
+}
 
 type internal PathNeutralWarningDirective = {
     Order: int64
@@ -46,77 +54,305 @@ module internal Directives =
         let mutable diagnosticOrder = int64 diagnostics.Count
 
         let addDiagnostic code message range =
-            diagnostics.Add { Code = code; Message = message; Range = range; Order = diagnosticOrder }
-            diagnosticOrder <- diagnosticOrder + 1L
+            diagnostics.Add {
+                Code = code
+                Message = message
+                Range = range
+                Order = diagnosticOrder
+            }
+
+            diagnosticOrder <-
+                diagnosticOrder
+                + 1L
 
         let blank startOffset endOffset =
-            for index = startOffset to endOffset - 1 do
-                if output[index] <> '\r' && output[index] <> '\n' then output[index] <- ' '
+            for index = startOffset to endOffset
+                                       - 1 do
+                if
+                    output[index]
+                    <> '\r'
+                    && output[index]
+                       <> '\n'
+                then
+                    output[index] <- ' '
 
         let quotedValue (value: string) =
             let first = value.IndexOf '"'
             let last = value.LastIndexOf '"'
-            if first >= 0 && last > first then Some(value.Substring(first + 1, last - first - 1)) else None
 
-        for lineIndex = 0 to source.Map.LineStarts.Length - 1 do
+            if
+                first >= 0
+                && last > first
+            then
+                Some(
+                    value.Substring(
+                        first + 1,
+                        last
+                        - first
+                        - 1
+                    )
+                )
+            else
+                None
+
+        let protectedSpans = [|
+            yield!
+                lexed.Trivia
+                |> Seq.filter (fun trivia -> trivia.Kind = LexicalTriviaKind.BlockComment)
+                |> Seq.map _.Range
+            yield!
+                lexed.Tokens
+                |> Seq.filter (fun token ->
+                    token.Kind = LexicalTokenKind.StringLiteral
+                    || token.Kind = LexicalTokenKind.ByteStringLiteral
+                )
+                |> Seq.map _.Range
+        |]
+
+        let isProtected offset =
+            protectedSpans
+            |> Array.exists (fun range ->
+                range.Start.Offset < offset
+                && offset < range.End.Offset
+            )
+
+        for lineIndex = 0 to source.Map.LineStarts.Length
+                             - 1 do
             let startOffset = source.Map.LineStarts[lineIndex]
-            let endOffset = if lineIndex + 1 < source.Map.LineStarts.Length then source.Map.LineStarts[lineIndex + 1] else source.Text.Length
+
+            let endOffset =
+                if
+                    lineIndex
+                    + 1 < source.Map.LineStarts.Length
+                then
+                    source.Map.LineStarts[lineIndex
+                                          + 1]
+                else
+                    source.Text.Length
+
             let mutable contentEnd = endOffset
-            while contentEnd > startOffset && (source.Text[contentEnd - 1] = '\r' || source.Text[contentEnd - 1] = '\n') do contentEnd <- contentEnd - 1
-            let lineText = source.Text.Substring(startOffset, contentEnd - startOffset)
-            let trimmed = lineText.TrimStart()
-            let directiveStart = startOffset + lineText.Length - trimmed.Length
-            let directiveRange = { Start = SourceMap.positionAt source.Map directiveStart; End = SourceMap.positionAt source.Map contentEnd }
-            let add kind = directives.Add { Kind = kind; Text = trimmed; Range = directiveRange }
+
+            while contentEnd > startOffset
+                  && (source.Text[contentEnd
+                                  - 1] = '\r'
+                      || source.Text[contentEnd
+                                     - 1] = '\n') do
+                contentEnd <-
+                    contentEnd
+                    - 1
+
+            let lineText =
+                source.Text.Substring(
+                    startOffset,
+                    contentEnd
+                    - startOffset
+                )
+
+            let trimmed =
+                let text = lineText.TrimStart()
+
+                let start =
+                    startOffset
+                    + lineText.Length
+                    - text.Length
+
+                if isProtected start then String.Empty else text
+
+            let directiveStart =
+                startOffset
+                + lineText.Length
+                - trimmed.Length
+
+            let directiveRange = {
+                Start = SourceMap.positionAt source.Map directiveStart
+                End = SourceMap.positionAt source.Map contentEnd
+            }
+
+            let add kind =
+                directives.Add {
+                    Kind = kind
+                    Text = trimmed
+                    Range = directiveRange
+                }
 
             if trimmed.StartsWith("#if ", StringComparison.Ordinal) then
-                blank startOffset contentEnd; add DirectiveKind.Conditional
+                blank startOffset contentEnd
+                add DirectiveKind.Conditional
                 let condition = defines.Contains(trimmed.Substring(4).Trim())
-                frames <- { ParentActive = active; AnyTaken = condition; CurrentActive = active && condition; HasElse = false; Range = directiveRange } :: frames
-                active <- active && condition
+
+                frames <-
+                    {
+                        ParentActive = active
+                        AnyTaken = condition
+                        CurrentActive =
+                            active
+                            && condition
+                        HasElse = false
+                        Range = directiveRange
+                    }
+                    :: frames
+
+                active <-
+                    active
+                    && condition
             elif trimmed.StartsWith("#elif ", StringComparison.Ordinal) then
-                blank startOffset contentEnd; add DirectiveKind.Conditional
+                blank startOffset contentEnd
+                add DirectiveKind.Conditional
+
                 match frames with
                 | [] -> addDiagnostic "FS0010" "Unexpected '#elif'." directiveRange
                 | frame :: tail ->
-                    let condition = not frame.AnyTaken && defines.Contains(trimmed.Substring(6).Trim())
-                    let next = { frame with AnyTaken = frame.AnyTaken || condition; CurrentActive = frame.ParentActive && condition }
-                    frames <- next :: tail; active <- next.CurrentActive
+                    let condition =
+                        not frame.AnyTaken
+                        && defines.Contains(trimmed.Substring(6).Trim())
+
+                    let next = {
+                        frame with
+                            AnyTaken =
+                                frame.AnyTaken
+                                || condition
+                            CurrentActive =
+                                frame.ParentActive
+                                && condition
+                    }
+
+                    frames <-
+                        next
+                        :: tail
+
+                    active <- next.CurrentActive
             elif trimmed = "#else" then
-                blank startOffset contentEnd; add DirectiveKind.Conditional
+                blank startOffset contentEnd
+                add DirectiveKind.Conditional
+
                 match frames with
-                | [] -> addDiagnostic "FS0010" "Unexpected '#else'." directiveRange
-                | frame :: _ when frame.HasElse -> addDiagnostic "FS0010" "Duplicate '#else'." directiveRange
+                | [] ->
+                    addDiagnostic
+                        "FS0010"
+                        "#else has no matching #if in definition. Expected incomplete structured construct at or before this point or other token."
+                        directiveRange
+                | frame :: _ when frame.HasElse ->
+                    addDiagnostic "FS0010" "Duplicate '#else'." directiveRange
                 | frame :: tail ->
-                    let next = { frame with HasElse = true; CurrentActive = frame.ParentActive && not frame.AnyTaken; AnyTaken = true }
-                    frames <- next :: tail; active <- next.CurrentActive
+                    let next = {
+                        frame with
+                            HasElse = true
+                            CurrentActive =
+                                frame.ParentActive
+                                && not frame.AnyTaken
+                            AnyTaken = true
+                    }
+
+                    frames <-
+                        next
+                        :: tail
+
+                    active <- next.CurrentActive
             elif trimmed = "#endif" then
-                blank startOffset contentEnd; add DirectiveKind.Conditional
+                blank startOffset contentEnd
+                add DirectiveKind.Conditional
+
                 match frames with
                 | [] -> addDiagnostic "FS0010" "Unexpected '#endif'." directiveRange
-                | frame :: tail -> frames <- tail; active <- frame.ParentActive
+                | frame :: tail ->
+                    frames <- tail
+                    active <- frame.ParentActive
+            elif not active then
+                blank startOffset contentEnd
             elif trimmed.StartsWith("#line ", StringComparison.Ordinal) then
-                blank startOffset contentEnd; add DirectiveKind.Line
-                let parts = trimmed.Substring(6).Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries)
+                blank startOffset contentEnd
+                add DirectiveKind.Line
+
+                let parts =
+                    trimmed.Substring(6).Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries)
+
                 match parts with
                 | [| number; rest |] ->
                     match Int32.TryParse number, quotedValue rest with
-                    | (true, logicalLine), Some path -> sourceMap <- SourceMap.addLineMapping sourceMap (lineIndex + 2) logicalLine (Some path)
+                    | (true, logicalLine), Some path ->
+                        sourceMap <-
+                            SourceMap.addLineMapping
+                                sourceMap
+                                (lineIndex
+                                 + 2)
+                                logicalLine
+                                (Some path)
                     | _ -> addDiagnostic "FS0010" "Invalid '#line' directive." directiveRange
                 | _ -> addDiagnostic "FS0010" "Invalid '#line' directive." directiveRange
-            elif trimmed.StartsWith("#light", StringComparison.Ordinal) then blank startOffset contentEnd; add DirectiveKind.Light
-            elif trimmed.StartsWith("#indent", StringComparison.Ordinal) then blank startOffset contentEnd; add DirectiveKind.Indent
-            elif trimmed.StartsWith("#nowarn", StringComparison.Ordinal) || trimmed.StartsWith("#warnon", StringComparison.Ordinal) then
-                blank startOffset contentEnd; add DirectiveKind.Warning
+            elif trimmed.StartsWith("#light", StringComparison.Ordinal) then
+                blank startOffset contentEnd
+                add DirectiveKind.Light
+            elif trimmed.StartsWith("#indent", StringComparison.Ordinal) then
+                blank startOffset contentEnd
+                add DirectiveKind.Indent
+            elif
+                trimmed.StartsWith("#nowarn", StringComparison.Ordinal)
+                || trimmed.StartsWith("#warnon", StringComparison.Ordinal)
+            then
+                blank startOffset contentEnd
+                add DirectiveKind.Warning
+
                 match quotedValue trimmed with
                 | None -> addDiagnostic "FS0010" "Invalid warning directive." directiveRange
                 | Some code ->
-                    let action = if trimmed.StartsWith("#warnon", StringComparison.Ordinal) then LocalWarningDirectiveAction.Enable else LocalWarningDirectiveAction.Disable
-                    warnings.Add { Order = warningOrder; Action = action; Code = code; LogicalPath = None; Range = directiveRange }
-                    warningOrder <- warningOrder + 1L
-                    if action = LocalWarningDirectiveAction.Enable && not language.SupportsScopedWarningDirectives then addDiagnostic "FS3350" "Feature 'warning directives' is not available in this language version." directiveRange
-            elif not active then blank startOffset contentEnd
+                    let action =
+                        if trimmed.StartsWith("#warnon", StringComparison.Ordinal) then
+                            LocalWarningDirectiveAction.Enable
+                        else
+                            LocalWarningDirectiveAction.Disable
 
-        for frame in frames |> List.rev do addDiagnostic "FS0010" "Incomplete conditional directive." frame.Range
+                    warnings.Add {
+                        Order = warningOrder
+                        Action = action
+                        Code = code
+                        LogicalPath = None
+                        Range = directiveRange
+                    }
 
-        { CompatibilityText = String output; SourceMap = sourceMap; Directives = ImmutableArray.CreateRange directives; WarningDirectives = ImmutableArray.CreateRange warnings; Diagnostics = ImmutableArray.CreateRange diagnostics }
+                    warningOrder <-
+                        warningOrder
+                        + 1L
+
+                    if
+                        action = LocalWarningDirectiveAction.Enable
+                        && not language.SupportsScopedWarningDirectives
+                    then
+                        addDiagnostic
+                            "FS3350"
+                            $"Feature 'Support for scoped enabling / disabling of warnings by #warn and #nowarn directives, also inside modules' is not available in F# {language.CanonicalMode}. Please use language version 10.0 or greater."
+                            directiveRange
+            elif not active then
+                blank startOffset contentEnd
+
+        for frame in
+            frames
+            |> List.rev do
+            addDiagnostic "FS0010" "Incomplete conditional directive." frame.Range
+
+        let warningScopes =
+            warnings
+            |> Seq.mapi (fun index warning ->
+                let scopeEnd =
+                    warnings
+                    |> Seq.skip (index + 1)
+                    |> Seq.tryFind (fun candidate -> candidate.Code = warning.Code)
+                    |> Option.map _.Range.Start
+                    |> Option.defaultValue (SourceMap.positionAt source.Map source.Text.Length)
+
+                {
+                    warning with
+                        Range = {
+                            Start = warning.Range.End
+                            End = scopeEnd
+                        }
+                }
+            )
+            |> ImmutableArray.CreateRange
+
+        {
+            CompatibilityText = String output
+            SourceMap = sourceMap
+            Directives = ImmutableArray.CreateRange directives
+            WarningDirectives = warningScopes
+            Diagnostics = ImmutableArray.CreateRange diagnostics
+        }

@@ -875,8 +875,13 @@ module internal Frontend =
                     let rec collect arguments =
                         function
                         | FunctionApplication(functionExpression, argumentExpression) ->
-                            collect (argumentExpression :: arguments) functionExpression
-                        | argumentExpression -> argumentExpression :: arguments
+                            collect
+                                (argumentExpression
+                                 :: arguments)
+                                functionExpression
+                        | argumentExpression ->
+                            argumentExpression
+                            :: arguments
 
                     collect [] expression
 
@@ -4285,19 +4290,15 @@ module internal Frontend =
                             let token = current ()
 
                             if
-                                (
-                                    match token.Kind with
-                                    | LeftParenthesis ->
-                                        token.Range.Start.Line = expressionRange.End.Line
-                                        || token.Range.Start.Column
-                                           > expressionToken.Range.Start.Column
-                                    | Identifier _
-                                    | Integer _
-                                    | StringLiteralToken _
-                                    | NullKeyword ->
-                                        token.Range.Start.Line = expressionRange.End.Line
-                                    | _ -> false
-                                )
+                                (match token.Kind with
+                                 | LeftParenthesis ->
+                                     token.Range.Start.Line = expressionRange.End.Line
+                                     || token.Range.Start.Column > expressionToken.Range.Start.Column
+                                 | Identifier _
+                                 | Integer _
+                                 | StringLiteralToken _
+                                 | NullKeyword -> token.Range.Start.Line = expressionRange.End.Line
+                                 | _ -> false)
                             then
                                 parseExpression ()
                                 |> Result.bind (fun (nextArgument, nextArgumentRange) ->
@@ -4313,12 +4314,10 @@ module internal Frontend =
                                             )
                                         )
 
-                                    parseFollowingApplications
-                                        application
-                                        {
-                                            Start = expressionRange.Start
-                                            End = nextArgumentRange.End
-                                        }
+                                    parseFollowingApplications application {
+                                        Start = expressionRange.Start
+                                        End = nextArgumentRange.End
+                                    }
                                 )
                             else
                                 Ok(expression, expressionRange)
@@ -4353,19 +4352,15 @@ module internal Frontend =
                             let token = current ()
 
                             if
-                                (
-                                    match token.Kind with
-                                    | LeftParenthesis ->
-                                        token.Range.Start.Line = expressionRange.End.Line
-                                        || token.Range.Start.Column
-                                           > expressionToken.Range.Start.Column
-                                    | Identifier _
-                                    | Integer _
-                                    | StringLiteralToken _
-                                    | NullKeyword ->
-                                        token.Range.Start.Line = expressionRange.End.Line
-                                    | _ -> false
-                                )
+                                (match token.Kind with
+                                 | LeftParenthesis ->
+                                     token.Range.Start.Line = expressionRange.End.Line
+                                     || token.Range.Start.Column > expressionToken.Range.Start.Column
+                                 | Identifier _
+                                 | Integer _
+                                 | StringLiteralToken _
+                                 | NullKeyword -> token.Range.Start.Line = expressionRange.End.Line
+                                 | _ -> false)
                             then
                                 parseExpression ()
                                 |> Result.bind (fun (nextArgument, nextArgumentRange) ->
@@ -4381,12 +4376,10 @@ module internal Frontend =
                                             )
                                         )
 
-                                    parseFollowingApplications
-                                        application
-                                        {
-                                            Start = expressionRange.Start
-                                            End = nextArgumentRange.End
-                                        }
+                                    parseFollowingApplications application {
+                                        Start = expressionRange.Start
+                                        End = nextArgumentRange.End
+                                    }
                                 )
                             else
                                 Ok(expression, expressionRange)
@@ -4442,6 +4435,7 @@ module internal Frontend =
             let parseEntryPointDeclaration () =
                 parseResult {
                     let! attributeStart = expected AttributeStart "expected '[<'"
+
                     let! attributeName, attributeToken =
                         identifier "expected an attribute type name"
 
@@ -4458,8 +4452,7 @@ module internal Frontend =
 
                     let! _ = expected AttributeEnd "expected '>]'"
                     let! _ = expected LetKeyword "expected 'let'"
-                    let! declarationName, _ =
-                        identifier "expected an entry-point declaration name"
+                    let! declarationName, _ = identifier "expected an entry-point declaration name"
 
                     let! parameterName, _ = identifier "expected an entry-point parameter"
                     let! _ = expected Equals "expected '='"
@@ -4594,9 +4587,11 @@ module internal Frontend =
                             consume ()
                             |> ignore
 
-                            match expected RightParenthesis "expected ')'" with
-                            | Error error -> Error error
-                            | Ok _ ->
+                            match (current ()).Kind with
+                            | RightParenthesis ->
+                                consume ()
+                                |> ignore
+
                                 finishDeclaration
                                     moduleName
                                     declarations
@@ -4605,6 +4600,37 @@ module internal Frontend =
                                     true
                                     ParsedMethodKind.Regular
                                     None
+                            | Identifier parameterName ->
+                                consume ()
+                                |> ignore
+
+                                parseResult {
+                                    let! _ =
+                                        expected Colon "expected ':' after a function parameter"
+
+                                    let! parameterType = parseTypeExpression ()
+                                    let! _ = expected RightParenthesis "expected ')'"
+
+                                    return!
+                                        finishDeclaration
+                                            moduleName
+                                            declarations
+                                            letToken
+                                            declarationName
+                                            false
+                                            (ParsedMethodKind.RegularTypedFunction(
+                                                parameterName,
+                                                parameterType
+                                            ))
+                                            None
+                                }
+                            | _ ->
+                                Error(
+                                    prototypeDiagnostic
+                                        source.Path
+                                        (current ()).Range
+                                        "expected ')' or a typed function parameter"
+                                )
                         | Colon ->
                             consume ()
                             |> ignore

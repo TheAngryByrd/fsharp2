@@ -93,10 +93,10 @@ module private ReferenceMethodKey =
 module private ReferenceFieldKey =
     let create declarationId name isStatic =
         String.concat "\u001f" [
-        declarationId
-        name
-        (if isStatic then "static" else "instance")
-    ]
+            declarationId
+            name
+            (if isStatic then "static" else "instance")
+        ]
 
 module private ReferenceCustomAttribute =
     let private entityTypeName (metadata: MetadataReader) (handle: EntityHandle) =
@@ -104,17 +104,11 @@ module private ReferenceCustomAttribute =
         | HandleKind.TypeReference ->
             let reference = metadata.GetTypeReference(TypeReferenceHandle.op_Explicit handle)
 
-            Some(
-                metadata.GetString(reference.Namespace),
-                metadata.GetString(reference.Name)
-            )
+            Some(metadata.GetString(reference.Namespace), metadata.GetString(reference.Name))
         | HandleKind.TypeDefinition ->
             let definition = metadata.GetTypeDefinition(TypeDefinitionHandle.op_Explicit handle)
 
-            Some(
-                metadata.GetString(definition.Namespace),
-                metadata.GetString(definition.Name)
-            )
+            Some(metadata.GetString(definition.Namespace), metadata.GetString(definition.Name))
         | _ -> None
 
     let typeName (metadata: MetadataReader) (attribute: CustomAttribute) =
@@ -126,7 +120,9 @@ module private ReferenceCustomAttribute =
             entityTypeName metadata constructor.Parent
         | HandleKind.MethodDefinition ->
             let constructor =
-                metadata.GetMethodDefinition(MethodDefinitionHandle.op_Explicit attribute.Constructor)
+                metadata.GetMethodDefinition(
+                    MethodDefinitionHandle.op_Explicit attribute.Constructor
+                )
 
             let declaringType = metadata.GetTypeDefinition(constructor.GetDeclaringType())
 
@@ -277,6 +273,7 @@ type private ReferenceSignatureTypeProvider(types: Dictionary<TypeNameArity, Res
 
                 let name, genericArity = ReferenceTypeName.parseMetadataName metadataName
                 let assemblyName = referencedAssemblyName reference.ResolutionScope
+
                 let typeName = {
                     Namespace = namespaceName
                     Name = name
@@ -456,6 +453,7 @@ type internal ReferenceTypeIndex
             |> Seq.choose (fun methodHandle ->
                 let methodDefinition = metadata.GetMethodDefinition(methodHandle)
                 let methodName = metadata.GetString(methodDefinition.Name)
+
                 let sourceName =
                     ReferenceCustomAttribute.compilationSourceName
                         metadata
@@ -472,8 +470,10 @@ type internal ReferenceTypeIndex
                     <> enum 0
 
                 if
-                    (methodName <> name
-                     && sourceName <> name)
+                    (methodName
+                     <> name
+                     && sourceName
+                        <> name)
                     || access
                        <> MethodAttributes.Public
                     || methodIsStatic
@@ -591,10 +591,14 @@ type internal ReferenceTypeIndex
             typeDefinition.GetMethods()
             |> Seq.choose (fun methodHandle ->
                 let methodDefinition = metadata.GetMethodDefinition(methodHandle)
-                let access = methodDefinition.Attributes &&& MethodAttributes.MemberAccessMask
+
+                let access =
+                    methodDefinition.Attributes
+                    &&& MethodAttributes.MemberAccessMask
 
                 let isStatic =
-                    (methodDefinition.Attributes &&& MethodAttributes.Static)
+                    (methodDefinition.Attributes
+                     &&& MethodAttributes.Static)
                     <> enum 0
 
                 if
@@ -617,7 +621,8 @@ type internal ReferenceTypeIndex
 
     let sourceSuggestionNames =
         lazy
-            let compareOrdinal left right = StringComparer.Ordinal.Compare(left, right)
+            let compareOrdinal left right =
+                StringComparer.Ordinal.Compare(left, right)
 
             let methodNames =
                 autoOpenTypeDeclarationIds
@@ -632,7 +637,12 @@ type internal ReferenceTypeIndex
 
                     seq {
                         if metadataName.EndsWith("Module", StringComparison.Ordinal) then
-                            yield metadataName.Substring(0, metadataName.Length - "Module".Length)
+                            yield
+                                metadataName.Substring(
+                                    0,
+                                    metadataName.Length
+                                    - "Module".Length
+                                )
 
                         if
                             metadataName.StartsWith("FSharp", StringComparison.Ordinal)
@@ -1358,8 +1368,7 @@ type internal ReferenceTypeIndex
                     let isPublicTopLevelType =
                         not definition.IsNested
                         && (definition.Attributes
-                            &&& TypeAttributes.VisibilityMask)
-                           = TypeAttributes.Public
+                            &&& TypeAttributes.VisibilityMask) = TypeAttributes.Public
 
                     if isPublicTopLevelType then
                         let suggestionName, _ =
@@ -1390,7 +1399,10 @@ type internal ReferenceTypeIndex
                     match types.TryGetValue(key) with
                     | false, _ -> ()
                     | true, resolved ->
-                        if isPublicTopLevelType && isAutoOpenType definition then
+                        if
+                            isPublicTopLevelType
+                            && isAutoOpenType definition
+                        then
                             autoOpenTypeDeclarationIds.Add(resolved.DeclarationId)
                             |> ignore
 

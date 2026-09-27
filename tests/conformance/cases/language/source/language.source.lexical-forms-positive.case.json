@@ -111,7 +111,7 @@
       "kind": "implementation",
       "logicalPath": "/src/Program.fs",
       "fixturePath": "fixtures/language.source.lexical-forms-positive/Program.fs",
-      "sha256": "sha256:03f4b36bbacc0da5e3662f65c7b32a0da3b15818fc77043b72fefc70178131f3"
+      "sha256": "sha256:7639c3fab87d27b70b71021a20ff4b6263410296956bef093246f388cd98eb76"
     }
   ],
   "targetReferences": {

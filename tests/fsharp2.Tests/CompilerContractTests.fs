@@ -1322,6 +1322,89 @@ let main _ =
                     "_arg1"
                     "The entry-point wildcard must use the Oracle metadata name."
 
+            testCase "reused parsing rebinds the physical source checksum"
+            <| fun _ ->
+                let sourceText = "module Program\nlet answer () = 42\n"
+
+                let baseline =
+                    createRequest
+                        (defaultSemanticOptions ())
+                        (defaultDiagnosticOptions ())
+                        (EmissionOptions.Create(
+                            true,
+                            false,
+                            DebugFormat.Portable,
+                            [||],
+                            [| "Program.fs" |],
+                            [||]
+                        ))
+                        (defaultSigningOptions ())
+                        (emptyResources ())
+                        [|
+                            RequestedArtifact.ImplementationAssembly
+                            RequestedArtifact.PortablePdb
+                        |]
+                        sourceText
+
+                let utf16Bytes = Text.Encoding.Unicode.GetBytes(sourceText)
+
+                let reboundSource =
+                    SourceSnapshot.Create(
+                        baseline.Sources[0].StableId,
+                        baseline.Sources[0].LogicalPath,
+                        sourceText,
+                        fingerprint utf16Bytes
+                    )
+
+                let rebound =
+                    CompilationRequest.Create(
+                        baseline.ContractVersion,
+                        baseline.RequestIdentity,
+                        baseline.AssemblyIdentity,
+                        [| reboundSource |],
+                        baseline.TargetReferences
+                        |> Seq.toArray,
+                        baseline.SemanticOptions,
+                        baseline.DiagnosticOptions,
+                        baseline.EmissionOptions,
+                        baseline.SigningOptions,
+                        baseline.Resources,
+                        baseline.RequestedArtifacts
+                        |> Seq.toArray
+                    )
+
+                let compiler = Compiler()
+                let first = compiler.Compile(baseline, CancellationToken.None)
+                let second = compiler.Compile(rebound, CancellationToken.None)
+
+                Expect.equal
+                    first.Outcome
+                    CompilationOutcome.Succeeded
+                    "The first compilation succeeds"
+
+                Expect.equal
+                    second.Outcome
+                    CompilationOutcome.Succeeded
+                    "The reused compilation succeeds"
+
+                let portablePdb =
+                    second.Artifacts
+                    |> Seq.find (fun artifact -> artifact.Kind = RequestedArtifact.PortablePdb)
+
+                use pdbStream = new MemoryStream(bytes portablePdb.Bytes, false)
+                use pdbProvider = MetadataReaderProvider.FromPortablePdbStream(pdbStream)
+                let pdb = pdbProvider.GetMetadataReader()
+
+                let document =
+                    pdb.Documents
+                    |> Seq.exactlyOne
+                    |> pdb.GetDocument
+
+                Expect.sequenceEqual
+                    (pdb.GetBlobBytes(document.Hash))
+                    (SHA256.HashData utf16Bytes)
+                    "The reused PDB uses the current physical source checksum"
+
             testCase "portable PDB preserves Oracle FSharp import scopes"
             <| fun _ ->
                 let sourceText =

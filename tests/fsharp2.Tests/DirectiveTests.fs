@@ -63,6 +63,38 @@ module DirectiveTests =
                     ]
                     "Directive order"
 
+            testCase "ignores directive text inside comments strings and inactive branches"
+            <| fun _ ->
+                let protectedText =
+                    "(*\n#if HIDDEN\n*)\nlet text = \"\"\"\n#line 99 \"wrong.fs\"\n\"\"\"\nlet value = 1"
+
+                let protectedResult = prepare "10.0" [] protectedText
+
+                Expect.isEmpty
+                    protectedResult.Directives
+                    "Comment and string content does not create directives"
+
+                Expect.isEmpty
+                    protectedResult.Diagnostics
+                    "Comment and string content does not create directive diagnostics"
+
+                let inactiveText = "#if MISSING\n#line 90 \"wrong.fs\"\n#endif\nlet value = 1"
+
+                let inactiveResult = prepare "10.0" [] inactiveText
+
+                let mapped =
+                    SourceMap.positionAt
+                        inactiveResult.SourceMap
+                        (inactiveText.IndexOf("let value"))
+                    |> SourceMap.mapPosition inactiveResult.SourceMap
+
+                Expect.equal
+                    mapped.LogicalPath
+                    None
+                    "An inactive line directive does not change the path"
+
+                Expect.equal mapped.Line 4 "An inactive line directive does not change the line"
+
             testCase "gates scoped warnon and records path-neutral warning actions"
             <| fun _ ->
                 let text = "#nowarn \"25\"\nlet first = 1\n#warnon \"25\"\nlet second = 2"

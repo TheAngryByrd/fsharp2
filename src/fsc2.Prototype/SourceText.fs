@@ -50,7 +50,10 @@ module internal SourceMap =
 
         while offset < text.Length do
             match text[offset] with
-            | '\r' when offset + 1 < text.Length && text[offset + 1] = '\n' ->
+            | '\r' when
+                offset + 1 < text.Length
+                && text[offset + 1] = '\n'
+                ->
                 newlines.Add NewlineForm.CarriageReturnLineFeed
                 offset <- offset + 2
                 starts.Add offset
@@ -74,17 +77,31 @@ module internal SourceMap =
         }
 
     let positionAt (sourceMap: SourceMap) offset =
-        if offset < 0 || offset > sourceMap.TextLength then
+        if
+            offset < 0
+            || offset > sourceMap.TextLength
+        then
             invalidArg "offset" "offset must identify a UTF-16 position in the source text."
 
         let mutable low = 0
-        let mutable high = sourceMap.LineStarts.Length - 1
+
+        let mutable high =
+            sourceMap.LineStarts.Length
+            - 1
+
         let mutable lineIndex = 0
 
-        while low <= high do
-            let middle = low + (high - low) / 2
+        while low
+              <= high do
+            let middle =
+                low
+                + (high - low)
+                  / 2
 
-            if sourceMap.LineStarts[middle] <= offset then
+            if
+                sourceMap.LineStarts[middle]
+                <= offset
+            then
                 lineIndex <- middle
                 low <- middle + 1
             else
@@ -92,8 +109,13 @@ module internal SourceMap =
 
         {
             Offset = offset
-            Line = lineIndex + 1
-            Column = offset - sourceMap.LineStarts[lineIndex] + 1
+            Line =
+                lineIndex
+                + 1
+            Column =
+                offset
+                - sourceMap.LineStarts[lineIndex]
+                + 1
         }
 
     let addLineMapping sourceMap physicalLine logicalLine logicalPath =
@@ -127,24 +149,28 @@ module internal SourceMap =
     let mapPosition sourceMap (position: SourcePosition) =
         let mapping =
             sourceMap.LineMappings
-            |> Seq.filter (fun candidate -> candidate.PhysicalLine <= position.Line)
+            |> Seq.filter (fun candidate ->
+                candidate.PhysicalLine
+                <= position.Line
+            )
             |> Seq.tryLast
 
         match mapping with
-        | None ->
-            {
-                Offset = position.Offset
-                Line = position.Line
-                Column = position.Column
-                LogicalPath = None
-            }
-        | Some mapping ->
-            {
-                Offset = position.Offset
-                Line = mapping.LogicalLine + position.Line - mapping.PhysicalLine
-                Column = position.Column
-                LogicalPath = mapping.LogicalPath
-            }
+        | None -> {
+            Offset = position.Offset
+            Line = position.Line
+            Column = position.Column
+            LogicalPath = None
+          }
+        | Some mapping -> {
+            Offset = position.Offset
+            Line =
+                mapping.LogicalLine
+                + position.Line
+                - mapping.PhysicalLine
+            Column = position.Column
+            LogicalPath = mapping.LogicalPath
+          }
 
 type internal DecodedSource = {
     Text: string
@@ -155,7 +181,13 @@ type internal DecodedSource = {
 
 module internal SourceText =
     let private decodeWith (encoding: Encoding) sourceEncoding bomLength (bytes: byte array) =
-        let text = encoding.GetString(bytes, bomLength, bytes.Length - bomLength)
+        let text =
+            encoding.GetString(
+                bytes,
+                bomLength,
+                bytes.Length
+                - bomLength
+            )
 
         {
             Text = text
@@ -168,13 +200,31 @@ module internal SourceText =
         if bytes.IsDefault then
             invalidArg "bytes" "bytes must be initialized."
 
-        let values = bytes |> Seq.toArray
+        let values =
+            bytes
+            |> Seq.toArray
 
-        if values.Length >= 3 && values[0] = 0xEFuy && values[1] = 0xBBuy && values[2] = 0xBFuy then
+        if
+            values.Length
+            >= 3
+            && values[0] = 0xEFuy
+            && values[1] = 0xBBuy
+            && values[2] = 0xBFuy
+        then
             decodeWith (UTF8Encoding(false, false)) SourceEncoding.Utf8 3 values
-        elif values.Length >= 2 && values[0] = 0xFFuy && values[1] = 0xFEuy then
+        elif
+            values.Length
+            >= 2
+            && values[0] = 0xFFuy
+            && values[1] = 0xFEuy
+        then
             decodeWith Encoding.Unicode SourceEncoding.Utf16LittleEndian 2 values
-        elif values.Length >= 2 && values[0] = 0xFEuy && values[1] = 0xFFuy then
+        elif
+            values.Length
+            >= 2
+            && values[0] = 0xFEuy
+            && values[1] = 0xFFuy
+        then
             decodeWith Encoding.BigEndianUnicode SourceEncoding.Utf16BigEndian 2 values
         else
             decodeWith (UTF8Encoding(false, false)) SourceEncoding.Utf8 0 values

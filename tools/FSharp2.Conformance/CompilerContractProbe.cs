@@ -8,8 +8,6 @@ namespace FSharp2.Conformance;
 
 public static class CompilerContractProbe
 {
-    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
-
     public static CompilationRequest CreateRequest(MaterializedCase materializedCase)
     {
         ArgumentNullException.ThrowIfNull(materializedCase);
@@ -27,7 +25,7 @@ public static class CompilerContractProbe
                 SourceSnapshot.Create(
                     StableIdentity.create(source.StableId),
                     source.LogicalPath,
-                    StrictUtf8.GetString(source.Bytes.AsSpan()),
+                    DecodeSource(source.Bytes),
                     source.Sha256))
             .ToArray();
         var references = materializedCase.TargetReferences
@@ -85,6 +83,24 @@ public static class CompilerContractProbe
             signingOptions,
             ResourceInputs.Create([], []),
             requestedArtifacts);
+    }
+
+    private static string DecodeSource(ImmutableArray<byte> source)
+    {
+        var bytes = source.AsSpan();
+        if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+        {
+            return Encoding.UTF8.GetString(bytes[3..]);
+        }
+        if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE)
+        {
+            return Encoding.Unicode.GetString(bytes[2..]);
+        }
+        if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF)
+        {
+            return Encoding.BigEndianUnicode.GetString(bytes[2..]);
+        }
+        return Encoding.UTF8.GetString(bytes);
     }
 
     private static FSharpOption<string> OptionalString(JsonElement value, string name) =>

@@ -3,6 +3,8 @@ namespace fsharp2.Tests
 open System
 open System.Diagnostics
 open System.IO
+open System.Reflection.Metadata
+open System.Security.Cryptography
 open System.Text
 open Expecto
 
@@ -85,6 +87,7 @@ module CompilerTargetSourceTests =
         let sourcePath = Path.Combine(root, sourceName)
         let outputPath = Path.Combine(root, "SourceCase.dll")
         let pdbPath = Path.Combine(root, "SourceCase.pdb")
+        let systemRuntimePath = System.Reflection.Assembly.Load("System.Runtime").Location
 
         let result =
             invokeFsc2 root [|
@@ -93,6 +96,8 @@ module CompilerTargetSourceTests =
                 "--deterministic+"
                 "--debug:portable"
                 $"--langversion:{mode}"
+                $"--reference:{typeof<Microsoft.FSharp.Core.Unit>.Assembly.Location}"
+                $"--reference:{systemRuntimePath}"
                 $"--out:{outputPath}"
                 $"--pdb:{pdbPath}"
                 sourcePath
@@ -159,5 +164,93 @@ module CompilerTargetSourceTests =
                              + result.StandardError)
 
                         Expect.isTrue (File.Exists outputPath) "UTF-16 conditional source output"
+
+                        use pdbStream = File.OpenRead(Path.Combine(root, "SourceCase.pdb"))
+                        use pdbProvider = MetadataReaderProvider.FromPortablePdbStream(pdbStream)
+                        let pdb = pdbProvider.GetMetadataReader()
+
+                        let document =
+                            pdb.GetDocument(
+                                pdb.Documents
+                                |> Seq.exactlyOne
+                            )
+
+                        Expect.sequenceEqual
+                            (pdb.GetBlobBytes(document.Hash))
+                            (SHA256.HashData bytes)
+                            "The PDB checksum uses the physical source bytes"
+                    )
+
+            testCase "portable PDB matches Oracle scopes for option-pattern locals"
+            <| fun _ ->
+                withRoot
+                    "pdb-locals"
+                    (fun root ->
+                        let source =
+                            """module Program
+
+let before (value: int option) =
+    match value with
+    | Some item -> item
+
+#nowarn "25"
+
+let inside (value: int option) =
+    match value with
+    | Some item -> item
+
+#warnon "25"
+
+let after (value: int option) =
+    match value with
+    | Some item -> item
+
+let answer () = 42
+"""
+
+                        File.WriteAllText(Path.Combine(root, "Scoped.fs"), source)
+                        let result, _ = compile root "10.0" "Scoped.fs"
+
+                        Expect.equal
+                            result.ExitCode
+                            0
+                            (result.StandardOutput
+                             + result.StandardError)
+
+                        use pdbStream = File.OpenRead(Path.Combine(root, "SourceCase.pdb"))
+                        use pdbProvider = MetadataReaderProvider.FromPortablePdbStream(pdbStream)
+                        let pdb = pdbProvider.GetMetadataReader()
+
+                        let methodScopes =
+                            pdb.LocalScopes
+                            |> Seq.map pdb.GetLocalScope
+                            |> Seq.groupBy _.Method
+                            |> Seq.map (fun (methodHandle, scopes) ->
+                                methodHandle, Seq.toArray scopes
+                            )
+                            |> Seq.filter (fun (_, scopes) -> scopes.Length = 2)
+                            |> Seq.toArray
+
+                        Expect.hasLength
+                            methodScopes
+                            3
+                            "Each option-pattern method has an outer and user-local scope"
+
+                        for _, scopes in methodScopes do
+                            Expect.isEmpty
+                                (scopes[0].GetLocalVariables())
+                                "The outer method scope hides compiler-generated locals"
+
+                            let localNames =
+                                scopes[1].GetLocalVariables()
+                                |> Seq.map (fun handle ->
+                                    pdb.GetString(pdb.GetLocalVariable(handle).Name)
+                                )
+                                |> Seq.toArray
+
+                            Expect.sequenceEqual
+                                localNames
+                                [| "item" |]
+                                "The nested scope exposes only the source-pattern local"
                     )
         ]

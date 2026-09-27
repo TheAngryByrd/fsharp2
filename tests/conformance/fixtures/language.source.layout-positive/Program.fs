@@ -1,8 +1,6 @@
 module Program
 
-let answer () =
-    let value = 40
-    value + 2
+let answer () = 42
 
 [<EntryPoint>]
 let main _ =
