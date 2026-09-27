@@ -346,7 +346,48 @@ module internal CompilationPipeline =
                                     sourceDiagnosticOptions request preparedSources
 
                                 let diagnostics =
-                                    Seq.empty<CompilationDiagnostic>
+                                    preparedSources
+                                    |> Seq.collect service.LexicalWarnings
+                                    |> Seq.map (fun warning ->
+                                        CompilationDiagnostic.Create(
+                                            0L,
+                                            warning.Code,
+                                            Int32.Parse(warning.Code.Substring(2)),
+                                            None,
+                                            DiagnosticStage.Compilation CompilationPhase.Source,
+                                            DiagnosticSeverity.Warning,
+                                            DiagnosticSeverity.Warning,
+                                            DiagnosticDisposition.Emitted,
+                                            None,
+                                            warning.Message,
+                                            warning.Path,
+                                            warning.Range,
+                                            [||],
+                                            [||],
+                                            Some DiagnosticStream.StandardError
+                                        )
+                                    )
+                                    |> Seq.mapi (fun order warning ->
+                                        CompilationDiagnostic.Create(
+                                            int64 order,
+                                            warning.Code,
+                                            warning.NumericCode,
+                                            warning.Subcategory,
+                                            warning.Stage,
+                                            warning.OriginalSeverity,
+                                            warning.EffectiveSeverity,
+                                            warning.Disposition,
+                                            warning.Suppression,
+                                            warning.Message,
+                                            warning.LogicalPath,
+                                            warning.Range,
+                                            warning.RelatedInformation
+                                            |> Seq.toArray,
+                                            warning.Suggestions
+                                            |> Seq.toArray,
+                                            warning.Stream
+                                        )
+                                    )
                                     |> Seq.map (DiagnosticPolicy.input None false true)
                                     |> DiagnosticPolicy.apply diagnosticOptions
                                     |> Seq.filter (fun diagnostic ->

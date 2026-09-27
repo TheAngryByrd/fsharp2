@@ -202,7 +202,17 @@ let selected = 1
 
                 let diagnosticsFor text =
                     (prepare "10.0" [] text).Diagnostics
-                    |> Seq.map (fun diagnostic -> diagnostic.Code, diagnostic.Range.Start.Column)
+                    |> Seq.map (fun diagnostic ->
+                        Expect.equal
+                            diagnostic.Severity
+                            (if diagnostic.Code = "FS0203" then
+                                 LexicalSeverity.Warning
+                             else
+                                 LexicalSeverity.Error)
+                            $"{diagnostic.Code} severity"
+
+                        diagnostic.Code, diagnostic.Range.Start.Column
+                    )
                     |> Seq.toList
 
                 Expect.equal
@@ -222,8 +232,8 @@ let selected = 1
                             "let x = 1"
                         ]
                     ))
-                    []
-                    "An unquoted invalid argument does not stop the compilation"
+                    [ "FS0203", 9 ]
+                    "An unquoted invalid argument is an Oracle warning"
 
                 Expect.equal
                     (diagnosticsFor (
@@ -232,8 +242,8 @@ let selected = 1
                             "let x = 1"
                         ]
                     ))
-                    []
-                    "A quoted invalid argument does not stop the compilation"
+                    [ "FS0203", 9 ]
+                    "A quoted invalid argument is an Oracle warning"
 
                 Expect.sequenceEqual
                     ((prepare

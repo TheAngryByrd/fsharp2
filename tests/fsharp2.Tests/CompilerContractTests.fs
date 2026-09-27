@@ -1322,6 +1322,23 @@ let main _ =
                     "_arg1"
                     "The entry-point wildcard must use the Oracle metadata name."
 
+            testCase "invalid warning directive arguments compile with an Oracle warning"
+            <| fun _ ->
+                let result = compile "module Program\n#nowarn \"abc\"\nlet answer () = 42\n"
+
+                Expect.equal
+                    result.Outcome
+                    CompilationOutcome.Succeeded
+                    "An FS0203 warning does not stop the compilation"
+
+                Expect.sequenceEqual
+                    (result.Diagnostics
+                     |> Seq.map (fun diagnostic ->
+                         diagnostic.Code, diagnostic.EffectiveSeverity, diagnostic.Message
+                     ))
+                    [ "FS0203", DiagnosticSeverity.Warning, "Invalid warning number 'abc'" ]
+                    "The invalid argument is reported as a warning"
+
             testCase "reused parsing rebinds the physical source checksum"
             <| fun _ ->
                 let sourceText = "module Program\nlet answer () = 42\n"
