@@ -504,17 +504,44 @@ module internal Directives =
                     active <- frame.ParentActive
             elif not active then
                 blank startOffset contentEnd
-            elif trimmed.StartsWith("#line ", StringComparison.Ordinal) then
+            elif
+                isDirective "#line" true
+                || (trimmed.Length > 2
+                    && trimmed[0] = '#'
+                    && Char.IsWhiteSpace trimmed[1]
+                    && Char.IsDigit(trimmed.TrimStart('#').TrimStart()[0]))
+            then
                 blank startOffset contentEnd
                 add DirectiveKind.Line
 
-                let parts =
-                    trimmed.Substring(6).Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries)
+                let arguments =
+                    (withoutLineComment (
+                        if trimmed.StartsWith("#line", StringComparison.Ordinal) then
+                            trimmed.Substring(5)
+                        else
+                            trimmed.Substring(1)
+                    ))
+                        .Trim()
+                        .Split(' ', 2, StringSplitOptions.RemoveEmptyEntries)
 
-                match parts with
+                match arguments with
+                | [| number |] ->
+                    match Int32.TryParse number with
+                    | true, logicalLine when logicalLine > 0 ->
+                        sourceMap <-
+                            SourceMap.addLineMapping
+                                sourceMap
+                                (lineIndex
+                                 + 2)
+                                logicalLine
+                                None
+                    | _ -> ()
                 | [| number; rest |] ->
                     match Int32.TryParse number, quotedValue rest with
-                    | (true, logicalLine), Some path ->
+                    | (true, logicalLine), Some path when
+                        logicalLine > 0
+                        && not (String.IsNullOrWhiteSpace path)
+                        ->
                         sourceMap <-
                             SourceMap.addLineMapping
                                 sourceMap
@@ -522,8 +549,8 @@ module internal Directives =
                                  + 2)
                                 logicalLine
                                 (Some path)
-                    | _ -> addDiagnostic "FS0010" "Invalid '#line' directive." directiveRange
-                | _ -> addDiagnostic "FS0010" "Invalid '#line' directive." directiveRange
+                    | _ -> ()
+                | _ -> ()
             elif trimmed.StartsWith("#light", StringComparison.Ordinal) then
                 blank startOffset contentEnd
                 add DirectiveKind.Light
@@ -537,35 +564,73 @@ module internal Directives =
                 blank startOffset contentEnd
                 add DirectiveKind.Warning
 
-                match quotedValue trimmed with
-                | None -> addDiagnostic "FS0010" "Invalid warning directive." directiveRange
-                | Some code ->
-                    let action =
-                        if trimmed.StartsWith("#warnon", StringComparison.Ordinal) then
-                            LocalWarningDirectiveAction.Enable
+                let nameLength = "#nowarn".Length
+
+                let argumentText = withoutLineComment (trimmed.Substring(nameLength))
+
+                let arguments =
+                    Text.RegularExpressions.Regex.Matches(argumentText, "\"[^\"]*\"|[^\\s\"]+")
+                    |> Seq.map (fun argument ->
+                        argument.Value.Trim('"'),
+                        directiveStart
+                        + nameLength
+                        + argument.Index
+                    )
+                    |> Seq.toList
+
+                let isWarningNumber (value: string) =
+                    let digits =
+                        if value.StartsWith("FS", StringComparison.OrdinalIgnoreCase) then
+                            value.Substring(2)
                         else
-                            LocalWarningDirectiveAction.Disable
+                            value
 
-                    warnings.Add {
-                        Order = warningOrder
-                        Action = action
-                        Code = code
-                        LogicalPath = None
-                        Range = directiveRange
-                    }
+                    digits.Length > 0
+                    && Seq.forall Char.IsDigit digits
 
-                    warningOrder <-
-                        warningOrder
-                        + 1L
+                if List.isEmpty arguments then
+                    let position = SourceMap.positionAt source.Map directiveStart
 
-                    if
-                        action = LocalWarningDirectiveAction.Enable
-                        && not language.SupportsScopedWarningDirectives
-                    then
-                        addDiagnostic
-                            "FS3350"
-                            $"Feature 'Support for scoped enabling / disabling of warnings by #warn and #nowarn directives, also inside modules' is not available in F# {language.CanonicalMode}. Please use language version 10.0 or greater."
-                            directiveRange
+                    addDiagnostic
+                        "FS3875"
+                        "Warn directives must have warning number(s) as argument(s)"
+                        { Start = position; End = position }
+
+                for code, argumentOffset in arguments do
+                    if not (isWarningNumber code) then
+                        let position = SourceMap.positionAt source.Map argumentOffset
+
+                        addDiagnostic "FS0203" $"Invalid warning number '{code}'" {
+                            Start = position
+                            End = position
+                        }
+                    else
+                        let action =
+                            if trimmed.StartsWith("#warnon", StringComparison.Ordinal) then
+                                LocalWarningDirectiveAction.Enable
+                            else
+                                LocalWarningDirectiveAction.Disable
+
+                        warnings.Add {
+                            Order = warningOrder
+                            Action = action
+                            Code = code
+                            LogicalPath = None
+                            Range = directiveRange
+                        }
+
+                        warningOrder <-
+                            warningOrder
+                            + 1L
+
+                        if
+                            action = LocalWarningDirectiveAction.Enable
+                            && not language.SupportsScopedWarningDirectives
+                        then
+                            addDiagnostic
+                                "FS3350"
+                                $"Feature 'Support for scoped enabling / disabling of warnings by #warn and #nowarn directives, also inside modules' is not available in F# {language.CanonicalMode}. Please use language version 10.0 or greater."
+                                directiveRange
             elif not active then
                 blank startOffset contentEnd
 

@@ -142,6 +142,106 @@ let selected = 1
 
                 Expect.isEmpty result.Diagnostics "Inactive text reports no diagnostics"
 
+            testCase "accepts every Oracle line directive form"
+            <| fun _ ->
+                let mappedLine (text: string) =
+                    let result = prepare "10.0" [] text
+
+                    let mapped =
+                        SourceMap.positionAt result.SourceMap (text.IndexOf("let value"))
+                        |> SourceMap.mapPosition result.SourceMap
+
+                    Expect.isEmpty result.Diagnostics $"The line directive in '{text}' is valid"
+                    mapped.LogicalPath, mapped.Line
+
+                let lines (values: string list) = String.concat "\n" values
+
+                Expect.equal
+                    (mappedLine (
+                        lines [
+                            "#line 10"
+                            "let value = 1"
+                        ]
+                    ))
+                    (None, 10)
+                    "A line number without a file"
+
+                Expect.equal
+                    (mappedLine (
+                        lines [
+                            "# 10 \"f.fs\""
+                            "let value = 1"
+                        ]
+                    ))
+                    (Some "f.fs", 10)
+                    "The short form"
+
+                Expect.equal
+                    (mappedLine (
+                        lines [
+                            "#line abc"
+                            "let value = 1"
+                        ]
+                    ))
+                    (None, 2)
+                    "An ignored malformed directive"
+
+            testCase "reports warning directive arguments at Oracle positions"
+            <| fun _ ->
+                let lines (values: string list) = String.concat "\n" values
+
+                let diagnosticsFor text =
+                    (prepare "10.0" [] text).Diagnostics
+                    |> Seq.map (fun diagnostic -> diagnostic.Code, diagnostic.Range.Start.Column)
+                    |> Seq.toList
+
+                Expect.equal
+                    (diagnosticsFor (
+                        lines [
+                            "#nowarn"
+                            "let x = 1"
+                        ]
+                    ))
+                    [ "FS3875", 1 ]
+                    "A directive without arguments"
+
+                Expect.equal
+                    (diagnosticsFor (
+                        lines [
+                            "#nowarn x"
+                            "let x = 1"
+                        ]
+                    ))
+                    [ "FS0203", 9 ]
+                    "An unquoted invalid argument"
+
+                Expect.equal
+                    (diagnosticsFor (
+                        lines [
+                            "#nowarn \"abc\""
+                            "let x = 1"
+                        ]
+                    ))
+                    [ "FS0203", 9 ]
+                    "A quoted invalid argument"
+
+                Expect.sequenceEqual
+                    ((prepare
+                        "10.0"
+                        []
+                        (lines [
+                            "#nowarn \"40\" FS0049 25"
+                            "let x = 1"
+                        ]))
+                         .WarningDirectives
+                     |> Seq.map _.Code)
+                    [
+                        "40"
+                        "FS0049"
+                        "25"
+                    ]
+                    "Every argument becomes a warning directive"
+
             testCase "reports malformed conditional expressions at the Oracle position"
             <| fun _ ->
                 let diagnosticFor expression =
