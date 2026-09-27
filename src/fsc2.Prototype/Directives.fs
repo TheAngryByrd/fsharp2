@@ -685,13 +685,18 @@ module internal Directives =
                 | [| number |] ->
                     match Int32.TryParse number with
                     | true, logicalLine when logicalLine > 0 ->
+                        let currentPath =
+                            (SourceMap.positionAt sourceMap startOffset
+                             |> SourceMap.mapPosition sourceMap)
+                                .LogicalPath
+
                         sourceMap <-
                             SourceMap.addLineMapping
                                 sourceMap
                                 (lineIndex
                                  + 2)
                                 logicalLine
-                                None
+                                currentPath
                     | _ -> ()
                 | [| number; rest |] ->
                     match Int32.TryParse number, quotedValue rest with

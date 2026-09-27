@@ -168,6 +168,17 @@ let selected = 1
                 Expect.equal
                     (mappedLine (
                         lines [
+                            "#line 1 \"a.fs\""
+                            "#line 20"
+                            "let value = 1"
+                        ]
+                    ))
+                    (Some "a.fs", 20)
+                    "A line number without a file keeps the current file"
+
+                Expect.equal
+                    (mappedLine (
+                        lines [
                             "# 10 \"f.fs\""
                             "let value = 1"
                         ]
