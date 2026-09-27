@@ -185,8 +185,8 @@ module LayoutTests =
                     (result.Diagnostics
                      |> Seq.map _.Message)
                     [
-                        "Unexpected character '�' in binding"
+                        "Unexpected character '�'."
                         "Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\u001dTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
                     ]
-                    "The parser recovery messages match the Compatibility Oracle"
+                    "The lexical and layout messages carry no parser context"
         ]

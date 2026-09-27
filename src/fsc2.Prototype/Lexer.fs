@@ -188,33 +188,7 @@ module internal Lexer =
                 diagnosticOrder
                 + 1L
 
-        let unexpectedCharacterMessage current startOffset endOffset =
-            let position = SourceMap.positionAt source.Map startOffset
-
-            let lineStart =
-                source.Map.LineStarts[position.Line
-                                      - 1]
-
-            let prefix =
-                text
-                    .Substring(
-                        lineStart,
-                        startOffset
-                        - lineStart
-                    )
-                    .TrimStart()
-
-            if prefix.StartsWith("let ", StringComparison.Ordinal) then
-                if
-                    endOffset = text.Length
-                    || text[endOffset] = '\r'
-                    || text[endOffset] = '\n'
-                then
-                    $"Unexpected character '{current}' in binding. Expected incomplete structured construct at or before this point or other token."
-                else
-                    $"Unexpected character '{current}' in binding"
-            else
-                $"Unexpected character '{current}'."
+        let unexpectedCharacterMessage current = $"Unexpected character '{current}'."
 
         let scanQuoted startOffset delimiterLength verbatim =
             let mutable cursor =
@@ -800,11 +774,7 @@ module internal Lexer =
                 offset <- offset + 1
                 addToken LexicalTokenKind.Invalid startOffset offset
 
-                addDiagnostic
-                    "FS0010"
-                    (unexpectedCharacterMessage current startOffset offset)
-                    startOffset
-                    offset
+                addDiagnostic "FS0010" (unexpectedCharacterMessage current) startOffset offset
             elif isOperatorCharacter current then
                 offset <- offset + 1
 
@@ -823,11 +793,7 @@ module internal Lexer =
                 offset <- offset + 1
                 addToken LexicalTokenKind.Invalid startOffset offset
 
-                addDiagnostic
-                    "FS0010"
-                    (unexpectedCharacterMessage current startOffset offset)
-                    startOffset
-                    offset
+                addDiagnostic "FS0010" (unexpectedCharacterMessage current) startOffset offset
 
         let eof = SourceMap.positionAt source.Map text.Length
 
