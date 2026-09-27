@@ -258,6 +258,109 @@ module internal Lexer =
 
             cursor, closed
 
+        let rec scanInterpolated contentStart delimiterLength verbatim =
+            let mutable cursor = contentStart
+            let mutable closed = false
+
+            let closesAt position =
+                if delimiterLength = 3 then
+                    position
+                    + 2 < text.Length
+                    && text[position] = '"'
+                    && text[position
+                            + 1] = '"'
+                    && text[position
+                            + 2] = '"'
+                else
+                    text[position] = '"'
+                    && not (
+                        verbatim
+                        && position
+                           + 1 < text.Length
+                        && text[position
+                                + 1] = '"'
+                    )
+
+            while cursor < text.Length
+                  && not closed do
+                if closesAt cursor then
+                    cursor <-
+                        cursor
+                        + delimiterLength
+
+                    closed <- true
+                elif
+                    text[cursor] = '"'
+                    && verbatim
+                then
+                    cursor <- cursor + 2
+                elif
+                    not verbatim
+                    && text[cursor] = '\\'
+                    && cursor + 1 < text.Length
+                then
+                    cursor <- cursor + 2
+                elif
+                    (text[cursor] = '{'
+                     || text[cursor] = '}')
+                    && cursor + 1 < text.Length
+                    && text[cursor + 1] = text[cursor]
+                then
+                    cursor <- cursor + 2
+                elif text[cursor] = '{' then
+                    cursor <- cursor + 1
+                    let mutable depth = 1
+
+                    while cursor < text.Length
+                          && depth > 0 do
+                        match text[cursor] with
+                        | '{' ->
+                            depth <- depth + 1
+                            cursor <- cursor + 1
+                        | '}' ->
+                            depth <- depth - 1
+                            cursor <- cursor + 1
+                        | '"' ->
+                            let nestedLength =
+                                if
+                                    cursor + 2 < text.Length
+                                    && text[cursor + 1] = '"'
+                                    && text[cursor + 2] = '"'
+                                then
+                                    3
+                                else
+                                    1
+
+                            cursor <- fst (scanQuoted cursor nestedLength false)
+                        | '$' when
+                            cursor + 1 < text.Length
+                            && text[cursor + 1] = '"'
+                            ->
+                            let nestedLength =
+                                if
+                                    cursor + 3 < text.Length
+                                    && text[cursor + 2] = '"'
+                                    && text[cursor + 3] = '"'
+                                then
+                                    3
+                                else
+                                    1
+
+                            cursor <-
+                                fst (
+                                    scanInterpolated
+                                        (cursor
+                                         + 1
+                                         + nestedLength)
+                                        nestedLength
+                                        false
+                                )
+                        | _ -> cursor <- cursor + 1
+                else
+                    cursor <- cursor + 1
+
+            cursor, closed
+
         while offset < text.Length do
             let startOffset = offset
             let current = text[offset]
@@ -306,6 +409,16 @@ module internal Lexer =
                 addTrivia LexicalTriviaKind.LineComment startOffset offset
             elif
                 current = '('
+                && offset + 2 < text.Length
+                && text[offset + 1] = '*'
+                && text[offset + 2] = ')'
+            then
+                addToken LexicalTokenKind.Delimiter offset (offset + 1)
+                addToken LexicalTokenKind.Operator (offset + 1) (offset + 2)
+                addToken LexicalTokenKind.Delimiter (offset + 2) (offset + 3)
+                offset <- offset + 3
+            elif
+                current = '('
                 && offset + 1 < text.Length
                 && text[offset + 1] = '*'
             then
@@ -314,7 +427,19 @@ module internal Lexer =
 
                 while offset < text.Length
                       && depth > 0 do
-                    if
+                    if text[offset] = '"' then
+                        let delimiterLength =
+                            if
+                                offset + 2 < text.Length
+                                && text[offset + 1] = '"'
+                                && text[offset + 2] = '"'
+                            then
+                                3
+                            else
+                                1
+
+                        offset <- fst (scanQuoted offset delimiterLength false)
+                    elif
                         offset + 1 < text.Length
                         && text[offset] = '('
                         && text[offset + 1] = '*'
@@ -371,6 +496,54 @@ module internal Lexer =
                     addDiagnostic
                         "FS1230"
                         "Inner quote is not permitted in an identifier."
+                        startOffset
+                        offset
+            elif
+                (current = '$'
+                 || current = '@')
+                && offset + 2 < text.Length
+                && text[offset + 1] = (if current = '$' then '@' else '$')
+                && text[offset + 2] = '"'
+                || current = '$'
+                   && offset + 1 < text.Length
+                   && text[offset + 1] = '"'
+            then
+                let prefixLength = if text[offset + 1] = '"' then 1 else 2
+
+                let quoteStart =
+                    startOffset
+                    + prefixLength
+
+                let verbatim = prefixLength = 2
+
+                let delimiterLength =
+                    if
+                        not verbatim
+                        && quoteStart
+                           + 2 < text.Length
+                        && text[quoteStart
+                                + 1] = '"'
+                        && text[quoteStart
+                                + 2] = '"'
+                    then
+                        3
+                    else
+                        1
+
+                let endOffset, closed =
+                    scanInterpolated
+                        (quoteStart
+                         + delimiterLength)
+                        delimiterLength
+                        verbatim
+
+                offset <- endOffset
+                addToken LexicalTokenKind.StringLiteral startOffset offset
+
+                if not closed then
+                    addDiagnostic
+                        "FS0514"
+                        "End of file in string begun at or before here."
                         startOffset
                         offset
             elif

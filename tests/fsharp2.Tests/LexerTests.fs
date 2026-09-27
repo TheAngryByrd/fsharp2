@@ -70,6 +70,48 @@ module LexerTests =
                     |]
                     "Literal projection"
 
+            testCase "treats (*) as the multiplication operator"
+            <| fun _ ->
+                let result = tokenize "let product = (*) 2 3"
+
+                Expect.contains
+                    (result.Tokens
+                     |> Seq.map (fun token -> token.Kind, token.Text))
+                    (LexicalTokenKind.Operator, "*")
+                    "The parenthesized operator is not a comment"
+
+                Expect.isEmpty result.Diagnostics "The parenthesized operator is valid"
+
+            testCase "keeps string delimiters inside block comments"
+            <| fun _ ->
+                let result = tokenize "(* \"*)\" *) let after = 1"
+
+                Expect.isEmpty
+                    result.Diagnostics
+                    "A string inside a comment does not close the comment"
+
+                Expect.contains
+                    (result.Tokens
+                     |> Seq.map _.Text)
+                    "after"
+                    "Lexing continues after the comment"
+
+            testCase "lexes interpolated strings as one literal"
+            <| fun _ ->
+                let result = tokenize "let text = $\"a {1 + 2} \\\" b\" + $\"\"\"x {\"y\"} z\"\"\""
+
+                Expect.isEmpty result.Diagnostics "Interpolated strings are valid"
+
+                Expect.sequenceEqual
+                    (result.Tokens
+                     |> Seq.filter (fun token -> token.Kind = LexicalTokenKind.StringLiteral)
+                     |> Seq.map _.Text)
+                    [
+                        "$\"a {1 + 2} \\\" b\""
+                        "$\"\"\"x {\"y\"} z\"\"\""
+                    ]
+                    "Each interpolated string is one literal token"
+
             testCase "separates range operators and recovers after malformed numeric literals"
             <| fun _ ->
                 let range = tokenize "1..2"
