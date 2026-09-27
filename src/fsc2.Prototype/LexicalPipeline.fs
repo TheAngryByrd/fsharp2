@@ -135,25 +135,20 @@ module internal LexicalPipeline =
         let directives =
             Directives.analyze language (Set.ofSeq normalizedDefines) source lexed
 
-        let layout = Layout.apply source directives lexed
+        let activeLexed =
+            Lexer.tokenize language {
+                source with
+                    Text = directives.CompatibilityText
+            }
 
-        let isActive offset =
-            offset
-            >= source.Text.Length
-            || directives.CompatibilityText[offset] = source.Text[offset]
+        let layout = Layout.apply source directives activeLexed
 
         {
             LanguageCacheIdentity = language.CacheIdentity
             Defines = normalizedDefines
             SourceMap = directives.SourceMap
-            Tokens =
-                lexed.Tokens
-                |> Seq.filter (fun token -> isActive token.Range.Start.Offset)
-                |> ImmutableArray.CreateRange
-            Trivia =
-                lexed.Trivia
-                |> Seq.filter (fun trivia -> isActive trivia.Range.Start.Offset)
-                |> ImmutableArray.CreateRange
+            Tokens = activeLexed.Tokens
+            Trivia = activeLexed.Trivia
             Directives = directives.Directives
             WarningDirectives = directives.WarningDirectives
             LayoutTokens = orderedLayoutTokens layout.Tokens

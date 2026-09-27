@@ -120,6 +120,28 @@ let other = 2
                     [ "FS0513", "End of file in #if section begun at or after here", 1, 1 ]
                     "An unterminated #if"
 
+            testCase "ignores unclosed literals inside inactive branches"
+            <| fun _ ->
+                let text =
+                    "#if NEVER
+let broken = \"
+#else
+let selected = 1
+#endif"
+
+                let result = prepare "10.0" [] text
+
+                Expect.stringContains
+                    result.CompatibilityText
+                    "let selected = 1"
+                    "The else branch stays active"
+
+                Expect.isFalse
+                    (result.CompatibilityText.Contains "#endif")
+                    "The closing directive is still recognized"
+
+                Expect.isEmpty result.Diagnostics "Inactive text reports no diagnostics"
+
             testCase "reports malformed conditional expressions at the Oracle position"
             <| fun _ ->
                 let diagnosticFor expression =

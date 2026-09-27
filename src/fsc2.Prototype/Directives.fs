@@ -1,6 +1,7 @@
 namespace FSharp2.Compiler
 
 open System
+open System.Collections.Generic
 open System.Collections.Immutable
 
 [<RequireQualifiedAccess>]
@@ -285,16 +286,26 @@ module internal Directives =
                 |> Seq.map _.Range
         |]
 
+        let inactiveLines = HashSet<int>()
+
         let isProtected offset =
             protectedSpans
             |> Array.exists (fun range ->
                 range.Start.Offset < offset
                 && offset < range.End.Offset
+                && not (inactiveLines.Contains range.Start.Line)
             )
 
         for lineIndex = 0 to source.Map.LineStarts.Length
                              - 1 do
             let startOffset = source.Map.LineStarts[lineIndex]
+
+            if not active then
+                inactiveLines.Add(
+                    lineIndex
+                    + 1
+                )
+                |> ignore
 
             let endOffset =
                 if
