@@ -16,6 +16,16 @@ module internal Parser =
 
         member _.LastEnd = lastEnd
 
+        member _.EndBefore offset =
+            tokens
+            |> Seq.filter (fun token ->
+                token.Kind = LayoutTokenKind.SourceToken
+                && token.Range.End.Offset
+                   <= offset
+            )
+            |> Seq.last
+            |> fun token -> token.Range.End
+
         member this.Peek offset =
             if offset = 0 then
                 this.Current
@@ -161,6 +171,14 @@ module internal Parser =
             Range = range
         }
 
+    let private reportWarning state code message (range: SourceRange) =
+        state.Diagnostics.Add {
+            Severity = DiagnosticSeverity.Warning
+            Code = code
+            Message = message
+            Range = range
+        }
+
     let private describe (token: LayoutToken) =
         match token.Kind, token.Token with
         | LayoutTokenKind.SourceToken, Some source ->
@@ -181,11 +199,19 @@ module internal Parser =
 
     let private successiveArgumentsCode = "FS0597"
 
+    let private useInModuleCode = "FS0524"
+
+    let private letAndCode = "FS0576"
+
     let private isRecoveryCode code =
         code
         <> featureGateCode
         && code
            <> successiveArgumentsCode
+        && code
+           <> useInModuleCode
+        && code
+           <> letAndCode
 
     let private reportedAt state (token: LayoutToken) =
         state.ReportedStarts.Contains token.Range.Start.Offset
@@ -1067,6 +1093,20 @@ module internal Parser =
             "||"
             "&&"
             "|>"
+            ":"
+            "["
+            "]"
+            "}"
+        ]
+
+    let private typeArgumentScanStopKeywords =
+        HashSet [
+            "then"
+            "let"
+            "with"
+            "in"
+            "do"
+            "else"
         ]
 
     let private typeArgumentScanContinues =
@@ -1076,6 +1116,7 @@ module internal Parser =
             "-"
             ";"
             "."
+            "->"
         ]
 
     let rec private parseExpression state context =
@@ -1141,16 +1182,21 @@ module internal Parser =
                             (offset + 1)
                             (parentheses
                              + 1)
-                    elif isKeyword "then" token then
+                    elif
+                        isKind LexicalTokenKind.Keyword token
+                        && typeArgumentScanStopKeywords.Contains text
+                    then
                         true
                     elif
-                        isKind LexicalTokenKind.Operator token
+                        (isKind LexicalTokenKind.Operator token
+                         || isKind LexicalTokenKind.Delimiter token)
                         && typeArgumentScanStops.Contains text
                     then
                         true
                     elif
                         isIdentifier token
                         || isKind LexicalTokenKind.NumericLiteral token
+                        || isKind LexicalTokenKind.StringLiteral token
                         || ((isKind LexicalTokenKind.Operator token
                              || isKind LexicalTokenKind.Delimiter token)
                             && typeArgumentScanContinues.Contains text)
@@ -2010,10 +2056,22 @@ module internal Parser =
                     (emptyAt cursor.LastEnd)
         }
 
+    let private useInModuleMessage =
+        "'use' bindings are not permitted in modules and are treated as 'let' bindings"
+
+    let private letAndMessage =
+        "The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+
     let private parseLet state attributes =
         let cursor = state.Cursor
         let letToken = cursor.Advance()
         let context = letToken.Range.Start
+
+        let keyword =
+            if isKeyword "use" letToken then
+                SyntaxLetKeyword.Use
+            else
+                SyntaxLetKeyword.Let
 
         let isRecursive =
             if isKeyword "rec" cursor.Current then
@@ -2025,15 +2083,45 @@ module internal Parser =
                 false
 
         let bindings = ImmutableArray.CreateBuilder<SyntaxBinding>()
+        let reported = state.Diagnostics.Count
         bindings.Add(parseBinding state context attributes)
+        let firstBindingRecovered = reportedSince state reported
 
         while isKeyword "and" cursor.Current do
-            cursor.Advance()
-            |> ignore
+            let previousEnd = cursor.LastEnd
+            let andToken = cursor.Advance()
+
+            if
+                not isRecursive
+                && andToken.Range.Start.Line = previousEnd.Line
+            then
+                reportUnsupported state andToken "a non-recursive 'and' on the same line"
 
             bindings.Add(parseBinding state context ImmutableArray.Empty)
 
+        if keyword = SyntaxLetKeyword.Use then
+            let finish =
+                state.Diagnostics
+                |> Seq.skip reported
+                |> Seq.tryFind (fun diagnostic -> diagnostic.Severity = DiagnosticSeverity.Error)
+                |> Option.map (fun diagnostic -> cursor.EndBefore diagnostic.Range.Start.Offset)
+                |> Option.defaultValue cursor.LastEnd
+
+            reportWarning
+                state
+                useInModuleCode
+                useInModuleMessage
+                (span letToken.Range (emptyAt finish))
+
+        if
+            not isRecursive
+            && bindings.Count > 1
+            && not firstBindingRecovered
+        then
+            report state letAndCode letAndMessage letToken.Range
+
         ImplementationDeclaration.Let(
+            keyword,
             isRecursive,
             bindings.ToImmutable(),
             span (declarationStart attributes letToken) (emptyAt cursor.LastEnd)
@@ -3203,7 +3291,10 @@ module internal Parser =
     let private implementationRules = {
         Parse =
             fun state list attributes token ->
-                if isKeyword "let" token then
+                if
+                    isKeyword "let" token
+                    || isKeyword "use" token
+                then
                     Some(Some(parseLet state attributes), ListRecovery.Continues)
                 elif isKeyword "do" token then
                     Some(Some(parseDo state attributes), ListRecovery.Continues)
@@ -3226,7 +3317,7 @@ module internal Parser =
                 | ImplementationDeclaration.Expression _
                 | ImplementationDeclaration.Open _
                 | ImplementationDeclaration.Skipped _ -> DiscardedDeclaration.KeepsRootReport
-                | ImplementationDeclaration.Let(_, bindings, _) when bindings.Length = 1 ->
+                | ImplementationDeclaration.Let(_, _, bindings, _) when bindings.Length = 1 ->
                     DiscardedDeclaration.MakesNextIncomplete
                 | ImplementationDeclaration.Do _ -> DiscardedDeclaration.MakesNextIncomplete
                 | ImplementationDeclaration.Let _

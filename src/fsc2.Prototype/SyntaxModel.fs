@@ -216,9 +216,18 @@ type internal SyntaxNestedModule<'Declaration> = {
 }
 
 [<RequireQualifiedAccess>]
+type internal SyntaxLetKeyword =
+    | Let
+    | Use
+
+[<RequireQualifiedAccess>]
 type internal ImplementationDeclaration =
     | Open of LongIdentifier * SourceRange
-    | Let of isRecursive: bool * ImmutableArray<SyntaxBinding> * SourceRange
+    | Let of
+        keyword: SyntaxLetKeyword *
+        isRecursive: bool *
+        ImmutableArray<SyntaxBinding> *
+        SourceRange
     | Do of ImmutableArray<SyntaxAttributeList> * SyntaxExpression * SourceRange
     | Expression of
         ImmutableArray<SyntaxAttributeList> *
@@ -232,7 +241,7 @@ type internal ImplementationDeclaration =
     member this.Range =
         match this with
         | Open(_, range)
-        | Let(_, _, range)
+        | Let(_, _, _, range)
         | Do(_, _, range)
         | Expression(_, _, _, range) -> range
         | NestedModule nested -> nested.Range

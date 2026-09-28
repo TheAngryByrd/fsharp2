@@ -5,14 +5,16 @@ open Expecto
 open FSharp2.Compiler
 
 module ParserGrammarTests =
-    let private parse logicalPath text =
+    let private parseAt mode logicalPath text =
         let language =
-            LanguageVersion.normalize (Some "10.0")
+            LanguageVersion.normalize (Some mode)
             |> Result.defaultWith failtest
 
         SourceSnapshot.Create(StableIdentity.create logicalPath, logicalPath, text, "content")
         |> LexicalPipeline.prepare language Array.empty
         |> Parser.parseImplementationFile
+
+    let private parse = parseAt "10.0"
 
     let private position (range: SourceRange) =
         range.Start.Line, range.Start.Column, range.End.Line, range.End.Column
@@ -183,7 +185,7 @@ module ParserGrammarTests =
     let rec private declarationShape declaration =
         match declaration with
         | ImplementationDeclaration.Type definition -> typeDefinitionShape definition
-        | ImplementationDeclaration.Let(_, bindings, _) ->
+        | ImplementationDeclaration.Let(_, _, bindings, _) ->
             let binding = Seq.exactlyOne bindings
 
             let head =
@@ -508,6 +510,12 @@ module ParserGrammarTests =
         "if a<b then b>a else false", "if {a < b} then {b > a} else Boolean false"
         "a<(b)", "{a < (b)}"
         "(a<b)", "({a < b})"
+        "match a<b with | true -> b>a | _ -> false",
+        "match {a < b} with | Boolean true -> {b > a} | _ -> Boolean false"
+        "[ a<b ], b>a", "[{a < b}], {b > a}"
+        "{ A = a<b }, b>a", "{A = {a < b}}, {b > a}"
+        "if true then a<b else b>a", "if Boolean true then {a < b} else {b > a}"
+        "a<b [ b>a ]", "{a < [b [{b > a}]]}"
     ]
 
     let private adjacentTypeArgumentCases = [
@@ -536,6 +544,12 @@ module ParserGrammarTests =
         ]
         "TypeNumber.fs", "let c = a<1>a\n", []
         "TypeDot.fs", "let c = a<b.x>a\n", []
+        "TypeArrow.fs",
+        "let c = match a with | v when v<b -> b>a | _ -> false\n",
+        [
+            "TypeArrow.fs(5,42): error FS0010: Unexpected symbol '|' in pattern matching. Expected '->' or other token."
+        ]
+        "TypeString.fs", "let c = a<b, \"x\", b>a\n", []
     ]
 
     [<Tests>]
@@ -551,6 +565,38 @@ module ParserGrammarTests =
                             (List.last declarations)
                             $"let c = {expected}"
                             "The Oracle type checker accepts this binding as a comparison"
+            ]
+
+            testCase "a let keyword on the next line ends the type argument scan"
+            <| fun _ ->
+                let declarations, _ =
+                    shapes "LtLet.fs" $"{lessThanPrelude}let c = a<b\nlet d = b>a\n"
+
+                Expect.sequenceEqual
+                    (List.skip 3 declarations)
+                    [
+                        "let c = {a < b}"
+                        "let d = {b > a}"
+                    ]
+                    "The Oracle type checker accepts both bindings as comparisons"
+
+            testList "the adjacent less-than rule is the same in F# 4.6" [
+                testCase "a comparison"
+                <| fun _ ->
+                    let result = parseAt "4.6" "Lt46.fs" $"{lessThanPrelude}let c = a<b && b>a\n"
+
+                    Expect.isEmpty
+                        result.Diagnostics
+                        "The Oracle type checker accepts this binding at 4.6"
+
+                testCase "closed type arguments"
+                <| fun _ ->
+                    let result = parseAt "4.6" "Lt46.fs" $"{lessThanPrelude}let c = a<b>a\n"
+
+                    SyntaxDiagnosticText.expectExplicitlyUnsupported
+                        []
+                        result.Diagnostics
+                        (oracleLines "Lt46.fs" result)
             ]
 
             testList "an adjacent less-than with closing type arguments stays explicit" [

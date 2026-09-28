@@ -40,7 +40,7 @@ module ParserAdjacencyTests =
             $"The Compatibility Oracle reports no parse diagnostic for '{text}' at {mode}"
 
         match Seq.exactlyOne (Seq.exactlyOne result.File.Contents).Declarations with
-        | ImplementationDeclaration.Let(_, bindings, _) -> (Seq.exactlyOne bindings).Body
+        | ImplementationDeclaration.Let(_, _, bindings, _) -> (Seq.exactlyOne bindings).Body
         | other -> failtest $"Expected a let declaration, found {other}"
 
     let private dotLambdaCases = [
