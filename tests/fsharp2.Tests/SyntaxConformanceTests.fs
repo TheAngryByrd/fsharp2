@@ -47,13 +47,25 @@ module SyntaxConformanceTests =
             case.GetProperty("sources").EnumerateArray()
             |> Seq.sortBy (fun source -> source.GetProperty("order").GetInt32())
             |> Seq.map (fun source ->
-                SourceSnapshot.Create(
-                    StableIdentity.create (text source "stableId"),
-                    text source "logicalPath",
-                    File.ReadAllText(Path.Combine(conformanceRoot, text source "fixturePath")),
-                    "content"
-                )
-                |> LexicalPipeline.prepare language Array.empty
+                let logicalPath = text source "logicalPath"
+
+                {
+                    Kind =
+                        SyntaxSourceKind.parse logicalPath
+                        |> Result.defaultWith (fun error ->
+                            failtest $"'{logicalPath}' has no source kind: {error}"
+                        )
+                    Document =
+                        SourceSnapshot.Create(
+                            StableIdentity.create (text source "stableId"),
+                            logicalPath,
+                            File.ReadAllText(
+                                Path.Combine(conformanceRoot, text source "fixturePath")
+                            ),
+                            "content"
+                        )
+                        |> LexicalPipeline.prepare language Array.empty
+                }
             )
             |> ImmutableArray.CreateRange
 

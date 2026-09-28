@@ -12,8 +12,23 @@ module ParserCompilationTests =
     let private parse target (files: (string * string) list) =
         files
         |> List.map (fun (logicalPath, text) ->
-            SourceSnapshot.Create(StableIdentity.create logicalPath, logicalPath, text, "content")
-            |> LexicalPipeline.prepare language Array.empty
+            let kind =
+                SyntaxSourceKind.parse logicalPath
+                |> Result.defaultWith (fun error ->
+                    failtest $"'{logicalPath}' has no source kind: {error}"
+                )
+
+            {
+                Kind = kind
+                Document =
+                    SourceSnapshot.Create(
+                        StableIdentity.create logicalPath,
+                        logicalPath,
+                        text,
+                        "content"
+                    )
+                    |> LexicalPipeline.prepare language Array.empty
+            }
         )
         |> ImmutableArray.CreateRange
         |> Parser.parseCompilation target
@@ -278,6 +293,51 @@ module ParserCompilationTests =
             missingDeclaration "ValDiscardSig.fsi" 1 1 3 2
         ]
 
+        "an anonymous script file before the last file",
+        SyntaxCompilationTarget.Executable,
+        [
+            "Script.fsx", "let a = 1\n"
+            last
+        ],
+        []
+
+        "an anonymous script file with an upper-case extension",
+        SyntaxCompilationTarget.Executable,
+        [
+            "Script.FSX", "let a = 1\n"
+            last
+        ],
+        []
+
+        "an anonymous fsscript file in a library",
+        SyntaxCompilationTarget.Library,
+        [ "Script.FsScript", "let a = 1\n" ],
+        []
+
+        "anonymous script files keep their parse diagnostics",
+        SyntaxCompilationTarget.Executable,
+        [
+            "Broken.fsx", "let a = )\n"
+            last
+        ],
+        [ "Broken.fsx(1,9,1,10): error FS0010: Unexpected symbol ')' in binding" ]
+
+        "an anonymous implementation file with an upper-case extension",
+        SyntaxCompilationTarget.Executable,
+        [
+            "Upper.FS", "let a = 1\n"
+            last
+        ],
+        [ missingDeclaration "Upper.FS" 1 1 2 1 ]
+
+        "an anonymous signature file with a mixed-case extension",
+        SyntaxCompilationTarget.Executable,
+        [
+            "Mixed.FsI", "val a: int\n"
+            last
+        ],
+        [ missingDeclaration "Mixed.FsI" 1 1 2 1 ]
+
         "a nested module in an anonymous root",
         SyntaxCompilationTarget.Executable,
         [
@@ -380,6 +440,32 @@ module ParserCompilationTests =
                         Expect.isNone
                             (SyntaxCompilationTarget.tryParse name)
                             $"The Oracle reports FS0224 or FS1048 for --target:{name}"
+            ]
+
+            testList "the file extension selects the source kind" [
+                for logicalPath, expected in
+                    [
+                        "/src/A.fs", Ok SyntaxSourceKind.Implementation
+                        "A.FS", Ok SyntaxSourceKind.Implementation
+                        "A.fsx", Ok SyntaxSourceKind.Script
+                        "A.FSX", Ok SyntaxSourceKind.Script
+                        "A.fsscript", Ok SyntaxSourceKind.Script
+                        "A.FsScript", Ok SyntaxSourceKind.Script
+                        "A.fsi", Ok SyntaxSourceKind.Signature
+                        "A.FsI", Ok SyntaxSourceKind.Signature
+                        "A.fsx.fs", Ok SyntaxSourceKind.Implementation
+                        "A.ml", Error SyntaxSourceKindError.RequiresMLCompatibility
+                        "A.MLI", Error SyntaxSourceKindError.RequiresMLCompatibility
+                        "A.txt", Error SyntaxSourceKindError.Unrecognized
+                        "A.fs.txt", Error SyntaxSourceKindError.Unrecognized
+                        "NoExtension", Error SyntaxSourceKindError.Unrecognized
+                    ] ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        Expect.equal
+                            (SyntaxSourceKind.parse logicalPath)
+                            expected
+                            "The Oracle accepts .fs, .fsi, .fsx, and .fsscript, needs ML compatibility for .ml and .mli, and reports FS0226 for other extensions"
             ]
 
             testCase "files keep their order and their kind"

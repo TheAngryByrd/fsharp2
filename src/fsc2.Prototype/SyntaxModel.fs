@@ -301,6 +301,22 @@ type internal SyntaxCompilationTarget =
     | Library
 
 [<RequireQualifiedAccess>]
+type internal SyntaxSourceKind =
+    | Implementation
+    | Script
+    | Signature
+
+[<RequireQualifiedAccess>]
+type internal SyntaxSourceKindError =
+    | Unrecognized
+    | RequiresMLCompatibility
+
+type internal SyntaxSource = {
+    Kind: SyntaxSourceKind
+    Document: LexicalDocument
+}
+
+[<RequireQualifiedAccess>]
 type internal SyntaxFile =
     | Implementation of ImplementationFileSyntax
     | Signature of SignatureFileSyntax
@@ -323,3 +339,14 @@ module internal SyntaxCompilationTarget =
         | "library"
         | "module" -> Some SyntaxCompilationTarget.Library
         | _ -> None
+
+module internal SyntaxSourceKind =
+    let parse (logicalPath: string) =
+        match System.IO.Path.GetExtension(logicalPath).ToLowerInvariant() with
+        | ".fs" -> Ok SyntaxSourceKind.Implementation
+        | ".fsx"
+        | ".fsscript" -> Ok SyntaxSourceKind.Script
+        | ".fsi" -> Ok SyntaxSourceKind.Signature
+        | ".ml"
+        | ".mli" -> Error SyntaxSourceKindError.RequiresMLCompatibility
+        | _ -> Error SyntaxSourceKindError.Unrecognized

@@ -2973,17 +2973,16 @@ module internal Parser =
             End = nextTokenStart document last.Range.End.Offset
           }
 
-    let parseCompilation
-        (target: SyntaxCompilationTarget)
-        (documents: ImmutableArray<LexicalDocument>)
-        =
+    let parseCompilation (target: SyntaxCompilationTarget) (sources: ImmutableArray<SyntaxSource>) =
         let files = ImmutableArray.CreateBuilder<SyntaxFile>()
         let diagnostics = ImmutableArray.CreateBuilder<SyntaxFileDiagnostic>()
 
-        documents
-        |> Seq.iteri (fun index document ->
+        sources
+        |> Seq.iteri (fun index source ->
+            let document = source.Document
+
             let file, fileDiagnostics, anonymousRange =
-                if document.LogicalPath.EndsWith(".fsi", StringComparison.OrdinalIgnoreCase) then
+                if source.Kind = SyntaxSourceKind.Signature then
                     let result = parseSignatureFile document
 
                     SyntaxFile.Signature result.File,
@@ -3008,10 +3007,11 @@ module internal Parser =
             Seq.iter add fileDiagnostics
 
             let requiresDeclaration =
-                match target with
-                | SyntaxCompilationTarget.Library -> true
-                | SyntaxCompilationTarget.Executable ->
-                    index < documents.Length
+                match source.Kind, target with
+                | SyntaxSourceKind.Script, _ -> false
+                | _, SyntaxCompilationTarget.Library -> true
+                | _, SyntaxCompilationTarget.Executable ->
+                    index < sources.Length
                             - 1
 
             match anonymousRange with
