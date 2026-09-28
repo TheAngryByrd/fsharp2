@@ -65,7 +65,7 @@ module ParserLanguageVersionTests =
 
     let private bindingBody (result: ImplementationFileParseResult) =
         match Seq.last (Seq.exactlyOne result.File.Contents).Declarations with
-        | ImplementationDeclaration.Let(_, bindings, _) -> (Seq.exactlyOne bindings).Body
+        | ImplementationDeclaration.Let(_, _, bindings, _) -> (Seq.exactlyOne bindings).Body
         | other -> failtest $"Expected a let declaration, found {other}"
 
     [<Tests>]

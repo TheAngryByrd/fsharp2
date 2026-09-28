@@ -185,7 +185,7 @@ module ParserGrammarTests =
     let rec private declarationShape declaration =
         match declaration with
         | ImplementationDeclaration.Type definition -> typeDefinitionShape definition
-        | ImplementationDeclaration.Let(_, bindings, _) ->
+        | ImplementationDeclaration.Let(_, _, bindings, _) ->
             let binding = Seq.exactlyOne bindings
 
             let head =

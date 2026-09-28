@@ -122,7 +122,9 @@ module internal SyntaxProjection =
 
     let private projectDeclaration declaration =
         match declaration with
-        | ImplementationDeclaration.Let(false, bindings, range) when bindings.Length = 1 ->
+        | ImplementationDeclaration.Let(SyntaxLetKeyword.Let, false, bindings, range) when
+            bindings.Length = 1
+            ->
             projectBinding bindings[0] range
         | other -> Error other.Range
 

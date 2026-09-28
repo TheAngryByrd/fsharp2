@@ -2665,6 +2665,259 @@ module M =
         ]
     ]
 
+    let private letKeywordCases = [
+        "u_simple.fs",
+        "module M\nuse c = 3\n",
+        [
+            "u_simple.fs(2,1,2,10): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+        ]
+
+        "u_multi.fs",
+        "module M\nuse c =\n    3\nlet d = 4\n",
+        [
+            "u_multi.fs(2,1,3,6): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+        ]
+
+        "u_two.fs",
+        "module M\nuse c = 3\nuse d = 4\n",
+        [
+            "u_two.fs(2,1,2,10): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+            "u_two.fs(3,1,3,10): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+        ]
+
+        "u_rec.fs",
+        "module M\nuse rec c = 3\n",
+        [
+            "u_rec.fs(2,1,2,14): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+        ]
+
+        "u_attr.fs",
+        "module M\n[<A>]\nuse c = 3\n",
+        [
+            "u_attr.fs(3,1,3,10): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+        ]
+
+        "u_nested.fs",
+        "module M\nmodule N =\n    use c = 3\n",
+        [
+            "u_nested.fs(3,5,3,14): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+        ]
+
+        "u_ns.fs",
+        "namespace Q\nuse c = 3\n",
+        [
+            "u_ns.fs(2,1,2,10): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+        ]
+
+        "u_anon.fs",
+        "use c = 3\n",
+        [
+            "u_anon.fs(1,1,1,10): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+            "u_anon.fs(1,1,2,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "u_err.fs",
+        "module M\nuse c = )\n",
+        [
+            "u_err.fs(2,9,2,10): error FS0010: Unexpected symbol ')' in binding"
+            "u_err.fs(2,1,2,8): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+        ]
+
+        "u_func.fs",
+        "module M\nuse f x = x\n",
+        [
+            "u_func.fs(2,1,2,12): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+        ]
+
+        "u_and.fs",
+        "module M\nuse c = 3\nand d = 4\n",
+        [
+            "u_and.fs(2,1,3,10): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+            "u_and.fs(2,1,2,4): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+        ]
+
+        "u_tuple.fs",
+        "module M\nuse (c, d) = (3, 4)\n",
+        [
+            "u_tuple.fs(2,1,2,20): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+        ]
+
+        "u_access.fs",
+        "module M\nuse private c = 3\n",
+        [
+            "u_access.fs(2,1,2,18): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+        ]
+
+        "u_after_err.fs",
+        "module M\nlet a = )\nuse c = 3\n",
+        [
+            "u_after_err.fs(2,9,2,10): error FS0010: Unexpected symbol ')' in binding"
+            "u_after_err.fs(3,1,3,10): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+        ]
+
+        "d_file.fs",
+        "module M\n)\nuse c = 3\n",
+        [
+            "d_file.fs(2,1,2,2): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "d_nested.fs",
+        "module M\nmodule N =\n    1 )\n    use c = 3\nlet d = 4\n",
+        [
+            "d_nested.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "d_nested.fs(5,1,5,4): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "u_comment.fs",
+        "module M\nuse c = 3 // x\n",
+        [
+            "u_comment.fs(2,1,2,10): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+        ]
+
+        "r_trail.fs",
+        "module M\nuse c = 1 )\n",
+        [
+            "r_trail.fs(2,11,2,12): error FS0010: Unexpected symbol ')' in binding. Expected incomplete structured construct at or before this point or other token."
+            "r_trail.fs(2,1,2,10): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+        ]
+
+        "r_block.fs",
+        "module M\nuse c =\n    )\n",
+        [
+            "r_block.fs(3,5,3,6): error FS0010: Unexpected symbol ')' in binding"
+            "r_block.fs(2,1,2,8): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+        ]
+
+        "r_eq.fs",
+        "module M\nuse c x )\n",
+        [
+            "r_eq.fs(2,9,2,10): error FS0010: Unexpected symbol ')' in binding. Expected '=' or other token."
+            "r_eq.fs(2,1,2,8): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+        ]
+
+        "l_and2.fs",
+        "module M\nlet a = 1\nand b = 2\n",
+        [
+            "l_and2.fs(2,1,2,4): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+        ]
+
+        "l_rec.fs", "module M\nlet rec a = 1\nand b = 2\n", []
+
+        "l_three.fs",
+        "module M\nlet a = 1\nand b = 2\nand c = 3\n",
+        [
+            "l_three.fs(2,1,2,4): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+        ]
+
+        "l_err_first.fs",
+        "module M\nlet a = )\nand b = 2\n",
+        [ "l_err_first.fs(2,9,2,10): error FS0010: Unexpected symbol ')' in binding" ]
+
+        "l_err_second.fs",
+        "module M\nlet a = 1\nand b = )\n",
+        [
+            "l_err_second.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding"
+            "l_err_second.fs(2,1,2,4): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+        ]
+
+        "l_attr.fs",
+        "module M\n[<A>]\nlet a = 1\nand b = 2\n",
+        [
+            "l_attr.fs(3,1,3,4): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+        ]
+
+        "l_then.fs",
+        "module M\nlet a = 1\nand b = 2\nlet c = 3\n",
+        [
+            "l_then.fs(2,1,2,4): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+        ]
+
+        "l_twice.fs",
+        "module M\nlet a = 1\nand b = 2\nlet c = 3\nand d = 4\n",
+        [
+            "l_twice.fs(2,1,2,4): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+            "l_twice.fs(4,1,4,4): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+        ]
+
+        "l_anon.fs",
+        "let a = 1\nand b = 2\n",
+        [
+            "l_anon.fs(1,1,1,4): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+            "l_anon.fs(1,1,2,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "l_ns.fs",
+        "namespace Q\nlet a = 1\nand b = 2\n",
+        [
+            "l_ns.fs(2,1,2,4): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+        ]
+
+        "l_multi.fs",
+        "module M\nlet a =\n    1\nand b =\n    2\n",
+        [
+            "l_multi.fs(2,1,2,4): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+        ]
+
+        "l_func.fs",
+        "module M\nlet f x = x\nand g y = y\n",
+        [
+            "l_func.fs(2,1,2,4): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+        ]
+
+        "u_and2.fs",
+        "module M\nuse a = 1\nand b = 2\n",
+        [
+            "u_and2.fs(2,1,3,10): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+            "u_and2.fs(2,1,2,4): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+        ]
+
+        "l_access.fs",
+        "module M\nlet private a = 1\nand b = 2\n",
+        [
+            "l_access.fs(2,1,2,4): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+        ]
+    ]
+
+    let private unmodeledLetKeywordCases = [
+        "u_local.fs", "module M\nlet f () =\n    use c = 3\n    c\n", []
+
+        "u_sig.fsi",
+        "module M\nuse c: int\n",
+        [
+            "u_sig.fsi(2,1,2,4): error FS0010: Unexpected keyword 'let' or 'use'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "d_first.fs",
+        "module M\nmodule N =\n    )\n    use c = 3\nlet d = 4\n",
+        [
+            "d_first.fs(3,5,3,6): error FS0010: Unexpected symbol ')' in definition"
+            "d_first.fs(5,1,5,4): error FS0010: Incomplete structured construct at or before this point in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "l_and.fs",
+        "module M\nlet a = 1 and b = 2\n",
+        [
+            "l_and.fs(2,11,2,14): error FS0010: Unexpected keyword 'and' in binding. Expected incomplete structured construct at or before this point or other token."
+            "l_and.fs(3,1,3,1): error FS0010: Incomplete structured construct at or before this point in binding. Expected incomplete structured construct at or before this point or other token."
+            "l_and.fs(2,1,2,4): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+            "l_and.fs(2,1,2,4): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+            "l_and.fs(3,1,3,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "r_inner.fs",
+        "module M\nuse c = f (\n    1 ]\n",
+        [
+            "r_inner.fs(3,7,3,8): error FS0010: Unexpected symbol ']' in expression"
+            "r_inner.fs(2,1,3,6): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+        ]
+
+        "l_nested.fs",
+        "module N\nmodule O =\n    let a = 1\n    and b = 2\n",
+        [
+            "l_nested.fs(3,5,3,8): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+        ]
+    ]
+
     [<Tests>]
     let tests =
         testList "Issue29.ParserCompilation" [
@@ -2931,6 +3184,61 @@ module private N =
                             (2, 1)
                             "The range starts at the first attribute list"
                     | other -> failtest $"Expected a nested module, found {other}"
+                | other -> failtest $"Expected an implementation file, found {other}"
+
+            testList "use and non-recursive and report the Oracle diagnostics" [
+                for logicalPath, text, expected in letKeywordCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        Expect.sequenceEqual
+                            (oracleLines (
+                                parse SyntaxCompilationTarget.Executable [
+                                    logicalPath, text
+                                    last
+                                ]
+                            ))
+                            expected
+                            "The diagnostics must match the Compatibility Oracle"
+            ]
+
+            testList "an unmodeled use or and shape stays explicit" [
+                for logicalPath, text, oracle in unmodeledLetKeywordCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result =
+                            parse SyntaxCompilationTarget.Executable [
+                                logicalPath, text
+                                last
+                            ]
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            (result.Diagnostics
+                             |> Seq.map _.Diagnostic)
+                            (oracleLines result)
+            ]
+
+            testCase "a module-level use keeps its keyword in the tree"
+            <| fun _ ->
+                let result =
+                    parse SyntaxCompilationTarget.Executable [
+                        "UseTree.fs", "module M\nuse c = 3\nlet d = 4\n"
+                    ]
+
+                match result.Files[0] with
+                | SyntaxFile.Implementation file ->
+                    Expect.sequenceEqual
+                        ((Seq.exactlyOne file.Contents).Declarations
+                         |> Seq.map (fun declaration ->
+                             match declaration with
+                             | ImplementationDeclaration.Let(keyword, _, _, _) -> keyword
+                             | other -> failtest $"Expected a let declaration, found {other}"
+                         ))
+                        [
+                            SyntaxLetKeyword.Use
+                            SyntaxLetKeyword.Let
+                        ]
+                        "Keywords"
                 | other -> failtest $"Expected an implementation file, found {other}"
 
             testCase "files keep their order and their kind"

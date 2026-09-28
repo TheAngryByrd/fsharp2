@@ -44,7 +44,7 @@ module ParserTests =
     let rec private declarationShape declaration =
         match declaration with
         | ImplementationDeclaration.Open(name, _) -> $"open {name.Text}"
-        | ImplementationDeclaration.Let(_, bindings, _) ->
+        | ImplementationDeclaration.Let(_, _, bindings, _) ->
             bindings
             |> Seq.map (fun binding ->
                 let head =
@@ -757,7 +757,8 @@ module Later =
 
                 let binding =
                     match Seq.exactlyOne contents.Declarations with
-                    | ImplementationDeclaration.Let(false, bindings, _) -> Seq.exactlyOne bindings
+                    | ImplementationDeclaration.Let(_, false, bindings, _) ->
+                        Seq.exactlyOne bindings
                     | other -> failtest $"Expected one let declaration, found {other}"
 
                 let rec shape expression =
@@ -801,7 +802,7 @@ module Later =
                     ((Seq.exactlyOne result.File.Contents).Declarations
                      |> Seq.collect (fun declaration ->
                          match declaration with
-                         | ImplementationDeclaration.Let(_, bindings, _) -> bindings
+                         | ImplementationDeclaration.Let(_, _, bindings, _) -> bindings
                          | other -> failtest $"Expected let declarations, found {other}"
                      )
                      |> Seq.map (fun binding ->
@@ -809,6 +810,7 @@ module Later =
                          |> Option.map (fun access -> access.Kind, position access.Range),
                          declarationShape (
                              ImplementationDeclaration.Let(
+                                 SyntaxLetKeyword.Let,
                                  false,
                                  ImmutableArray.Create binding,
                                  binding.Range
@@ -941,7 +943,7 @@ module Later =
 
                 let bindingAttributes index =
                     match declarations[index] with
-                    | ImplementationDeclaration.Let(_, bindings, range) ->
+                    | ImplementationDeclaration.Let(_, _, bindings, range) ->
                         let binding = Seq.head bindings
 
                         position range,
@@ -1205,7 +1207,7 @@ module Values =
 
                 let binding =
                     match Seq.head (Seq.exactlyOne result.File.Contents).Declarations with
-                    | ImplementationDeclaration.Let(_, bindings, _) -> Seq.exactlyOne bindings
+                    | ImplementationDeclaration.Let(_, _, bindings, _) -> Seq.exactlyOne bindings
                     | other -> failtest $"Expected a let declaration, found {other}"
 
                 Expect.equal (position binding.Body.Range) (2, 14, 2, 14) "Missing body range"
