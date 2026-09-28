@@ -273,6 +273,26 @@ module ParserTests =
         ],
         [ "module M = [val a: int (skipped); val c: <missing> (skipped)]" ]
 
+        "NestedFirstSignature.fsi",
+        "module M\nmodule N =\n    )\nval b: int\n",
+        [ "NestedFirstSignature.fsi(3,5): error FS0010: Unexpected symbol ')' in signature file" ],
+        [
+            "module N = [skipped]"
+            "val b: int"
+        ]
+
+        "NestedFirstSignatureThenValues.fsi",
+        "module M\nmodule N =\n    )\n    val b: )\nval c: )\n",
+        [
+            "NestedFirstSignatureThenValues.fsi(3,5): error FS0010: Unexpected symbol ')' in signature file"
+            "NestedFirstSignatureThenValues.fsi(4,12): error FS0010: Unexpected symbol ')' in value signature"
+            "NestedFirstSignatureThenValues.fsi(5,8): error FS0010: Unexpected symbol ')' in value signature"
+        ],
+        [
+            "module N = [skipped; val b: <missing> (skipped)]"
+            "val c: <missing> (skipped)"
+        ]
+
         "AnonymousSignature.fsi",
         "val a: int\n)\n",
         [ "AnonymousSignature.fsi(2,1): error FS0010: Unexpected symbol ')' in signature file" ],

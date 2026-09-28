@@ -211,6 +211,8 @@ module internal Parser =
         | NamespaceFile
         | AnonymousFile
         | AnonymousSignature
+        | NestedFirstDefinition
+        | NestedFirstSignature
 
     let private closingKeywords =
         set [
@@ -298,6 +300,8 @@ module internal Parser =
                 symbol text token.Range
             | RecoveryPoint.ValueColon when isIdentifier token -> Some("identifier", token.Range)
             | RecoveryPoint.LambdaStart when isOperator "->" token -> symbol text token.Range
+            | RecoveryPoint.NestedFirstDefinition when isOperator "=" token ->
+                symbol text token.Range
             | _ -> None
 
     let private reportUnexpected state point context =
@@ -343,6 +347,9 @@ module internal Parser =
                     $"Unexpected {description} in implementation file. Expected incomplete structured construct at or before this point or other token."
                 | RecoveryPoint.AnonymousFile -> $"Unexpected {description} in implementation file"
                 | RecoveryPoint.AnonymousSignature -> $"Unexpected {description} in signature file"
+                | RecoveryPoint.NestedFirstDefinition -> $"Unexpected {description} in definition"
+                | RecoveryPoint.NestedFirstSignature ->
+                    $"Unexpected {description} in signature file"
 
             report state "FS0010" message range
             true
@@ -2326,6 +2333,7 @@ module internal Parser =
         ContinuesRecovery: LayoutToken -> bool
         NestedRecoveryDiscards: bool
         StartPoint: DeclarationList -> RecoveryPoint
+        FirstNestedPoint: RecoveryPoint
         Open: LongIdentifier * SourceRange -> 'Declaration
         NestedModule:
             SyntaxIdentifier -> ImmutableArray<'Declaration> -> SourceRange -> 'Declaration
@@ -2374,6 +2382,7 @@ module internal Parser =
         let cursor = state.Cursor
         let declarations = ImmutableArray.CreateBuilder<'Declaration>()
         let discarded = ImmutableArray.CreateBuilder<'Declaration>()
+        let mutable scopedSuppression = false
         let mutable stop = false
 
         while not stop do
@@ -2390,6 +2399,11 @@ module internal Parser =
                         discarded
                     else
                         declarations
+
+                let firstInNestedModule =
+                    list = DeclarationList.NestedModule
+                    && declarations.Count = 0
+                    && discarded.Count = 0
 
                 let reported = state.Diagnostics.Count
                 let attributes = parseAttributeLists state
@@ -2421,13 +2435,16 @@ module internal Parser =
                         match rules.Parse state list attributes token with
                         | Some result -> result
                         | None ->
+                            let point =
+                                if firstInNestedModule then
+                                    rules.FirstNestedPoint
+                                else
+                                    rules.StartPoint list
+
                             if reportedAt state token then
                                 None, ListRecovery.Continues
                             elif
-                                reportUnexpected
-                                    state
-                                    (rules.StartPoint list)
-                                    "a module or namespace declaration"
+                                reportUnexpected state point "a module or namespace declaration"
                             then
                                 None, ListRecovery.Discards
                             else
@@ -2462,6 +2479,13 @@ module internal Parser =
                     match recovery, list with
                     | ListRecovery.Discards, DeclarationList.NestedModule when
                         rules.NestedRecoveryDiscards
+                        && firstInNestedModule
+                        ->
+                        // The Compatibility Oracle discards later declarations of this module only, and reports one more diagnostic if any exist.
+                        suppress state true false
+                        scopedSuppression <- true
+                    | ListRecovery.Discards, DeclarationList.NestedModule when
+                        rules.NestedRecoveryDiscards
                         ->
                         // The Compatibility Oracle discards the rest of the file after this recovery and reports one more diagnostic at its end.
                         suppress state true true
@@ -2471,6 +2495,13 @@ module internal Parser =
                         suppress state false false
                     | ListRecovery.Unmodeled, _ -> suppress state true false
                     | ListRecovery.Continues, _ -> ()
+
+        if
+            scopedSuppression
+            && not state.Interrupted
+        then
+            state.SuppressFrom <- None
+            state.UnmodeledAtNextDeclaration <- false
 
         declarations.ToImmutable(), discarded.ToImmutable()
 
@@ -2612,6 +2643,7 @@ module internal Parser =
                     None
         ContinuesRecovery = fun _ -> true
         NestedRecoveryDiscards = true
+        FirstNestedPoint = RecoveryPoint.NestedFirstDefinition
         StartPoint =
             fun list ->
                 match list with
@@ -2638,6 +2670,7 @@ module internal Parser =
                 isKeyword "val" token
                 || isKeyword "open" token
         NestedRecoveryDiscards = false
+        FirstNestedPoint = RecoveryPoint.NestedFirstSignature
         StartPoint =
             fun list ->
                 match list with

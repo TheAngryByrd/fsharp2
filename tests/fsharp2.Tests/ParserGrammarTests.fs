@@ -342,11 +342,60 @@ module ParserGrammarTests =
             "NestedRecoveryThenDeclarations.fs(6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
         ]
 
+        "NestedFirstThenNested.fs",
+        "module M\nmodule N =\n    )\n    let b = )\nlet c = )\n",
+        [
+            "NestedFirstThenNested.fs(3,5): error FS0010: Unexpected symbol ')' in definition"
+            "NestedFirstThenNested.fs(5,1): error FS0010: Incomplete structured construct at or before this point in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
         "LambdaBeforeClauseBar.fs",
         "module P\nlet f x = match x with | A -> fun y -> y | B -> id\n",
         [
             "LambdaBeforeClauseBar.fs(2,42): error FS0010: Unexpected symbol '|' in lambda expression. Expected incomplete structured construct at or before this point or other token."
             "LambdaBeforeClauseBar.fs(3,1): error FS0010: Incomplete structured construct at or before this point in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+    ]
+
+    let private nestedFirstCases = [
+        "NestedFirstOnly.fs",
+        "module M\nmodule N =\n    )\n",
+        [ "NestedFirstOnly.fs(3,5): error FS0010: Unexpected symbol ')' in definition" ]
+
+        "NestedFirstKeyword.fs",
+        "module M\nmodule N =\n    end\n",
+        [ "NestedFirstKeyword.fs(3,5): error FS0010: Unexpected keyword 'end' in definition" ]
+
+        "NestedFirstEquals.fs",
+        "module M\nmodule N =\n    =\n",
+        [ "NestedFirstEquals.fs(3,5): error FS0010: Unexpected symbol '=' in definition" ]
+
+        "NestedFirstThenRoot.fs",
+        "module M\nmodule N =\n    )\nlet c = )\n",
+        [
+            "NestedFirstThenRoot.fs(3,5): error FS0010: Unexpected symbol ')' in definition"
+            "NestedFirstThenRoot.fs(4,9): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "NestedFirstThenRootLater.fs",
+        "module M\nmodule N =\n    ]\nlet c = 1\nlet d = )\n",
+        [
+            "NestedFirstThenRootLater.fs(3,5): error FS0010: Unexpected symbol ']' in definition"
+            "NestedFirstThenRootLater.fs(5,9): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "NestedFirstInNamespace.fs",
+        "namespace X\nmodule N =\n    )\nlet c = )\n",
+        [
+            "NestedFirstInNamespace.fs(3,5): error FS0010: Unexpected symbol ')' in definition"
+            "NestedFirstInNamespace.fs(4,9): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "NestedFirstThenModule.fs",
+        "namespace X\nmodule N =\n    )\nmodule K =\n    let d = )\n",
+        [
+            "NestedFirstThenModule.fs(3,5): error FS0010: Unexpected symbol ')' in definition"
+            "NestedFirstThenModule.fs(5,13): error FS0010: Unexpected symbol ')' in binding"
         ]
     ]
 
@@ -538,7 +587,9 @@ let items = [ origin.X; 1 ]
             ]
 
             testList "later declarations keep the diagnostics that the Oracle reports" [
-                for logicalPath, text, oracle in laterDeclarationCases ->
+                for logicalPath, text, oracle in
+                    laterDeclarationCases
+                    @ nestedFirstCases ->
                     testCase logicalPath
                     <| fun _ ->
                         Expect.sequenceEqual
