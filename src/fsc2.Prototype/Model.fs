@@ -2345,6 +2345,7 @@ type internal QueryStatistics = {
     CheckMisses: int
     LowerHits: int
     LowerMisses: int
+    SyntaxProjections: int
 } with
 
     override _.ToString() = "QueryStatistics"
