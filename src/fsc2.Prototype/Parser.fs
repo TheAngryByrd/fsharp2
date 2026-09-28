@@ -139,6 +139,7 @@ module internal Parser =
         mutable InAnonymousRoot: bool
         mutable Depth: int
         mutable UnresumedAtEnd: SourceRange option
+        mutable HeaderLost: bool
     }
 
     [<RequireQualifiedAccess>]
@@ -2870,6 +2871,43 @@ module internal Parser =
         | Some(DeclarationAfterRecovery.SkippedInSignatureModule _) -> true
         | _ -> false
 
+    let private offsetAfterAttributeLists (cursor: Cursor) =
+        let rec after offset =
+            let token = cursor.Peek offset
+            let next = cursor.Peek(offset + 1)
+
+            if
+                isDelimiter "[" token
+                && isOperator "<" next
+                && next.Range.Start.Offset = token.Range.End.Offset
+            then
+                let rec close offset =
+                    let token = cursor.Peek offset
+                    let next = cursor.Peek(offset + 1)
+
+                    if isEndOfFile token then
+                        offset
+                    elif
+                        isOperator ">" token
+                        && isDelimiter "]" next
+                        && next.Range.Start.Offset = token.Range.End.Offset
+                    then
+                        offset + 2
+                    else
+                        close (offset + 1)
+
+                let rec skipSeparators offset =
+                    if (cursor.Peek offset).Kind = LayoutTokenKind.Separator then
+                        skipSeparators (offset + 1)
+                    else
+                        offset
+
+                after (skipSeparators (close (offset + 2)))
+            else
+                offset
+
+        after 0
+
     let private resumesSignatureModule (token: LayoutToken) =
         isKeyword "val" token
         || isKeyword "open" token
@@ -2990,8 +3028,6 @@ module internal Parser =
             ->
             if reportsAtEnd then
                 state.UnresumedAtEnd <- Some(emptyAt state.Cursor.Current.Range.Start)
-        | Some(DeclarationAfterRecovery.SkippedInSignatureModule _) ->
-            state.Recovery <- Recovery.Parsing
         | Some(DeclarationAfterRecovery.ReportedAtRoot _)
         | Some DeclarationAfterRecovery.IncompleteAtNext ->
             let token = state.Cursor.Current
@@ -3076,16 +3112,27 @@ module internal Parser =
             else
                 match pendingDeclaration state with
                 | Some(DeclarationAfterRecovery.SkippedInSignatureModule(recoveryDepth, _)) when
-                    resumesSignatureModule token
+                    resumesSignatureModule (cursor.Peek(offsetAfterAttributeLists cursor))
                     ->
+                    let resumeOffset = offsetAfterAttributeLists cursor
+
                     if
                         state.Depth
-                        + 1
-                        >= recoveryDepth
+                        + 1 < recoveryDepth
+                        || (isKeyword "val" (cursor.Peek resumeOffset)
+                            && not (
+                                isIdentifier (
+                                    cursor.Peek(
+                                        resumeOffset
+                                        + 1
+                                    )
+                                )
+                            ))
                     then
-                        state.Recovery <- Recovery.Parsing
-                    else
+                        // The Compatibility Oracle does not resume at a value without a name, and stays silent for later values.
                         reportAfterRecovery state token
+                    else
+                        state.Recovery <- Recovery.Parsing
                 | _ -> ()
 
                 let target = if isSuppressing state then discarded else declarations
@@ -3176,7 +3223,10 @@ module internal Parser =
                                 if firstInNestedModule then
                                     rules.FirstNestedPoint
                                 else
-                                    rules.StartPoint list
+                                    match rules.StartPoint list with
+                                    | RecoveryPoint.SignatureFile when state.HeaderLost ->
+                                        RecoveryPoint.NestedSignature
+                                    | point -> point
 
                             if reportedAt state token then
                                 None, ListRecovery.Continues
@@ -3254,17 +3304,38 @@ module internal Parser =
                     | ListRecovery.Discards, DeclarationList.NestedModule
                     | ListRecovery.DiscardsInValue, DeclarationList.NestedModule ->
                         // The Compatibility Oracle skips the next tokens silently until a value, open, module, or namespace.
+                        state.HeaderLost <- true
+
                         suppress
                             state
                             (DeclarationAfterRecovery.SkippedInSignatureModule(state.Depth, true))
                     | ListRecovery.DiscardsInsideValueType, DeclarationList.NestedModule ->
+                        state.HeaderLost <- true
+
                         suppress
                             state
                             (DeclarationAfterRecovery.SkippedInSignatureModule(state.Depth, false))
+                    | ListRecovery.Discards, _ when state.HeaderLost ->
+                        suppress
+                            state
+                            (DeclarationAfterRecovery.SkippedInSignatureModule(
+                                state.Depth
+                                + 1,
+                                true
+                            ))
                     | ListRecovery.Discards, _
                     | ListRecovery.DiscardsAfterDeclaration, _ ->
                         // The Compatibility Oracle discards the rest of the file after this recovery and reports no diagnostic for it.
                         suppress state (DeclarationAfterRecovery.Discarded None)
+                    | ListRecovery.DiscardsInValue, _ when state.HeaderLost ->
+                        // The Compatibility Oracle keeps the lost module header, so this recovery also reports FS0222 at the end.
+                        suppress
+                            state
+                            (DeclarationAfterRecovery.SkippedInSignatureModule(
+                                state.Depth
+                                + 1,
+                                true
+                            ))
                     | ListRecovery.DiscardsInValue, _
                     | ListRecovery.DiscardsInsideValueType, _ ->
                         // The Compatibility Oracle discards later values and opens, and reports FS0010 at the end for other declarations.
@@ -3417,6 +3488,8 @@ module internal Parser =
             | Recovery.Suppressing(_, DeclarationAfterRecovery.ReportedAtRoot _) ->
                 // The Compatibility Oracle reports FS0530 for a namespace after a named module.
                 reportAfterRecovery state cursor.Current
+            | Recovery.Suppressing(_, DeclarationAfterRecovery.SkippedInSignatureModule _) ->
+                reportAfterRecovery state cursor.Current
             | Recovery.Suppressing _
             | Recovery.Interrupted _ -> reportPendingAtEnd state
 
@@ -3483,7 +3556,13 @@ module internal Parser =
         Parse =
             fun state list attributes token ->
                 if isKeyword "val" token then
-                    Some(parseVal state (list = DeclarationList.NestedModule) attributes)
+                    Some(
+                        parseVal
+                            state
+                            (list = DeclarationList.NestedModule
+                             || state.HeaderLost)
+                            attributes
+                    )
                 else
                     None
         NestedRecoveryDiscards = false
@@ -3511,6 +3590,7 @@ module internal Parser =
         InAnonymousRoot = false
         Depth = 0
         UnresumedAtEnd = None
+        HeaderLost = false
     }
 
     let parseImplementationFile (document: LexicalDocument) : ImplementationFileParseResult =
