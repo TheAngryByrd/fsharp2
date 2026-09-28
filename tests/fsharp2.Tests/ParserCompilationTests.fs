@@ -5,11 +5,11 @@ open Expecto
 open FSharp2.Compiler
 
 module ParserCompilationTests =
-    let private language =
-        LanguageVersion.normalize (Some "10.0")
-        |> Result.defaultWith failtest
+    let private parseAt mode target (files: (string * string) list) =
+        let language =
+            LanguageVersion.normalize (Some mode)
+            |> Result.defaultWith failtest
 
-    let private parse target (files: (string * string) list) =
         files
         |> List.map (fun (logicalPath, text) ->
             let kind =
@@ -32,6 +32,8 @@ module ParserCompilationTests =
         )
         |> ImmutableArray.CreateRange
         |> Parser.parseCompilation target
+
+    let private parse = parseAt "10.0"
 
     let private oracleLines (result: SyntaxCompilationResult) =
         result.Diagnostics
@@ -3240,6 +3242,45 @@ module private N =
                         ]
                         "Keywords"
                 | other -> failtest $"Expected an implementation file, found {other}"
+
+            testList "a non-recovery error keeps the full FS0524 range" [
+                for mode, logicalPath, text, expected in
+                    [
+                        "7.0",
+                        "u_dot.fs",
+                        "module M\nuse f = _.A\n",
+                        [
+                            "u_dot.fs(2,9,2,11): error FS3350: Feature 'underscore dot shorthand for accessor only function' is not available in F# 7.0. Please use language version 8.0 or greater."
+                            "u_dot.fs(2,1,2,12): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+                        ]
+                        "10.0",
+                        "u_succ.fs",
+                        "module M\nuse x = g f(1)\n",
+                        [
+                            "u_succ.fs(2,11,2,15): error FS0597: Successive arguments should be separated by spaces or tupled, and arguments involving function or method applications should be parenthesized"
+                            "u_succ.fs(2,1,2,15): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+                        ]
+                        "10.0",
+                        "u_succ_err.fs",
+                        "module M\nuse x = g f(1) )\n",
+                        [
+                            "u_succ_err.fs(2,11,2,15): error FS0597: Successive arguments should be separated by spaces or tupled, and arguments involving function or method applications should be parenthesized"
+                            "u_succ_err.fs(2,16,2,17): error FS0010: Unexpected symbol ')' in binding. Expected incomplete structured construct at or before this point or other token."
+                            "u_succ_err.fs(2,1,2,15): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+                        ]
+                    ] ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        Expect.sequenceEqual
+                            (oracleLines (
+                                parseAt mode SyntaxCompilationTarget.Executable [
+                                    logicalPath, text
+                                    last
+                                ]
+                            ))
+                            expected
+                            "The diagnostics must match the Compatibility Oracle"
+            ]
 
             testCase "files keep their order and their kind"
             <| fun _ ->
