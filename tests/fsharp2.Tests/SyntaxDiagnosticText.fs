@@ -5,5 +5,7 @@ open FSharp2.Compiler
 module internal SyntaxDiagnosticText =
     let severity (diagnostic: SyntaxDiagnostic) =
         match diagnostic.Severity with
-        | LexicalSeverity.Error -> "error"
-        | LexicalSeverity.Warning -> "warning"
+        | DiagnosticSeverity.Error -> "error"
+        | DiagnosticSeverity.Warning -> "warning"
+        | DiagnosticSeverity.Information -> "info"
+        | DiagnosticSeverity.Hidden -> "hidden"
