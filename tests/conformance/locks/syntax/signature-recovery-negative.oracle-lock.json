@@ -4,7 +4,7 @@
   "lockId": "syntax.signature-recovery-negative",
   "family": "syntax",
   "caseId": "language.syntax.signature-recovery-negative",
-  "caseHash": "sha256:a9c82beda79f0b69d8eba175bd8aa1917498db2cb3535310c7d0c71d25d5b7fc",
+  "caseHash": "sha256:178b25ff4e7bb73b68f7f53d1eb0671a90e09978519b03614931c18782f5310d",
   "oracleIdentity": {
     "sdkVersion": "10.0.110",
     "sdkCommit": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd",
@@ -36,11 +36,11 @@
       "textHash": "sha256:4d9efaf1c69fd2f1088ecef67012b9f589c03ca1700275fd67b10d914f009f33"
     },
     "stderr": {
-      "base64": "CkM6XFVzZXJzXGppbW15XEFwcERhdGFcTG9jYWxcVGVtcFxmMmNhcDI5XG9yYWNsZS1sYW5ndWFnZS1zeW50YXgtc2lnbmF0dXJlLXJlY292ZXJ5LW5lZ2F0aXZlLTIwMjYwOTI4VDAyMjUzNTE2NlotZGQwNGExM2U4MzQ5NDg5YWFiNmE2MWIyMDAxNzIyYmVcbGFuZXNcb3JhY2xlXHdvcmtcc3JjXExpYnJhcnkuZnNpKDQsMTcsNCwxOCk6IHBhcnNlIGVycm9yIEZTMDAxMDogVW5leHBlY3RlZCBzeW1ib2wgJyknIGluIHZhbHVlIHNpZ25hdHVyZQ0KCkM6XFVzZXJzXGppbW15XEFwcERhdGFcTG9jYWxcVGVtcFxmMmNhcDI5XG9yYWNsZS1sYW5ndWFnZS1zeW50YXgtc2lnbmF0dXJlLXJlY292ZXJ5LW5lZ2F0aXZlLTIwMjYwOTI4VDAyMjUzNTE2NlotZGQwNGExM2U4MzQ5NDg5YWFiNmE2MWIyMDAxNzIyYmVcbGFuZXNcb3JhY2xlXHdvcmtcc3JjXExpYnJhcnkuZnNpKDYsMTUsNiwxOCk6IHBhcnNlIGVycm9yIEZTMDAxMDogVW5leHBlY3RlZCBpZGVudGlmaWVyIGluIHZhbHVlIHNpZ25hdHVyZS4gRXhwZWN0ZWQgJzonIG9yIG90aGVyIHRva2VuLg0KCkM6XFVzZXJzXGppbW15XEFwcERhdGFcTG9jYWxcVGVtcFxmMmNhcDI5XG9yYWNsZS1sYW5ndWFnZS1zeW50YXgtc2lnbmF0dXJlLXJlY292ZXJ5LW5lZ2F0aXZlLTIwMjYwOTI4VDAyMjUzNTE2NlotZGQwNGExM2U4MzQ5NDg5YWFiNmE2MWIyMDAxNzIyYmVcbGFuZXNcb3JhY2xlXHdvcmtcc3JjXExpYnJhcnkuZnNpKDksMjQsOSwyNSk6IHBhcnNlIGVycm9yIEZTMDAxMDogVW5leHBlY3RlZCBzeW1ib2wgJ10nIGluIHZhbHVlIHNpZ25hdHVyZQ0K",
-      "byteLength": 795,
-      "byteHash": "sha256:a703dca7f4ceb239356f211c9e169962d548be301ec71e041b9e5288be62e546",
-      "text": "\nC:\\Users\\jimmy\\AppData\\Local\\Temp\\f2cap29\\oracle-language-syntax-signature-recovery-negative-20260928T022535166Z-dd04a13e8349489aab6a61b2001722be\\lanes\\oracle\\work\\src\\Library.fsi(4,17,4,18): parse error FS0010: Unexpected symbol ')' in value signature\r\n\nC:\\Users\\jimmy\\AppData\\Local\\Temp\\f2cap29\\oracle-language-syntax-signature-recovery-negative-20260928T022535166Z-dd04a13e8349489aab6a61b2001722be\\lanes\\oracle\\work\\src\\Library.fsi(6,15,6,18): parse error FS0010: Unexpected identifier in value signature. Expected ':' or other token.\r\n\nC:\\Users\\jimmy\\AppData\\Local\\Temp\\f2cap29\\oracle-language-syntax-signature-recovery-negative-20260928T022535166Z-dd04a13e8349489aab6a61b2001722be\\lanes\\oracle\\work\\src\\Library.fsi(9,24,9,25): parse error FS0010: Unexpected symbol ']' in value signature\r\n",
-      "textHash": "sha256:a703dca7f4ceb239356f211c9e169962d548be301ec71e041b9e5288be62e546"
+      "base64": "Ci9fZnNoYXJwMl9jb25mb3JtYW5jZS9yb290L3NyYy9MaWJyYXJ5LmZzaSg0LDE3LDQsMTgpOiBwYXJzZSBlcnJvciBGUzAwMTA6IFVuZXhwZWN0ZWQgc3ltYm9sICcpJyBpbiB2YWx1ZSBzaWduYXR1cmUNCgovX2ZzaGFycDJfY29uZm9ybWFuY2Uvcm9vdC9zcmMvTGlicmFyeS5mc2koNiwxNSw2LDE4KTogcGFyc2UgZXJyb3IgRlMwMDEwOiBVbmV4cGVjdGVkIGlkZW50aWZpZXIgaW4gdmFsdWUgc2lnbmF0dXJlLiBFeHBlY3RlZCAnOicgb3Igb3RoZXIgdG9rZW4uDQoKL19mc2hhcnAyX2NvbmZvcm1hbmNlL3Jvb3Qvc3JjL0xpYnJhcnkuZnNpKDksMjQsOSwyNSk6IHBhcnNlIGVycm9yIEZTMDAxMDogVW5leHBlY3RlZCBzeW1ib2wgJ10nIGluIHZhbHVlIHNpZ25hdHVyZQ0K",
+      "byteLength": 384,
+      "byteHash": "sha256:5b8ceb524f7c52ffc625f9bc8158e011bc7999f8290e557e4e7025c6c36de99d",
+      "text": "\n/_fsharp2_conformance/root/src/Library.fsi(4,17,4,18): parse error FS0010: Unexpected symbol ')' in value signature\r\n\n/_fsharp2_conformance/root/src/Library.fsi(6,15,6,18): parse error FS0010: Unexpected identifier in value signature. Expected ':' or other token.\r\n\n/_fsharp2_conformance/root/src/Library.fsi(9,24,9,25): parse error FS0010: Unexpected symbol ']' in value signature\r\n",
+      "textHash": "sha256:5b8ceb524f7c52ffc625f9bc8158e011bc7999f8290e557e4e7025c6c36de99d"
     }
   },
   "process": {

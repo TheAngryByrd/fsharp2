@@ -63,13 +63,16 @@ module ParserTests =
                 $"let {head}/{binding.Parameters.Length}{body}{skipped}"
             )
             |> String.concat " and "
-        | ImplementationDeclaration.NestedModule(name, declarations, _) ->
+        | ImplementationDeclaration.NestedModule nested ->
             let inner =
-                declarations
-                |> Seq.map declarationShape
+                Seq.append
+                    (nested.Declarations
+                     |> Seq.map declarationShape)
+                    (nested.DiscardedByRecovery
+                     |> Seq.map (fun declaration -> $"discarded: {declarationShape declaration}"))
                 |> String.concat "; "
 
-            $"module {name.Text} = [{inner}]"
+            $"module {nested.Name.Text} = [{inner}]"
         | ImplementationDeclaration.Type definition -> $"type {definition.Name.Text}"
         | ImplementationDeclaration.Do(attributes, _, _) ->
             $"do [{attributes.Length} attribute lists]"
@@ -123,13 +126,16 @@ module ParserTests =
             let skipped = if value.Skipped.IsSome then " (skipped)" else ""
 
             $"val {name}: {typeShape value.Type}{skipped}"
-        | SignatureDeclaration.NestedModule(name, declarations, _) ->
+        | SignatureDeclaration.NestedModule nested ->
             let inner =
-                declarations
-                |> Seq.map signatureShape
+                Seq.append
+                    (nested.Declarations
+                     |> Seq.map signatureShape)
+                    (nested.DiscardedByRecovery
+                     |> Seq.map (fun declaration -> $"discarded: {signatureShape declaration}"))
                 |> String.concat "; "
 
-            $"module {name.Text} = [{inner}]"
+            $"module {nested.Name.Text} = [{inner}]"
         | SignatureDeclaration.Skipped _ -> "skipped"
 
     let private signatureRecoveryCases = [
@@ -1038,10 +1044,10 @@ module Values =
 
                 let values =
                     match contents.Declarations[1] with
-                    | SignatureDeclaration.NestedModule(_, declarations, range) ->
-                        Expect.equal (position range) (5, 1, 10, 55) "Nested module range"
+                    | SignatureDeclaration.NestedModule nested ->
+                        Expect.equal (position nested.Range) (5, 1, 10, 55) "Nested module range"
 
-                        declarations
+                        nested.Declarations
                         |> Seq.map (fun declaration ->
                             match declaration with
                             | SignatureDeclaration.Val value -> value
@@ -1194,6 +1200,27 @@ module Values =
                             discarded
                             "Each later declaration is marked as discarded"
             ]
+
+            testCase "nested modules keep the declarations that the Oracle discards"
+            <| fun _ ->
+                let logicalPath = "NestedThenLet.fs"
+
+                let result =
+                    parse
+                        logicalPath
+                        "namespace A\nmodule M =\n    let a = 1\n    )\n    let b = 1\n"
+
+                Expect.equal
+                    (oracleLines logicalPath result.Diagnostics
+                     |> List.head)
+                    "NestedThenLet.fs(4,5): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+                    "The first diagnostic matches the Compatibility Oracle"
+
+                Expect.sequenceEqual
+                    (result.File.Contents
+                     |> Seq.collect (rootShapes declarationShape))
+                    [ "module M = [let a/0; skipped; discarded: let b/0]" ]
+                    "The nested module keeps its discarded declaration apart"
 
             testCase "recovery nodes keep the exact missing and skipped ranges"
             <| fun _ ->

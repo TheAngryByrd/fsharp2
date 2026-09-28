@@ -2335,8 +2335,7 @@ module internal Parser =
         StartPoint: DeclarationList -> RecoveryPoint
         FirstNestedPoint: RecoveryPoint
         Open: LongIdentifier * SourceRange -> 'Declaration
-        NestedModule:
-            SyntaxIdentifier -> ImmutableArray<'Declaration> -> SourceRange -> 'Declaration
+        NestedModule: SyntaxNestedModule<'Declaration> -> 'Declaration
         Skipped: SkippedSyntax -> 'Declaration
     }
 
@@ -2528,14 +2527,23 @@ module internal Parser =
                 cursor.Advance()
                 |> ignore
 
-                let declarations, _ = parseDeclarations state rules DeclarationList.NestedModule
+                let declarations, discarded =
+                    parseDeclarations state rules DeclarationList.NestedModule
+
                 let range = span moduleToken.Range (emptyAt cursor.LastEnd)
 
                 if cursor.Current.Kind = LayoutTokenKind.EndBlock then
                     cursor.Advance()
                     |> ignore
 
-                Some(rules.NestedModule name declarations range)
+                Some(
+                    rules.NestedModule {
+                        Name = name
+                        Declarations = declarations
+                        DiscardedByRecovery = discarded
+                        Range = range
+                    }
+                )
             else
                 reportUnsupported state cursor.Current "a module declaration"
                 None
@@ -2652,9 +2660,7 @@ module internal Parser =
                 | DeclarationList.ModuleRoot
                 | DeclarationList.NestedModule -> RecoveryPoint.DefinitionStart
         Open = ImplementationDeclaration.Open
-        NestedModule =
-            fun name declarations range ->
-                ImplementationDeclaration.NestedModule(name, declarations, range)
+        NestedModule = ImplementationDeclaration.NestedModule
         Skipped = ImplementationDeclaration.Skipped
     }
 
@@ -2679,9 +2685,7 @@ module internal Parser =
                 | DeclarationList.ModuleRoot
                 | DeclarationList.NamespaceRoot -> RecoveryPoint.SignatureFile
         Open = SignatureDeclaration.Open
-        NestedModule =
-            fun name declarations range ->
-                SignatureDeclaration.NestedModule(name, declarations, range)
+        NestedModule = SignatureDeclaration.NestedModule
         Skipped = SignatureDeclaration.Skipped
     }
 

@@ -32,9 +32,7 @@
     "syntax.expressions"
   ],
   "languageVersions": [
-    "default",
-    "9.0",
-    "10.0"
+    "default"
   ],
   "optionCells": [
     "debug-optimize-minus-tailcalls-minus-portable-deterministic",
