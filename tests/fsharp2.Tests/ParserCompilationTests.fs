@@ -1399,6 +1399,48 @@ module M =
     ]
 
     let private nestedRecoveryEndCases = [
+        "m2_let.fs",
+        "module M\nmodule N =\n    1 )\n    module O =\n        let a = 1\n        let b = 2\nlet c = 3\n",
+        [
+            "m2_let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "m2_let.fs(6,9,6,12): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "m2_none.fs",
+        "module M\nmodule N =\n    1 )\n    module O =\n        let a = 1\n        let b = 2\n",
+        [
+            "m2_none.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "m2_none.fs(6,9,6,12): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "m1_expr.fs",
+        "module M\nmodule N =\n    1 )\n    module O =\n        let a = 1\n        f 2\nlet c = 3\n",
+        [
+            "m1_expr.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "m1_expr.fs(6,9,6,10): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "m1_nested.fs",
+        "module M\nmodule N =\n    1 )\n    module O =\n        let a = 1\n    let b = 2\nlet c = 3\n",
+        [
+            "m1_nested.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "m1_nested.fs(6,5,6,8): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "mexpr_let.fs",
+        "module M\nmodule N =\n    1 )\n    module O =\n        f 1\n        let b = 2\nlet c = 3\n",
+        [
+            "mexpr_let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "mexpr_let.fs(7,1,7,4): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "m3_let.fs",
+        "module M\nmodule N =\n    1 )\n    module O =\n        let a = 1\n        let b = 2\n        let e = 3\nlet c = 3\n",
+        [
+            "m3_let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "m3_let.fs(6,9,6,12): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
         "e_none.fs",
         "module M\nmodule N =\n    1 )\n",
         [

@@ -84,11 +84,17 @@ module internal Parser =
 
     [<RequireQualifiedAccess>]
     type private DeclarationAfterRecovery =
-        | Discarded
-        | Unmodeled
+        | Discarded of rootReportStart: int option
+        | Unmodeled of reportsAtEnd: bool
         | DiscardedIfValueOrOpen
-        | ReportedAtRoot
+        | ReportedAtRoot of recoveryDepth: int
         | IncompleteAtNext
+
+    [<RequireQualifiedAccess>]
+    type private Recovery =
+        | Parsing
+        | Suppressing of suppressFrom: int * next: DeclarationAfterRecovery
+        | Interrupted of suppressFrom: int
 
     [<RequireQualifiedAccess>]
     type private DiscardedDeclaration =
@@ -101,14 +107,9 @@ module internal Parser =
         Diagnostics: ResizeArray<SyntaxDiagnostic>
         ReportedStarts: HashSet<int>
         Language: LanguageVersionIdentity
-        mutable SuppressFrom: int option
-        mutable NextDeclaration: DeclarationAfterRecovery
-        mutable UnmodeledAtEnd: bool
-        mutable Interrupted: bool
+        mutable Recovery: Recovery
         mutable InAnonymousRoot: bool
-        mutable RootReportStart: int option
         mutable Depth: int
-        mutable RecoveryDepth: int
     }
 
     [<RequireQualifiedAccess>]
@@ -1051,6 +1052,32 @@ module internal Parser =
 
     let private parsePattern state context = parsePatternWith false state context
 
+    let private comparisonOperatorsAfterOperand =
+        HashSet [
+            "<<<"
+            "<="
+            "<>"
+            "<|"
+        ]
+
+    let private typeArgumentScanStops =
+        HashSet [
+            "+"
+            "="
+            "||"
+            "&&"
+            "|>"
+        ]
+
+    let private typeArgumentScanContinues =
+        HashSet [
+            ","
+            "*"
+            "-"
+            ";"
+            "."
+        ]
+
     let rec private parseExpression state context =
         let cursor = state.Cursor
         let first = parseInfix state context 0
@@ -1082,6 +1109,58 @@ module internal Parser =
         else
             first
 
+    and private adjacentLessThanIsOperator (cursor: Cursor) =
+        let text = tokenText cursor.Current
+
+        if
+            text
+            <> "<"
+        then
+            comparisonOperatorsAfterOperand.Contains text
+        else
+            // The Compatibility Oracle reads an adjacent '<' as type arguments when a scan across lines finds the closing '>'.
+            let rec scan offset parentheses =
+                let token = cursor.Peek offset
+                let text = tokenText token
+
+                match token.Kind with
+                | LayoutTokenKind.BeginBlock
+                | LayoutTokenKind.Separator
+                | LayoutTokenKind.EndBlock -> scan (offset + 1) parentheses
+                | LayoutTokenKind.SourceToken ->
+                    if isEndOfFile token then
+                        true
+                    elif isDelimiter ")" token then
+                        parentheses = 0
+                        || scan
+                            (offset + 1)
+                            (parentheses
+                             - 1)
+                    elif isDelimiter "(" token then
+                        scan
+                            (offset + 1)
+                            (parentheses
+                             + 1)
+                    elif isKeyword "then" token then
+                        true
+                    elif
+                        isKind LexicalTokenKind.Operator token
+                        && typeArgumentScanStops.Contains text
+                    then
+                        true
+                    elif
+                        isIdentifier token
+                        || isKind LexicalTokenKind.NumericLiteral token
+                        || ((isKind LexicalTokenKind.Operator token
+                             || isKind LexicalTokenKind.Delimiter token)
+                            && typeArgumentScanContinues.Contains text)
+                    then
+                        scan (offset + 1) parentheses
+                    else
+                        false
+
+            scan 1 0
+
     and private parseInfix state context minimum =
         let cursor = state.Cursor
         let mutable left = parseApplication state context
@@ -1104,6 +1183,7 @@ module internal Parser =
                 if
                     followsWithoutSpace
                     && text.StartsWith("<", StringComparison.Ordinal)
+                    && not (adjacentLessThanIsOperator cursor)
                 then
                     reportUnsupported state token "a type application in an expression"
                 elif
@@ -2568,8 +2648,34 @@ module internal Parser =
 
     let private reportAfterRecovery state (token: LayoutToken) =
         reportUnsupported state token "a declaration after syntax recovery"
-        state.Interrupted <- true
-        state.SuppressFrom <- Some state.Diagnostics.Count
+        state.Recovery <- Recovery.Interrupted state.Diagnostics.Count
+
+    let private isSuppressing state =
+        match state.Recovery with
+        | Recovery.Parsing -> false
+        | Recovery.Suppressing _
+        | Recovery.Interrupted _ -> true
+
+    let private pendingDeclaration state =
+        match state.Recovery with
+        | Recovery.Suppressing(_, next) -> Some next
+        | Recovery.Parsing
+        | Recovery.Interrupted _ -> None
+
+    let private discardsSilently state =
+        match pendingDeclaration state with
+        | Some(DeclarationAfterRecovery.Discarded _) -> true
+        | _ -> false
+
+    let private suppress state next =
+        state.Recovery <- Recovery.Suppressing(state.Diagnostics.Count, next)
+
+    let private continueSuppression state next =
+        match state.Recovery with
+        | Recovery.Suppressing(suppressFrom, _) ->
+            state.Recovery <- Recovery.Suppressing(suppressFrom, next)
+        | Recovery.Parsing
+        | Recovery.Interrupted _ -> ()
 
     let private rootKeywords =
         HashSet [
@@ -2655,17 +2761,13 @@ module internal Parser =
             "Incomplete structured construct at or before this point in implementation file"
             range
 
-        state.NextDeclaration <- DeclarationAfterRecovery.Discarded
-        state.RootReportStart <- Some range.Start.Offset
-        state.SuppressFrom <- Some state.Diagnostics.Count
+        suppress state (DeclarationAfterRecovery.Discarded(Some range.Start.Offset))
 
     let private reportAtRoot state =
         match rootDeclarationToken state.Cursor with
         | Some(description, range) ->
             report state "FS0010" $"Unexpected {description} in implementation file" range
-            state.NextDeclaration <- DeclarationAfterRecovery.Discarded
-            state.RootReportStart <- Some range.Start.Offset
-            state.SuppressFrom <- Some state.Diagnostics.Count
+            suppress state (DeclarationAfterRecovery.Discarded(Some range.Start.Offset))
         | None -> reportAfterRecovery state state.Cursor.Current
 
     let private reportIncompleteAtNext state =
@@ -2674,12 +2776,9 @@ module internal Parser =
         | None -> reportAfterRecovery state state.Cursor.Current
 
     let private reportPendingAtEnd state =
-        if
-            state.SuppressFrom.IsSome
-            && not state.Interrupted
-            && (state.NextDeclaration = DeclarationAfterRecovery.ReportedAtRoot
-                || state.NextDeclaration = DeclarationAfterRecovery.IncompleteAtNext)
-        then
+        match pendingDeclaration state with
+        | Some(DeclarationAfterRecovery.ReportedAtRoot _)
+        | Some DeclarationAfterRecovery.IncompleteAtNext ->
             let token = state.Cursor.Current
 
             if isEndOfFile token then
@@ -2697,41 +2796,48 @@ module internal Parser =
                 reportIncompleteAtRoot state { Start = lineStart; End = eof }
             else
                 reportIncompleteAtRoot state token.Range
+        | _ -> ()
 
-    let private suppress state nextDeclaration unmodeledAtEnd =
-        state.SuppressFrom <- Some state.Diagnostics.Count
-        state.NextDeclaration <- nextDeclaration
-        state.UnmodeledAtEnd <- unmodeledAtEnd
 
     let private suppressAfterNestedRecovery state =
         if state.InAnonymousRoot then
-            suppress state DeclarationAfterRecovery.Unmodeled true
+            suppress state (DeclarationAfterRecovery.Unmodeled true)
         else
-            suppress state DeclarationAfterRecovery.ReportedAtRoot false
-            state.RecoveryDepth <- state.Depth
+            suppress state (DeclarationAfterRecovery.ReportedAtRoot state.Depth)
 
     let private removeSuppressedDiagnostics state =
-        match state.SuppressFrom with
-        | Some first ->
+        let rootReportStart =
+            match pendingDeclaration state with
+            | Some(DeclarationAfterRecovery.Discarded rootReportStart) -> rootReportStart
+            | _ -> None
+
+        let removeFrom suppressFrom =
             let kept =
                 state.Diagnostics
-                |> Seq.skip first
+                |> Seq.skip suppressFrom
                 |> Seq.filter (fun diagnostic ->
                     diagnostic.Code = unsupportedCode
-                    && state.RootReportStart
+                    && rootReportStart
                        <> Some diagnostic.Range.Start.Offset
                 )
                 |> Seq.toArray
 
             state.Diagnostics.RemoveRange(
-                first,
+                suppressFrom,
                 state.Diagnostics.Count
-                - first
+                - suppressFrom
             )
 
             state.Diagnostics.AddRange kept
-            state.SuppressFrom <- Some state.Diagnostics.Count
-        | None -> ()
+
+        match state.Recovery with
+        | Recovery.Suppressing(suppressFrom, next) ->
+            removeFrom suppressFrom
+            state.Recovery <- Recovery.Suppressing(state.Diagnostics.Count, next)
+        | Recovery.Interrupted suppressFrom ->
+            removeFrom suppressFrom
+            state.Recovery <- Recovery.Interrupted state.Diagnostics.Count
+        | Recovery.Parsing -> ()
 
     let rec private parseDeclarations
         state
@@ -2753,11 +2859,7 @@ module internal Parser =
             elif isDeclarationListEnd token then
                 stop <- true
             else
-                let target =
-                    if state.SuppressFrom.IsSome then
-                        discarded
-                    else
-                        declarations
+                let target = if isSuppressing state then discarded else declarations
 
                 let firstInNestedModule =
                     list = DeclarationList.NestedModule
@@ -2766,43 +2868,37 @@ module internal Parser =
 
                 let reported = state.Diagnostics.Count
 
-                if
-                    state.SuppressFrom.IsSome
-                    && not state.Interrupted
-                then
-                    match state.NextDeclaration with
-                    | DeclarationAfterRecovery.ReportedAtRoot when
-                        list
-                        <> DeclarationList.NestedModule
-                        ->
-                        reportAtRoot state
-                    | DeclarationAfterRecovery.IncompleteAtNext -> reportIncompleteAtNext state
-                    | _ -> ()
+                match pendingDeclaration state with
+                | Some(DeclarationAfterRecovery.ReportedAtRoot _) when
+                    list
+                    <> DeclarationList.NestedModule
+                    ->
+                    reportAtRoot state
+                | Some DeclarationAfterRecovery.IncompleteAtNext -> reportIncompleteAtNext state
+                | _ -> ()
 
                 let discardedBeforeRootReport =
-                    state.SuppressFrom.IsSome
-                    && not state.Interrupted
-                    && state.NextDeclaration = DeclarationAfterRecovery.ReportedAtRoot
+                    match pendingDeclaration state with
+                    | Some(DeclarationAfterRecovery.ReportedAtRoot _) -> true
+                    | _ -> false
 
                 let attributes = parseAttributeLists state
                 let token = cursor.Current
 
-                if
-                    state.SuppressFrom.IsSome
-                    && not state.Interrupted
-                    && (
-                        match state.NextDeclaration with
-                        | DeclarationAfterRecovery.Discarded
-                        | DeclarationAfterRecovery.ReportedAtRoot
-                        | DeclarationAfterRecovery.IncompleteAtNext -> false
-                        | DeclarationAfterRecovery.Unmodeled -> true
-                        | DeclarationAfterRecovery.DiscardedIfValueOrOpen ->
-                            not (
-                                isKeyword "val" token
-                                || isKeyword "open" token
-                            )
-                    )
-                then
+                let interrupts =
+                    match pendingDeclaration state with
+                    | None
+                    | Some(DeclarationAfterRecovery.Discarded _)
+                    | Some(DeclarationAfterRecovery.ReportedAtRoot _)
+                    | Some DeclarationAfterRecovery.IncompleteAtNext -> false
+                    | Some(DeclarationAfterRecovery.Unmodeled _) -> true
+                    | Some DeclarationAfterRecovery.DiscardedIfValueOrOpen ->
+                        not (
+                            isKeyword "val" token
+                            || isKeyword "open" token
+                        )
+
+                if interrupts then
                     reportAfterRecovery state token
 
                 let parsed, recovery =
@@ -2814,10 +2910,7 @@ module internal Parser =
                                               - 1]
                                     .Range.End.Line = token.Range.Start.Line))
                     then
-                        if
-                            state.SuppressFrom.IsSome
-                            && state.NextDeclaration = DeclarationAfterRecovery.Discarded
-                        then
+                        if discardsSilently state then
                             skipUntil state token.Range.Start
                             |> Option.iter (
                                 rules.Skipped
@@ -2838,8 +2931,7 @@ module internal Parser =
                         | Some result -> result
                         | None when
                             rules.SkipsUnrecognizedAfterRecovery
-                            && state.SuppressFrom.IsSome
-                            && state.NextDeclaration = DeclarationAfterRecovery.Discarded
+                            && discardsSilently state
                             ->
                             // The Compatibility Oracle discards any declaration after a signature file recovery and reports no diagnostic for it.
                             skipUntil state token.Range.Start
@@ -2868,28 +2960,27 @@ module internal Parser =
                 parsed
                 |> Option.iter target.Add
 
-                if
-                    discardedBeforeRootReport
-                    && state.NextDeclaration = DeclarationAfterRecovery.ReportedAtRoot
-                then
-                    let discardedKind =
-                        if state.Depth < state.RecoveryDepth then
-                            // The Compatibility Oracle keeps the root diagnostic for declarations of an outer module.
-                            Some DiscardedDeclaration.KeepsRootReport
-                        elif state.RecoveryDepth = 1 then
-                            parsed
-                            |> Option.map rules.Discarded
-                        else
-                            Some DiscardedDeclaration.Unmodeled
+                if discardedBeforeRootReport then
+                    match pendingDeclaration state with
+                    | Some(DeclarationAfterRecovery.ReportedAtRoot recoveryDepth) ->
+                        let discardedKind =
+                            if state.Depth < recoveryDepth then
+                                // The Compatibility Oracle keeps the root diagnostic for declarations of an outer module.
+                                Some DiscardedDeclaration.KeepsRootReport
+                            elif recoveryDepth = 1 then
+                                parsed
+                                |> Option.map rules.Discarded
+                            else
+                                Some DiscardedDeclaration.Unmodeled
 
-                    match discardedKind with
-                    | None
-                    | Some DiscardedDeclaration.KeepsRootReport -> ()
-                    | Some DiscardedDeclaration.MakesNextIncomplete ->
-                        state.NextDeclaration <- DeclarationAfterRecovery.IncompleteAtNext
-                    | Some DiscardedDeclaration.Unmodeled ->
-                        state.NextDeclaration <- DeclarationAfterRecovery.Unmodeled
-                        state.UnmodeledAtEnd <- true
+                        match discardedKind with
+                        | None
+                        | Some DiscardedDeclaration.KeepsRootReport -> ()
+                        | Some DiscardedDeclaration.MakesNextIncomplete ->
+                            continueSuppression state DeclarationAfterRecovery.IncompleteAtNext
+                        | Some DiscardedDeclaration.Unmodeled ->
+                            continueSuppression state (DeclarationAfterRecovery.Unmodeled true)
+                    | _ -> ()
 
                 let next = cursor.Current
 
@@ -2911,7 +3002,7 @@ module internal Parser =
                         >> target.Add
                     )
 
-                if state.SuppressFrom.IsSome then
+                if isSuppressing state then
                     removeSuppressedDiagnostics state
                 else
                     match recovery, list with
@@ -2920,7 +3011,7 @@ module internal Parser =
                         && firstInNestedModule
                         ->
                         // The Compatibility Oracle discards later declarations of this module only, and reports one more diagnostic if any exist.
-                        suppress state DeclarationAfterRecovery.Unmodeled false
+                        suppress state (DeclarationAfterRecovery.Unmodeled false)
                         scopedSuppression <- true
                     | ListRecovery.Discards, DeclarationList.NestedModule when
                         rules.NestedRecoveryDiscards
@@ -2935,20 +3026,17 @@ module internal Parser =
                     | ListRecovery.Discards, _
                     | ListRecovery.DiscardsAfterDeclaration, _ ->
                         // The Compatibility Oracle discards the rest of the file after this recovery and reports no diagnostic for it.
-                        suppress state DeclarationAfterRecovery.Discarded false
+                        suppress state (DeclarationAfterRecovery.Discarded None)
                     | ListRecovery.DiscardsInValue, _ ->
                         // The Compatibility Oracle discards later values and opens, and reports FS0010 at the end for other declarations.
-                        suppress state DeclarationAfterRecovery.DiscardedIfValueOrOpen false
+                        suppress state DeclarationAfterRecovery.DiscardedIfValueOrOpen
                     | ListRecovery.Unmodeled, _ ->
-                        suppress state DeclarationAfterRecovery.Unmodeled false
+                        suppress state (DeclarationAfterRecovery.Unmodeled false)
                     | ListRecovery.Continues, _ -> ()
 
-        if
-            scopedSuppression
-            && not state.Interrupted
-        then
-            state.SuppressFrom <- None
-            state.NextDeclaration <- DeclarationAfterRecovery.Discarded
+        match state.Recovery with
+        | Recovery.Suppressing _ when scopedSuppression -> state.Recovery <- Recovery.Parsing
+        | _ -> ()
 
         declarations.ToImmutable(), discarded.ToImmutable()
 
@@ -3084,16 +3172,14 @@ module internal Parser =
                 roots.Add(root ModuleOrNamespaceKind.AnonymousModule first.Range declarations)
 
         if not (isEndOfFile cursor.Current) then
-            if state.SuppressFrom.IsNone then
+            match state.Recovery with
+            | Recovery.Parsing ->
                 reportUnsupported state cursor.Current "a module or namespace declaration"
-            elif
-                not state.Interrupted
-                && state.NextDeclaration = DeclarationAfterRecovery.ReportedAtRoot
-            then
+            | Recovery.Suppressing(_, DeclarationAfterRecovery.ReportedAtRoot _) ->
                 // The Compatibility Oracle reports FS0530 for a namespace after a named module.
                 reportAfterRecovery state cursor.Current
-            else
-                reportPendingAtEnd state
+            | Recovery.Suppressing _
+            | Recovery.Interrupted _ -> reportPendingAtEnd state
 
             while not (isEndOfFile cursor.Current) do
                 cursor.Advance()
@@ -3101,12 +3187,9 @@ module internal Parser =
 
         reportPendingAtEnd state
 
-        if
-            state.SuppressFrom.IsSome
-            && state.UnmodeledAtEnd
-            && not state.Interrupted
-        then
-            reportAfterRecovery state cursor.Current
+        match pendingDeclaration state with
+        | Some(DeclarationAfterRecovery.Unmodeled true) -> reportAfterRecovery state cursor.Current
+        | _ -> ()
 
         roots.ToImmutable()
 
@@ -3182,14 +3265,9 @@ module internal Parser =
         Diagnostics = ResizeArray()
         ReportedStarts = HashSet()
         Language = document.LanguageVersion
-        SuppressFrom = None
-        NextDeclaration = DeclarationAfterRecovery.Discarded
-        UnmodeledAtEnd = false
-        Interrupted = false
+        Recovery = Recovery.Parsing
         InAnonymousRoot = false
-        RootReportStart = None
         Depth = 0
-        RecoveryDepth = 0
     }
 
     let parseImplementationFile (document: LexicalDocument) : ImplementationFileParseResult =
