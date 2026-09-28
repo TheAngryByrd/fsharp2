@@ -2906,16 +2906,23 @@ module internal Parser =
     let private missingDeclarationMessage =
         "Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
 
-    let private nextTokenStart (document: LexicalDocument) offset =
-        let token =
-            document.LayoutTokens
-            |> Seq.find (fun token ->
-                token.Kind = LayoutTokenKind.SourceToken
-                && token.Range.Start.Offset
-                   >= offset
-            )
+    let private implicitModuleMessage moduleName fileName =
+        $"The declarations in this file will be placed in an implicit module '{moduleName}' based on the file name '{fileName}'. However this is not a valid F# identifier, so the contents will not be accessible from other files. Consider renaming the file or adding a 'module' or 'namespace' declaration at the top of the file."
 
-        token.Range.Start
+    type private AnonymousRoot = {
+        Range: SourceRange
+        HasDeclarations: bool
+    }
+
+    let private nextToken (document: LexicalDocument) offset =
+        document.LayoutTokens
+        |> Seq.find (fun token ->
+            token.Kind = LayoutTokenKind.SourceToken
+            && token.Range.Start.Offset
+               >= offset
+        )
+
+    let private nextTokenStart document offset = (nextToken document offset).Range.Start
 
     let private anonymousRoot (contents: ImmutableArray<ModuleOrNamespaceSyntax<_>>) =
         contents
@@ -2926,53 +2933,107 @@ module internal Parser =
             | ModuleOrNamespaceKind.Namespace _ -> false
         )
 
-    let private anonymousImplementationRange
+    let private anonymousImplementation
         (document: LexicalDocument)
         (root: ModuleOrNamespaceSyntax<ImplementationDeclaration>)
         =
-        let start = nextTokenStart document 0
+        let first = nextToken document 0
+        let start = first.Range.Start
 
-        let finish =
-            let kept =
-                root.Declarations
-                |> Seq.filter (fun declaration ->
-                    match declaration with
-                    | ImplementationDeclaration.Skipped _ -> false
-                    | _ -> true
-                )
+        let kept =
+            root.Declarations
+            |> Seq.filter (fun declaration ->
+                match declaration with
+                | ImplementationDeclaration.Skipped _ -> false
+                | _ -> true
+            )
+            |> Seq.toList
 
-            match Seq.tryLast kept with
-            | None -> start
-            | Some(ImplementationDeclaration.Open(_, range)) -> range.End
-            | Some last -> nextTokenStart document last.Range.End.Offset
+        let range =
+            match List.tryLast kept with
+            | None when isEndOfFile first -> emptyAt start
+            | None -> first.Range
+            | Some last ->
+                let finish =
+                    match last with
+                    | ImplementationDeclaration.Open(_, range) -> range.End
+                    | _ -> nextTokenStart document last.Range.End.Offset
 
-        if finish.Line > start.Line then
-            {
-                Start = start
-                End =
-                    SourceMap.positionAt
-                        document.SourceMap
-                        document.SourceMap.LineStarts[start.Line]
-            }
-        else
-            { Start = start; End = finish }
+                if finish.Line > start.Line then
+                    {
+                        Start = start
+                        End =
+                            SourceMap.positionAt
+                                document.SourceMap
+                                document.SourceMap.LineStarts[start.Line]
+                    }
+                else
+                    { Start = start; End = finish }
 
-    let private anonymousSignatureRange
+        {
+            Range = range
+            HasDeclarations = not kept.IsEmpty
+        }
+
+    let private anonymousSignature
         (document: LexicalDocument)
         (root: ModuleOrNamespaceSyntax<SignatureDeclaration>)
         =
-        let start = nextTokenStart document 0
+        let first = nextToken document 0
+        let start = first.Range.Start
 
-        match Seq.tryLast root.Declarations with
-        | None -> emptyAt start
-        | Some(SignatureDeclaration.Skipped skipped) -> {
-            Start = start
-            End = skipped.Range.End
-          }
-        | Some last -> {
-            Start = start
-            End = nextTokenStart document last.Range.End.Offset
-          }
+        let hasDeclarations =
+            root.Declarations
+            |> Seq.exists (fun declaration ->
+                match declaration with
+                | SignatureDeclaration.Skipped _ -> false
+                | _ -> true
+            )
+
+        let range =
+            match Seq.tryLast root.Declarations with
+            | _ when
+                not hasDeclarations
+                && isEndOfFile first
+                ->
+                emptyAt start
+            | _ when not hasDeclarations -> first.Range
+            | None -> emptyAt start
+            | Some(SignatureDeclaration.Skipped skipped) -> {
+                Start = start
+                End = skipped.Range.End
+              }
+            | Some last -> {
+                Start = start
+                End = nextTokenStart document last.Range.End.Offset
+              }
+
+        {
+            Range = range
+            HasDeclarations = hasDeclarations
+        }
+
+    let private invalidImplicitModuleName (logicalPath: string) =
+        let fileName = IO.Path.GetFileName logicalPath
+        let stem = IO.Path.GetFileNameWithoutExtension fileName
+
+        let moduleName =
+            if stem.Length = 0 then
+                stem
+            else
+                string (Char.ToUpperInvariant stem[0])
+                + stem.Substring 1
+
+        if
+            moduleName
+            |> Seq.forall (fun character ->
+                Char.IsLetterOrDigit character
+                || character = '_'
+            )
+        then
+            None
+        else
+            Some(moduleName, fileName)
 
     let parseCompilation (target: SyntaxCompilationTarget) (sources: ImmutableArray<SyntaxSource>) =
         let files = ImmutableArray.CreateBuilder<SyntaxFile>()
@@ -2982,21 +3043,21 @@ module internal Parser =
         |> Seq.iteri (fun index source ->
             let document = source.Document
 
-            let file, fileDiagnostics, anonymousRange =
+            let file, fileDiagnostics, anonymous =
                 if source.Kind = SyntaxSourceKind.Signature then
                     let result = parseSignatureFile document
 
                     SyntaxFile.Signature result.File,
                     result.Diagnostics,
                     anonymousRoot result.File.Contents
-                    |> Option.map (anonymousSignatureRange document)
+                    |> Option.map (anonymousSignature document)
                 else
                     let result = parseImplementationFile document
 
                     SyntaxFile.Implementation result.File,
                     result.Diagnostics,
                     anonymousRoot result.File.Contents
-                    |> Option.map (anonymousImplementationRange document)
+                    |> Option.map (anonymousImplementation document)
 
             let add diagnostic =
                 diagnostics.Add {
@@ -3007,23 +3068,34 @@ module internal Parser =
             files.Add file
             Seq.iter add fileDiagnostics
 
-            let requiresDeclaration =
-                match source.Kind, target with
-                | SyntaxSourceKind.Script, _ -> false
-                | _, SyntaxCompilationTarget.Library -> true
-                | _, SyntaxCompilationTarget.Executable ->
-                    index < sources.Length
-                            - 1
+            match source.Kind, anonymous with
+            | SyntaxSourceKind.Script, _
+            | _, None -> ()
+            | _, Some anonymous ->
+                let requiresDeclaration =
+                    match target with
+                    | SyntaxCompilationTarget.Library -> true
+                    | SyntaxCompilationTarget.Executable ->
+                        index < sources.Length
+                                - 1
 
-            match anonymousRange with
-            | Some range when requiresDeclaration ->
-                add {
-                    Severity = LexicalSeverity.Error
-                    Code = "FS0222"
-                    Message = missingDeclarationMessage
-                    Range = range
-                }
-            | _ -> ()
+                if requiresDeclaration then
+                    add {
+                        Severity = LexicalSeverity.Error
+                        Code = "FS0222"
+                        Message = missingDeclarationMessage
+                        Range = anonymous.Range
+                    }
+
+                match invalidImplicitModuleName document.LogicalPath with
+                | Some(moduleName, fileName) when anonymous.HasDeclarations ->
+                    add {
+                        Severity = LexicalSeverity.Warning
+                        Code = "FS0221"
+                        Message = implicitModuleMessage moduleName fileName
+                        Range = anonymous.Range
+                    }
+                | _ -> ()
         )
 
         {

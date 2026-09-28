@@ -46,6 +46,17 @@ module ParserCompilationTests =
     let private missingDeclaration logicalPath startLine startColumn endLine endColumn =
         $"{logicalPath}({startLine},{startColumn},{endLine},{endColumn}): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
 
+    let private implicitModule
+        logicalPath
+        moduleName
+        fileName
+        startLine
+        startColumn
+        endLine
+        endColumn
+        =
+        $"{logicalPath}({startLine},{startColumn},{endLine},{endColumn}): warning FS0221: The declarations in this file will be placed in an implicit module '{moduleName}' based on the file name '{fileName}'. However this is not a valid F# identifier, so the contents will not be accessible from other files. Consider renaming the file or adding a 'module' or 'namespace' declaration at the top of the file."
+
     let private anonymous = "Anonymous.fs", "let a = 1\n"
     let private named = "Named.fs", "module B\nlet b = 1\n"
     let private last = "Last.fs", "module Z\nlet z = 1\n"
@@ -337,6 +348,257 @@ module ParserCompilationTests =
             last
         ],
         [ missingDeclaration "Mixed.FsI" 1 1 2 1 ]
+
+        "an implicit module name with a hyphen before the last file",
+        SyntaxCompilationTarget.Executable,
+        [
+            "my-file.fs", "let a = 1\n"
+            last
+        ],
+        [
+            missingDeclaration "my-file.fs" 1 1 2 1
+            implicitModule "my-file.fs" "My-file" "my-file.fs" 1 1 2 1
+        ]
+
+        "an implicit module name with a hyphen in the last file",
+        SyntaxCompilationTarget.Executable,
+        [
+            last
+            "my-file.fs", "let a = 1\n"
+        ],
+        [ implicitModule "my-file.fs" "My-file" "my-file.fs" 1 1 2 1 ]
+
+        "an implicit module name with a hyphen in a library",
+        SyntaxCompilationTarget.Library,
+        [ "my-file.fs", "let a = 1\n" ],
+        [
+            missingDeclaration "my-file.fs" 1 1 2 1
+            implicitModule "my-file.fs" "My-file" "my-file.fs" 1 1 2 1
+        ]
+
+        "the implicit module message uses the file name without its folder",
+        SyntaxCompilationTarget.Executable,
+        [
+            last
+            "/src/my-file.fs", "let a = 1\n"
+        ],
+        [ implicitModule "/src/my-file.fs" "My-file" "my-file.fs" 1 1 2 1 ]
+
+        "an implicit module name with a space",
+        SyntaxCompilationTarget.Executable,
+        [
+            last
+            "a b.fs", "let a = 1\n"
+        ],
+        [ implicitModule "a b.fs" "A b" "a b.fs" 1 1 2 1 ]
+
+        "an implicit module name with a dot",
+        SyntaxCompilationTarget.Executable,
+        [
+            last
+            "a.b.fs", "let a = 1\n"
+        ],
+        [ implicitModule "a.b.fs" "A.b" "a.b.fs" 1 1 2 1 ]
+
+        "an implicit module name with an apostrophe",
+        SyntaxCompilationTarget.Executable,
+        [
+            last
+            "x'.fs", "let a = 1\n"
+        ],
+        [ implicitModule "x'.fs" "X'" "x'.fs" 1 1 2 1 ]
+
+        "an implicit module name from an upper-case extension",
+        SyntaxCompilationTarget.Executable,
+        [
+            last
+            "q-x.FS", "let a = 1\n"
+        ],
+        [ implicitModule "q-x.FS" "Q-x" "q-x.FS" 1 1 2 1 ]
+
+        "implicit module names with letters, digits, and underscores",
+        SyntaxCompilationTarget.Executable,
+        [
+            "1a.fs", "let a = 1\n"
+            "_x.fs", "let a = 1\n"
+            "type.fs", "let a = 1\n"
+            "\u00e9.fs", "let a = 1\n"
+            "Ab1.fs", "let a = 1\n"
+            last
+        ],
+        [
+            missingDeclaration "1a.fs" 1 1 2 1
+            missingDeclaration "_x.fs" 1 1 2 1
+            missingDeclaration "type.fs" 1 1 2 1
+            missingDeclaration "\u00e9.fs" 1 1 2 1
+            missingDeclaration "Ab1.fs" 1 1 2 1
+        ]
+
+        "implicit module names of a signature and its implementation",
+        SyntaxCompilationTarget.Executable,
+        [
+            "a.b.fsi", "val a: int\n"
+            "a.b.fs", "let a = 1\n"
+        ],
+        [
+            missingDeclaration "a.b.fsi" 1 1 2 1
+            implicitModule "a.b.fsi" "A.b" "a.b.fsi" 1 1 2 1
+            implicitModule "a.b.fs" "A.b" "a.b.fs" 1 1 2 1
+        ]
+
+        "a script file has no implicit module warning",
+        SyntaxCompilationTarget.Executable,
+        [
+            "a.b.fsx", "let a = 1\n"
+            last
+        ],
+        []
+
+        "a file without declarations has no implicit module warning",
+        SyntaxCompilationTarget.Executable,
+        [
+            "e-mpty.fs", ""
+            "c-o.fs", "// c\n"
+            last
+        ],
+        [
+            missingDeclaration "e-mpty.fs" 1 1 1 1
+            missingDeclaration "c-o.fs" 2 1 2 1
+        ]
+
+        "an implicit module warning follows the parse diagnostics and FS0222",
+        SyntaxCompilationTarget.Executable,
+        [
+            "e-r.fs", "let a = )\n"
+            last
+        ],
+        [
+            "e-r.fs(1,9,1,10): error FS0010: Unexpected symbol ')' in binding"
+            missingDeclaration "e-r.fs" 1 1 2 1
+            implicitModule "e-r.fs" "E-r" "e-r.fs" 1 1 2 1
+        ]
+
+        "an implicit module warning after a file-level recovery",
+        SyntaxCompilationTarget.Executable,
+        [
+            "k-d.fs", "let a = 1\n)\n"
+            last
+        ],
+        [
+            "k-d.fs(2,1,2,2): error FS0010: Unexpected symbol ')' in implementation file"
+            missingDeclaration "k-d.fs" 1 1 2 1
+            implicitModule "k-d.fs" "K-d" "k-d.fs" 1 1 2 1
+        ]
+
+        "an implicit module warning for an open declaration",
+        SyntaxCompilationTarget.Executable,
+        [
+            "o-p.fs", "open System\n"
+            last
+        ],
+        [
+            missingDeclaration "o-p.fs" 1 1 1 12
+            implicitModule "o-p.fs" "O-p" "o-p.fs" 1 1 1 12
+        ]
+
+        "an implicit module warning for a nested module",
+        SyntaxCompilationTarget.Executable,
+        [
+            "n-e.fs", "module M =\n    let a = 1\n"
+            last
+        ],
+        [
+            missingDeclaration "n-e.fs" 1 1 2 1
+            implicitModule "n-e.fs" "N-e" "n-e.fs" 1 1 2 1
+        ]
+
+        "an implicit module warning for a signature open declaration",
+        SyntaxCompilationTarget.Executable,
+        [
+            "s-o.fsi", "open System\n"
+            last
+        ],
+        [
+            missingDeclaration "s-o.fsi" 1 1 2 1
+            implicitModule "s-o.fsi" "S-o" "s-o.fsi" 1 1 2 1
+        ]
+
+        "a file with only discarded tokens has the range of the first token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "d-x.fs", ")\n"
+            last
+        ],
+        [
+            "d-x.fs(1,1,1,2): error FS0010: Unexpected symbol ')' in implementation file"
+            missingDeclaration "d-x.fs" 1 1 1 2
+        ]
+
+        "a file with only discarded tokens on two lines",
+        SyntaxCompilationTarget.Executable,
+        [
+            "D1.fs", ")\n)\n"
+            last
+        ],
+        [
+            "D1.fs(1,1,1,2): error FS0010: Unexpected symbol ')' in implementation file"
+            missingDeclaration "D1.fs" 1 1 1 2
+        ]
+
+        "a file with an indented discarded token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "D2.fs", "\n  )  "
+            last
+        ],
+        [
+            "D2.fs(2,3,2,4): error FS0010: Unexpected symbol ')' in implementation file"
+            missingDeclaration "D2.fs" 2 3 2 4
+        ]
+
+        "a declaration after a discarded first token is discarded",
+        SyntaxCompilationTarget.Executable,
+        [
+            "D3.fs", ") let a = 1\n"
+            last
+        ],
+        [
+            "D3.fs(1,1,1,2): error FS0010: Unexpected symbol ')' in implementation file"
+            missingDeclaration "D3.fs" 1 1 1 2
+        ]
+
+        "a discarded first token without a line break",
+        SyntaxCompilationTarget.Executable,
+        [
+            "D7.fs", ")"
+            last
+        ],
+        [
+            "D7.fs(1,1,1,2): error FS0010: Unexpected symbol ')' in implementation file"
+            missingDeclaration "D7.fs" 1 1 1 2
+        ]
+
+        "a signature file with only discarded tokens has the range of the first token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "s-d.fsi", ")\n"
+            last
+        ],
+        [
+            "s-d.fsi(1,1,1,2): error FS0010: Unexpected symbol ')' in signature file"
+            missingDeclaration "s-d.fsi" 1 1 1 2
+        ]
+
+        "a signature declaration after a discarded first token is discarded",
+        SyntaxCompilationTarget.Executable,
+        [
+            "s-k.fsi", ") val a: int\n"
+            last
+        ],
+        [
+            "s-k.fsi(1,1,1,2): error FS0010: Unexpected symbol ')' in signature file"
+            missingDeclaration "s-k.fsi" 1 1 1 2
+        ]
 
         "a nested module in an anonymous root",
         SyntaxCompilationTarget.Executable,
