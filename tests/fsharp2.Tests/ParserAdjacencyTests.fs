@@ -27,7 +27,8 @@ module ParserAdjacencyTests =
             |> String.concat "; "
             |> sprintf "[%s]"
         | SyntaxExpression.Application(func, argument, _) -> $"app({shape func}, {shape argument})"
-        | SyntaxExpression.Index(target, index, _) -> $"index({shape target}, {shape index})"
+        | SyntaxExpression.BracketApplication(target, argument, _) ->
+            $"bracket({shape target}, {shape argument})"
         | SyntaxExpression.DotLambda(body, _) -> $"dot({shape body})"
         | other -> failtest $"Unexpected expression {other}"
 
@@ -45,8 +46,8 @@ module ParserAdjacencyTests =
     let private dotLambdaCases = [
         "_.ToString()", "dot(app(ToString, ()))"
         "_.Item(0)", "dot(app(Item, (0)))"
-        "_.Head[0]", "dot(index(Head, 0))"
-        "g _.A[0] x", "app(app(g, dot(index(A, 0))), x)"
+        "_.Head[0]", "dot(bracket(Head, 0))"
+        "g _.A[0] x", "app(app(g, dot(bracket(A, 0))), x)"
         "g _.A 1", "app(app(g, dot(A)), 1)"
     ]
 
@@ -60,20 +61,20 @@ module ParserAdjacencyTests =
         "g _.M()(1)"
     ]
 
-    let private indexCases = [
-        "arr[0]", "index(arr, 0)", "app(arr, [0])"
-        "f arr[0]", "app(f, index(arr, 0))", "app(app(f, arr), [0])"
-        "arr[0][1]", "index(index(arr, 0), 1)", "app(app(arr, [0]), [1])"
-        "f(1)[0]", "index(app(f, (1)), 0)", "app(app(f, (1)), [0])"
-        "arr [0]", "app(arr, [0])", "app(arr, [0])"
-        "arr[ 0 ]", "index(arr, 0)", "app(arr, [0])"
-        "g arr[0][1]", "app(app(g, index(arr, 0)), [1])", "app(app(app(g, arr), [0]), [1])"
-        "g arr[0](1)", "app(app(g, index(arr, 0)), (1))", "app(app(app(g, arr), [0]), (1))"
-        "g (arr)[0]", "app(app(g, (arr)), [0])", "app(app(g, (arr)), [0])"
-        "g [1; 2][0]", "app(app(g, [1; 2]), [0])", "app(app(g, [1; 2]), [0])"
-        "g 1(2)", "app(app(g, 1), (2))", "app(app(g, 1), (2))"
-        "f (x)(y)", "app(app(f, (x)), (y))", "app(app(f, (x)), (y))"
-        "f(1)(2) 3", "app(app(app(f, (1)), (2)), 3)", "app(app(app(f, (1)), (2)), 3)"
+    let private bracketCases = [
+        "arr[0]", "bracket(arr, 0)"
+        "f arr[0]", "app(f, bracket(arr, 0))"
+        "arr[0][1]", "bracket(bracket(arr, 0), 1)"
+        "f(1)[0]", "bracket(app(f, (1)), 0)"
+        "arr [0]", "app(arr, [0])"
+        "arr[ 0 ]", "bracket(arr, 0)"
+        "g arr[0][1]", "app(app(g, bracket(arr, 0)), [1])"
+        "g arr[0](1)", "app(app(g, bracket(arr, 0)), (1))"
+        "g (arr)[0]", "app(app(g, (arr)), [0])"
+        "g [1; 2][0]", "app(app(g, [1; 2]), [0])"
+        "g 1(2)", "app(app(g, 1), (2))"
+        "f (x)(y)", "app(app(f, (x)), (y))"
+        "f(1)(2) 3", "app(app(app(f, (1)), (2)), 3)"
     ]
 
     let private successiveArguments startColumn endColumn =
@@ -94,6 +95,18 @@ module ParserAdjacencyTests =
         "g f()", [ successiveArguments 11 14 ]
         "g f (1)(2)", []
         "g (f)(1)", []
+        "g f(1) )",
+        [
+            successiveArguments 11 15
+            "Program.fs(2,16,2,17): error FS0010: Unexpected symbol ')' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "g f(1) h(2) ]",
+        [
+            successiveArguments 11 15
+            successiveArguments 16 20
+            "Program.fs(2,21,2,22): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        ") g f(1)", [ "Program.fs(2,9,2,10): error FS0010: Unexpected symbol ')' in binding" ]
     ]
 
     let private oracleLines (result: ImplementationFileParseResult) =
@@ -140,8 +153,8 @@ module ParserAdjacencyTests =
                             "The Oracle reports no parse diagnostic here"
             ]
 
-            testList "an adjacent bracket is index access from F# 6.0" [
-                for text, fromSix, beforeSix in indexCases do
+            testList "an adjacent bracket is a high-precedence application at every version" [
+                for text, expected in bracketCases do
                     for mode in
                         [
                             "5.0"
@@ -151,12 +164,10 @@ module ParserAdjacencyTests =
                         ] ->
                         testCase $"{text} {mode}"
                         <| fun _ ->
-                            let expected = if mode = "5.0" then beforeSix else fromSix
-
                             Expect.equal
                                 (shape (body mode text))
                                 expected
-                                "The Oracle type checker reads index access, applications, and argument boundaries this way"
+                                "At 5.0 and 6.0 the Oracle type checker reads an adjacent bracket after a name as one argument, and a second bracket as a separate argument"
             ]
 
             testList "an argument with an adjacent parenthesized argument reports FS0597" [
@@ -172,6 +183,25 @@ module ParserAdjacencyTests =
                                 (oracleLines (parse mode $"module Program\nlet x = {text}\n"))
                                 expected
                                 "The diagnostics must match the Compatibility Oracle"
+            ]
+
+            testList "an adjacent bracket after a dot lambda before F# 8.0 reports only FS3350" [
+                for text, startColumn in
+                    [
+                        "_.Items[0]", 9
+                        "g _.Items[0]", 11
+                    ] ->
+                    testCase text
+                    <| fun _ ->
+                        let result = parse "5.0" $"module Program\nlet f = {text}\n"
+
+                        Expect.sequenceEqual
+                            (oracleLines result)
+                            [
+                                $"Program.fs(2,{startColumn},2,{startColumn
+                                                                + 2}): error FS3350: Feature 'underscore dot shorthand for accessor only function' is not available in F# 5.0. Please use language version 8.0 or greater."
+                            ]
+                            "The diagnostics must match the Compatibility Oracle"
             ]
 
             testCase "an adjacent argument after an unsupported index target stays explicit"

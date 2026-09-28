@@ -15,7 +15,10 @@
     "language.syntax.underscore-dot-shorthand-positive",
     "language.syntax.underscore-dot-shorthand-negative",
     "language.syntax.successive-arguments-positive",
-    "language.syntax.successive-arguments-negative"
+    "language.syntax.successive-arguments-negative",
+    "language.syntax.successive-arguments-5-positive",
+    "language.syntax.ordered-files-positive",
+    "language.syntax.ordered-files-negative"
   ],
   "positiveCaseIds": [
     "language.syntax.implementation-declarations-positive",
@@ -23,7 +26,9 @@
     "language.syntax.type-definitions-positive",
     "language.syntax.expressions-positive",
     "language.syntax.underscore-dot-shorthand-positive",
-    "language.syntax.successive-arguments-positive"
+    "language.syntax.successive-arguments-positive",
+    "language.syntax.successive-arguments-5-positive",
+    "language.syntax.ordered-files-positive"
   ],
   "negativeCaseIds": [
     "language.syntax.implementation-recovery-negative",
@@ -31,7 +36,8 @@
     "language.syntax.type-definitions-negative",
     "language.syntax.expressions-negative",
     "language.syntax.underscore-dot-shorthand-negative",
-    "language.syntax.successive-arguments-negative"
+    "language.syntax.successive-arguments-negative",
+    "language.syntax.ordered-files-negative"
   ],
   "featureRows": [
     "syntax.implementation-declarations",
@@ -39,12 +45,14 @@
     "syntax.type-definitions",
     "syntax.expressions",
     "syntax.underscore-dot-shorthand",
-    "syntax.successive-arguments"
+    "syntax.successive-arguments",
+    "syntax.ordered-files"
   ],
   "languageVersions": [
     "default",
     "8.0",
-    "7.0"
+    "7.0",
+    "5.0"
   ],
   "optionCells": [
     "debug-optimize-minus-tailcalls-minus-portable-deterministic",
