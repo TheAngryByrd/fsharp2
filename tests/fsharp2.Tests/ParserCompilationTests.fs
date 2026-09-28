@@ -1018,6 +1018,39 @@ f (
         ],
         [ missingDeclaration "S5.fs" 1 1 1 5 ]
 
+        "a module header is not followed by an application on the next line",
+        SyntaxCompilationTarget.Executable,
+        [
+            "Y12.fs",
+            "module M
+f x = 1
+"
+            last
+        ],
+        []
+
+        "a module header is not followed by a name on the next line",
+        SyntaxCompilationTarget.Executable,
+        [
+            "Y21.fs",
+            "module M
+x = 1
+"
+            last
+        ],
+        []
+
+        "a dotted module header is not followed by a dotted name on the next line",
+        SyntaxCompilationTarget.Executable,
+        [
+            "Y22.fs",
+            "module A.B
+x.y = 1
+"
+            last
+        ],
+        []
+
         "a nested module in an anonymous root",
         SyntaxCompilationTarget.Executable,
         [

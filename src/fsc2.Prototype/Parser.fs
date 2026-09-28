@@ -2829,11 +2829,11 @@ module internal Parser =
             let first = cursor.Current
 
             let header =
-                let mutable offset = 1
+                let mutable offset = 2
 
-                while isIdentifier (cursor.Peek offset)
-                      || isOperator "." (cursor.Peek offset) do
-                    offset <- offset + 1
+                while isOperator "." (cursor.Peek offset)
+                      && isIdentifier (cursor.Peek(offset + 1)) do
+                    offset <- offset + 2
 
                 if
                     isKeyword "module" first
