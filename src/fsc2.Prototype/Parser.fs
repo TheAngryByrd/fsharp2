@@ -2982,12 +2982,16 @@ module internal Parser =
     let private missingDeclarationMessage =
         "Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
 
+    let private moduleEqualsDeclarationMessage =
+        "Files in libraries or multiple-file applications must begin with a namespace or module declaration. When using a module declaration at the start of a file the '=' sign is not allowed. If this is a top-level module, consider removing the = to resolve this error."
+
     let private implicitModuleMessage moduleName fileName =
         $"The declarations in this file will be placed in an implicit module '{moduleName}' based on the file name '{fileName}'. However this is not a valid F# identifier, so the contents will not be accessible from other files. Consider renaming the file or adding a 'module' or 'namespace' declaration at the top of the file."
 
     type private AnonymousRoot = {
         Range: SourceRange
         HasDeclarations: bool
+        StartsWithNestedModule: bool
     }
 
     let private nextToken (document: LexicalDocument) offset =
@@ -3050,6 +3054,10 @@ module internal Parser =
         {
             Range = range
             HasDeclarations = not kept.IsEmpty
+            StartsWithNestedModule =
+                match Seq.tryHead root.Declarations with
+                | Some(ImplementationDeclaration.NestedModule _) -> true
+                | _ -> false
         }
 
     let private anonymousSignature
@@ -3088,6 +3096,10 @@ module internal Parser =
         {
             Range = range
             HasDeclarations = hasDeclarations
+            StartsWithNestedModule =
+                match Seq.tryHead root.Declarations with
+                | Some(SignatureDeclaration.NestedModule _) -> true
+                | _ -> false
         }
 
     let private invalidImplicitModuleName (logicalPath: string) =
@@ -3145,9 +3157,14 @@ module internal Parser =
             files.Add file
             Seq.iter add fileDiagnostics
 
+            let unmodeled =
+                fileDiagnostics
+                |> Seq.exists (fun diagnostic -> diagnostic.Code = unsupportedCode)
+
             match source.Kind, anonymous with
             | SyntaxSourceKind.Script, _
             | _, None -> ()
+            | _, Some _ when unmodeled -> ()
             | _, Some anonymous ->
                 let requiresDeclaration =
                     match target with
@@ -3160,7 +3177,11 @@ module internal Parser =
                     add {
                         Severity = DiagnosticSeverity.Error
                         Code = "FS0222"
-                        Message = missingDeclarationMessage
+                        Message =
+                            if anonymous.StartsWithNestedModule then
+                                moduleEqualsDeclarationMessage
+                            else
+                                missingDeclarationMessage
                         Range = anonymous.Range
                     }
 

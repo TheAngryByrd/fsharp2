@@ -46,6 +46,9 @@ module ParserCompilationTests =
     let private missingDeclaration logicalPath startLine startColumn endLine endColumn =
         $"{logicalPath}({startLine},{startColumn},{endLine},{endColumn}): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
 
+    let private moduleEqualsDeclaration logicalPath startLine startColumn endLine endColumn =
+        $"{logicalPath}({startLine},{startColumn},{endLine},{endColumn}): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration. When using a module declaration at the start of a file the '=' sign is not allowed. If this is a top-level module, consider removing the = to resolve this error."
+
     let private implicitModule
         logicalPath
         moduleName
@@ -274,7 +277,7 @@ module ParserCompilationTests =
             "NestedSig.fsi", "module M =\n    val a: int\n"
             last
         ],
-        [ missingDeclaration "NestedSig.fsi" 1 1 3 1 ]
+        [ moduleEqualsDeclaration "NestedSig.fsi" 1 1 3 1 ]
 
         "a signature range ends at a discarded token",
         SyntaxCompilationTarget.Executable,
@@ -576,7 +579,7 @@ module ParserCompilationTests =
             last
         ],
         [
-            missingDeclaration "n-e.fs" 1 1 2 1
+            moduleEqualsDeclaration "n-e.fs" 1 1 2 1
             implicitModule "n-e.fs" "N-e" "n-e.fs" 1 1 2 1
         ]
 
@@ -1051,13 +1054,61 @@ x.y = 1
         ],
         []
 
+        "a nested module after a comment in an anonymous root",
+        SyntaxCompilationTarget.Executable,
+        [
+            "CommentMod.fs",
+            "// c
+module M =
+    let a = 1
+"
+            last
+        ],
+        [ moduleEqualsDeclaration "CommentMod.fs" 2 1 3 1 ]
+
+        "a nested module before a let declaration in an anonymous root",
+        SyntaxCompilationTarget.Executable,
+        [
+            "ModThenLet.fs",
+            "module M =
+    let a = 1
+let b = 2
+"
+            last
+        ],
+        [ moduleEqualsDeclaration "ModThenLet.fs" 1 1 2 1 ]
+
+        "a nested module after a let declaration in an anonymous root",
+        SyntaxCompilationTarget.Executable,
+        [
+            "LetThenMod.fs",
+            "let b = 2
+module M =
+    let a = 1
+"
+            last
+        ],
+        [ missingDeclaration "LetThenMod.fs" 1 1 2 1 ]
+
+        "a nested module after an open declaration in an anonymous root",
+        SyntaxCompilationTarget.Executable,
+        [
+            "OpenThenMod.fs",
+            "open System
+module M =
+    let a = 1
+"
+            last
+        ],
+        [ missingDeclaration "OpenThenMod.fs" 1 1 2 1 ]
+
         "a nested module in an anonymous root",
         SyntaxCompilationTarget.Executable,
         [
             "NestedOnly.fs", "module M =\n    let a = 1\n"
             last
         ],
-        [ missingDeclaration "NestedOnly.fs" 1 1 2 1 ]
+        [ moduleEqualsDeclaration "NestedOnly.fs" 1 1 2 1 ]
 
         "a namespace root",
         SyntaxCompilationTarget.Executable,
@@ -1463,6 +1514,24 @@ x.y = 1
                              |> Seq.map _.Diagnostic)
                             (oracleLines result)
             ]
+
+            testCase "an attributed nested module first in an anonymous root stays explicit"
+            <| fun _ ->
+                let result =
+                    parse SyntaxCompilationTarget.Executable [
+                        "AttrMod.fs",
+                        "[<AutoOpen>]
+module M =
+    let a = 1
+"
+                        last
+                    ]
+
+                SyntaxDiagnosticText.expectExplicitlyUnsupported
+                    [ moduleEqualsDeclaration "AttrMod.fs" 1 1 2 1 ]
+                    (result.Diagnostics
+                     |> Seq.map _.Diagnostic)
+                    (oracleLines result)
 
             testCase "files keep their order and their kind"
             <| fun _ ->
