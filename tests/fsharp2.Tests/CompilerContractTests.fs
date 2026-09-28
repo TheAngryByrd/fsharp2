@@ -1339,6 +1339,32 @@ let main _ =
                     [ "FS0203", DiagnosticSeverity.Warning, "Invalid warning number 'abc'" ]
                     "The invalid argument is reported as a warning"
 
+            testCase "warnings as errors stop an invalid warning directive argument"
+            <| fun _ ->
+                let result =
+                    createRequest
+                        (defaultSemanticOptions ())
+                        (DiagnosticOptions.Create(None, [||], true, [||]))
+                        (defaultEmissionOptions ())
+                        (defaultSigningOptions ())
+                        (emptyResources ())
+                        defaultRequestedArtifacts
+                        "module Program\n#nowarn \"abc\"\nlet answer () = 42\n"
+                    |> compileRequest
+
+                Expect.equal
+                    result.Outcome
+                    CompilationOutcome.Failed
+                    "A promoted FS0203 stops the compilation"
+
+                Expect.isEmpty result.Artifacts "A failed compilation publishes no artifacts"
+
+                Expect.sequenceEqual
+                    (result.Diagnostics
+                     |> Seq.map (fun diagnostic -> diagnostic.Code, diagnostic.EffectiveSeverity))
+                    [ "FS0203", DiagnosticSeverity.Error ]
+                    "The promoted warning is an error"
+
             testCase "reused parsing rebinds the physical source checksum"
             <| fun _ ->
                 let sourceText = "module Program\nlet answer () = 42\n"
