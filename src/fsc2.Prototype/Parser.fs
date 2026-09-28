@@ -6,29 +6,80 @@ open System.Collections.Immutable
 module internal Parser =
     type private Cursor(tokens: ImmutableArray<LayoutToken>) =
         let mutable index = 0
+        let mutable remainder: LayoutToken option = None
         let mutable lastEnd = tokens[0].Range.Start
 
-        member _.Current = tokens[index]
+        member _.Current =
+            remainder
+            |> Option.defaultValue tokens[index]
 
         member _.LastEnd = lastEnd
 
-        member _.Peek offset =
-            tokens[min
-                       (index
-                        + offset)
-                       (tokens.Length
-                        - 1)]
+        member this.Peek offset =
+            if offset = 0 then
+                this.Current
+            else
+                tokens[min
+                           (index
+                            + offset)
+                           (tokens.Length
+                            - 1)]
 
-        member _.Advance() =
-            let token = tokens[index]
+        member this.Advance() =
+            let token = this.Current
 
             if token.Kind = LayoutTokenKind.SourceToken then
                 lastEnd <- token.Range.End
+
+            remainder <- None
 
             if index + 1 < tokens.Length then
                 index <- index + 1
 
             token
+
+        member this.AdvanceFirstCharacter() =
+            let token = this.Current
+
+            match token.Token with
+            | Some source when source.Text.Length > 1 ->
+                let split = {
+                    source.Range.Start with
+                        Offset =
+                            source.Range.Start.Offset
+                            + 1
+                        Column =
+                            source.Range.Start.Column
+                            + 1
+                }
+
+                let first = {
+                    source with
+                        Text = source.Text.Substring(0, 1)
+                        Range = { source.Range with End = split }
+                }
+
+                let rest = {
+                    source with
+                        Text = source.Text.Substring 1
+                        Range = { source.Range with Start = split }
+                }
+
+                lastEnd <- split
+
+                remainder <-
+                    Some {
+                        token with
+                            Token = Some rest
+                            Range = rest.Range
+                    }
+
+                {
+                    token with
+                        Token = Some first
+                        Range = first.Range
+                }
+            | _ -> this.Advance()
 
     type private ParserState = {
         Cursor: Cursor
@@ -54,6 +105,10 @@ module internal Parser =
     let private isOperator = isText LexicalTokenKind.Operator
     let private isDelimiter = isText LexicalTokenKind.Delimiter
     let private isEndOfFile = isKind LexicalTokenKind.EndOfFile
+
+    let private isIdentifier (token: LayoutToken) =
+        isKind LexicalTokenKind.Identifier token
+        || isKind LexicalTokenKind.EscapedIdentifier token
 
     let private span (start: SourceRange) (finish: SourceRange) = {
         Start = start.Start
@@ -96,6 +151,11 @@ module internal Parser =
         | BindingEquals
         | BindingEnd
         | DefinitionStart
+        | ValueName
+        | ValueColon
+        | ValueType
+        | SignatureFile
+        | NestedSignature
 
     let private closingKeywords =
         set [
@@ -164,6 +224,7 @@ module internal Parser =
                 || isOperator "." token
                 ->
                 symbol text token.Range
+            | RecoveryPoint.ValueColon when isIdentifier token -> Some("identifier", token.Range)
             | _ -> None
 
     let private reportUnexpected state point context =
@@ -178,6 +239,15 @@ module internal Parser =
                     $"Unexpected {description} in binding. Expected incomplete structured construct at or before this point or other token."
                 | RecoveryPoint.DefinitionStart ->
                     $"Unexpected {description} in definition. Expected incomplete structured construct at or before this point or other token."
+                | RecoveryPoint.ValueName ->
+                    $"Unexpected {description} in value signature. Expected identifier, '(', '(*)' or other token."
+                | RecoveryPoint.ValueColon ->
+                    $"Unexpected {description} in value signature. Expected ':' or other token."
+                | RecoveryPoint.ValueType -> $"Unexpected {description} in value signature"
+                | RecoveryPoint.SignatureFile ->
+                    $"Unexpected {description}. Expected incomplete structured construct at or before this point or other token."
+                | RecoveryPoint.NestedSignature ->
+                    $"Unexpected {description} in signature file. Expected incomplete structured construct at or before this point or other token."
 
             report state "FS0010" message range
         | None -> reportUnsupported state state.Cursor.Current context
@@ -236,10 +306,6 @@ module internal Parser =
         Text = tokenText token
         Range = token.Range
     }
-
-    let private isIdentifier (token: LayoutToken) =
-        isKind LexicalTokenKind.Identifier token
-        || isKind LexicalTokenKind.EscapedIdentifier token
 
     let private longIdentifier (cursor: Cursor) =
         let parts = ImmutableArray.CreateBuilder<SyntaxIdentifier>()
@@ -526,6 +592,27 @@ module internal Parser =
         || isKeyword "and" token
         || isOffside context token
 
+    let private parseAccessibility (cursor: Cursor) =
+        let token = cursor.Current
+
+        let kind =
+            if isKeyword "public" token then
+                Some SyntaxAccessibility.Public
+            elif isKeyword "internal" token then
+                Some SyntaxAccessibility.Internal
+            elif isKeyword "private" token then
+                Some SyntaxAccessibility.Private
+            else
+                None
+
+        kind
+        |> Option.map (fun kind ->
+            cursor.Advance()
+            |> ignore
+
+            { Kind = kind; Range = token.Range }
+        )
+
     let private parseBinding state context =
         let cursor = state.Cursor
         let reported = state.Diagnostics.Count
@@ -549,26 +636,7 @@ module internal Parser =
                 recover (Some RecoveryPoint.BindingStart)
                 missing
 
-        let accessibility =
-            let token = cursor.Current
-
-            let kind =
-                if isKeyword "public" token then
-                    Some SyntaxAccessibility.Public
-                elif isKeyword "internal" token then
-                    Some SyntaxAccessibility.Internal
-                elif isKeyword "private" token then
-                    Some SyntaxAccessibility.Private
-                else
-                    None
-
-            kind
-            |> Option.map (fun kind ->
-                cursor.Advance()
-                |> ignore
-
-                { Kind = kind; Range = token.Range }
-            )
+        let accessibility = parseAccessibility cursor
 
         let head =
             if canStartPattern cursor.Current then
@@ -670,25 +738,377 @@ module internal Parser =
             span letToken.Range (emptyAt cursor.LastEnd)
         )
 
+    let private endsDeclaration context (token: LayoutToken) =
+        token.Kind = LayoutTokenKind.Separator
+        || token.Kind = LayoutTokenKind.EndBlock
+        || isEndOfFile token
+        || isOffside context token
+
+    let private afterLastToken (cursor: Cursor) =
+        // The Compatibility Oracle reports an incomplete construct one column after the last token.
+        let position = {
+            cursor.LastEnd with
+                Offset =
+                    cursor.LastEnd.Offset
+                    + 1
+                Column =
+                    cursor.LastEnd.Column
+                    + 1
+        }
+
+        emptyAt position
+
+    let private reportIncomplete state context =
+        report
+            state
+            "FS0010"
+            $"Incomplete structured construct at or before this point in {context}"
+            (afterLastToken state.Cursor)
+
+    [<RequireQualifiedAccess>]
+    type private TypeGap =
+        | UnexpectedToken
+        | EndAfterColonOrArrow
+        | EndAfterStar
+
+    let private missingType (token: LayoutToken) =
+        SyntaxType.Missing {
+            Expected = "type"
+            Range = emptyAt token.Range.Start
+        }
+
+    let private isTypeVariable (cursor: Cursor) =
+        let token = cursor.Current
+        let next = cursor.Peek 1
+
+        isDelimiter "'" token
+        && isIdentifier next
+        && next.Range.Start.Offset = token.Range.End.Offset
+
+    let private canStartType (cursor: Cursor) =
+        isIdentifier cursor.Current
+        || isDelimiter "(" cursor.Current
+        || isTypeVariable cursor
+
+    let private closesTypeArguments (token: LayoutToken) =
+        isKind LexicalTokenKind.Operator token
+        && tokenText token
+           |> Seq.forall ((=) '>')
+
+    let rec private parseType state context (onGap: TypeGap -> unit option) =
+        let cursor = state.Cursor
+        let argument = parseTupleType state context onGap
+
+        if
+            isOperator "->" cursor.Current
+            && not (isOffside context cursor.Current)
+        then
+            cursor.Advance()
+            |> ignore
+
+            let result =
+                parseTypeOperand
+                    state
+                    context
+                    onGap
+                    TypeGap.EndAfterColonOrArrow
+                    (fun () -> parseType state context onGap)
+
+            SyntaxType.Function(argument, result, span argument.Range result.Range)
+        else
+            argument
+
+    and private parseTypeOperand state context onGap endGap parse =
+        let cursor = state.Cursor
+        let token = cursor.Current
+
+        if
+            canStartType cursor
+            && not (isOffside context token)
+        then
+            parse ()
+        else
+            let missing = missingType token
+
+            let gap =
+                if endsDeclaration context token then
+                    endGap
+                else
+                    TypeGap.UnexpectedToken
+
+            if (onGap gap).IsNone then
+                reportUnsupported state token "a type"
+
+            missing
+
+    and private parseTupleType state context onGap =
+        let cursor = state.Cursor
+        let first = parseParameterType state context onGap
+
+        if
+            isOperator "*" cursor.Current
+            && not (isOffside context cursor.Current)
+        then
+            let elements = ImmutableArray.CreateBuilder<SyntaxType>()
+            elements.Add first
+
+            while isOperator "*" cursor.Current
+                  && not (isOffside context cursor.Current) do
+                cursor.Advance()
+                |> ignore
+
+                elements.Add(
+                    parseTypeOperand
+                        state
+                        context
+                        onGap
+                        TypeGap.EndAfterStar
+                        (fun () -> parseParameterType state context onGap)
+                )
+
+            let elements = elements.ToImmutable()
+
+            SyntaxType.Tuple(
+                elements,
+                span
+                    first.Range
+                    elements[elements.Length
+                             - 1]
+                        .Range
+            )
+        else
+            first
+
+    and private parseParameterType state context onGap =
+        let cursor = state.Cursor
+
+        if
+            isIdentifier cursor.Current
+            && isOperator ":" (cursor.Peek 1)
+        then
+            let name = identifier (cursor.Advance())
+
+            cursor.Advance()
+            |> ignore
+
+            let parameterType =
+                parseTypeOperand
+                    state
+                    context
+                    onGap
+                    TypeGap.EndAfterColonOrArrow
+                    (fun () -> parseApplicationType state context)
+
+            SyntaxType.SignatureParameter(name, parameterType, span name.Range parameterType.Range)
+        else
+            parseApplicationType state context
+
+    and private parseApplicationType state context =
+        let cursor = state.Cursor
+        let mutable result = parseAtomicType state context
+
+        while isIdentifier cursor.Current
+              && not (isOffside context cursor.Current) do
+            let typeConstructor = SyntaxType.LongIdentifier(longIdentifier cursor)
+
+            result <-
+                SyntaxType.Application(
+                    typeConstructor,
+                    ImmutableArray.Create result,
+                    true,
+                    span result.Range typeConstructor.Range
+                )
+
+        result
+
+    and private parseAtomicType state context =
+        let cursor = state.Cursor
+        let token = cursor.Current
+
+        let nested () =
+            parseTypeOperand
+                state
+                context
+                (fun _ -> None)
+                TypeGap.UnexpectedToken
+                (fun () -> parseType state context (fun _ -> None))
+
+        if isTypeVariable cursor then
+            cursor.Advance()
+            |> ignore
+
+            let name = cursor.Advance()
+
+            SyntaxType.Variable {
+                Text =
+                    "'"
+                    + tokenText name
+                Range = span token.Range name.Range
+            }
+        elif isDelimiter "(" token then
+            cursor.Advance()
+            |> ignore
+
+            let inner = nested ()
+
+            if isDelimiter ")" cursor.Current then
+                let close = cursor.Advance()
+                SyntaxType.Parenthesized(inner, span token.Range close.Range)
+            else
+                reportUnsupported state cursor.Current "a parenthesized type"
+                SyntaxType.Parenthesized(inner, span token.Range (emptyAt cursor.LastEnd))
+        else
+            let name = SyntaxType.LongIdentifier(longIdentifier cursor)
+
+            if isOperator "<" cursor.Current then
+                cursor.Advance()
+                |> ignore
+
+                let arguments = ImmutableArray.CreateBuilder<SyntaxType>()
+                arguments.Add(nested ())
+
+                while isDelimiter "," cursor.Current do
+                    cursor.Advance()
+                    |> ignore
+
+                    arguments.Add(nested ())
+
+                if closesTypeArguments cursor.Current then
+                    let close = cursor.AdvanceFirstCharacter()
+
+                    SyntaxType.Application(
+                        name,
+                        arguments.ToImmutable(),
+                        false,
+                        span name.Range close.Range
+                    )
+                else
+                    reportUnsupported state cursor.Current "type arguments"
+
+                    SyntaxType.Application(
+                        name,
+                        arguments.ToImmutable(),
+                        false,
+                        span name.Range (emptyAt cursor.LastEnd)
+                    )
+            else
+                name
+
+    let private parseVal state nested =
+        let cursor = state.Cursor
+        let valToken = cursor.Advance()
+        let context = valToken.Range.Start
+        let reported = state.Diagnostics.Count
+        let mutable recovered = false
+        let mutable skipped = None
+
+        let recover point =
+            if state.Diagnostics.Count = reported then
+                reportUnexpected state point "a value signature"
+
+            recovered <- true
+            skipped <- skipUntil state context
+
+        let onGap gap =
+            match gap with
+            | TypeGap.UnexpectedToken -> Some(recover RecoveryPoint.ValueType)
+            | TypeGap.EndAfterColonOrArrow -> Some(reportIncomplete state "value signature")
+            | TypeGap.EndAfterStar -> None
+
+        let accessibility = parseAccessibility cursor
+
+        let name =
+            if isIdentifier cursor.Current then
+                Some(identifier (cursor.Advance()))
+            else
+                recover RecoveryPoint.ValueName
+                None
+
+        let valueType =
+            if recovered then
+                missingType cursor.Current
+            elif isOperator ":" cursor.Current then
+                cursor.Advance()
+                |> ignore
+
+                parseTypeOperand
+                    state
+                    context
+                    onGap
+                    TypeGap.EndAfterColonOrArrow
+                    (fun () -> parseType state context onGap)
+            else
+                let missing = missingType cursor.Current
+                recover RecoveryPoint.ValueColon
+                missing
+
+        if
+            not recovered
+            && not (endsDeclaration context cursor.Current)
+        then
+            recover (
+                if nested then
+                    RecoveryPoint.NestedSignature
+                else
+                    RecoveryPoint.SignatureFile
+            )
+
+        let value =
+            SignatureDeclaration.Val {
+                Accessibility = accessibility
+                Name = name
+                Type = valueType
+                Skipped = skipped
+                Range = span valToken.Range (emptyAt cursor.LastEnd)
+            }
+
+        Some value, recovered
+
     let private parseOpen state =
         let cursor = state.Cursor
         let openToken = cursor.Advance()
+        let context = openToken.Range.Start
 
-        if isIdentifier cursor.Current then
+        if
+            isIdentifier cursor.Current
+            && not (isOffside context cursor.Current)
+        then
             let name = longIdentifier cursor
-            Some(ImplementationDeclaration.Open(name, span openToken.Range name.Range))
+            Some(name, span openToken.Range name.Range)
+        elif endsDeclaration context cursor.Current then
+            report
+                state
+                "FS0010"
+                "Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global', 'type' or other token."
+                (afterLastToken cursor)
+
+            None
         else
             reportUnsupported state cursor.Current "an open declaration"
             None
+
+    type private DeclarationRules<'Declaration> = {
+        Parse: ParserState -> bool -> LayoutToken -> ('Declaration option * bool) option
+        StartPoint: bool -> RecoveryPoint
+        Open: LongIdentifier * SourceRange -> 'Declaration
+        NestedModule:
+            SyntaxIdentifier -> ImmutableArray<'Declaration> -> SourceRange -> 'Declaration
+        Skipped: SkippedSyntax -> 'Declaration
+    }
 
     let private isDeclarationListEnd (token: LayoutToken) =
         token.Kind = LayoutTokenKind.EndBlock
         || isEndOfFile token
         || isKeyword "namespace" token
 
-    let rec private parseDeclarations state =
+    let rec private parseDeclarations
+        state
+        (rules: DeclarationRules<'Declaration>)
+        nested
+        : ImmutableArray<'Declaration> =
         let cursor = state.Cursor
-        let declarations = ImmutableArray.CreateBuilder<ImplementationDeclaration>()
+        let declarations = ImmutableArray.CreateBuilder<'Declaration>()
+        let mutable suppressFrom = None
         let mutable stop = false
 
         while not stop do
@@ -702,20 +1122,23 @@ module internal Parser =
             else
                 let reported = state.Diagnostics.Count
 
-                let parsed =
+                let parsed, discardsList =
                     if isKeyword "open" token then
                         parseOpen state
-                    elif isKeyword "let" token then
-                        Some(parseLet state)
+                        |> Option.map rules.Open,
+                        false
                     elif isKeyword "module" token then
-                        parseNestedModule state
+                        parseNestedModule state rules, false
                     else
-                        reportUnexpected
-                            state
-                            RecoveryPoint.DefinitionStart
-                            "a module or namespace declaration"
+                        match rules.Parse state nested token with
+                        | Some result -> result
+                        | None ->
+                            reportUnexpected
+                                state
+                                (rules.StartPoint nested)
+                                "a module or namespace declaration"
 
-                        None
+                            None, true
 
                 parsed
                 |> Option.iter declarations.Add
@@ -733,13 +1156,32 @@ module internal Parser =
 
                     skipUntil state token.Range.Start
                     |> Option.iter (
-                        ImplementationDeclaration.Skipped
+                        rules.Skipped
                         >> declarations.Add
                     )
 
+                if
+                    discardsList
+                    && not nested
+                    && suppressFrom.IsNone
+                then
+                    suppressFrom <- Some state.Diagnostics.Count
+
+        match suppressFrom with
+        | Some first ->
+            state.Diagnostics.RemoveRange(
+                first,
+                state.Diagnostics.Count
+                - first
+            )
+        | None -> ()
+
         declarations.ToImmutable()
 
-    and private parseNestedModule state =
+    and private parseNestedModule
+        state
+        (rules: DeclarationRules<'Declaration>)
+        : 'Declaration option =
         let cursor = state.Cursor
         let moduleToken = cursor.Advance()
 
@@ -759,21 +1201,21 @@ module internal Parser =
                 cursor.Advance()
                 |> ignore
 
-                let declarations = parseDeclarations state
+                let declarations = parseDeclarations state rules true
                 let range = span moduleToken.Range (emptyAt cursor.LastEnd)
 
                 if cursor.Current.Kind = LayoutTokenKind.EndBlock then
                     cursor.Advance()
                     |> ignore
 
-                Some(ImplementationDeclaration.NestedModule(name, declarations, range))
+                Some(rules.NestedModule name declarations range)
             else
                 reportUnsupported state cursor.Current "a module declaration"
                 None
 
-    let private parseRoots state =
+    let private parseRoots state rules =
         let cursor = state.Cursor
-        let roots = ImmutableArray.CreateBuilder<ModuleOrNamespaceSyntax>()
+        let roots = ImmutableArray.CreateBuilder<ModuleOrNamespaceSyntax<_>>()
 
         let root kind name (start: SourceRange) declarations = {
             Kind = kind
@@ -793,7 +1235,7 @@ module internal Parser =
                         reportUnsupported state cursor.Current "a namespace declaration"
                         None
 
-                let declarations = parseDeclarations state
+                let declarations = parseDeclarations state rules false
 
                 roots.Add(
                     root ModuleOrNamespaceKind.Namespace name namespaceToken.Range declarations
@@ -820,7 +1262,7 @@ module internal Parser =
 
             match header with
             | Some(moduleToken, name) ->
-                let declarations = parseDeclarations state
+                let declarations = parseDeclarations state rules false
 
                 roots.Add(
                     root
@@ -830,19 +1272,68 @@ module internal Parser =
                         declarations
                 )
             | None ->
-                let declarations = parseDeclarations state
+                let declarations = parseDeclarations state rules false
 
                 roots.Add(root ModuleOrNamespaceKind.AnonymousModule None first.Range declarations)
 
         roots.ToImmutable()
 
-    let parseImplementationFile (document: LexicalDocument) =
-        let state = {
-            Cursor = Cursor(document.LayoutTokens)
-            Diagnostics = ResizeArray()
+    let private implementationRules = {
+        Parse =
+            fun state _ token ->
+                if isKeyword "let" token then
+                    Some(Some(parseLet state), false)
+                else
+                    None
+        StartPoint = fun _ -> RecoveryPoint.DefinitionStart
+        Open = ImplementationDeclaration.Open
+        NestedModule =
+            fun name declarations range ->
+                ImplementationDeclaration.NestedModule(name, declarations, range)
+        Skipped = ImplementationDeclaration.Skipped
+    }
+
+    let private signatureRules = {
+        Parse =
+            fun state nested token ->
+                if isKeyword "val" token then
+                    Some(parseVal state nested)
+                else
+                    None
+        StartPoint =
+            fun nested ->
+                if nested then
+                    RecoveryPoint.NestedSignature
+                else
+                    RecoveryPoint.SignatureFile
+        Open = SignatureDeclaration.Open
+        NestedModule =
+            fun name declarations range ->
+                SignatureDeclaration.NestedModule(name, declarations, range)
+        Skipped = SignatureDeclaration.Skipped
+    }
+
+    let private start (document: LexicalDocument) = {
+        Cursor = Cursor(document.LayoutTokens)
+        Diagnostics = ResizeArray()
+    }
+
+    let parseImplementationFile (document: LexicalDocument) : ImplementationFileParseResult =
+        let state = start document
+        let contents = parseRoots state implementationRules
+
+        {
+            File = {
+                StableId = document.StableId
+                LogicalPath = document.LogicalPath
+                Contents = contents
+            }
+            Diagnostics = ImmutableArray.CreateRange state.Diagnostics
         }
 
-        let contents = parseRoots state
+    let parseSignatureFile (document: LexicalDocument) : SignatureFileParseResult =
+        let state = start document
+        let contents = parseRoots state signatureRules
 
         {
             File = {

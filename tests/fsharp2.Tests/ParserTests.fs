@@ -20,8 +20,8 @@ module ParserTests =
     let private position (range: SourceRange) =
         range.Start.Line, range.Start.Column, range.End.Line, range.End.Column
 
-    let private oracleLines logicalPath (result: ImplementationFileParseResult) =
-        result.Diagnostics
+    let private oracleLines logicalPath (diagnostics: ImmutableArray<SyntaxDiagnostic>) =
+        diagnostics
         |> Seq.map (fun diagnostic ->
             $"{logicalPath}({diagnostic.Range.Start.Line},{diagnostic.Range.Start.Column}): error {diagnostic.Code}: {diagnostic.Message}"
         )
@@ -58,7 +58,201 @@ module ParserTests =
             $"module {name.Text} = [{inner}]"
         | ImplementationDeclaration.Skipped _ -> "skipped"
 
+    let private parseSignature logicalPath text =
+        prepare logicalPath text
+        |> Parser.parseSignatureFile
+
+    let rec private typeShape syntaxType =
+        match syntaxType with
+        | SyntaxType.LongIdentifier name -> name.Text
+        | SyntaxType.Variable variable -> variable.Text
+        | SyntaxType.Application(typeConstructor, arguments, true, _) ->
+            let arguments =
+                arguments
+                |> Seq.map typeShape
+                |> String.concat ", "
+
+            $"{arguments} {typeShape typeConstructor}"
+        | SyntaxType.Application(typeConstructor, arguments, false, _) ->
+            let arguments =
+                arguments
+                |> Seq.map typeShape
+                |> String.concat ", "
+
+            $"{typeShape typeConstructor}<{arguments}>"
+        | SyntaxType.Function(argument, result, _) ->
+            $"({typeShape argument} -> {typeShape result})"
+        | SyntaxType.Tuple(elements, _) ->
+            let elements =
+                elements
+                |> Seq.map typeShape
+                |> String.concat " * "
+
+            $"({elements})"
+        | SyntaxType.Parenthesized(inner, _) -> typeShape inner
+        | SyntaxType.SignatureParameter(name, parameterType, _) ->
+            $"{name.Text}: {typeShape parameterType}"
+        | SyntaxType.Missing _ -> "<missing>"
+
+    let rec private signatureShape declaration =
+        match declaration with
+        | SignatureDeclaration.Open(name, _) -> $"open {name.Text}"
+        | SignatureDeclaration.Val value ->
+            let name =
+                value.Name
+                |> Option.map _.Text
+                |> Option.defaultValue "<missing>"
+
+            let skipped = if value.Skipped.IsSome then " (skipped)" else ""
+
+            $"val {name}: {typeShape value.Type}{skipped}"
+        | SignatureDeclaration.NestedModule(name, declarations, _) ->
+            let inner =
+                declarations
+                |> Seq.map signatureShape
+                |> String.concat "; "
+
+            $"module {name.Text} = [{inner}]"
+        | SignatureDeclaration.Skipped _ -> "skipped"
+
+    let private signatureRecoveryCases = [
+        "TypeStart.fsi",
+        "module Program\n\nval broken: )\nval first: int\n",
+        [ "TypeStart.fsi(3,13): error FS0010: Unexpected symbol ')' in value signature" ],
+        [
+            "val broken: <missing> (skipped)"
+            "val first: int"
+        ]
+
+        "TypeAfterArrow.fsi",
+        "module Program\nval broken: int -> )\nval tuple: int * ]\nval first: int\n",
+        [ "TypeAfterArrow.fsi(2,20): error FS0010: Unexpected symbol ')' in value signature" ],
+        [
+            "val broken: (int -> <missing>) (skipped)"
+            "val tuple: (int * <missing>) (skipped)"
+            "val first: int"
+        ]
+
+        "Name.fsi",
+        "module Program\nval ): int\nval end: int\nval first: int\n",
+        [
+            "Name.fsi(2,5): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+        ],
+        [
+            "val <missing>: <missing> (skipped)"
+            "val <missing>: <missing> (skipped)"
+            "val first: int"
+        ]
+
+        "Colon.fsi",
+        "module Program\nval broken int\nval other )\nval first: int\n",
+        [
+            "Colon.fsi(2,12): error FS0010: Unexpected identifier in value signature. Expected ':' or other token."
+        ],
+        [
+            "val broken: <missing> (skipped)"
+            "val other: <missing> (skipped)"
+            "val first: int"
+        ]
+
+        "Trailing.fsi",
+        "module Program\nval broken: int list )\nval other: int end\nval first: int\n",
+        [
+            "Trailing.fsi(2,22): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ],
+        [
+            "val broken: int list (skipped)"
+            "val other: int (skipped)"
+            "val first: int"
+        ]
+
+        "DeclarationStart.fsi",
+        "module Program\nval f: int\n]\nval first: int\n",
+        [
+            "DeclarationStart.fsi(3,1): error FS0010: Unexpected symbol ']'. Expected incomplete structured construct at or before this point or other token."
+        ],
+        [
+            "val f: int"
+            "skipped"
+            "val first: int"
+        ]
+
+        "Incomplete.fsi",
+        "module Program\nval broken:\nval arrow: int ->   \nval first: int\n",
+        [
+            "Incomplete.fsi(2,13): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "Incomplete.fsi(3,19): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ],
+        [
+            "val broken: <missing>"
+            "val arrow: (int -> <missing>)"
+            "val first: int"
+        ]
+
+        "OpenIncomplete.fsi",
+        "module Program\nopen   \nval first: int\n",
+        [
+            "OpenIncomplete.fsi(2,6): error FS0010: Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global', 'type' or other token."
+        ],
+        [ "val first: int" ]
+
+        "NestedModule.fsi",
+        "namespace Sample\nmodule Inner =\n    val broken: }\n    val first: int\nmodule Later =\n    val second: int\n",
+        [ "NestedModule.fsi(3,17): error FS0010: Unexpected symbol '}' in value signature" ],
+        [
+            "module Inner = [val broken: <missing> (skipped); val first: int]"
+            "module Later = [val second: int]"
+        ]
+
+        "SiblingModules.fsi",
+        "namespace Sample\nmodule First =\n    val a: )\n    val b: )\n    val c: int\nmodule Second =\n    val d: ]\n",
+        [
+            "SiblingModules.fsi(3,12): error FS0010: Unexpected symbol ')' in value signature"
+            "SiblingModules.fsi(4,12): error FS0010: Unexpected symbol ')' in value signature"
+            "SiblingModules.fsi(7,12): error FS0010: Unexpected symbol ']' in value signature"
+        ],
+        [
+            "module First = [val a: <missing> (skipped); val b: <missing> (skipped); val c: int]"
+            "module Second = [val d: <missing> (skipped)]"
+        ]
+
+        "NestedTrailing.fsi",
+        "namespace N\nmodule M =\n    val a: int )\n    val c: )\n",
+        [
+            "NestedTrailing.fsi(3,16): error FS0010: Unexpected symbol ')' in signature file. Expected incomplete structured construct at or before this point or other token."
+            "NestedTrailing.fsi(4,12): error FS0010: Unexpected symbol ')' in value signature"
+        ],
+        [ "module M = [val a: int (skipped); val c: <missing> (skipped)]" ]
+
+        "NestedDeclarationStart.fsi",
+        "namespace N\nmodule M =\n    val a: int\n    )\n    val c: int )\n",
+        [
+            "NestedDeclarationStart.fsi(4,5): error FS0010: Unexpected symbol ')' in signature file. Expected incomplete structured construct at or before this point or other token."
+            "NestedDeclarationStart.fsi(5,16): error FS0010: Unexpected symbol ')' in signature file. Expected incomplete structured construct at or before this point or other token."
+        ],
+        [ "module M = [val a: int; skipped; val c: int (skipped)]" ]
+    ]
+
     let private bindingRecoveryCases = [
+        "OpenIncomplete.fs",
+        "module Program\nopen\nlet first = 1\n",
+        [
+            "OpenIncomplete.fs(2,6): error FS0010: Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global', 'type' or other token."
+        ],
+        [ "let first/0" ]
+
+        "DefinitionDiscards.fs",
+        "module Program\nlet a = 1\n)\nlet b = 1\nlet c = )\n",
+        [
+            "DefinitionDiscards.fs(3,1): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ],
+        [
+            "let a/0"
+            "skipped"
+            "let b/0"
+            "let c/0 = <missing> (skipped)"
+        ]
+
         "BodyStart.fs",
         "module Program\n\nlet broken = )\n\nlet first = 1\n\nlet second = first\n",
         [ "BodyStart.fs(3,14): error FS0010: Unexpected symbol ')' in binding" ],
@@ -199,7 +393,7 @@ module Later =
                 let result = parse "Containers.fs" text
 
                 Expect.equal
-                    (oracleLines "Containers.fs" result)
+                    (oracleLines "Containers.fs" result.Diagnostics)
                     []
                     "The Compatibility Oracle reports no parse diagnostics for this file"
 
@@ -242,7 +436,10 @@ module Later =
                 let result =
                     parse "Expressions.fs" "module Program\nlet value = f x + g (1, y) * 2 - 3\n"
 
-                Expect.equal (oracleLines "Expressions.fs" result) [] "No parse diagnostics"
+                Expect.equal
+                    (oracleLines "Expressions.fs" result.Diagnostics)
+                    []
+                    "No parse diagnostics"
 
                 let contents = Seq.exactlyOne result.File.Contents
 
@@ -286,7 +483,7 @@ module Later =
                         "Access.fs"
                         "module Program\nlet private seed = 40\nlet internal f x = x\nlet public answer = f seed\n"
 
-                Expect.equal (oracleLines "Access.fs" result) [] "No parse diagnostics"
+                Expect.equal (oracleLines "Access.fs" result.Diagnostics) [] "No parse diagnostics"
 
                 Expect.sequenceEqual
                     ((Seq.exactlyOne result.File.Contents).Declarations
@@ -320,7 +517,7 @@ module Later =
                         let result = parse logicalPath text
 
                         Expect.sequenceEqual
-                            (oracleLines logicalPath result)
+                            (oracleLines logicalPath result.Diagnostics)
                             oracle
                             "The diagnostics must match the Compatibility Oracle"
 
@@ -328,6 +525,92 @@ module Later =
                             (result.File.Contents
                              |> Seq.collect _.Declarations
                              |> Seq.map declarationShape)
+                            declarations
+                            "Recovery must keep each later declaration"
+            ]
+
+            testCase "signature files retain opens, nested modules, value types, and accessibility"
+            <| fun _ ->
+                let text =
+                    "namespace Sample.Core
+
+open System
+
+module Values =
+    val answer: int
+    val add: left: int -> right: int -> int
+    val pair: int * string
+    val map: ('a -> 'b) -> 'a list -> list<'b>
+    val private nested: Map<string, list<int>> -> unit
+"
+
+                let result = parseSignature "Signatures.fsi" text
+
+                Expect.equal
+                    (oracleLines "Signatures.fsi" result.Diagnostics)
+                    []
+                    "The Compatibility Oracle reports no parse diagnostics for this file"
+
+                let contents = Seq.exactlyOne result.File.Contents
+
+                Expect.equal contents.Kind ModuleOrNamespaceKind.Namespace "Namespace root"
+
+                Expect.sequenceEqual
+                    (contents.Declarations
+                     |> Seq.map signatureShape)
+                    [
+                        "open System"
+                        "module Values = [val answer: int; val add: (left: int -> (right: int -> int)); val pair: (int * string); val map: (('a -> 'b) -> ('a list -> list<'b>)); val nested: (Map<string, list<int>> -> unit)]"
+                    ]
+                    "Ordered signature declarations"
+
+                let values =
+                    match contents.Declarations[1] with
+                    | SignatureDeclaration.NestedModule(_, declarations, range) ->
+                        Expect.equal (position range) (5, 1, 10, 55) "Nested module range"
+
+                        declarations
+                        |> Seq.map (fun declaration ->
+                            match declaration with
+                            | SignatureDeclaration.Val value -> value
+                            | other -> failtest $"Expected a value signature, found {other}"
+                        )
+                        |> Seq.toArray
+                    | other -> failtest $"Expected a nested module, found {other}"
+
+                Expect.sequenceEqual
+                    (values
+                     |> Seq.map (fun value -> position value.Range, position value.Type.Range))
+                    [
+                        (6, 5, 6, 20), (6, 17, 6, 20)
+                        (7, 5, 7, 44), (7, 14, 7, 44)
+                        (8, 5, 8, 27), (8, 15, 8, 27)
+                        (9, 5, 9, 47), (9, 14, 9, 47)
+                        (10, 5, 10, 55), (10, 25, 10, 55)
+                    ]
+                    "Value and type ranges"
+
+                Expect.equal
+                    (values[4].Accessibility
+                     |> Option.map _.Kind)
+                    (Some SyntaxAccessibility.Private)
+                    "Private value"
+
+            testList "signature recovery keeps later declarations" [
+                for logicalPath, text, oracle, declarations in signatureRecoveryCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parseSignature logicalPath text
+
+                        Expect.sequenceEqual
+                            (oracleLines logicalPath result.Diagnostics)
+                            oracle
+                            "The diagnostics must match the Compatibility Oracle"
+
+                        Expect.sequenceEqual
+                            (result.File.Contents
+                             |> Seq.collect _.Declarations
+                             |> Seq.map signatureShape)
                             declarations
                             "Recovery must keep each later declaration"
             ]
