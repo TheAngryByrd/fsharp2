@@ -1999,6 +1999,7 @@ module internal Parser =
     type private ListRecovery =
         | Continues
         | Discards
+        | DiscardsAfterDeclaration
         | DiscardsInValue
         | Unmodeled
 
@@ -2020,7 +2021,7 @@ module internal Parser =
                 skipUntil state context
                 |> ignore
 
-                ListRecovery.Discards
+                ListRecovery.DiscardsAfterDeclaration
             else
                 ListRecovery.Continues
 
@@ -2731,9 +2732,13 @@ module internal Parser =
                         ->
                         // The Compatibility Oracle discards the rest of the file after this recovery and reports one more diagnostic at its end.
                         suppress state DeclarationAfterRecovery.Unmodeled true
+                    | ListRecovery.DiscardsAfterDeclaration, DeclarationList.NestedModule ->
+                        // The Compatibility Oracle discards the rest of the file, also after the first declaration of the module, and reports one more diagnostic.
+                        suppress state DeclarationAfterRecovery.Unmodeled true
                     | ListRecovery.Discards, DeclarationList.NestedModule
                     | ListRecovery.DiscardsInValue, DeclarationList.NestedModule -> ()
-                    | ListRecovery.Discards, _ ->
+                    | ListRecovery.Discards, _
+                    | ListRecovery.DiscardsAfterDeclaration, _ ->
                         // The Compatibility Oracle discards the rest of the file after this recovery and reports no diagnostic for it.
                         suppress state DeclarationAfterRecovery.Discarded false
                     | ListRecovery.DiscardsInValue, _ ->

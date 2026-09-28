@@ -1195,6 +1195,62 @@ x.y = 1
     ]
 
     let private unmodeledExpressionDeclarationCases = [
+        "N1.fs",
+        "module M\nmodule N =\n    1 )\n",
+        [
+            "N1.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "N1.fs(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "N2.fs",
+        "module M\nmodule N =\n    let a = 1\n    1 )\n",
+        [
+            "N2.fs(4,7,4,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "N2.fs(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "N3.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\n",
+        [
+            "N3.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "N3.fs(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "N4.fs",
+        "module M\nmodule N =\n    f x ]\nlet c = 3\n",
+        [
+            "N4.fs(3,9,3,10): error FS0010: Unexpected symbol ']' in definition. Expected incomplete structured construct at or before this point or other token."
+            "N4.fs(4,1,4,4): error FS0010: Unexpected keyword 'let' or 'use' in implementation file"
+        ]
+
+        "N5.fs",
+        "module M\nmodule N =\n    1 end\n",
+        [
+            "N5.fs(3,7,3,10): error FS0010: Unexpected keyword 'end' in definition. Expected incomplete structured construct at or before this point or other token."
+            "N5.fs(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "N6.fs",
+        "namespace Q\nmodule N =\n    1 )\n",
+        [
+            "N6.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "N6.fs(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "N7.fs",
+        "module M\nmodule N =\n    1 )\nmodule O =\n    let d = 4\n",
+        [
+            "N7.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "N7.fs(4,1,4,7): error FS0010: Unexpected keyword 'module' in implementation file"
+        ]
+
+        "N8.fs",
+        "module M\nmodule N =\n    let a = 1\n    1 )\n    let b = 2\n",
+        [
+            "N8.fs(4,7,4,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "N8.fs(6,1,6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
         "Y1.fs",
         "module M\n1 +\n",
         [
