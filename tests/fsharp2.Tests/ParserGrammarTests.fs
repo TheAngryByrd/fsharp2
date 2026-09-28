@@ -192,9 +192,9 @@ module ParserGrammarTests =
                 |> String.concat " "
 
             $"let {head} = {expressionShape binding.Body}"
-        | ImplementationDeclaration.Expression(attributes, body, _) when attributes.IsEmpty ->
+        | ImplementationDeclaration.Expression(attributes, body, _, _) when attributes.IsEmpty ->
             $"expr {expressionShape body}"
-        | ImplementationDeclaration.Expression(attributes, body, _) ->
+        | ImplementationDeclaration.Expression(attributes, body, _, _) ->
             $"expr [{attributes.Length} attribute lists] {expressionShape body}"
         | ImplementationDeclaration.NestedModule nested ->
             let inner =
@@ -342,13 +342,6 @@ module ParserGrammarTests =
     ]
 
     let private explicitAfterOracleCases = [
-        "NestedRecoveryAtEnd.fs",
-        "namespace A\nmodule M =\n    let a = 1\n    )\n",
-        [
-            "NestedRecoveryAtEnd.fs(4,5): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
-            "NestedRecoveryAtEnd.fs(5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
-        ]
-
         "NestedRecoveryThenDeclarations.fs",
         "namespace A\nmodule M =\n    let a = 1\n    )\n    let b = )\nlet c = )\n",
         [
@@ -414,6 +407,13 @@ module ParserGrammarTests =
     ]
 
     let private laterDeclarationCases = [
+        "NestedRecoveryAtEnd.fs",
+        "namespace A\nmodule M =\n    let a = 1\n    )\n",
+        [
+            "NestedRecoveryAtEnd.fs(4,5): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "NestedRecoveryAtEnd.fs(5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
         "UnionCaseAfterBar.fs",
         "module P\ntype U = A | B of )\n",
         [ "UnionCaseAfterBar.fs(2,19): error FS0010: Unexpected symbol ')' in union case" ]

@@ -87,6 +87,7 @@ module internal Parser =
         | Discarded
         | Unmodeled
         | DiscardedIfValueOrOpen
+        | ReportedAtRoot
 
     type private ParserState = {
         Cursor: Cursor
@@ -97,6 +98,7 @@ module internal Parser =
         mutable NextDeclaration: DeclarationAfterRecovery
         mutable UnmodeledAtEnd: bool
         mutable Interrupted: bool
+        mutable InAnonymousRoot: bool
     }
 
     [<RequireQualifiedAccess>]
@@ -1999,6 +2001,7 @@ module internal Parser =
     type private ListRecovery =
         | Continues
         | Discards
+        | DiscardsAfterDeclaration
         | DiscardsInValue
         | Unmodeled
 
@@ -2010,21 +2013,18 @@ module internal Parser =
         let body = parseExpression state context
         let range = span (declarationStart attributes start) (emptyAt cursor.LastEnd)
 
-        let recovery =
+        let skipped, recovery =
             if
                 reportedSince state reported
                 || endsLine context cursor.Current
             then
-                ListRecovery.Continues
+                None, ListRecovery.Continues
             elif reportUnexpected state point "an expression declaration" then
-                skipUntil state context
-                |> ignore
-
-                ListRecovery.Discards
+                skipUntil state context, ListRecovery.DiscardsAfterDeclaration
             else
-                ListRecovery.Continues
+                None, ListRecovery.Continues
 
-        ImplementationDeclaration.Expression(attributes, body, range), recovery
+        ImplementationDeclaration.Expression(attributes, body, skipped, range), recovery
 
     let private parseVal state nested attributes =
         let cursor = state.Cursor
@@ -2560,18 +2560,160 @@ module internal Parser =
         state.Interrupted <- true
         state.SuppressFrom <- Some state.Diagnostics.Count
 
+    let private rootKeywords =
+        HashSet [
+            "module"
+            "type"
+            "open"
+            "do"
+            "exception"
+            "if"
+            "match"
+            "fun"
+            "private"
+            "inline"
+            "end"
+            "val"
+        ]
+
+    let private rootSymbols =
+        HashSet [
+            "("
+            ")"
+            "["
+            "]"
+            "}"
+            "="
+            "|"
+        ]
+
+    let private rootDeclarationToken (cursor: Cursor) =
+        let token = cursor.Current
+        let next = cursor.Peek 1
+        let text = tokenText token
+
+        let adjacent = next.Range.Start.Offset = token.Range.End.Offset
+
+        if isAttributeListStart cursor then
+            Some("symbol '[<'", span token.Range next.Range)
+        elif
+            (isKeyword "let" token
+             || isKeyword "use" token)
+            && isOperator "!" next
+            && adjacent
+        then
+            Some("binder keyword", span token.Range next.Range)
+        elif
+            isKeyword "let" token
+            || isKeyword "use" token
+        then
+            Some("keyword 'let' or 'use'", token.Range)
+        elif
+            isKind LexicalTokenKind.Keyword token
+            && rootKeywords.Contains text
+        then
+            Some($"keyword '{text}'", token.Range)
+        elif text = "_" then
+            Some("symbol '_'", token.Range)
+        elif isKind LexicalTokenKind.Identifier token then
+            Some("identifier", token.Range)
+        elif
+            isKind LexicalTokenKind.NumericLiteral token
+            && Seq.forall Char.IsAsciiDigit text
+        then
+            Some("integer literal", token.Range)
+        elif
+            isKind LexicalTokenKind.StringLiteral token
+            && text.StartsWith("\"", StringComparison.Ordinal)
+            && not (text.StartsWith("\"\"\"", StringComparison.Ordinal))
+        then
+            Some("string literal", token.Range)
+        elif
+            (isKind LexicalTokenKind.Delimiter token
+             || isKind LexicalTokenKind.Operator token)
+            && rootSymbols.Contains text
+        then
+            Some($"symbol '{text}'", token.Range)
+        else
+            None
+
+    let private reportIncompleteAtRoot state (range: SourceRange) =
+        report
+            state
+            "FS0010"
+            "Incomplete structured construct at or before this point in implementation file"
+            range
+
+        state.NextDeclaration <- DeclarationAfterRecovery.Discarded
+        state.SuppressFrom <- Some state.Diagnostics.Count
+
+    let private reportAtRoot state =
+        match rootDeclarationToken state.Cursor with
+        | Some(description, range) ->
+            report state "FS0010" $"Unexpected {description} in implementation file" range
+            state.NextDeclaration <- DeclarationAfterRecovery.Discarded
+            state.SuppressFrom <- Some state.Diagnostics.Count
+        | None -> reportAfterRecovery state state.Cursor.Current
+
+    let private reportPendingAtEnd state =
+        if
+            state.SuppressFrom.IsSome
+            && not state.Interrupted
+            && state.NextDeclaration = DeclarationAfterRecovery.ReportedAtRoot
+        then
+            let token = state.Cursor.Current
+
+            if isEndOfFile token then
+                let eof = token.Range.Start
+
+                let lineStart = {
+                    eof with
+                        Offset =
+                            eof.Offset
+                            - (eof.Column
+                               - 1)
+                        Column = 1
+                }
+
+                reportIncompleteAtRoot state { Start = lineStart; End = eof }
+            else
+                reportIncompleteAtRoot state token.Range
+
     let private suppress state nextDeclaration unmodeledAtEnd =
         state.SuppressFrom <- Some state.Diagnostics.Count
         state.NextDeclaration <- nextDeclaration
         state.UnmodeledAtEnd <- unmodeledAtEnd
 
+    let private suppressAfterNestedRecovery state =
+        if state.InAnonymousRoot then
+            suppress state DeclarationAfterRecovery.Unmodeled true
+        else
+            suppress state DeclarationAfterRecovery.ReportedAtRoot false
+
     let private removeSuppressedDiagnostics state =
         match state.SuppressFrom with
         | Some first ->
+            // The Compatibility Oracle changes the diagnostic after a nested recovery when the discarded code has an error.
+            if
+                state.Diagnostics.Count > first
+                && state.NextDeclaration = DeclarationAfterRecovery.ReportedAtRoot
+            then
+                state.NextDeclaration <- DeclarationAfterRecovery.Unmodeled
+                state.UnmodeledAtEnd <- true
+
+            let reportedBefore =
+                state.Diagnostics
+                |> Seq.take first
+                |> Seq.map _.Range.Start
+                |> HashSet
+
             let kept =
                 state.Diagnostics
                 |> Seq.skip first
-                |> Seq.filter (fun diagnostic -> diagnostic.Code = unsupportedCode)
+                |> Seq.filter (fun diagnostic ->
+                    diagnostic.Code = unsupportedCode
+                    && not (reportedBefore.Contains diagnostic.Range.Start)
+                )
                 |> Seq.toArray
 
             state.Diagnostics.RemoveRange(
@@ -2616,6 +2758,16 @@ module internal Parser =
                     && discarded.Count = 0
 
                 let reported = state.Diagnostics.Count
+
+                if
+                    state.SuppressFrom.IsSome
+                    && not state.Interrupted
+                    && state.NextDeclaration = DeclarationAfterRecovery.ReportedAtRoot
+                    && list
+                       <> DeclarationList.NestedModule
+                then
+                    reportAtRoot state
+
                 let attributes = parseAttributeLists state
                 let token = cursor.Current
 
@@ -2624,7 +2776,8 @@ module internal Parser =
                     && not state.Interrupted
                     && (
                         match state.NextDeclaration with
-                        | DeclarationAfterRecovery.Discarded -> false
+                        | DeclarationAfterRecovery.Discarded
+                        | DeclarationAfterRecovery.ReportedAtRoot -> false
                         | DeclarationAfterRecovery.Unmodeled -> true
                         | DeclarationAfterRecovery.DiscardedIfValueOrOpen ->
                             not (
@@ -2730,10 +2883,14 @@ module internal Parser =
                         rules.NestedRecoveryDiscards
                         ->
                         // The Compatibility Oracle discards the rest of the file after this recovery and reports one more diagnostic at its end.
-                        suppress state DeclarationAfterRecovery.Unmodeled true
+                        suppressAfterNestedRecovery state
+                    | ListRecovery.DiscardsAfterDeclaration, DeclarationList.NestedModule ->
+                        // The Compatibility Oracle discards the rest of the file, also after the first declaration of the module, and reports one more diagnostic.
+                        suppressAfterNestedRecovery state
                     | ListRecovery.Discards, DeclarationList.NestedModule
                     | ListRecovery.DiscardsInValue, DeclarationList.NestedModule -> ()
-                    | ListRecovery.Discards, _ ->
+                    | ListRecovery.Discards, _
+                    | ListRecovery.DiscardsAfterDeclaration, _ ->
                         // The Compatibility Oracle discards the rest of the file after this recovery and reports no diagnostic for it.
                         suppress state DeclarationAfterRecovery.Discarded false
                     | ListRecovery.DiscardsInValue, _ ->
@@ -2824,6 +2981,7 @@ module internal Parser =
 
         if isKeyword "namespace" cursor.Current then
             while isKeyword "namespace" cursor.Current do
+                reportPendingAtEnd state
                 let namespaceToken = cursor.Advance()
 
                 let name =
@@ -2866,6 +3024,7 @@ module internal Parser =
                     root (ModuleOrNamespaceKind.NamedModule name) moduleToken.Range declarations
                 )
             | None ->
+                state.InAnonymousRoot <- true
                 let declarations = rootDeclarations DeclarationList.AnonymousRoot
                 roots.Add(root ModuleOrNamespaceKind.AnonymousModule first.Range declarations)
 
@@ -2876,6 +3035,8 @@ module internal Parser =
             while not (isEndOfFile cursor.Current) do
                 cursor.Advance()
                 |> ignore
+
+        reportPendingAtEnd state
 
         if
             state.SuppressFrom.IsSome
@@ -2949,6 +3110,7 @@ module internal Parser =
         NextDeclaration = DeclarationAfterRecovery.Discarded
         UnmodeledAtEnd = false
         Interrupted = false
+        InAnonymousRoot = false
     }
 
     let parseImplementationFile (document: LexicalDocument) : ImplementationFileParseResult =
@@ -2980,12 +3142,16 @@ module internal Parser =
     let private missingDeclarationMessage =
         "Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
 
+    let private moduleEqualsDeclarationMessage =
+        "Files in libraries or multiple-file applications must begin with a namespace or module declaration. When using a module declaration at the start of a file the '=' sign is not allowed. If this is a top-level module, consider removing the = to resolve this error."
+
     let private implicitModuleMessage moduleName fileName =
         $"The declarations in this file will be placed in an implicit module '{moduleName}' based on the file name '{fileName}'. However this is not a valid F# identifier, so the contents will not be accessible from other files. Consider renaming the file or adding a 'module' or 'namespace' declaration at the top of the file."
 
     type private AnonymousRoot = {
         Range: SourceRange
         HasDeclarations: bool
+        StartsWithNestedModule: bool
     }
 
     let private nextToken (document: LexicalDocument) offset =
@@ -3031,7 +3197,7 @@ module internal Parser =
                 let finish =
                     match last with
                     | ImplementationDeclaration.Open(_, range)
-                    | ImplementationDeclaration.Expression(_, _, range) -> range.End
+                    | ImplementationDeclaration.Expression(_, _, _, range) -> range.End
                     | _ -> nextTokenStart document last.Range.End.Offset
 
                 if finish.Line > start.Line then
@@ -3048,6 +3214,10 @@ module internal Parser =
         {
             Range = range
             HasDeclarations = not kept.IsEmpty
+            StartsWithNestedModule =
+                match Seq.tryHead root.Declarations with
+                | Some(ImplementationDeclaration.NestedModule _) -> true
+                | _ -> false
         }
 
     let private anonymousSignature
@@ -3086,6 +3256,10 @@ module internal Parser =
         {
             Range = range
             HasDeclarations = hasDeclarations
+            StartsWithNestedModule =
+                match Seq.tryHead root.Declarations with
+                | Some(SignatureDeclaration.NestedModule _) -> true
+                | _ -> false
         }
 
     let private invalidImplicitModuleName (logicalPath: string) =
@@ -3143,9 +3317,14 @@ module internal Parser =
             files.Add file
             Seq.iter add fileDiagnostics
 
+            let unmodeled =
+                fileDiagnostics
+                |> Seq.exists (fun diagnostic -> diagnostic.Code = unsupportedCode)
+
             match source.Kind, anonymous with
             | SyntaxSourceKind.Script, _
             | _, None -> ()
+            | _, Some _ when unmodeled -> ()
             | _, Some anonymous ->
                 let requiresDeclaration =
                     match target with
@@ -3158,7 +3337,11 @@ module internal Parser =
                     add {
                         Severity = DiagnosticSeverity.Error
                         Code = "FS0222"
-                        Message = missingDeclarationMessage
+                        Message =
+                            if anonymous.StartsWithNestedModule then
+                                moduleEqualsDeclarationMessage
+                            else
+                                missingDeclarationMessage
                         Range = anonymous.Range
                     }
 
