@@ -1,0 +1,123 @@
+namespace fsharp2.Tests
+
+open System
+open System.IO
+open System.Text.Json
+open Expecto
+open FSharp2.Compiler
+
+module SyntaxConformanceTests =
+    let private conformanceRoot =
+        Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, "..", "conformance"))
+
+    let private syntaxRows = [
+        "syntax.implementation-declarations"
+        "syntax.signature-declarations"
+    ]
+
+    let private language =
+        LanguageVersion.normalize (Some "10.0")
+        |> Result.defaultWith failtest
+
+    let private json (path: string) =
+        use document = JsonDocument.Parse(File.ReadAllBytes path)
+        document.RootElement.Clone()
+
+    let private text (element: JsonElement) (name: string) = element.GetProperty(name).GetString()
+
+    let private syntaxCases () =
+        Directory.GetFiles(
+            Path.Combine(conformanceRoot, "cases", "language", "syntax"),
+            "*.case.json"
+        )
+        |> Array.sort
+        |> Array.map json
+
+    let private parserDiagnostics (source: JsonElement) =
+        let logicalPath = text source "logicalPath"
+
+        let document =
+            SourceSnapshot.Create(
+                StableIdentity.create (text source "stableId"),
+                logicalPath,
+                File.ReadAllText(Path.Combine(conformanceRoot, text source "fixturePath")),
+                "content"
+            )
+            |> LexicalPipeline.prepare language Array.empty
+
+        let diagnostics =
+            if text source "kind" = "signature" then
+                (Parser.parseSignatureFile document).Diagnostics
+            else
+                (Parser.parseImplementationFile document).Diagnostics
+
+        diagnostics
+        |> Seq.map (fun diagnostic ->
+            logicalPath,
+            diagnostic.Code,
+            diagnostic.Message,
+            diagnostic.Range.Start.Line,
+            diagnostic.Range.Start.Column
+        )
+
+    let private oracleDiagnostics (case: JsonElement) =
+        let expected = case.GetProperty("expectedDiagnostics")
+
+        if text expected "mode" = "oracle-lock" then
+            let lock = json (Path.Combine(conformanceRoot, text expected "lockPath"))
+
+            lock.GetProperty("diagnostics").EnumerateArray()
+            |> Seq.map (fun diagnostic ->
+                let range = diagnostic.GetProperty("range")
+
+                text diagnostic "logicalSource",
+                text diagnostic "code",
+                text diagnostic "message",
+                range.GetProperty("startLine").GetInt32(),
+                range.GetProperty("startColumn").GetInt32()
+            )
+            |> Seq.toList
+        else
+            []
+
+    [<Tests>]
+    let tests =
+        testList "Issue29.SyntaxConformance" [
+            testCase "each syntax feature row has a positive and a negative Oracle case"
+            <| fun _ ->
+                let cases = syntaxCases ()
+
+                for row in syntaxRows do
+                    let polarities =
+                        cases
+                        |> Seq.filter (fun case -> text case "featureRow" = row)
+                        |> Seq.map (fun case -> text case "polarity")
+                        |> Set.ofSeq
+
+                    Expect.equal
+                        polarities
+                        (set [
+                            "negative"
+                            "positive"
+                        ])
+                        $"Feature row '{row}' must have positive and negative cases"
+
+            testCase "the syntax parser reports the Oracle diagnostics for each syntax case"
+            <| fun _ ->
+                let cases = syntaxCases ()
+
+                Expect.isNonEmpty cases "The syntax family has cases"
+
+                for case in cases do
+                    let caseId = text case "caseId"
+
+                    let actual =
+                        case.GetProperty("sources").EnumerateArray()
+                        |> Seq.collect parserDiagnostics
+                        |> Seq.toList
+
+                    Expect.sequenceEqual
+                        actual
+                        (oracleDiagnostics case)
+                        $"Case '{caseId}' must match its Oracle lock"
+        ]

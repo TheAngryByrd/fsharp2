@@ -1,0 +1,60 @@
+{
+  "documentKind": "family-inventory-v1",
+  "schemaVersion": 1,
+  "inventoryId": "syntax.inventory",
+  "family": "syntax",
+  "caseIds": [
+    "language.syntax.implementation-declarations-positive",
+    "language.syntax.implementation-recovery-negative",
+    "language.syntax.signature-declarations-positive",
+    "language.syntax.signature-recovery-negative"
+  ],
+  "positiveCaseIds": [
+    "language.syntax.implementation-declarations-positive",
+    "language.syntax.signature-declarations-positive"
+  ],
+  "negativeCaseIds": [
+    "language.syntax.implementation-recovery-negative",
+    "language.syntax.signature-recovery-negative"
+  ],
+  "featureRows": [
+    "syntax.implementation-declarations",
+    "syntax.signature-declarations"
+  ],
+  "languageVersions": [
+    "default",
+    "9.0",
+    "10.0"
+  ],
+  "optionCells": [
+    "debug-optimize-minus-tailcalls-minus-portable-deterministic",
+    "release-optimize-plus-tailcalls-plus-portable-deterministic",
+    "noframework-simpleresolution-fullpaths-flaterrors-consolecolors-minus",
+    "explicit-ordered-references-fsharp-core-identity",
+    "implementation-assembly-request",
+    "reference-assembly-request",
+    "portable-pdb-request",
+    "xml-documentation-request"
+  ],
+  "artifactKinds": [
+    "implementation-assembly",
+    "reference-assembly",
+    "portable-pdb",
+    "xml-documentation"
+  ],
+  "probeKinds": [
+    "ilverify",
+    "managed-load",
+    "public-api",
+    "metadata",
+    "portable-pdb",
+    "downstream-fsharp",
+    "downstream-csharp",
+    "within-compiler-repeat"
+  ],
+  "review": {
+    "owner": "parser-compatibility",
+    "sourceIssue": "#29",
+    "reviewCondition": "Review when the syntax case set, parser productions, or compatibility envelope changes."
+  }
+}
