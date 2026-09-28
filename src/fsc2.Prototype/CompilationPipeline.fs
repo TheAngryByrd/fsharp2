@@ -20,6 +20,11 @@ type internal CoreCompilation = {
 
 /// The host-independent compile/link/publish path shared by standalone and
 /// persistent-service execution.
+type internal RequestFailure = {
+    Errors: CompilerDiagnostic list
+    Warnings: CompilationDiagnostic list
+}
+
 module internal CompilationPipeline =
     type Response = {
         ExitCode: int
@@ -267,7 +272,31 @@ module internal CompilationPipeline =
                     |> ImmutableArray.CreateRange
         }
 
-    let compileRequest (service: CompilerService) (request: CompilationRequest) =
+    let private sourceWarnings (service: CompilerService) (preparedSources: LexicalDocument list) =
+        preparedSources
+        |> Seq.collect service.LexicalWarnings
+        |> Seq.mapi (fun order warning ->
+            CompilationDiagnostic.Create(
+                int64 order,
+                warning.Code,
+                Int32.Parse(warning.Code.Substring(2)),
+                None,
+                DiagnosticStage.Compilation CompilationPhase.Source,
+                DiagnosticSeverity.Warning,
+                DiagnosticSeverity.Warning,
+                DiagnosticDisposition.Emitted,
+                None,
+                warning.Message,
+                warning.Path,
+                warning.Range,
+                [||],
+                [||],
+                Some DiagnosticStream.StandardError
+            )
+        )
+        |> Seq.toList
+
+    let private compileRequestCore (service: CompilerService) (request: CompilationRequest) =
         match
             ReferenceTypeIndex.Create(request.TargetReferences),
             LanguageVersion.normalize request.SemanticOptions.LanguageVersion
@@ -346,27 +375,7 @@ module internal CompilationPipeline =
                                     sourceDiagnosticOptions request preparedSources
 
                                 let diagnostics =
-                                    preparedSources
-                                    |> Seq.collect service.LexicalWarnings
-                                    |> Seq.mapi (fun order warning ->
-                                        CompilationDiagnostic.Create(
-                                            int64 order,
-                                            warning.Code,
-                                            Int32.Parse(warning.Code.Substring(2)),
-                                            None,
-                                            DiagnosticStage.Compilation CompilationPhase.Source,
-                                            DiagnosticSeverity.Warning,
-                                            DiagnosticSeverity.Warning,
-                                            DiagnosticDisposition.Emitted,
-                                            None,
-                                            warning.Message,
-                                            warning.Path,
-                                            warning.Range,
-                                            [||],
-                                            [||],
-                                            Some DiagnosticStream.StandardError
-                                        )
-                                    )
+                                    sourceWarnings service preparedSources
                                     |> Seq.map (DiagnosticPolicy.input None false true)
                                     |> DiagnosticPolicy.apply diagnosticOptions
                                     |> Seq.filter (fun diagnostic ->
@@ -378,16 +387,7 @@ module internal CompilationPipeline =
                                     diagnostics
                                     |> Seq.exists DiagnosticPolicy.isEffectiveError
                                 then
-                                    diagnostics
-                                    |> Seq.filter DiagnosticPolicy.isEffectiveError
-                                    |> Seq.map (fun diagnostic -> {
-                                        Code = diagnostic.Code
-                                        Message = diagnostic.Message
-                                        Path = diagnostic.LogicalPath
-                                        Range = diagnostic.Range
-                                    })
-                                    |> Seq.toList
-                                    |> Error
+                                    Error []
                                 else
                                     Ok {
                                         Query = query
@@ -399,6 +399,25 @@ module internal CompilationPipeline =
                                     }
                         with ex ->
                             Error [ diagnostic "FSC2P9999" ex.Message ]
+
+    let compileRequest (service: CompilerService) (request: CompilationRequest) =
+        match compileRequestCore service request with
+        | Ok compilation -> Ok compilation
+        | Error errors ->
+            let warnings =
+                match LanguageVersion.normalize request.SemanticOptions.LanguageVersion with
+                | Error _ -> []
+                | Ok language ->
+                    let defines = List.ofSeq request.SemanticOptions.Defines
+
+                    request.Sources
+                    |> Seq.map (fun source ->
+                        service.PrepareSource(language, defines, source).Document
+                    )
+                    |> Seq.toList
+                    |> sourceWarnings service
+
+            Error { Errors = errors; Warnings = warnings }
 
     let private responseDiagnostic code numericCode stage message =
         CompilationDiagnostic.Create(
@@ -650,9 +669,11 @@ module internal CompilationPipeline =
             let request = createRequestWithDiagnosticOptions invocation options sources
 
             match compileRequest service request with
-            | Error compilerDiagnostics ->
-                compilerDiagnostics
-                |> Seq.map structuredCompilerDiagnostic
+            | Error requestFailure ->
+                Seq.append
+                    requestFailure.Warnings
+                    (requestFailure.Errors
+                     |> Seq.map structuredCompilerDiagnostic)
                 |> failure compileStarted options
             | Ok compilation ->
                 let publishStarted = Stopwatch.GetTimestamp()

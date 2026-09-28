@@ -578,7 +578,7 @@ type Compiler() =
                 let diagnosticOptions = effectiveDiagnosticOptions request
 
                 match CompilationPipeline.compileRequest service request with
-                | Error [ diagnostic ] when diagnostic.Code = "FSC2C2002" ->
+                | Error { Errors = [ diagnostic ] } when diagnostic.Code = "FSC2C2002" ->
                     let failure = {
                         Code = diagnostic.Code
                         Message = diagnostic.Message
@@ -589,20 +589,42 @@ type Compiler() =
                     unsupportedResult
                         failure
                         (unsupportedPhaseResults request failure.StoppingPhase)
-                | Error compilerDiagnostics ->
-                    let diagnostic = List.head compilerDiagnostics
-
+                | Error requestFailure ->
                     let failedPhase =
-                        if diagnostic.Code = "FS0001" then
+                        match requestFailure.Errors with
+                        | [] -> CompilationPhase.Source
+                        | diagnostic :: _ when diagnostic.Code = "FS0001" ->
                             CompilationPhase.TypedDeclarations
-                        elif diagnostic.Code = "FS0039" then
+                        | diagnostic :: _ when diagnostic.Code = "FS0039" ->
                             CompilationPhase.ResolvedSymbols
-                        else
-                            CompilationPhase.Syntax
+                        | _ -> CompilationPhase.Syntax
 
                     let diagnostics =
-                        compilerDiagnostics
-                        |> Seq.map (failureDiagnostic failedPhase)
+                        Seq.append
+                            requestFailure.Warnings
+                            (requestFailure.Errors
+                             |> Seq.map (failureDiagnostic failedPhase))
+                        |> Seq.mapi (fun order diagnostic ->
+                            CompilationDiagnostic.Create(
+                                int64 order,
+                                diagnostic.Code,
+                                diagnostic.NumericCode,
+                                diagnostic.Subcategory,
+                                diagnostic.Stage,
+                                diagnostic.OriginalSeverity,
+                                diagnostic.EffectiveSeverity,
+                                diagnostic.Disposition,
+                                diagnostic.Suppression,
+                                diagnostic.Message,
+                                diagnostic.LogicalPath,
+                                diagnostic.Range,
+                                diagnostic.RelatedInformation
+                                |> Seq.toArray,
+                                diagnostic.Suggestions
+                                |> Seq.toArray,
+                                diagnostic.Stream
+                            )
+                        )
                         |> Seq.map (DiagnosticPolicy.input None false true)
                         |> DiagnosticPolicy.apply diagnosticOptions
 

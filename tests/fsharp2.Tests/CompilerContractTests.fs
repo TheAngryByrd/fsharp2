@@ -1361,9 +1361,42 @@ let main _ =
 
                 Expect.sequenceEqual
                     (result.Diagnostics
+                     |> Seq.map (fun diagnostic ->
+                         diagnostic.Code,
+                         diagnostic.OriginalSeverity,
+                         diagnostic.EffectiveSeverity,
+                         diagnostic.Stage
+                     ))
+                    [
+                        "FS0203",
+                        DiagnosticSeverity.Warning,
+                        DiagnosticSeverity.Error,
+                        DiagnosticStage.Compilation CompilationPhase.Source
+                    ]
+                    "The source warning is promoted to an error"
+
+            testCase "a lexical error keeps warnings from the same source"
+            <| fun _ ->
+                let result =
+                    compile
+                        "module Program
+#nowarn \"abc\"
+let answer () = 12abc
+"
+
+                Expect.equal
+                    result.Outcome
+                    CompilationOutcome.Failed
+                    "The malformed literal stops the compilation"
+
+                Expect.sequenceEqual
+                    (result.Diagnostics
                      |> Seq.map (fun diagnostic -> diagnostic.Code, diagnostic.EffectiveSeverity))
-                    [ "FS0203", DiagnosticSeverity.Error ]
-                    "The promoted warning is an error"
+                    [
+                        "FS0203", DiagnosticSeverity.Warning
+                        "FS1156", DiagnosticSeverity.Error
+                    ]
+                    "The warning and the error are both reported in source order"
 
             testCase "reused parsing rebinds the physical source checksum"
             <| fun _ ->
