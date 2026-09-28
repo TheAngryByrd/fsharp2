@@ -336,6 +336,52 @@ module ParserCompilationTests =
                             "The diagnostics must match the Compatibility Oracle"
             ]
 
+            testList "each fsc target name selects the Oracle FS0222 rule" [
+                for name, expected in
+                    [
+                        "exe", []
+                        "Exe", []
+                        "winexe", []
+                        "WinExe", []
+                        "library", [ missingDeclaration "Anonymous.fs" 1 1 2 1 ]
+                        "Library", [ missingDeclaration "Anonymous.fs" 1 1 2 1 ]
+                        "module", [ missingDeclaration "Anonymous.fs" 1 1 2 1 ]
+                        "MODULE", [ missingDeclaration "Anonymous.fs" 1 1 2 1 ]
+                    ] ->
+                    testCase name
+                    <| fun _ ->
+                        let target =
+                            SyntaxCompilationTarget.tryParse name
+                            |> Option.defaultWith (fun () ->
+                                failtest $"The Oracle accepts --target:{name}"
+                            )
+
+                        Expect.sequenceEqual
+                            (oracleLines (
+                                parse target [
+                                    named
+                                    anonymous
+                                ]
+                            ))
+                            expected
+                            "The diagnostics must match the Compatibility Oracle"
+            ]
+
+            testList "a target name that the Oracle rejects has no target" [
+                for name in
+                    [
+                        ""
+                        " exe"
+                        "appcontainerexe"
+                        "winmdobj"
+                    ] ->
+                    testCase $"'{name}'"
+                    <| fun _ ->
+                        Expect.isNone
+                            (SyntaxCompilationTarget.tryParse name)
+                            $"The Oracle reports FS0224 or FS1048 for --target:{name}"
+            ]
+
             testCase "files keep their order and their kind"
             <| fun _ ->
                 let result =

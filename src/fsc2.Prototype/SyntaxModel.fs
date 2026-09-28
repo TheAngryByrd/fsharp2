@@ -314,3 +314,12 @@ type internal SyntaxCompilationResult = {
     Files: ImmutableArray<SyntaxFile>
     Diagnostics: ImmutableArray<SyntaxFileDiagnostic>
 }
+
+module internal SyntaxCompilationTarget =
+    let tryParse (name: string) =
+        match name.ToLowerInvariant() with
+        | "exe"
+        | "winexe" -> Some SyntaxCompilationTarget.Executable
+        | "library"
+        | "module" -> Some SyntaxCompilationTarget.Library
+        | _ -> None

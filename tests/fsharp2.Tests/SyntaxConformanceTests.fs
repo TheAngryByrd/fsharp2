@@ -37,9 +37,11 @@ module SyntaxConformanceTests =
 
     let private parserDiagnostics language (case: JsonElement) =
         let target =
-            match text (case.GetProperty("options").GetProperty("emission")) "outputType" with
-            | "library" -> SyntaxCompilationTarget.Library
-            | _ -> SyntaxCompilationTarget.Executable
+            let outputType =
+                text (case.GetProperty("options").GetProperty("emission")) "outputType"
+
+            SyntaxCompilationTarget.tryParse outputType
+            |> Option.defaultWith (fun () -> failtest $"Unknown output type '{outputType}'")
 
         let documents =
             case.GetProperty("sources").EnumerateArray()
