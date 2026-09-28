@@ -37,21 +37,35 @@ module SyntaxConformanceTests =
 
     let private parserDiagnostics language (case: JsonElement) =
         let target =
-            match text (case.GetProperty("options").GetProperty("emission")) "outputType" with
-            | "library" -> SyntaxCompilationTarget.Library
-            | _ -> SyntaxCompilationTarget.Executable
+            let outputType =
+                text (case.GetProperty("options").GetProperty("emission")) "outputType"
+
+            SyntaxCompilationTarget.tryParse outputType
+            |> Option.defaultWith (fun () -> failtest $"Unknown output type '{outputType}'")
 
         let documents =
             case.GetProperty("sources").EnumerateArray()
             |> Seq.sortBy (fun source -> source.GetProperty("order").GetInt32())
             |> Seq.map (fun source ->
-                SourceSnapshot.Create(
-                    StableIdentity.create (text source "stableId"),
-                    text source "logicalPath",
-                    File.ReadAllText(Path.Combine(conformanceRoot, text source "fixturePath")),
-                    "content"
-                )
-                |> LexicalPipeline.prepare language Array.empty
+                let logicalPath = text source "logicalPath"
+
+                {
+                    Kind =
+                        SyntaxSourceKind.parse logicalPath
+                        |> Result.defaultWith (fun error ->
+                            failtest $"'{logicalPath}' has no source kind: {error}"
+                        )
+                    Document =
+                        SourceSnapshot.Create(
+                            StableIdentity.create (text source "stableId"),
+                            logicalPath,
+                            File.ReadAllText(
+                                Path.Combine(conformanceRoot, text source "fixturePath")
+                            ),
+                            "content"
+                        )
+                        |> LexicalPipeline.prepare language Array.empty
+                }
             )
             |> ImmutableArray.CreateRange
 
@@ -60,6 +74,7 @@ module SyntaxConformanceTests =
             let diagnostic = fileDiagnostic.Diagnostic
 
             fileDiagnostic.LogicalPath,
+            SyntaxDiagnosticText.severity diagnostic,
             diagnostic.Code,
             diagnostic.Message,
             diagnostic.Range.Start.Line,
@@ -80,6 +95,7 @@ module SyntaxConformanceTests =
                 let range = diagnostic.GetProperty("range")
 
                 text diagnostic "logicalSource",
+                text diagnostic "originalSeverity",
                 text diagnostic "code",
                 text diagnostic "message",
                 range.GetProperty("startLine").GetInt32(),

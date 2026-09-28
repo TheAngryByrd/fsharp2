@@ -280,6 +280,7 @@ type internal SignatureFileSyntax = {
 }
 
 type internal SyntaxDiagnostic = {
+    Severity: LexicalSeverity
     Code: string
     Message: string
     Range: SourceRange
@@ -301,6 +302,22 @@ type internal SyntaxCompilationTarget =
     | Library
 
 [<RequireQualifiedAccess>]
+type internal SyntaxSourceKind =
+    | Implementation
+    | Script
+    | Signature
+
+[<RequireQualifiedAccess>]
+type internal SyntaxSourceKindError =
+    | Unrecognized
+    | RequiresMLCompatibility
+
+type internal SyntaxSource = {
+    Kind: SyntaxSourceKind
+    Document: LexicalDocument
+}
+
+[<RequireQualifiedAccess>]
 type internal SyntaxFile =
     | Implementation of ImplementationFileSyntax
     | Signature of SignatureFileSyntax
@@ -314,3 +331,23 @@ type internal SyntaxCompilationResult = {
     Files: ImmutableArray<SyntaxFile>
     Diagnostics: ImmutableArray<SyntaxFileDiagnostic>
 }
+
+module internal SyntaxCompilationTarget =
+    let tryParse (name: string) =
+        match name.ToLowerInvariant() with
+        | "exe"
+        | "winexe" -> Some SyntaxCompilationTarget.Executable
+        | "library"
+        | "module" -> Some SyntaxCompilationTarget.Library
+        | _ -> None
+
+module internal SyntaxSourceKind =
+    let parse (logicalPath: string) =
+        match System.IO.Path.GetExtension(logicalPath).ToLowerInvariant() with
+        | ".fs" -> Ok SyntaxSourceKind.Implementation
+        | ".fsx"
+        | ".fsscript" -> Ok SyntaxSourceKind.Script
+        | ".fsi" -> Ok SyntaxSourceKind.Signature
+        | ".ml"
+        | ".mli" -> Error SyntaxSourceKindError.RequiresMLCompatibility
+        | _ -> Error SyntaxSourceKindError.Unrecognized

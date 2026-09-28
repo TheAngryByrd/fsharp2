@@ -18,7 +18,8 @@
     "language.syntax.successive-arguments-negative",
     "language.syntax.successive-arguments-5-positive",
     "language.syntax.ordered-files-positive",
-    "language.syntax.ordered-files-negative"
+    "language.syntax.ordered-files-negative",
+    "language.syntax.implicit-module-negative"
   ],
   "positiveCaseIds": [
     "language.syntax.implementation-declarations-positive",
@@ -37,7 +38,8 @@
     "language.syntax.expressions-negative",
     "language.syntax.underscore-dot-shorthand-negative",
     "language.syntax.successive-arguments-negative",
-    "language.syntax.ordered-files-negative"
+    "language.syntax.ordered-files-negative",
+    "language.syntax.implicit-module-negative"
   ],
   "featureRows": [
     "syntax.implementation-declarations",

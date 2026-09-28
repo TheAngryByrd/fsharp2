@@ -153,5 +153,4 @@ module internal LanguageFeature =
     let unavailableDiagnostic (language: LanguageVersionIdentity) feature =
         match feature with
         | LanguageFeature.UnderscoreDotShorthand ->
-            Some
-                $"Feature 'underscore dot shorthand for accessor only function' is not available in F# {language.CanonicalMode}. Please use language version 8.0 or greater."
+            $"Feature 'underscore dot shorthand for accessor only function' is not available in F# {language.CanonicalMode}. Please use language version 8.0 or greater."

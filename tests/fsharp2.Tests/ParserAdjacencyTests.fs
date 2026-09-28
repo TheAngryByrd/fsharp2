@@ -114,7 +114,7 @@ module ParserAdjacencyTests =
         |> Seq.map (fun diagnostic ->
             let range = diagnostic.Range
 
-            $"Program.fs({range.Start.Line},{range.Start.Column},{range.End.Line},{range.End.Column}): error {diagnostic.Code}: {diagnostic.Message}"
+            $"Program.fs({range.Start.Line},{range.Start.Column},{range.End.Line},{range.End.Column}): {SyntaxDiagnosticText.severity diagnostic} {diagnostic.Code}: {diagnostic.Message}"
         )
         |> Seq.toList
 

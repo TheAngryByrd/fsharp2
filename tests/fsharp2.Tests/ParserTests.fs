@@ -37,7 +37,7 @@ module ParserTests =
     let private oracleLines logicalPath (diagnostics: ImmutableArray<SyntaxDiagnostic>) =
         diagnostics
         |> Seq.map (fun diagnostic ->
-            $"{logicalPath}({diagnostic.Range.Start.Line},{diagnostic.Range.Start.Column}): error {diagnostic.Code}: {diagnostic.Message}"
+            $"{logicalPath}({diagnostic.Range.Start.Line},{diagnostic.Range.Start.Column}): {SyntaxDiagnosticText.severity diagnostic} {diagnostic.Code}: {diagnostic.Message}"
         )
         |> Seq.toList
 
