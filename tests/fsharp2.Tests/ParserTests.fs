@@ -76,6 +76,8 @@ module ParserTests =
         | ImplementationDeclaration.Type definition -> $"type {definition.Name.Text}"
         | ImplementationDeclaration.Do(attributes, _, _) ->
             $"do [{attributes.Length} attribute lists]"
+        | ImplementationDeclaration.Expression(attributes, _, _) ->
+            $"expr [{attributes.Length} attribute lists]"
         | ImplementationDeclaration.Skipped _ -> "skipped"
 
     let private parseSignature logicalPath text =

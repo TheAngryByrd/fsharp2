@@ -921,6 +921,103 @@ module ParserCompilationTests =
             missingDeclaration "A7.fsi" 1 1 1 2
         ]
 
+        "an expression before a let declaration",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A1.fs",
+            "1 + 2
+let b = 1
+"
+            last
+        ],
+        [ missingDeclaration "A1.fs" 1 1 2 1 ]
+
+        "a multi-line expression",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A2.fs",
+            "f (
+    1)
+"
+            last
+        ],
+        [ missingDeclaration "A2.fs" 1 1 2 1 ]
+
+        "a multi-line expression before a let declaration",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A3.fs",
+            "f (
+    1)
+let b = 1
+"
+            last
+        ],
+        [ missingDeclaration "A3.fs" 1 1 2 1 ]
+
+        "a last expression on the next line",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A4.fs",
+            "let a = 1
+f 2
+"
+            last
+        ],
+        [ missingDeclaration "A4.fs" 1 1 2 1 ]
+
+        "a last expression before blank lines",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A5.fs",
+            "let a = 1
+f 2
+
+"
+            last
+        ],
+        [ missingDeclaration "A5.fs" 1 1 2 1 ]
+
+        "a last multi-line expression on the next line",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A6.fs",
+            "let a = 1
+f (
+  2)
+"
+            last
+        ],
+        [ missingDeclaration "A6.fs" 1 1 2 1 ]
+
+        "a single-line expression range ends at its last token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A7.fs",
+            "1
+"
+            last
+        ],
+        [ missingDeclaration "A7.fs" 1 1 1 2 ]
+
+        "a single-line expression range ignores trailing space",
+        SyntaxCompilationTarget.Executable,
+        [
+            "S15.fs",
+            "1 + 2   
+"
+            last
+        ],
+        [ missingDeclaration "S15.fs" 1 1 1 6 ]
+
+        "a single-line expression range without a line break",
+        SyntaxCompilationTarget.Executable,
+        [
+            "S5.fs", "f ()"
+            last
+        ],
+        [ missingDeclaration "S5.fs" 1 1 1 5 ]
+
         "a nested module in an anonymous root",
         SyntaxCompilationTarget.Executable,
         [

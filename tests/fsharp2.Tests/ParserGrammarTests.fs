@@ -180,7 +180,7 @@ module ParserGrammarTests =
 
         $"type {definition.Name.Text}{constructor} = {representation}"
 
-    let private declarationShape declaration =
+    let rec private declarationShape declaration =
         match declaration with
         | ImplementationDeclaration.Type definition -> typeDefinitionShape definition
         | ImplementationDeclaration.Let(_, bindings, _) ->
@@ -192,6 +192,17 @@ module ParserGrammarTests =
                 |> String.concat " "
 
             $"let {head} = {expressionShape binding.Body}"
+        | ImplementationDeclaration.Expression(attributes, body, _) when attributes.IsEmpty ->
+            $"expr {expressionShape body}"
+        | ImplementationDeclaration.Expression(attributes, body, _) ->
+            $"expr [{attributes.Length} attribute lists] {expressionShape body}"
+        | ImplementationDeclaration.NestedModule nested ->
+            let inner =
+                nested.Declarations
+                |> Seq.map declarationShape
+                |> String.concat "; "
+
+            $"module {nested.Name.Text} = [{inner}]"
         | ImplementationDeclaration.Skipped _ -> "skipped"
         | other -> string other
 
@@ -478,6 +489,81 @@ module ParserGrammarTests =
     [<Tests>]
     let tests =
         testList "Issue29.ParserGrammar" [
+            testCase "top-level expressions are declarations with their structure and ranges"
+            <| fun _ ->
+                let declarations, ranges =
+                    shapes
+                        "TopLevel.fs"
+                        "module TopLevel
+1 + 2
+printfn \"a\"
+let b = 1
+f (
+    1)
+(1, 2)
+[1; 2]
+if true then 1 else 2
+fun x -> x
+match 1 with
+| _ -> ()
+[<A>]
+1
+\"a\"
+module Nested =
+    f 1
+"
+
+                Expect.sequenceEqual
+                    declarations
+                    [
+                        "expr {1 + 2}"
+                        "expr [printfn \"a\"]"
+                        "let b = 1"
+                        "expr [f (1)]"
+                        "expr (1, 2)"
+                        "expr [1; 2]"
+                        "expr if Boolean true then 1 else 2"
+                        "expr fun x -> x"
+                        "expr match 1 with | _ -> ()"
+                        "expr [1 attribute lists] 1"
+                        "expr \"a\""
+                        "module Nested = [expr [f 1]]"
+                    ]
+                    "Top-level expression declarations"
+
+                Expect.sequenceEqual
+                    ranges
+                    [
+                        2, 1, 2, 6
+                        3, 1, 3, 12
+                        4, 1, 4, 10
+                        5, 1, 6, 7
+                        7, 1, 7, 7
+                        8, 1, 8, 7
+                        9, 1, 9, 22
+                        10, 1, 10, 11
+                        11, 1, 12, 10
+                        13, 1, 14, 2
+                        15, 1, 15, 4
+                        16, 1, 17, 8
+                    ]
+                    "Top-level expression declaration ranges"
+
+            testCase "a top-level expression continued on an indented line stays explicit"
+            <| fun _ ->
+                let result =
+                    parse
+                        "Continued.fs"
+                        "module Continued
+x
+    1
+"
+
+                SyntaxDiagnosticText.expectExplicitlyUnsupported
+                    []
+                    result.Diagnostics
+                    (oracleLines "Continued.fs" result)
+
             testCase
                 "record, union, class, and abbreviation type definitions keep their structure and ranges"
             <| fun _ ->

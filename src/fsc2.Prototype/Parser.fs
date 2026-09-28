@@ -1995,6 +1995,17 @@ module internal Parser =
             span (declarationStart attributes doToken) (emptyAt cursor.LastEnd)
         )
 
+    let private parseExpressionDeclaration state attributes =
+        let cursor = state.Cursor
+        let start = cursor.Current
+        let body = parseExpression state start.Range.Start
+
+        ImplementationDeclaration.Expression(
+            attributes,
+            body,
+            span (declarationStart attributes start) (emptyAt cursor.LastEnd)
+        )
+
     [<RequireQualifiedAccess>]
     type private ListRecovery =
         | Continues
@@ -2871,6 +2882,8 @@ module internal Parser =
                     Some(Some(parseDo state attributes), ListRecovery.Continues)
                 elif isKeyword "type" token then
                     Some(parseTypeDefinition state attributes)
+                elif canStartExpression token then
+                    Some(Some(parseExpressionDeclaration state attributes), ListRecovery.Continues)
                 else
                     None
         NestedRecoveryDiscards = true
@@ -3000,7 +3013,8 @@ module internal Parser =
             | Some last ->
                 let finish =
                     match last with
-                    | ImplementationDeclaration.Open(_, range) -> range.End
+                    | ImplementationDeclaration.Open(_, range)
+                    | ImplementationDeclaration.Expression(_, _, range) -> range.End
                     | _ -> nextTokenStart document last.Range.End.Offset
 
                 if finish.Line > start.Line then
