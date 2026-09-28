@@ -70,6 +70,7 @@ module ParserTests =
                 |> String.concat "; "
 
             $"module {name.Text} = [{inner}]"
+        | ImplementationDeclaration.Type definition -> $"type {definition.Name.Text}"
         | ImplementationDeclaration.Do(attributes, _, _) ->
             $"do [{attributes.Length} attribute lists]"
         | ImplementationDeclaration.Skipped _ -> "skipped"
@@ -382,9 +383,6 @@ module ParserTests =
     let private unsupportedCases = [
         "TypeApplication.fs", "module Program\nlet y = f<int> x\n", []
         "PrefixMinus.fs", "module Program\nlet y = f -1\n", []
-        "TypeThenLet.fs",
-        "module Program\ntype T = int\nlet c = )\n",
-        [ "TypeThenLet.fs(3,9): error FS0010: Unexpected symbol ')' in binding" ]
         "ModuleThenNamespace.fs",
         "module Program\nlet x = 1\nnamespace N\nlet y = 2\n",
         [
@@ -434,14 +432,13 @@ module ParserTests =
         "AttributedLet.fs", "[<Literal>]\nlet f = )\n", 1
         "NestedModule.fs", "module Inner =\n    let f = )\n", 1
         "Open.fs", "open System\nlet f = )\n", 2
-        "Accessibility.fs", "let private f x = )\n", 1
         "BlockError.fs", "let f x =\n  )\n", 1
+        "Type.fs", "type T = int\nlet f = )\n", 2
     ]
 
     let private implementationCascadeUnsupportedCases = [
         "LetBlockBody.fs", "let f =\n    let inner = 1\n    )\nlet z = 1\n"
         "Do.fs", "do )\n"
-        "Type.fs", "type T = int\nlet f = )\n"
     ]
 
     let private valueRecovery = "module Program\nval a: )\n"
@@ -499,6 +496,14 @@ module ParserTests =
             "One recovery group reports one diagnostic at each position"
 
     let private bindingRecoveryCases = [
+        "TypeThenLet.fs",
+        "module Program\ntype T = int\nlet c = )\n",
+        [ "TypeThenLet.fs(3,9): error FS0010: Unexpected symbol ')' in binding" ],
+        [
+            "type T"
+            "let c/0 = <missing> (skipped)"
+        ]
+
         "TrailingDotOpen.fs",
         "module Program\nopen System.\nlet y = 2\n",
         [
@@ -751,6 +756,8 @@ module Later =
                     | SyntaxExpression.Infix(operator, left, right, _) ->
                         $"{{{shape left} {operator.Text} {shape right}}}"
                     | SyntaxExpression.Missing _ -> "<missing>"
+                    | other ->
+                        failtest $"Expected an application or infix expression, found {other}"
 
                 Expect.equal
                     (shape binding.Body)

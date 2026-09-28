@@ -148,6 +148,25 @@ module internal Parser =
     let private reportedAt state (token: LayoutToken) =
         state.ReportedStarts.Contains token.Range.Start.Offset
 
+    let private reportedSince state count = state.Diagnostics.Count > count
+
+    let private keepFirstDiagnosticSince state count =
+        if state.Diagnostics.Count > count + 1 then
+            let later =
+                state.Diagnostics
+                |> Seq.skip (count + 1)
+                |> Seq.filter (fun diagnostic -> diagnostic.Code = "FSC2P1001")
+                |> Seq.toArray
+
+            state.Diagnostics.RemoveRange(
+                count + 1,
+                state.Diagnostics.Count
+                - count
+                - 1
+            )
+
+            state.Diagnostics.AddRange later
+
     let private reportUnsupported state (token: LayoutToken) context =
         report
             state
@@ -166,6 +185,16 @@ module internal Parser =
         | ValueType
         | SignatureFile
         | NestedSignature
+        | ClauseArrow
+        | ClauseResult
+        | LambdaArrow
+        | MatchWith
+        | RecordFieldValue
+        | FieldType
+        | FieldColon
+        | UnionCaseField
+        | UnionCaseName
+        | TypeEquals
 
     let private closingKeywords =
         set [
@@ -203,7 +232,21 @@ module internal Parser =
         let symbol value range = Some($"symbol '{value}'", range)
         let keyword () = Some($"keyword '{text}'", token.Range)
 
-        if closesArrayOrAttribute cursor then
+        let excluded =
+            match point with
+            | RecoveryPoint.RecordFieldValue
+            | RecoveryPoint.FieldType
+            | RecoveryPoint.FieldColon -> isDelimiter "}" token
+            | RecoveryPoint.UnionCaseName -> isKeyword "of" token
+            | RecoveryPoint.TypeEquals ->
+                isDelimiter ")" token
+                || isDelimiter "}" token
+                || isKeyword "end" token
+            | _ -> false
+
+        if excluded then
+            None
+        elif closesArrayOrAttribute cursor then
             symbol $"{text}]" (span token.Range next.Range)
         elif
             isDelimiter ")" token
@@ -261,6 +304,21 @@ module internal Parser =
                     $"Unexpected {description}. Expected incomplete structured construct at or before this point or other token."
                 | RecoveryPoint.NestedSignature ->
                     $"Unexpected {description} in signature file. Expected incomplete structured construct at or before this point or other token."
+                | RecoveryPoint.ClauseArrow ->
+                    $"Unexpected {description} in pattern matching. Expected '->' or other token."
+                | RecoveryPoint.ClauseResult -> $"Unexpected {description} in pattern matching"
+                | RecoveryPoint.LambdaArrow ->
+                    $"Unexpected {description} in lambda expression. Expected '->' or other token."
+                | RecoveryPoint.MatchWith ->
+                    $"Unexpected {description} in expression. Expected 'with' or other token."
+                | RecoveryPoint.RecordFieldValue -> $"Unexpected {description} in expression"
+                | RecoveryPoint.FieldType -> $"Unexpected {description} in field declaration"
+                | RecoveryPoint.FieldColon ->
+                    $"Unexpected {description} in field declaration. Expected ':' or other token."
+                | RecoveryPoint.UnionCaseField
+                | RecoveryPoint.UnionCaseName -> $"Unexpected {description} in union case"
+                | RecoveryPoint.TypeEquals ->
+                    $"Unexpected {description} in type definition. Expected '=' or other token."
 
             report state "FS0010" message range
             true
@@ -448,10 +506,462 @@ module internal Parser =
                 | '%' -> Some(8, false)
                 | _ -> None
 
+    [<RequireQualifiedAccess>]
+    type private TypeGap =
+        | UnexpectedToken
+        | EndAfterColonOrArrow
+        | EndAfterStar
+
+    let private missingType (token: LayoutToken) =
+        SyntaxType.Missing {
+            Expected = "type"
+            Range = emptyAt token.Range.Start
+        }
+
+    let private isTypeVariable (cursor: Cursor) =
+        let token = cursor.Current
+        let next = cursor.Peek 1
+
+        isDelimiter "'" token
+        && isIdentifier next
+        && next.Range.Start.Offset = token.Range.End.Offset
+
+    let private canStartType (cursor: Cursor) =
+        isIdentifier cursor.Current
+        || isDelimiter "(" cursor.Current
+        || isTypeVariable cursor
+
+    let private closesTypeArguments (token: LayoutToken) =
+        isKind LexicalTokenKind.Operator token
+        && tokenText token
+           |> Seq.forall ((=) '>')
+
+    let rec private parseType state context (onGap: TypeGap -> unit option) =
+        let cursor = state.Cursor
+        let argument = parseTupleType state context onGap
+
+        if
+            isOperator "->" cursor.Current
+            && not (isOffside context cursor.Current)
+        then
+            cursor.Advance()
+            |> ignore
+
+            let result =
+                parseTypeOperand
+                    state
+                    context
+                    onGap
+                    TypeGap.EndAfterColonOrArrow
+                    (fun () -> parseType state context onGap)
+
+            SyntaxType.Function(argument, result, span argument.Range result.Range)
+        else
+            argument
+
+    and private parseTypeOperand state context onGap endGap parse =
+        let cursor = state.Cursor
+        let token = cursor.Current
+
+        if
+            canStartType cursor
+            && not (isOffside context token)
+        then
+            parse ()
+        else
+            let missing = missingType token
+
+            let gap =
+                if endsLine context token then
+                    endGap
+                else
+                    TypeGap.UnexpectedToken
+
+            if (onGap gap).IsNone then
+                reportUnsupported state token "a type"
+
+            missing
+
+    and private parseTupleType state context onGap =
+        let cursor = state.Cursor
+        let first = parseParameterType state context onGap
+
+        if
+            isOperator "*" cursor.Current
+            && not (isOffside context cursor.Current)
+        then
+            let elements = ImmutableArray.CreateBuilder<SyntaxType>()
+            elements.Add first
+
+            while isOperator "*" cursor.Current
+                  && not (isOffside context cursor.Current) do
+                cursor.Advance()
+                |> ignore
+
+                elements.Add(
+                    parseTypeOperand
+                        state
+                        context
+                        onGap
+                        TypeGap.EndAfterStar
+                        (fun () -> parseParameterType state context onGap)
+                )
+
+            let elements = elements.ToImmutable()
+
+            SyntaxType.Tuple(
+                elements,
+                span
+                    first.Range
+                    elements[elements.Length
+                             - 1]
+                        .Range
+            )
+        else
+            first
+
+    and private parseParameterType state context onGap =
+        let cursor = state.Cursor
+
+        if
+            isIdentifier cursor.Current
+            && isOperator ":" (cursor.Peek 1)
+        then
+            let name = identifier (cursor.Advance())
+
+            cursor.Advance()
+            |> ignore
+
+            let parameterType =
+                parseTypeOperand
+                    state
+                    context
+                    onGap
+                    TypeGap.EndAfterColonOrArrow
+                    (fun () -> parseApplicationType state context)
+
+            SyntaxType.SignatureParameter(name, parameterType, span name.Range parameterType.Range)
+        else
+            parseApplicationType state context
+
+    and private parseApplicationType state context =
+        let cursor = state.Cursor
+        let mutable result = parseAtomicType state context
+
+        while isIdentifier cursor.Current
+              && not (isOffside context cursor.Current)
+              && not (isOperator ":" (cursor.Peek 1)) do
+            let typeConstructor = SyntaxType.LongIdentifier(longIdentifier state)
+
+            result <-
+                SyntaxType.Application(
+                    typeConstructor,
+                    ImmutableArray.Create result,
+                    true,
+                    span result.Range typeConstructor.Range
+                )
+
+        result
+
+    and private parseAtomicType state context =
+        let cursor = state.Cursor
+        let token = cursor.Current
+
+        let nested () =
+            parseTypeOperand
+                state
+                context
+                (fun _ -> None)
+                TypeGap.UnexpectedToken
+                (fun () -> parseType state context (fun _ -> None))
+
+        if isTypeVariable cursor then
+            cursor.Advance()
+            |> ignore
+
+            let name = cursor.Advance()
+
+            SyntaxType.Variable {
+                Text =
+                    "'"
+                    + tokenText name
+                Range = span token.Range name.Range
+            }
+        elif isDelimiter "(" token then
+            cursor.Advance()
+            |> ignore
+
+            let inner = nested ()
+
+            if isDelimiter ")" cursor.Current then
+                let close = cursor.Advance()
+                SyntaxType.Parenthesized(inner, span token.Range close.Range)
+            else
+                if not (reportedAt state cursor.Current) then
+                    reportUnsupported state cursor.Current "a parenthesized type"
+
+                SyntaxType.Parenthesized(inner, span token.Range (emptyAt cursor.LastEnd))
+        else
+            let name = SyntaxType.LongIdentifier(longIdentifier state)
+
+            if isOperator "<" cursor.Current then
+                cursor.Advance()
+                |> ignore
+
+                let arguments = ImmutableArray.CreateBuilder<SyntaxType>()
+                arguments.Add(nested ())
+
+                while isDelimiter "," cursor.Current do
+                    cursor.Advance()
+                    |> ignore
+
+                    arguments.Add(nested ())
+
+                if closesTypeArguments cursor.Current then
+                    let close = cursor.AdvanceFirstCharacter()
+
+                    SyntaxType.Application(
+                        name,
+                        arguments.ToImmutable(),
+                        false,
+                        span name.Range close.Range
+                    )
+                else
+                    if not (reportedAt state cursor.Current) then
+                        reportUnsupported state cursor.Current "type arguments"
+
+                    SyntaxType.Application(
+                        name,
+                        arguments.ToImmutable(),
+                        false,
+                        span name.Range (emptyAt cursor.LastEnd)
+                    )
+            else
+                name
+
     let private canStartAtom (token: LayoutToken) =
         isIdentifier token
         || (constant token).IsSome
         || isDelimiter "(" token
+        || isDelimiter "[" token
+        || isDelimiter "{" token
+
+    let private canStartExpression (token: LayoutToken) =
+        canStartAtom token
+        || isKeyword "if" token
+        || isKeyword "match" token
+        || isKeyword "fun" token
+
+    let private missingExpression (token: LayoutToken) =
+        SyntaxExpression.Missing {
+            Expected = "expression"
+            Range = emptyAt token.Range.Start
+        }
+
+    let private missingPattern (token: LayoutToken) =
+        SyntaxPattern.Missing {
+            Expected = "pattern"
+            Range = emptyAt token.Range.Start
+        }
+
+    let private canStartPattern (token: LayoutToken) =
+        isIdentifier token
+        || (constant token).IsSome
+        || isDelimiter "(" token
+
+    let private continuesOnNewLine (context: SourcePosition) (token: LayoutToken) =
+        isOffside context token
+        && token.Range.Start.Column = context.Column
+
+    let private skipBlock state (context: SourcePosition) =
+        let cursor = state.Cursor
+
+        while cursor.Current.Kind
+              <> LayoutTokenKind.EndBlock
+              && not (isEndOfFile cursor.Current) do
+            let before = cursor.Current
+
+            if before.Kind = LayoutTokenKind.Separator then
+                cursor.Advance()
+                |> ignore
+            else
+                skipUntil state context
+                |> ignore
+
+                if obj.ReferenceEquals(before, cursor.Current) then
+                    cursor.Advance()
+                    |> ignore
+
+    let rec private parsePatternWith allowArguments state context =
+        let cursor = state.Cursor
+        let first = parseElementPattern allowArguments false state context
+
+        if isDelimiter "," cursor.Current then
+            let items = ImmutableArray.CreateBuilder<SyntaxPattern>()
+            items.Add first
+
+            while isDelimiter "," cursor.Current do
+                cursor.Advance()
+                |> ignore
+
+                items.Add(parseElementPattern allowArguments false state context)
+
+            let items = items.ToImmutable()
+
+            SyntaxPattern.Tuple(
+                items,
+                span
+                    first.Range
+                    items[items.Length
+                          - 1]
+                        .Range
+            )
+        else
+            first
+
+    and private parseElementPattern allowArguments allowType state context =
+        let cursor = state.Cursor
+        let token = cursor.Current
+
+        let pattern =
+            if
+                allowArguments
+                && isIdentifier token
+                && tokenText token
+                   <> "_"
+            then
+                let name = longIdentifier state
+                let next = cursor.Current
+
+                let argument =
+                    if
+                        (canStartPattern next
+                         || isDelimiter "[" next)
+                        && not (isOffside context next)
+                    then
+                        Some(parseAtomicPattern state context)
+                    else
+                        None
+
+                match argument with
+                | None when name.Parts.Length = 1 -> SyntaxPattern.Named name.Parts[0]
+                | None -> SyntaxPattern.UnionCase(name, None, name.Range)
+                | Some argument ->
+                    SyntaxPattern.UnionCase(name, Some argument, span name.Range argument.Range)
+            else
+                parseAtomicPattern state context
+
+        if
+            allowType
+            && isOperator ":" cursor.Current
+        then
+            cursor.Advance()
+            |> ignore
+
+            let patternType =
+                parseTypeOperand
+                    state
+                    context
+                    (fun _ -> None)
+                    TypeGap.UnexpectedToken
+                    (fun () -> parseType state context (fun _ -> None))
+
+            SyntaxPattern.Typed(pattern, patternType, span pattern.Range patternType.Range)
+        else
+            pattern
+
+    and private parseAtomicPattern state context =
+        let cursor = state.Cursor
+        let token = cursor.Current
+
+        match constant token with
+        | Some value ->
+            cursor.Advance()
+            |> ignore
+
+            SyntaxPattern.Constant(value, token.Range)
+        | None when
+            isIdentifier token
+            && tokenText token = "_"
+            ->
+            cursor.Advance()
+            |> ignore
+
+            SyntaxPattern.Wildcard token.Range
+        | None when isIdentifier token -> SyntaxPattern.Named(identifier (cursor.Advance()))
+        | None when isDelimiter "(" token ->
+            cursor.Advance()
+            |> ignore
+
+            if isDelimiter ")" cursor.Current then
+                let close = cursor.Advance()
+                SyntaxPattern.Constant(SyntaxConstant.Unit, span token.Range close.Range)
+            else
+                let first = parseElementPattern true true state context
+
+                let inner =
+                    if isDelimiter "," cursor.Current then
+                        let items = ImmutableArray.CreateBuilder<SyntaxPattern>()
+                        items.Add first
+
+                        while isDelimiter "," cursor.Current do
+                            cursor.Advance()
+                            |> ignore
+
+                            items.Add(parseElementPattern true true state context)
+
+                        let items = items.ToImmutable()
+
+                        SyntaxPattern.Tuple(
+                            items,
+                            span
+                                first.Range
+                                items[items.Length
+                                      - 1]
+                                    .Range
+                        )
+                    else
+                        first
+
+                if isDelimiter ")" cursor.Current then
+                    let close = cursor.Advance()
+                    SyntaxPattern.Parenthesized(inner, span token.Range close.Range)
+                else
+                    if not (reportedAt state cursor.Current) then
+                        reportUnsupported state cursor.Current "a parenthesized pattern"
+
+                    SyntaxPattern.Parenthesized(inner, span token.Range (emptyAt cursor.LastEnd))
+        | None when isDelimiter "[" token ->
+            cursor.Advance()
+            |> ignore
+
+            let items = ImmutableArray.CreateBuilder<SyntaxPattern>()
+            let mutable closed = isDelimiter "]" cursor.Current
+
+            while not closed
+                  && (canStartPattern cursor.Current
+                      || isDelimiter "[" cursor.Current) do
+                items.Add(parsePatternWith true state context)
+
+                if isDelimiter ";" cursor.Current then
+                    cursor.Advance()
+                    |> ignore
+
+                closed <- isDelimiter "]" cursor.Current
+
+            if closed then
+                let close = cursor.Advance()
+                SyntaxPattern.List(items.ToImmutable(), span token.Range close.Range)
+            else
+                if not (reportedAt state cursor.Current) then
+                    reportUnsupported state cursor.Current "a list pattern"
+
+                SyntaxPattern.List(items.ToImmutable(), span token.Range (emptyAt cursor.LastEnd))
+        | None ->
+            reportUnsupported state token "a pattern"
+            missingPattern token
+
+    let private parsePattern state context = parsePatternWith false state context
 
     let rec private parseExpression state context =
         let cursor = state.Cursor
@@ -584,102 +1094,352 @@ module internal Parser =
                         reportUnsupported state cursor.Current "a parenthesized expression"
 
                     SyntaxExpression.Parenthesized(inner, span token.Range (emptyAt cursor.LastEnd))
+        | None when isKeyword "if" token -> parseIf state context
+        | None when isKeyword "match" token -> parseMatch state context
+        | None when isKeyword "fun" token -> parseLambda state context
+        | None when isDelimiter "[" token -> parseList state
+        | None when isDelimiter "{" token -> parseRecord state
         | None ->
             reportUnsupported state token "an expression"
+            missingExpression token
 
-            SyntaxExpression.Missing {
-                Expected = "expression"
-                Range = emptyAt token.Range.Start
-            }
-
-    let private canStartPattern (token: LayoutToken) =
-        isIdentifier token
-        || (constant token).IsSome
-        || isDelimiter "(" token
-
-    let rec private parsePattern state context =
+    and private parseBranchStart state context point =
         let cursor = state.Cursor
-        let first = parseAtomicPattern state context
 
-        if isDelimiter "," cursor.Current then
-            let items = ImmutableArray.CreateBuilder<SyntaxPattern>()
-            items.Add first
+        if
+            canStartExpression cursor.Current
+            && not (isOffside context cursor.Current)
+        then
+            parseExpression state context
+        else
+            let missing = missingExpression cursor.Current
 
-            while isDelimiter "," cursor.Current do
+            match point with
+            | Some point ->
+                reportUnexpected state point "an expression"
+                |> ignore
+            | None -> reportUnsupported state cursor.Current "an expression"
+
+            missing
+
+    and private parseBranch state context point =
+        let cursor = state.Cursor
+
+        if cursor.Current.Kind = LayoutTokenKind.BeginBlock then
+            let block = cursor.Advance()
+            let blockContext = block.Range.Start
+            let reported = state.Diagnostics.Count
+            let body = parseBranchStart state blockContext point
+
+            if
+                cursor.Current.Kind
+                <> LayoutTokenKind.EndBlock
+            then
+                if not (reportedSince state reported) then
+                    reportUnsupported state cursor.Current "a sequential expression"
+
+                skipBlock state blockContext
+
+            if cursor.Current.Kind = LayoutTokenKind.EndBlock then
                 cursor.Advance()
                 |> ignore
 
-                items.Add(parseAtomicPattern state context)
+            body
+        else
+            parseBranchStart state context point
 
-            let items = items.ToImmutable()
+    and private parseIf state context =
+        let cursor = state.Cursor
+        let ifToken = cursor.Advance()
+        let condition = parseExpression state context
 
-            SyntaxPattern.Tuple(
-                items,
-                span
-                    first.Range
-                    items[items.Length
-                          - 1]
-                        .Range
+        if not (isKeyword "then" cursor.Current) then
+            if not (reportedAt state cursor.Current) then
+                reportUnsupported state cursor.Current "a conditional expression"
+
+            SyntaxExpression.If(
+                condition,
+                missingExpression cursor.Current,
+                None,
+                span ifToken.Range (emptyAt cursor.LastEnd)
             )
         else
-            first
-
-    and private parseAtomicPattern state context =
-        let cursor = state.Cursor
-        let token = cursor.Current
-
-        match constant token with
-        | Some value ->
             cursor.Advance()
             |> ignore
 
-            SyntaxPattern.Constant(value, token.Range)
-        | None when
-            isKind LexicalTokenKind.Identifier token
-            && tokenText token = "_"
-            ->
-            cursor.Advance()
-            |> ignore
+            let thenBranch = parseBranch state context None
 
-            SyntaxPattern.Wildcard token.Range
-        | None when isIdentifier token -> SyntaxPattern.Named(identifier (cursor.Advance()))
-        | None when isDelimiter "(" token ->
-            cursor.Advance()
-            |> ignore
+            if
+                cursor.Current.Kind = LayoutTokenKind.Separator
+                && (isKeyword "else" (cursor.Peek 1)
+                    || isKeyword "elif" (cursor.Peek 1))
+            then
+                cursor.Advance()
+                |> ignore
 
-            if isDelimiter ")" cursor.Current then
-                let close = cursor.Advance()
-                SyntaxPattern.Constant(SyntaxConstant.Unit, span token.Range close.Range)
-            else
-                let inner = parsePattern state context
+            let elseBranch =
+                if isKeyword "else" cursor.Current then
+                    cursor.Advance()
+                    |> ignore
 
-                if isDelimiter ")" cursor.Current then
-                    let close = cursor.Advance()
-                    SyntaxPattern.Parenthesized(inner, span token.Range close.Range)
+                    Some(parseBranch state context None)
+                elif isKeyword "elif" cursor.Current then
+                    Some(parseIf state context)
                 else
-                    if not (reportedAt state cursor.Current) then
-                        reportUnsupported state cursor.Current "a parenthesized pattern"
+                    None
 
-                    SyntaxPattern.Parenthesized(inner, span token.Range (emptyAt cursor.LastEnd))
-        | None ->
-            reportUnsupported state token "a pattern"
+            SyntaxExpression.If(
+                condition,
+                thenBranch,
+                elseBranch,
+                span ifToken.Range (emptyAt cursor.LastEnd)
+            )
 
-            SyntaxPattern.Missing {
-                Expected = "pattern"
-                Range = emptyAt token.Range.Start
-            }
+    and private parseMatch state context =
+        let cursor = state.Cursor
+        let matchToken = cursor.Advance()
+        let input = parseExpression state context
+        let clauses = ImmutableArray.CreateBuilder<SyntaxMatchClause>()
 
-    let private missingExpression (token: LayoutToken) =
-        SyntaxExpression.Missing {
-            Expected = "expression"
-            Range = emptyAt token.Range.Start
-        }
+        if not (isKeyword "with" cursor.Current) then
+            reportUnexpected state RecoveryPoint.MatchWith "a match expression"
+            |> ignore
+        else
+            cursor.Advance()
+            |> ignore
 
-    let private missingPattern (token: LayoutToken) =
-        SyntaxPattern.Missing {
-            Expected = "pattern"
-            Range = emptyAt token.Range.Start
-        }
+            let startsClause () =
+                (cursor.Current.Kind = LayoutTokenKind.BeginBlock
+                 || cursor.Current.Kind = LayoutTokenKind.Separator)
+                && isOperator "|" (cursor.Peek 1)
+
+            let closesBlock = cursor.Current.Kind = LayoutTokenKind.BeginBlock
+
+            if startsClause () then
+                cursor.Advance()
+                |> ignore
+
+            let mutable more = true
+
+            while more do
+                let bar =
+                    if isOperator "|" cursor.Current then
+                        Some(cursor.Advance())
+                    else
+                        None
+
+                let start = cursor.Current
+
+                let clauseContext =
+                    bar
+                    |> Option.map _.Range.Start
+                    |> Option.defaultValue start.Range.Start
+
+                if
+                    not (
+                        canStartPattern start
+                        || isDelimiter "[" start
+                    )
+                then
+                    if not (reportedAt state start) then
+                        reportUnsupported state start "a match clause"
+
+                    more <- false
+                else
+                    let pattern = parsePatternWith true state clauseContext
+
+                    let guard =
+                        if isKeyword "when" cursor.Current then
+                            cursor.Advance()
+                            |> ignore
+
+                            Some(parseExpression state clauseContext)
+                        else
+                            None
+
+                    if not (isOperator "->" cursor.Current) then
+                        reportUnexpected state RecoveryPoint.ClauseArrow "a match clause"
+                        |> ignore
+
+                        more <- false
+                    else
+                        cursor.Advance()
+                        |> ignore
+
+                        let reported = state.Diagnostics.Count
+
+                        let result =
+                            parseBranch state clauseContext (Some RecoveryPoint.ClauseResult)
+
+                        clauses.Add {
+                            Pattern = pattern
+                            Guard = guard
+                            Result = result
+                            Range =
+                                span
+                                    (bar
+                                     |> Option.map _.Range
+                                     |> Option.defaultValue start.Range)
+                                    (emptyAt cursor.LastEnd)
+                        }
+
+                        if reportedSince state reported then
+                            more <- false
+                        elif isOperator "|" cursor.Current then
+                            ()
+                        elif
+                            cursor.Current.Kind = LayoutTokenKind.Separator
+                            && isOperator "|" (cursor.Peek 1)
+                        then
+                            cursor.Advance()
+                            |> ignore
+                        else
+                            more <- false
+
+            if
+                closesBlock
+                && cursor.Current.Kind = LayoutTokenKind.EndBlock
+            then
+                cursor.Advance()
+                |> ignore
+
+        SyntaxExpression.Match(
+            input,
+            clauses.ToImmutable(),
+            span matchToken.Range (emptyAt cursor.LastEnd)
+        )
+
+    and private parseLambda state context =
+        let cursor = state.Cursor
+        let funToken = cursor.Advance()
+        let patterns = ImmutableArray.CreateBuilder<SyntaxPattern>()
+
+        while canStartPattern cursor.Current
+              && not (isOffside context cursor.Current) do
+            patterns.Add(parseAtomicPattern state context)
+
+        let body =
+            if isOperator "->" cursor.Current then
+                cursor.Advance()
+                |> ignore
+
+                parseBranch state context None
+            else
+                let missing = missingExpression cursor.Current
+
+                if not (reportedAt state cursor.Current) then
+                    reportUnexpected state RecoveryPoint.LambdaArrow "a lambda expression"
+                    |> ignore
+
+                missing
+
+        SyntaxExpression.Lambda(
+            patterns.ToImmutable(),
+            body,
+            span funToken.Range (emptyAt cursor.LastEnd)
+        )
+
+    and private parseList state =
+        let cursor = state.Cursor
+        let openToken = cursor.Advance()
+        let items = ImmutableArray.CreateBuilder<SyntaxExpression>()
+        let elementContext = cursor.Current.Range.Start
+        let mutable closed = isDelimiter "]" cursor.Current
+        let mutable failed = false
+
+        while not closed
+              && not failed do
+            if canStartExpression cursor.Current then
+                items.Add(parseExpression state elementContext)
+
+                if isDelimiter ";" cursor.Current then
+                    cursor.Advance()
+                    |> ignore
+
+                closed <- isDelimiter "]" cursor.Current
+
+                if
+                    not closed
+                    && not (canStartExpression cursor.Current)
+                then
+                    failed <- true
+            else
+                failed <- true
+
+        if closed then
+            let close = cursor.Advance()
+            SyntaxExpression.List(items.ToImmutable(), span openToken.Range close.Range)
+        else
+            if not (reportedAt state cursor.Current) then
+                reportUnsupported state cursor.Current "a list expression"
+
+            SyntaxExpression.List(
+                items.ToImmutable(),
+                span openToken.Range (emptyAt cursor.LastEnd)
+            )
+
+    and private parseRecord state =
+        let cursor = state.Cursor
+        let openToken = cursor.Advance()
+        let fields = ImmutableArray.CreateBuilder<SyntaxRecordFieldValue>()
+        let mutable closed = false
+        let mutable failed = false
+
+        while not closed
+              && not failed do
+            let start = cursor.Current
+            let fieldContext = start.Range.Start
+
+            if not (isIdentifier start) then
+                failed <- true
+            else
+                let name = longIdentifier state
+
+                if not (isOperator "=" cursor.Current) then
+                    failed <- true
+                else
+                    cursor.Advance()
+                    |> ignore
+
+                    if not (canStartExpression cursor.Current) then
+                        reportUnexpected state RecoveryPoint.RecordFieldValue "a record field"
+                        |> ignore
+
+                        failed <- true
+                    else
+                        let value = parseExpression state fieldContext
+
+                        fields.Add {
+                            Name = name
+                            Value = value
+                            Range = span start.Range value.Range
+                        }
+
+                        let separated = isDelimiter ";" cursor.Current
+
+                        if separated then
+                            cursor.Advance()
+                            |> ignore
+
+                        if isDelimiter "}" cursor.Current then
+                            closed <- true
+                        elif
+                            not separated
+                            && not (continuesOnNewLine fieldContext cursor.Current)
+                        then
+                            failed <- true
+
+        if closed then
+            let close = cursor.Advance()
+            SyntaxExpression.Record(fields.ToImmutable(), span openToken.Range close.Range)
+        else
+            if not (reportedAt state cursor.Current) then
+                reportUnsupported state cursor.Current "a record expression"
+
+            SyntaxExpression.Record(
+                fields.ToImmutable(),
+                span openToken.Range (emptyAt cursor.LastEnd)
+            )
 
     let private endsBinding context (token: LayoutToken) =
         token.Kind = LayoutTokenKind.Separator
@@ -838,7 +1598,7 @@ module internal Parser =
             skipped <- skipUntil state context
 
         let parseBody () =
-            if canStartAtom cursor.Current then
+            if canStartExpression cursor.Current then
                 parseExpression state context
             else
                 let missing = missingExpression cursor.Current
@@ -880,11 +1640,14 @@ module internal Parser =
                     let body = parseBody ()
 
                     if
-                        not recovered
-                        && cursor.Current.Kind
-                           <> LayoutTokenKind.EndBlock
+                        cursor.Current.Kind
+                        <> LayoutTokenKind.EndBlock
                     then
-                        recover None
+                        if not (reportedSince state reported) then
+                            reportUnsupported state cursor.Current "a binding"
+
+                        recovered <- true
+                        skipBlock state context
 
                     if cursor.Current.Kind = LayoutTokenKind.EndBlock then
                         cursor.Advance()
@@ -903,6 +1666,8 @@ module internal Parser =
             && not (endsBinding context cursor.Current)
         then
             recover (Some RecoveryPoint.BindingEnd)
+
+        keepFirstDiagnosticSince state reported
 
         {
             Attributes = attributes
@@ -960,7 +1725,7 @@ module internal Parser =
                 |> ignore
 
                 let body =
-                    if canStartAtom cursor.Current then
+                    if canStartExpression cursor.Current then
                         parseExpression state context
                     else
                         reportUnsupported state cursor.Current "a do declaration"
@@ -982,7 +1747,7 @@ module internal Parser =
 
                 body
             elif
-                canStartAtom cursor.Current
+                canStartExpression cursor.Current
                 && not (isOffside context cursor.Current)
             then
                 parseExpression state context
@@ -997,241 +1762,10 @@ module internal Parser =
         )
 
     [<RequireQualifiedAccess>]
-    type private TypeGap =
-        | UnexpectedToken
-        | EndAfterColonOrArrow
-        | EndAfterStar
-
-    let private missingType (token: LayoutToken) =
-        SyntaxType.Missing {
-            Expected = "type"
-            Range = emptyAt token.Range.Start
-        }
-
-    let private isTypeVariable (cursor: Cursor) =
-        let token = cursor.Current
-        let next = cursor.Peek 1
-
-        isDelimiter "'" token
-        && isIdentifier next
-        && next.Range.Start.Offset = token.Range.End.Offset
-
-    let private canStartType (cursor: Cursor) =
-        isIdentifier cursor.Current
-        || isDelimiter "(" cursor.Current
-        || isTypeVariable cursor
-
-    let private closesTypeArguments (token: LayoutToken) =
-        isKind LexicalTokenKind.Operator token
-        && tokenText token
-           |> Seq.forall ((=) '>')
-
-    let rec private parseType state context (onGap: TypeGap -> unit option) =
-        let cursor = state.Cursor
-        let argument = parseTupleType state context onGap
-
-        if
-            isOperator "->" cursor.Current
-            && not (isOffside context cursor.Current)
-        then
-            cursor.Advance()
-            |> ignore
-
-            let result =
-                parseTypeOperand
-                    state
-                    context
-                    onGap
-                    TypeGap.EndAfterColonOrArrow
-                    (fun () -> parseType state context onGap)
-
-            SyntaxType.Function(argument, result, span argument.Range result.Range)
-        else
-            argument
-
-    and private parseTypeOperand state context onGap endGap parse =
-        let cursor = state.Cursor
-        let token = cursor.Current
-
-        if
-            canStartType cursor
-            && not (isOffside context token)
-        then
-            parse ()
-        else
-            let missing = missingType token
-
-            let gap =
-                if endsLine context token then
-                    endGap
-                else
-                    TypeGap.UnexpectedToken
-
-            if (onGap gap).IsNone then
-                reportUnsupported state token "a type"
-
-            missing
-
-    and private parseTupleType state context onGap =
-        let cursor = state.Cursor
-        let first = parseParameterType state context onGap
-
-        if
-            isOperator "*" cursor.Current
-            && not (isOffside context cursor.Current)
-        then
-            let elements = ImmutableArray.CreateBuilder<SyntaxType>()
-            elements.Add first
-
-            while isOperator "*" cursor.Current
-                  && not (isOffside context cursor.Current) do
-                cursor.Advance()
-                |> ignore
-
-                elements.Add(
-                    parseTypeOperand
-                        state
-                        context
-                        onGap
-                        TypeGap.EndAfterStar
-                        (fun () -> parseParameterType state context onGap)
-                )
-
-            let elements = elements.ToImmutable()
-
-            SyntaxType.Tuple(
-                elements,
-                span
-                    first.Range
-                    elements[elements.Length
-                             - 1]
-                        .Range
-            )
-        else
-            first
-
-    and private parseParameterType state context onGap =
-        let cursor = state.Cursor
-
-        if
-            isIdentifier cursor.Current
-            && isOperator ":" (cursor.Peek 1)
-        then
-            let name = identifier (cursor.Advance())
-
-            cursor.Advance()
-            |> ignore
-
-            let parameterType =
-                parseTypeOperand
-                    state
-                    context
-                    onGap
-                    TypeGap.EndAfterColonOrArrow
-                    (fun () -> parseApplicationType state context)
-
-            SyntaxType.SignatureParameter(name, parameterType, span name.Range parameterType.Range)
-        else
-            parseApplicationType state context
-
-    and private parseApplicationType state context =
-        let cursor = state.Cursor
-        let mutable result = parseAtomicType state context
-
-        while isIdentifier cursor.Current
-              && not (isOffside context cursor.Current) do
-            let typeConstructor = SyntaxType.LongIdentifier(longIdentifier state)
-
-            result <-
-                SyntaxType.Application(
-                    typeConstructor,
-                    ImmutableArray.Create result,
-                    true,
-                    span result.Range typeConstructor.Range
-                )
-
-        result
-
-    and private parseAtomicType state context =
-        let cursor = state.Cursor
-        let token = cursor.Current
-
-        let nested () =
-            parseTypeOperand
-                state
-                context
-                (fun _ -> None)
-                TypeGap.UnexpectedToken
-                (fun () -> parseType state context (fun _ -> None))
-
-        if isTypeVariable cursor then
-            cursor.Advance()
-            |> ignore
-
-            let name = cursor.Advance()
-
-            SyntaxType.Variable {
-                Text =
-                    "'"
-                    + tokenText name
-                Range = span token.Range name.Range
-            }
-        elif isDelimiter "(" token then
-            cursor.Advance()
-            |> ignore
-
-            let inner = nested ()
-
-            if isDelimiter ")" cursor.Current then
-                let close = cursor.Advance()
-                SyntaxType.Parenthesized(inner, span token.Range close.Range)
-            else
-                if not (reportedAt state cursor.Current) then
-                    reportUnsupported state cursor.Current "a parenthesized type"
-
-                SyntaxType.Parenthesized(inner, span token.Range (emptyAt cursor.LastEnd))
-        else
-            let name = SyntaxType.LongIdentifier(longIdentifier state)
-
-            if isOperator "<" cursor.Current then
-                cursor.Advance()
-                |> ignore
-
-                let arguments = ImmutableArray.CreateBuilder<SyntaxType>()
-                arguments.Add(nested ())
-
-                while isDelimiter "," cursor.Current do
-                    cursor.Advance()
-                    |> ignore
-
-                    arguments.Add(nested ())
-
-                if closesTypeArguments cursor.Current then
-                    let close = cursor.AdvanceFirstCharacter()
-
-                    SyntaxType.Application(
-                        name,
-                        arguments.ToImmutable(),
-                        false,
-                        span name.Range close.Range
-                    )
-                else
-                    if not (reportedAt state cursor.Current) then
-                        reportUnsupported state cursor.Current "type arguments"
-
-                    SyntaxType.Application(
-                        name,
-                        arguments.ToImmutable(),
-                        false,
-                        span name.Range (emptyAt cursor.LastEnd)
-                    )
-            else
-                name
-
-    [<RequireQualifiedAccess>]
     type private ListRecovery =
         | Continues
         | Discards
+        | Unmodeled
 
     let private parseVal state nested attributes =
         let cursor = state.Cursor
@@ -1346,6 +1880,386 @@ module internal Parser =
             reportUnsupported state cursor.Current "an open declaration"
             None
 
+    let private missingRepresentation (token: LayoutToken) =
+        SyntaxTypeRepresentation.Missing {
+            Expected = "type representation"
+            Range = emptyAt token.Range.Start
+        }
+
+    let private parseRecordFields state =
+        let cursor = state.Cursor
+
+        cursor.Advance()
+        |> ignore
+
+        let fields = ImmutableArray.CreateBuilder<SyntaxRecordField>()
+        let mutable closed = false
+        let mutable failed = false
+
+        while not closed
+              && not failed do
+            let start = cursor.Current
+            let fieldContext = start.Range.Start
+
+            let isMutable =
+                if isKeyword "mutable" start then
+                    cursor.Advance()
+                    |> ignore
+
+                    true
+                else
+                    false
+
+            if not (isIdentifier cursor.Current) then
+                failed <- true
+            else
+                let name = identifier (cursor.Advance())
+
+                let hasColon = isOperator ":" cursor.Current
+
+                if hasColon then
+                    cursor.Advance()
+                    |> ignore
+
+                if not hasColon then
+                    reportUnexpected state RecoveryPoint.FieldColon "a record field"
+                    |> ignore
+
+                    failed <- true
+                elif not (canStartType cursor) then
+                    reportUnexpected state RecoveryPoint.FieldType "a record field"
+                    |> ignore
+
+                    failed <- true
+                else
+                    let fieldType = parseType state fieldContext (fun _ -> None)
+
+                    fields.Add {
+                        IsMutable = isMutable
+                        Name = name
+                        Type = fieldType
+                        Range = span start.Range fieldType.Range
+                    }
+
+                    let separated = isDelimiter ";" cursor.Current
+
+                    if separated then
+                        cursor.Advance()
+                        |> ignore
+
+                    if isDelimiter "}" cursor.Current then
+                        closed <- true
+                    elif
+                        not separated
+                        && not (continuesOnNewLine fieldContext cursor.Current)
+                    then
+                        failed <- true
+
+        if closed then
+            cursor.Advance()
+            |> ignore
+        elif not (reportedAt state cursor.Current) then
+            reportUnsupported state cursor.Current "a record type"
+
+        SyntaxTypeRepresentation.Record(fields.ToImmutable())
+
+    let private parseUnionCases state =
+        let cursor = state.Cursor
+        let cases = ImmutableArray.CreateBuilder<SyntaxUnionCase>()
+        let mutable more = true
+
+        while more do
+            let start = cursor.Current
+
+            if isOperator "|" start then
+                cursor.Advance()
+                |> ignore
+
+            let context = start.Range.Start
+
+            if not (isIdentifier cursor.Current) then
+                reportUnexpected state RecoveryPoint.UnionCaseName "a union case"
+                |> ignore
+
+                more <- false
+            else
+                let name = identifier (cursor.Advance())
+                let fields = ImmutableArray.CreateBuilder<SyntaxUnionField>()
+                let mutable failed = false
+
+                if isKeyword "of" cursor.Current then
+                    cursor.Advance()
+                    |> ignore
+
+                    let mutable moreFields = true
+
+                    while moreFields do
+                        let fieldStart = cursor.Current
+
+                        let fieldName =
+                            if
+                                isIdentifier fieldStart
+                                && isOperator ":" (cursor.Peek 1)
+                            then
+                                let fieldName = identifier (cursor.Advance())
+
+                                cursor.Advance()
+                                |> ignore
+
+                                Some fieldName
+                            else
+                                None
+
+                        if not (canStartType cursor) then
+                            reportUnexpected state RecoveryPoint.UnionCaseField "a union case"
+                            |> ignore
+
+                            failed <- true
+                            moreFields <- false
+                        else
+                            let fieldType = parseApplicationType state context
+
+                            fields.Add {
+                                Name = fieldName
+                                Type = fieldType
+                                Range = span fieldStart.Range fieldType.Range
+                            }
+
+                            if isOperator "*" cursor.Current then
+                                cursor.Advance()
+                                |> ignore
+                            else
+                                moreFields <- false
+
+                cases.Add {
+                    Name = name
+                    Fields = fields.ToImmutable()
+                    Range = span start.Range (emptyAt cursor.LastEnd)
+                }
+
+                if failed then
+                    more <- false
+                elif isOperator "|" cursor.Current then
+                    ()
+                elif
+                    cursor.Current.Kind = LayoutTokenKind.Separator
+                    && isOperator "|" (cursor.Peek 1)
+                then
+                    cursor.Advance()
+                    |> ignore
+                else
+                    more <- false
+
+        SyntaxTypeRepresentation.Union(cases.ToImmutable())
+
+    let private parseMembers state =
+        let cursor = state.Cursor
+        let members = ImmutableArray.CreateBuilder<SyntaxMember>()
+        let mutable more = true
+
+        while more do
+            let start = cursor.Current
+            let context = start.Range.Start
+            let attributes = parseAttributeLists state
+
+            let isStatic =
+                if isKeyword "static" cursor.Current then
+                    cursor.Advance()
+                    |> ignore
+
+                    true
+                else
+                    false
+
+            if not (isKeyword "member" cursor.Current) then
+                if not (reportedAt state cursor.Current) then
+                    reportUnsupported state cursor.Current "a class member"
+
+                more <- false
+            else
+                cursor.Advance()
+                |> ignore
+
+                let kind, name =
+                    if isStatic then
+                        if isIdentifier cursor.Current then
+                            Some SyntaxMemberKind.Static, Some(identifier (cursor.Advance()))
+                        else
+                            None, None
+                    elif
+                        isIdentifier cursor.Current
+                        && isOperator "." (cursor.Peek 1)
+                        && isIdentifier (cursor.Peek 2)
+                    then
+                        let self = identifier (cursor.Advance())
+
+                        cursor.Advance()
+                        |> ignore
+
+                        Some(SyntaxMemberKind.Instance self), Some(identifier (cursor.Advance()))
+                    else
+                        None, None
+
+                match kind, name with
+                | Some kind, Some name ->
+                    let parameters = ImmutableArray.CreateBuilder<SyntaxPattern>()
+
+                    while canStartPattern cursor.Current
+                          && not (isOffside context cursor.Current) do
+                        parameters.Add(parseAtomicPattern state context)
+
+                    if not (isOperator "=" cursor.Current) then
+                        if not (reportedAt state cursor.Current) then
+                            reportUnsupported state cursor.Current "a class member"
+
+                        more <- false
+                    else
+                        cursor.Advance()
+                        |> ignore
+
+                        let reported = state.Diagnostics.Count
+                        let body = parseBranch state context None
+
+                        members.Add {
+                            Attributes = attributes
+                            Kind = kind
+                            Name = name
+                            Parameters = parameters.ToImmutable()
+                            Body = body
+                            Range = span start.Range (emptyAt cursor.LastEnd)
+                        }
+
+                        if reportedSince state reported then
+                            more <- false
+                        elif cursor.Current.Kind = LayoutTokenKind.Separator then
+                            cursor.Advance()
+                            |> ignore
+                        else
+                            more <- false
+                | _ ->
+                    if not (reportedAt state cursor.Current) then
+                        reportUnsupported state cursor.Current "a class member"
+
+                    more <- false
+
+        SyntaxTypeRepresentation.Class(members.ToImmutable())
+
+    let private startsUnion (cursor: Cursor) =
+        isOperator "|" cursor.Current
+        || (isIdentifier cursor.Current
+            && (isKeyword "of" (cursor.Peek 1)
+                || isOperator "|" (cursor.Peek 1)))
+
+    let private startsMember (token: LayoutToken) =
+        isKeyword "member" token
+        || isKeyword "static" token
+
+    let private parseRepresentation state context =
+        let cursor = state.Cursor
+
+        if isDelimiter "{" cursor.Current then
+            parseRecordFields state
+        elif startsUnion cursor then
+            parseUnionCases state
+        elif startsMember cursor.Current then
+            parseMembers state
+        elif canStartType cursor then
+            SyntaxTypeRepresentation.Abbreviation(parseType state context (fun _ -> None))
+        else
+            let missing = missingRepresentation cursor.Current
+
+            if not (reportedAt state cursor.Current) then
+                reportUnsupported state cursor.Current "a type definition"
+
+            missing
+
+    let private parseTypeDefinition state attributes =
+        let cursor = state.Cursor
+        let typeToken = cursor.Advance()
+        let context = typeToken.Range.Start
+        let reported = state.Diagnostics.Count
+        let accessibility = parseAccessibility cursor
+
+        if not (isIdentifier cursor.Current) then
+            reportUnsupported state cursor.Current "a type name"
+            None, ListRecovery.Continues
+        else
+            let name = identifier (cursor.Advance())
+
+            let primaryConstructor =
+                if isDelimiter "(" cursor.Current then
+                    Some(parseAtomicPattern state context)
+                else
+                    None
+
+            let representation, recovery =
+                if isOperator "=" cursor.Current then
+                    cursor.Advance()
+                    |> ignore
+
+                    if cursor.Current.Kind = LayoutTokenKind.BeginBlock then
+                        let block = cursor.Advance()
+                        let blockReported = state.Diagnostics.Count
+                        let representation = parseRepresentation state block.Range.Start
+
+                        if
+                            cursor.Current.Kind
+                            <> LayoutTokenKind.EndBlock
+                        then
+                            if not (reportedSince state blockReported) then
+                                reportUnsupported state cursor.Current "a type definition"
+
+                            skipBlock state block.Range.Start
+
+                        if cursor.Current.Kind = LayoutTokenKind.EndBlock then
+                            cursor.Advance()
+                            |> ignore
+
+                        representation, ListRecovery.Continues
+                    else
+                        parseRepresentation state context, ListRecovery.Continues
+                elif
+                    isDelimiter ")" cursor.Current
+                    || isDelimiter "}" cursor.Current
+                    || isKeyword "end" cursor.Current
+                then
+                    let missing = missingRepresentation cursor.Current
+
+                    reportUnexpected state RecoveryPoint.DefinitionStart "a type definition"
+                    |> ignore
+
+                    missing, ListRecovery.Discards
+                else
+                    let missing = missingRepresentation cursor.Current
+
+                    if reportUnexpected state RecoveryPoint.TypeEquals "a type definition" then
+                        missing, ListRecovery.Unmodeled
+                    else
+                        missing, ListRecovery.Continues
+
+            let skipped =
+                if endsLine context cursor.Current then
+                    None
+                else
+                    if not (reportedSince state reported) then
+                        reportUnsupported state cursor.Current "a type definition"
+
+                    skipUntil state context
+
+            keepFirstDiagnosticSince state reported
+
+            let definition = {
+                Attributes = attributes
+                Accessibility = accessibility
+                Name = name
+                PrimaryConstructor = primaryConstructor
+                Representation = representation
+                Skipped = skipped
+                Range = span (declarationStart attributes typeToken) (emptyAt cursor.LastEnd)
+            }
+
+            Some(ImplementationDeclaration.Type definition), recovery
+
     type private DeclarationRules<'Declaration> = {
         Parse:
             ParserState
@@ -1376,6 +2290,7 @@ module internal Parser =
         let discarded = ImmutableArray.CreateBuilder<'Declaration>()
         let mutable suppressFrom = None
         let mutable interrupted = false
+        let mutable unmodeled = false
         let mutable stop = false
 
         while not stop do
@@ -1396,7 +2311,8 @@ module internal Parser =
                 match suppressFrom with
                 | Some _ when
                     not interrupted
-                    && not (rules.ContinuesRecovery token)
+                    && (unmodeled
+                        || not (rules.ContinuesRecovery token))
                     ->
                     reportUnsupported state token "a declaration after syntax recovery"
                     interrupted <- true
@@ -1478,6 +2394,12 @@ module internal Parser =
                     ->
                     // The Compatibility Oracle discards later declarations that continue this recovery and reports no diagnostic for them.
                     suppressFrom <- Some state.Diagnostics.Count
+                | None when
+                    recovery = ListRecovery.Unmodeled
+                    && not nested
+                    ->
+                    suppressFrom <- Some state.Diagnostics.Count
+                    unmodeled <- true
                 | None -> ()
 
         declarations.ToImmutable(), discarded.ToImmutable()
@@ -1606,6 +2528,8 @@ module internal Parser =
                     Some(Some(parseLet state attributes), ListRecovery.Continues)
                 elif isKeyword "do" token then
                     Some(Some(parseDo state attributes), ListRecovery.Continues)
+                elif isKeyword "type" token then
+                    Some(parseTypeDefinition state attributes)
                 else
                     None
         ContinuesRecovery = fun _ -> true
