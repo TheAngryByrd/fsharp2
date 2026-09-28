@@ -2878,6 +2878,12 @@ module M =
         [
             "l_access.fs(2,1,2,4): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
         ]
+
+        "l_nested.fs",
+        "module N\nmodule O =\n    let a = 1\n    and b = 2\n",
+        [
+            "l_nested.fs(3,5,3,8): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+        ]
     ]
 
     let private unmodeledLetKeywordCases = [
@@ -2913,10 +2919,73 @@ module M =
             "r_inner.fs(2,1,3,6): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
         ]
 
-        "l_nested.fs",
+    ]
+
+    let private nestedAndCases = [
+        "n_deep.fs",
+        "module N\nmodule O =\n    module P =\n        let a = 1\n        and b = 2\n",
+        [
+            "n_deep.fs(4,9,4,12): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+        ]
+
+        "n_err.fs",
+        "module N\nmodule O =\n    let a = 1\n    and b = )\n",
+        [
+            "n_err.fs(4,13,4,14): error FS0010: Unexpected symbol ')' in binding"
+            "n_err.fs(3,5,3,8): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+        ]
+
+        "n_multi.fs",
+        "module N\nmodule O =\n    let a =\n        1\n    and b =\n        2\n",
+        [
+            "n_multi.fs(3,5,3,8): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+        ]
+
+        "n_ns.fs",
+        "namespace Q\nmodule O =\n    let a = 1\n    and b = 2\n",
+        [
+            "n_ns.fs(3,5,3,8): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+        ]
+
+        "n_rec.fs", "module N\nmodule O =\n    let rec a = 1\n    and b = 2\n", []
+
+        "n_root_after.fs",
+        "module N\nmodule O =\n    let a = 1\n    and b = 2\nlet c = 3\n",
+        [
+            "n_root_after.fs(3,5,3,8): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+        ]
+
+        "n_then.fs",
+        "module N\nmodule O =\n    let a = 1\n    and b = 2\n    let c = 3\n",
+        [
+            "n_then.fs(3,5,3,8): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+        ]
+
+        "n_three.fs",
+        "module N\nmodule O =\n    let a = 1\n    and b = 2\n    and c = 3\n",
+        [
+            "n_three.fs(3,5,3,8): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+        ]
+
+        "n_two.fs",
         "module N\nmodule O =\n    let a = 1\n    and b = 2\n",
         [
-            "l_nested.fs(3,5,3,8): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+            "n_two.fs(3,5,3,8): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+        ]
+
+        "n_use.fs",
+        "module N\nmodule O =\n    use a = 1\n    and b = 2\n",
+        [
+            "n_use.fs(3,5,4,14): warning FS0524: 'use' bindings are not permitted in modules and are treated as 'let' bindings"
+            "n_use.fs(3,5,3,8): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+        ]
+    ]
+
+    let private unmodeledNestedAndCases = [
+        "n_indented_and.fs",
+        "module N\nlet a = 1\n    and b = 2\n",
+        [
+            "n_indented_and.fs(2,1,2,4): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
         ]
     ]
 
@@ -3205,6 +3274,38 @@ module private N =
 
             testList "an unmodeled use or and shape stays explicit" [
                 for logicalPath, text, oracle in unmodeledLetKeywordCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result =
+                            parse SyntaxCompilationTarget.Executable [
+                                logicalPath, text
+                                last
+                            ]
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            (result.Diagnostics
+                             |> Seq.map _.Diagnostic)
+                            (oracleLines result)
+            ]
+
+            testList "an and group in a nested module reports the Oracle diagnostics" [
+                for logicalPath, text, expected in nestedAndCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        Expect.sequenceEqual
+                            (oracleLines (
+                                parse SyntaxCompilationTarget.Executable [
+                                    logicalPath, text
+                                    last
+                                ]
+                            ))
+                            expected
+                            "The diagnostics must match the Compatibility Oracle"
+            ]
+
+            testList "an unmodeled and group stays explicit" [
+                for logicalPath, text, oracle in unmodeledNestedAndCases ->
                     testCase logicalPath
                     <| fun _ ->
                         let result =

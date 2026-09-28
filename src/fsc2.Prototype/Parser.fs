@@ -2104,7 +2104,16 @@ module internal Parser =
         bindings.Add(parseBinding state context attributes)
         let firstBindingRecovered = reportedSince state reported
 
-        while isKeyword "and" cursor.Current do
+        let continuesWithAnd () =
+            isKeyword "and" cursor.Current
+            || (cursor.Current.Kind = LayoutTokenKind.Separator
+                && isKeyword "and" (cursor.Peek 1))
+
+        while continuesWithAnd () do
+            if cursor.Current.Kind = LayoutTokenKind.Separator then
+                cursor.Advance()
+                |> ignore
+
             let previousEnd = cursor.LastEnd
             let andToken = cursor.Advance()
 
