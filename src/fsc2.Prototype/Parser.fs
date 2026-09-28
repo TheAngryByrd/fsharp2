@@ -86,6 +86,7 @@ module internal Parser =
         Cursor: Cursor
         Diagnostics: ResizeArray<SyntaxDiagnostic>
         ReportedStarts: HashSet<int>
+        Language: LanguageVersionIdentity
         mutable SuppressFrom: int option
         mutable UnmodeledAtNextDeclaration: bool
         mutable UnmodeledAtEnd: bool
@@ -156,27 +157,51 @@ module internal Parser =
 
     let private unsupportedCode = "FSC2P1001"
 
+    let private featureGateCode = "FS3350"
+
+    let private underscoreDotShorthandLevel = 80
+
     let private reportedAt state (token: LayoutToken) =
         state.ReportedStarts.Contains token.Range.Start.Offset
 
-    let private reportedSince state count = state.Diagnostics.Count > count
+    let private reportedSince state count =
+        seq {
+            count .. state.Diagnostics.Count
+                     - 1
+        }
+        |> Seq.exists (fun index ->
+            state.Diagnostics[index].Code
+            <> featureGateCode
+        )
 
     let private keepFirstDiagnosticSince state count =
-        if state.Diagnostics.Count > count + 1 then
+        let firstRecovery =
+            seq {
+                count .. state.Diagnostics.Count
+                         - 1
+            }
+            |> Seq.tryFind (fun index ->
+                state.Diagnostics[index].Code
+                <> featureGateCode
+            )
+
+        match firstRecovery with
+        | Some first when state.Diagnostics.Count > first + 1 ->
             let later =
                 state.Diagnostics
-                |> Seq.skip (count + 1)
+                |> Seq.skip (first + 1)
                 |> Seq.filter (fun diagnostic -> diagnostic.Code = unsupportedCode)
                 |> Seq.toArray
 
             state.Diagnostics.RemoveRange(
-                count + 1,
+                first + 1,
                 state.Diagnostics.Count
-                - count
+                - first
                 - 1
             )
 
             state.Diagnostics.AddRange later
+        | _ -> ()
 
     let private reportUnsupported state (token: LayoutToken) context =
         report
@@ -1100,6 +1125,11 @@ module internal Parser =
             |> ignore
 
             SyntaxExpression.Constant(value, token.Range)
+        | None when
+            isIdentifier token
+            && tokenText token = "_"
+            ->
+            parseDotLambda state
         | None when isIdentifier token ->
             longIdentifierWith
                 state
@@ -1136,6 +1166,34 @@ module internal Parser =
         | None ->
             reportUnsupported state token "an expression"
             missingExpression token
+
+    and private parseDotLambda state =
+        let cursor = state.Cursor
+        let underscore = cursor.Advance()
+
+        if not (isOperator "." cursor.Current) then
+            reportUnsupported state underscore "an underscore expression"
+            missingExpression underscore
+        else
+            let dot = cursor.Advance()
+
+            if
+                not (isIdentifier cursor.Current)
+                || tokenText cursor.Current = "_"
+            then
+                reportUnsupported state cursor.Current "an underscore dot shorthand"
+                missingExpression cursor.Current
+            else
+                let members = longIdentifier state
+
+                if state.Language.FeatureLevel < underscoreDotShorthandLevel then
+                    report
+                        state
+                        "FS3350"
+                        $"Feature 'underscore dot shorthand for accessor only function' is not available in F# {state.Language.CanonicalMode}. Please use language version 8.0 or greater."
+                        (span underscore.Range dot.Range)
+
+                SyntaxExpression.DotLambda(members, span underscore.Range members.Range)
 
     and private parseBranchStart state context point =
         let cursor = state.Cursor
@@ -1638,7 +1696,7 @@ module internal Parser =
         let mutable skipped = None
 
         let recover point =
-            if state.Diagnostics.Count = reported then
+            if not (reportedSince state reported) then
                 match point with
                 | Some point ->
                     reportUnexpected state point "a binding"
@@ -1786,7 +1844,7 @@ module internal Parser =
                     cursor.Current.Kind
                     <> LayoutTokenKind.EndBlock
                 then
-                    if state.Diagnostics.Count = reported then
+                    if not (reportedSince state reported) then
                         reportUnsupported state cursor.Current "a do declaration"
 
                     skipUntil state context
@@ -1827,7 +1885,7 @@ module internal Parser =
         let mutable skipped = None
 
         let recover point =
-            if state.Diagnostics.Count = reported then
+            if not (reportedSince state reported) then
                 reportUnexpected state point "a value signature"
                 |> ignore
 
@@ -2461,7 +2519,7 @@ module internal Parser =
                     && not (isOffside token.Range.Start next)
                 then
                     if
-                        state.Diagnostics.Count = reported
+                        not (reportedSince state reported)
                         && not (reportedAt state next)
                     then
                         reportUnsupported state next "a module or namespace declaration"
@@ -2693,6 +2751,7 @@ module internal Parser =
         Cursor = Cursor(document.LayoutTokens)
         Diagnostics = ResizeArray()
         ReportedStarts = HashSet()
+        Language = document.LanguageVersion
         SuppressFrom = None
         UnmodeledAtNextDeclaration = false
         UnmodeledAtEnd = false

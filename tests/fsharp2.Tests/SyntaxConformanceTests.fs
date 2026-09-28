@@ -15,6 +15,7 @@ module SyntaxConformanceTests =
         "syntax.signature-declarations"
         "syntax.type-definitions"
         "syntax.expressions"
+        "syntax.underscore-dot-shorthand"
     ]
 
     let private json (path: string) =
