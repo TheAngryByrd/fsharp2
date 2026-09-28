@@ -161,6 +161,34 @@
       "requiredPolarities": ["positive", "negative"],
       "requiredPhases": ["source", "syntax"],
       "envelope": "supported"
+    },
+    {
+      "id": "syntax.implementation-declarations",
+      "title": "Implementation file declarations and recovery",
+      "requiredPolarities": ["positive", "negative"],
+      "requiredPhases": ["source", "syntax"],
+      "envelope": "unsupported"
+    },
+    {
+      "id": "syntax.signature-declarations",
+      "title": "Signature file declarations and recovery",
+      "requiredPolarities": ["positive", "negative"],
+      "requiredPhases": ["source", "syntax"],
+      "envelope": "unsupported"
+    },
+    {
+      "id": "syntax.type-definitions",
+      "title": "Record, union, class, and abbreviation type definitions",
+      "requiredPolarities": ["positive", "negative"],
+      "requiredPhases": ["source", "syntax"],
+      "envelope": "unsupported"
+    },
+    {
+      "id": "syntax.expressions",
+      "title": "Match, if, lambda, list, and record expressions",
+      "requiredPolarities": ["positive", "negative"],
+      "requiredPhases": ["source", "syntax"],
+      "envelope": "unsupported"
     }
   ],
   "integrationCorpora": [

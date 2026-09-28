@@ -1,0 +1,156 @@
+{
+  "documentKind": "oracle-lock-v1",
+  "schemaVersion": 1,
+  "lockId": "syntax.implementation-recovery-negative",
+  "family": "syntax",
+  "caseId": "language.syntax.implementation-recovery-negative",
+  "caseHash": "sha256:0fc3d74a1852b7d9c1ec9dabab3b829585289a6e45f37812ef6c760c4bb1c6e1",
+  "oracleIdentity": {
+    "sdkVersion": "10.0.110",
+    "sdkCommit": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd",
+    "compiler": {
+      "logicalPath": "sdk/10.0.110/FSharp/fsc.dll",
+      "sha256": "sha256:8cb573be4b7f70886929a572024ab26fc1893cfdd795ef124c58627610ddbf22",
+      "productVersion": "14.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "msbuildTask": {
+      "logicalPath": "sdk/10.0.110/FSharp/FSharp.Build.dll",
+      "sha256": "sha256:ab62157b2111ae5f172e863d086f7035503f83c0bdb9a9efc2e2450891df6e1a",
+      "productVersion": "14.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "fsharpCore": {
+      "logicalPath": "sdk/10.0.110/FSharp/FSharp.Core.dll",
+      "sha256": "sha256:ff83cead5566c9111b69e920c2703e6d8d125305d6ac1ac08692cafee3890968",
+      "productVersion": "10.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "culture": "en-US",
+    "encoding": "utf-8",
+    "optionHash": "sha256:734c11396c4166a04f43e8b247bd3c57a60024049a015053a9a57c18bda9f5ca"
+  },
+  "streams": {
+    "stdout": {
+      "base64": "TWljcm9zb2Z0IChSKSBGIyBDb21waWxlciB2ZXJzaW9uIDE0LjAuMTEwLjAgZm9yIEYjIDEwLjANCkNvcHlyaWdodCAoYykgTWljcm9zb2Z0IENvcnBvcmF0aW9uLiBBbGwgUmlnaHRzIFJlc2VydmVkLg0K",
+      "byteLength": 117,
+      "byteHash": "sha256:4d9efaf1c69fd2f1088ecef67012b9f589c03ca1700275fd67b10d914f009f33",
+      "text": "Microsoft (R) F# Compiler version 14.0.110.0 for F# 10.0\r\nCopyright (c) Microsoft Corporation. All Rights Reserved.\r\n",
+      "textHash": "sha256:4d9efaf1c69fd2f1088ecef67012b9f589c03ca1700275fd67b10d914f009f33"
+    },
+    "stderr": {
+      "base64": "CkM6XFVzZXJzXGppbW15XEFwcERhdGFcTG9jYWxcVGVtcFxmMmNhcDI5XG9yYWNsZS1sYW5ndWFnZS1zeW50YXgtaW1wbGVtZW50YXRpb24tcmVjb3ZlcnktbmVnYXRpdmUtMjAyNjA5MjhUMDIyNTI3MjM5Wi1lN2Y3ZWQ1Njc3MWQ0ZWRmOWJkNWRmYWYyOTg0NDYwMVxsYW5lc1xvcmFjbGVcd29ya1xzcmNcUHJvZ3JhbS5mcygzLDE0LDMsMTUpOiBwYXJzZSBlcnJvciBGUzAwMTA6IFVuZXhwZWN0ZWQgc3ltYm9sICcpJyBpbiBiaW5kaW5nDQoKQzpcVXNlcnNcamltbXlcQXBwRGF0YVxMb2NhbFxUZW1wXGYyY2FwMjlcb3JhY2xlLWxhbmd1YWdlLXN5bnRheC1pbXBsZW1lbnRhdGlvbi1yZWNvdmVyeS1uZWdhdGl2ZS0yMDI2MDkyOFQwMjI1MjcyMzlaLWU3ZjdlZDU2NzcxZDRlZGY5YmQ1ZGZhZjI5ODQ0NjAxXGxhbmVzXG9yYWNsZVx3b3JrXHNyY1xQcm9ncmFtLmZzKDcsMTMsNywxNCk6IHBhcnNlIGVycm9yIEZTMDAxMDogVW5leHBlY3RlZCBzeW1ib2wgJ10nIGluIGJpbmRpbmcuIEV4cGVjdGVkICc9JyBvciBvdGhlciB0b2tlbi4NCgpDOlxVc2Vyc1xqaW1teVxBcHBEYXRhXExvY2FsXFRlbXBcZjJjYXAyOVxvcmFjbGUtbGFuZ3VhZ2Utc3ludGF4LWltcGxlbWVudGF0aW9uLXJlY292ZXJ5LW5lZ2F0aXZlLTIwMjYwOTI4VDAyMjUyNzIzOVotZTdmN2VkNTY3NzFkNGVkZjliZDVkZmFmMjk4NDQ2MDFcbGFuZXNcb3JhY2xlXHdvcmtcc3JjXFByb2dyYW0uZnMoMTEsMjIsMTEsMjMpOiBwYXJzZSBlcnJvciBGUzAwMTA6IFVuZXhwZWN0ZWQgc3ltYm9sICddJyBpbiBiaW5kaW5nLiBFeHBlY3RlZCBpbmNvbXBsZXRlIHN0cnVjdHVyZWQgY29uc3RydWN0IGF0IG9yIGJlZm9yZSB0aGlzIHBvaW50IG9yIG90aGVyIHRva2VuLg0K",
+      "byteLength": 867,
+      "byteHash": "sha256:65e0612524be806ebfa4396b91ddd388be6becec2107e3330678c4dd5c7cc3c4",
+      "text": "\nC:\\Users\\jimmy\\AppData\\Local\\Temp\\f2cap29\\oracle-language-syntax-implementation-recovery-negative-20260928T022527239Z-e7f7ed56771d4edf9bd5dfaf29844601\\lanes\\oracle\\work\\src\\Program.fs(3,14,3,15): parse error FS0010: Unexpected symbol ')' in binding\r\n\nC:\\Users\\jimmy\\AppData\\Local\\Temp\\f2cap29\\oracle-language-syntax-implementation-recovery-negative-20260928T022527239Z-e7f7ed56771d4edf9bd5dfaf29844601\\lanes\\oracle\\work\\src\\Program.fs(7,13,7,14): parse error FS0010: Unexpected symbol ']' in binding. Expected '=' or other token.\r\n\nC:\\Users\\jimmy\\AppData\\Local\\Temp\\f2cap29\\oracle-language-syntax-implementation-recovery-negative-20260928T022527239Z-e7f7ed56771d4edf9bd5dfaf29844601\\lanes\\oracle\\work\\src\\Program.fs(11,22,11,23): parse error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token.\r\n",
+      "textHash": "sha256:65e0612524be806ebfa4396b91ddd388be6becec2107e3330678c4dd5c7cc3c4"
+    }
+  },
+  "process": {
+    "exitCode": 1,
+    "targetResult": "failed"
+  },
+  "diagnostics": [
+    {
+      "identity": "diagnostic.fs0010.0",
+      "code": "FS0010",
+      "subcategory": "parse",
+      "message": "Unexpected symbol ')' in binding",
+      "logicalSource": "/src/Program.fs",
+      "range": {
+        "startLine": 3,
+        "startColumn": 14,
+        "endLine": 3,
+        "endColumn": 15
+      },
+      "recoveryContext": "syntax-recovery",
+      "originalSeverity": "error",
+      "adjustedSeverity": "error",
+      "stream": "stderr",
+      "sequence": 0,
+      "occurrenceCount": 1,
+      "related": [],
+      "warningLevel": 5,
+      "suppressed": false,
+      "promoted": false,
+      "languageGate": null
+    },
+    {
+      "identity": "diagnostic.fs0010.1",
+      "code": "FS0010",
+      "subcategory": "parse",
+      "message": "Unexpected symbol ']' in binding. Expected '=' or other token.",
+      "logicalSource": "/src/Program.fs",
+      "range": {
+        "startLine": 7,
+        "startColumn": 13,
+        "endLine": 7,
+        "endColumn": 14
+      },
+      "recoveryContext": "syntax-recovery",
+      "originalSeverity": "error",
+      "adjustedSeverity": "error",
+      "stream": "stderr",
+      "sequence": 1,
+      "occurrenceCount": 1,
+      "related": [],
+      "warningLevel": 5,
+      "suppressed": false,
+      "promoted": false,
+      "languageGate": null
+    },
+    {
+      "identity": "diagnostic.fs0010.2",
+      "code": "FS0010",
+      "subcategory": "parse",
+      "message": "Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token.",
+      "logicalSource": "/src/Program.fs",
+      "range": {
+        "startLine": 11,
+        "startColumn": 22,
+        "endLine": 11,
+        "endColumn": 23
+      },
+      "recoveryContext": "syntax-recovery",
+      "originalSeverity": "error",
+      "adjustedSeverity": "error",
+      "stream": "stderr",
+      "sequence": 2,
+      "occurrenceCount": 1,
+      "related": [],
+      "warningLevel": 5,
+      "suppressed": false,
+      "promoted": false,
+      "languageGate": null
+    }
+  ],
+  "artifacts": {
+    "preRun": [
+      {
+        "logicalPath": "/output/case.dll",
+        "state": "absent",
+        "sha256": null
+      },
+      {
+        "logicalPath": "/output/case.pdb",
+        "state": "absent",
+        "sha256": null
+      }
+    ],
+    "postRun": [
+      {
+        "logicalPath": "/output/case.dll",
+        "state": "absent",
+        "sha256": null
+      },
+      {
+        "logicalPath": "/output/case.pdb",
+        "state": "absent",
+        "sha256": null
+      }
+    ]
+  },
+  "review": {
+    "owner": "parser-compatibility",
+    "sourceIssue": "#29",
+    "capturedAt": "2026-09-27T20:25:29.693948-06:00",
+    "expiryCondition": "Refresh when the case hash, Oracle SDK identity, options, culture, encoding, or source fixture changes."
+  }
+}

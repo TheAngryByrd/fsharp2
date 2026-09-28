@@ -27,6 +27,8 @@
         <Compile Include="LayoutTests.fs" />
         <Compile Include="LexicalPipelineTests.fs" />
         <Compile Include="ParserTests.fs" />
+        <Compile Include="ParserGrammarTests.fs" />
+        <Compile Include="SyntaxConformanceTests.fs" />
         <Compile Include="SourceReuseTests.fs" />
         <Compile Include="CompilerTargetSourceTests.fs" />
         <Compile Include="CompilerContractTests.fs" />

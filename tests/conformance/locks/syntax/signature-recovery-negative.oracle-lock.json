@@ -1,0 +1,156 @@
+{
+  "documentKind": "oracle-lock-v1",
+  "schemaVersion": 1,
+  "lockId": "syntax.signature-recovery-negative",
+  "family": "syntax",
+  "caseId": "language.syntax.signature-recovery-negative",
+  "caseHash": "sha256:a9c82beda79f0b69d8eba175bd8aa1917498db2cb3535310c7d0c71d25d5b7fc",
+  "oracleIdentity": {
+    "sdkVersion": "10.0.110",
+    "sdkCommit": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd",
+    "compiler": {
+      "logicalPath": "sdk/10.0.110/FSharp/fsc.dll",
+      "sha256": "sha256:8cb573be4b7f70886929a572024ab26fc1893cfdd795ef124c58627610ddbf22",
+      "productVersion": "14.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "msbuildTask": {
+      "logicalPath": "sdk/10.0.110/FSharp/FSharp.Build.dll",
+      "sha256": "sha256:ab62157b2111ae5f172e863d086f7035503f83c0bdb9a9efc2e2450891df6e1a",
+      "productVersion": "14.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "fsharpCore": {
+      "logicalPath": "sdk/10.0.110/FSharp/FSharp.Core.dll",
+      "sha256": "sha256:ff83cead5566c9111b69e920c2703e6d8d125305d6ac1ac08692cafee3890968",
+      "productVersion": "10.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "culture": "en-US",
+    "encoding": "utf-8",
+    "optionHash": "sha256:734c11396c4166a04f43e8b247bd3c57a60024049a015053a9a57c18bda9f5ca"
+  },
+  "streams": {
+    "stdout": {
+      "base64": "TWljcm9zb2Z0IChSKSBGIyBDb21waWxlciB2ZXJzaW9uIDE0LjAuMTEwLjAgZm9yIEYjIDEwLjANCkNvcHlyaWdodCAoYykgTWljcm9zb2Z0IENvcnBvcmF0aW9uLiBBbGwgUmlnaHRzIFJlc2VydmVkLg0K",
+      "byteLength": 117,
+      "byteHash": "sha256:4d9efaf1c69fd2f1088ecef67012b9f589c03ca1700275fd67b10d914f009f33",
+      "text": "Microsoft (R) F# Compiler version 14.0.110.0 for F# 10.0\r\nCopyright (c) Microsoft Corporation. All Rights Reserved.\r\n",
+      "textHash": "sha256:4d9efaf1c69fd2f1088ecef67012b9f589c03ca1700275fd67b10d914f009f33"
+    },
+    "stderr": {
+      "base64": "CkM6XFVzZXJzXGppbW15XEFwcERhdGFcTG9jYWxcVGVtcFxmMmNhcDI5XG9yYWNsZS1sYW5ndWFnZS1zeW50YXgtc2lnbmF0dXJlLXJlY292ZXJ5LW5lZ2F0aXZlLTIwMjYwOTI4VDAyMjUzNTE2NlotZGQwNGExM2U4MzQ5NDg5YWFiNmE2MWIyMDAxNzIyYmVcbGFuZXNcb3JhY2xlXHdvcmtcc3JjXExpYnJhcnkuZnNpKDQsMTcsNCwxOCk6IHBhcnNlIGVycm9yIEZTMDAxMDogVW5leHBlY3RlZCBzeW1ib2wgJyknIGluIHZhbHVlIHNpZ25hdHVyZQ0KCkM6XFVzZXJzXGppbW15XEFwcERhdGFcTG9jYWxcVGVtcFxmMmNhcDI5XG9yYWNsZS1sYW5ndWFnZS1zeW50YXgtc2lnbmF0dXJlLXJlY292ZXJ5LW5lZ2F0aXZlLTIwMjYwOTI4VDAyMjUzNTE2NlotZGQwNGExM2U4MzQ5NDg5YWFiNmE2MWIyMDAxNzIyYmVcbGFuZXNcb3JhY2xlXHdvcmtcc3JjXExpYnJhcnkuZnNpKDYsMTUsNiwxOCk6IHBhcnNlIGVycm9yIEZTMDAxMDogVW5leHBlY3RlZCBpZGVudGlmaWVyIGluIHZhbHVlIHNpZ25hdHVyZS4gRXhwZWN0ZWQgJzonIG9yIG90aGVyIHRva2VuLg0KCkM6XFVzZXJzXGppbW15XEFwcERhdGFcTG9jYWxcVGVtcFxmMmNhcDI5XG9yYWNsZS1sYW5ndWFnZS1zeW50YXgtc2lnbmF0dXJlLXJlY292ZXJ5LW5lZ2F0aXZlLTIwMjYwOTI4VDAyMjUzNTE2NlotZGQwNGExM2U4MzQ5NDg5YWFiNmE2MWIyMDAxNzIyYmVcbGFuZXNcb3JhY2xlXHdvcmtcc3JjXExpYnJhcnkuZnNpKDksMjQsOSwyNSk6IHBhcnNlIGVycm9yIEZTMDAxMDogVW5leHBlY3RlZCBzeW1ib2wgJ10nIGluIHZhbHVlIHNpZ25hdHVyZQ0K",
+      "byteLength": 795,
+      "byteHash": "sha256:a703dca7f4ceb239356f211c9e169962d548be301ec71e041b9e5288be62e546",
+      "text": "\nC:\\Users\\jimmy\\AppData\\Local\\Temp\\f2cap29\\oracle-language-syntax-signature-recovery-negative-20260928T022535166Z-dd04a13e8349489aab6a61b2001722be\\lanes\\oracle\\work\\src\\Library.fsi(4,17,4,18): parse error FS0010: Unexpected symbol ')' in value signature\r\n\nC:\\Users\\jimmy\\AppData\\Local\\Temp\\f2cap29\\oracle-language-syntax-signature-recovery-negative-20260928T022535166Z-dd04a13e8349489aab6a61b2001722be\\lanes\\oracle\\work\\src\\Library.fsi(6,15,6,18): parse error FS0010: Unexpected identifier in value signature. Expected ':' or other token.\r\n\nC:\\Users\\jimmy\\AppData\\Local\\Temp\\f2cap29\\oracle-language-syntax-signature-recovery-negative-20260928T022535166Z-dd04a13e8349489aab6a61b2001722be\\lanes\\oracle\\work\\src\\Library.fsi(9,24,9,25): parse error FS0010: Unexpected symbol ']' in value signature\r\n",
+      "textHash": "sha256:a703dca7f4ceb239356f211c9e169962d548be301ec71e041b9e5288be62e546"
+    }
+  },
+  "process": {
+    "exitCode": 1,
+    "targetResult": "failed"
+  },
+  "diagnostics": [
+    {
+      "identity": "diagnostic.fs0010.0",
+      "code": "FS0010",
+      "subcategory": "parse",
+      "message": "Unexpected symbol ')' in value signature",
+      "logicalSource": "/src/Library.fsi",
+      "range": {
+        "startLine": 4,
+        "startColumn": 17,
+        "endLine": 4,
+        "endColumn": 18
+      },
+      "recoveryContext": "syntax-recovery",
+      "originalSeverity": "error",
+      "adjustedSeverity": "error",
+      "stream": "stderr",
+      "sequence": 0,
+      "occurrenceCount": 1,
+      "related": [],
+      "warningLevel": 5,
+      "suppressed": false,
+      "promoted": false,
+      "languageGate": null
+    },
+    {
+      "identity": "diagnostic.fs0010.1",
+      "code": "FS0010",
+      "subcategory": "parse",
+      "message": "Unexpected identifier in value signature. Expected ':' or other token.",
+      "logicalSource": "/src/Library.fsi",
+      "range": {
+        "startLine": 6,
+        "startColumn": 15,
+        "endLine": 6,
+        "endColumn": 18
+      },
+      "recoveryContext": "syntax-recovery",
+      "originalSeverity": "error",
+      "adjustedSeverity": "error",
+      "stream": "stderr",
+      "sequence": 1,
+      "occurrenceCount": 1,
+      "related": [],
+      "warningLevel": 5,
+      "suppressed": false,
+      "promoted": false,
+      "languageGate": null
+    },
+    {
+      "identity": "diagnostic.fs0010.2",
+      "code": "FS0010",
+      "subcategory": "parse",
+      "message": "Unexpected symbol ']' in value signature",
+      "logicalSource": "/src/Library.fsi",
+      "range": {
+        "startLine": 9,
+        "startColumn": 24,
+        "endLine": 9,
+        "endColumn": 25
+      },
+      "recoveryContext": "syntax-recovery",
+      "originalSeverity": "error",
+      "adjustedSeverity": "error",
+      "stream": "stderr",
+      "sequence": 2,
+      "occurrenceCount": 1,
+      "related": [],
+      "warningLevel": 5,
+      "suppressed": false,
+      "promoted": false,
+      "languageGate": null
+    }
+  ],
+  "artifacts": {
+    "preRun": [
+      {
+        "logicalPath": "/output/case.dll",
+        "state": "absent",
+        "sha256": null
+      },
+      {
+        "logicalPath": "/output/case.pdb",
+        "state": "absent",
+        "sha256": null
+      }
+    ],
+    "postRun": [
+      {
+        "logicalPath": "/output/case.dll",
+        "state": "absent",
+        "sha256": null
+      },
+      {
+        "logicalPath": "/output/case.pdb",
+        "state": "absent",
+        "sha256": null
+      }
+    ]
+  },
+  "review": {
+    "owner": "parser-compatibility",
+    "sourceIssue": "#29",
+    "capturedAt": "2026-09-27T20:25:37.6697263-06:00",
+    "expiryCondition": "Refresh when the case hash, Oracle SDK identity, options, culture, encoding, or source fixture changes."
+  }
+}
