@@ -2551,6 +2551,78 @@ module M =
         ]
     ]
 
+    let private attributedModuleCases = [
+        "am_ok.fs", "module M\n[<AutoOpen>]\nmodule N =\n    let a = 1\n", []
+
+        "am_two_lists.fs",
+        "module M\n[<AutoOpen>]\n[<RequireQualifiedAccess>]\nmodule N =\n    let a = 1\n",
+        []
+
+        "am_args.fs",
+        "module M\n[<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]\nmodule N =\n    let a = 1\n",
+        []
+
+        "am_nested.fs",
+        "module M\nmodule N =\n    [<AutoOpen>]\n    module O =\n        let a = 1\n",
+        []
+
+        "am_ns.fs", "namespace Q\n[<AutoOpen>]\nmodule N =\n    let a = 1\n", []
+
+        "am_error.fs",
+        "module M\n[<AutoOpen>]\nmodule N =\n    let a = )\nlet b = 2\n",
+        [ "am_error.fs(4,13,4,14): error FS0010: Unexpected symbol ')' in binding" ]
+
+        "am_anon.fs",
+        "[<AutoOpen>]\nmodule N =\n    let a = 1\n",
+        [
+            "am_anon.fs(1,1,2,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration. When using a module declaration at the start of a file the '=' sign is not allowed. If this is a top-level module, consider removing the = to resolve this error."
+        ]
+
+        "am_sig.fsi", "module M\n[<AutoOpen>]\nmodule N =\n    val a: int\n", []
+
+        "am_access.fs", "module M\n[<AutoOpen>]\nmodule private N =\n    let a = 1\n", []
+
+        "ac_internal.fs", "module M\nmodule internal N =\n    let a = 1\n", []
+
+        "ac_public.fs", "module M\nmodule public N =\n    let a = 1\n", []
+
+        "ac_error.fs",
+        "module M\nmodule private N =\n    let a = )\nlet b = 2\n",
+        [ "ac_error.fs(3,13,3,14): error FS0010: Unexpected symbol ')' in binding" ]
+
+        "ac_sig.fsi", "module M\nmodule private N =\n    val a: int\n", []
+
+        "ac_anon.fs",
+        "module private N =\n    let a = 1\n",
+        [
+            "ac_anon.fs(1,1,2,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration. When using a module declaration at the start of a file the '=' sign is not allowed. If this is a top-level module, consider removing the = to resolve this error."
+        ]
+    ]
+
+    let private unmodeledAttributedModuleCases = [
+        "am_same_line.fs",
+        "module M\n[<AutoOpen>] module N =\n    let a = 1\n",
+        [
+            "am_same_line.fs(3,5,3,8): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:14). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "am_same_line.fs(3,5,3,8): error FS0010: Incomplete structured construct at or before this point in definition"
+        ]
+
+        "ao_open.fs",
+        "module M\n[<A>]\nopen System\n",
+        [ "ao_open.fs(3,1,3,5): error FS0010: Unexpected keyword 'open' in definition" ]
+
+        "ao_open_line.fs",
+        "module M\n[<A>] open System\n",
+        [ "ao_open_line.fs(2,7,2,11): error FS0010: Unexpected keyword 'open' in definition" ]
+
+        "ac_twice.fs",
+        "module M\nmodule private private N =\n    let a = 1\n",
+        [
+            "ac_twice.fs(2,16,2,23): error FS0010: Unexpected keyword 'private' in definition. Expected identifier, 'global' or other token."
+            "ac_twice.fs(2,1,2,23): error FS0534: A module abbreviation must be a simple name, not a path"
+        ]
+    ]
+
     [<Tests>]
     let tests =
         testList "Issue29.ParserCompilation" [
@@ -2704,23 +2776,22 @@ module M =
                             (oracleLines result)
             ]
 
-            testCase "an attributed nested module first in an anonymous root stays explicit"
+            testCase
+                "an attributed nested module first in an anonymous root reports the module-equals text"
             <| fun _ ->
-                let result =
-                    parse SyntaxCompilationTarget.Executable [
-                        "AttrMod.fs",
-                        "[<AutoOpen>]
+                Expect.sequenceEqual
+                    (oracleLines (
+                        parse SyntaxCompilationTarget.Executable [
+                            "AttrMod.fs",
+                            "[<AutoOpen>]
 module M =
     let a = 1
 "
-                        last
-                    ]
-
-                SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            last
+                        ]
+                    ))
                     [ moduleEqualsDeclaration "AttrMod.fs" 1 1 2 1 ]
-                    (result.Diagnostics
-                     |> Seq.map _.Diagnostic)
-                    (oracleLines result)
+                    "The diagnostics must match the Compatibility Oracle"
 
             testList
                 "the next root declaration after a nested module recovery reports the Oracle diagnostic"
@@ -2755,6 +2826,70 @@ module M =
                              |> Seq.map _.Diagnostic)
                             (oracleLines result)
             ]
+
+            testList "an attributed or accessible nested module reports the Oracle diagnostics" [
+                for logicalPath, text, expected in attributedModuleCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        Expect.sequenceEqual
+                            (oracleLines (
+                                parse SyntaxCompilationTarget.Executable [
+                                    logicalPath, text
+                                    last
+                                ]
+                            ))
+                            expected
+                            "The diagnostics must match the Compatibility Oracle"
+            ]
+
+            testList "an unmodeled attributed or accessible declaration stays explicit" [
+                for logicalPath, text, oracle in unmodeledAttributedModuleCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result =
+                            parse SyntaxCompilationTarget.Executable [
+                                logicalPath, text
+                                last
+                            ]
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            (result.Diagnostics
+                             |> Seq.map _.Diagnostic)
+                            (oracleLines result)
+            ]
+
+            testCase "a nested module keeps its attributes, accessibility, and range"
+            <| fun _ ->
+                let result =
+                    parse SyntaxCompilationTarget.Executable [
+                        "Attributed.fs",
+                        "module M
+[<AutoOpen>]
+[<RequireQualifiedAccess>]
+module private N =
+    let a = 1
+"
+                    ]
+
+                match result.Files[0] with
+                | SyntaxFile.Implementation file ->
+                    match Seq.exactlyOne (Seq.exactlyOne file.Contents).Declarations with
+                    | ImplementationDeclaration.NestedModule nested ->
+                        Expect.equal nested.Attributes.Length 2 "Both attribute lists"
+
+                        Expect.equal
+                            (nested.Accessibility
+                             |> Option.map _.Kind)
+                            (Some SyntaxAccessibility.Private)
+                            "Accessibility"
+
+                        Expect.equal
+                            (nested.Range.Start.Line, nested.Range.Start.Column)
+                            (2, 1)
+                            "The range starts at the first attribute list"
+                    | other -> failtest $"Expected a nested module, found {other}"
+                | other -> failtest $"Expected an implementation file, found {other}"
 
             testCase "files keep their order and their kind"
             <| fun _ ->

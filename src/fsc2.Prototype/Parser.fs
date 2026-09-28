@@ -2809,7 +2809,10 @@ module internal Parser =
                     if
                         not attributes.IsEmpty
                         && (isKeyword "open" token
-                            || isKeyword "module" token)
+                            || (isKeyword "module" token
+                                && attributes[attributes.Length
+                                              - 1]
+                                    .Range.End.Line = token.Range.Start.Line))
                     then
                         if
                             state.SuppressFrom.IsSome
@@ -2829,7 +2832,7 @@ module internal Parser =
                         |> Option.map rules.Open,
                         ListRecovery.Continues
                     elif isKeyword "module" token then
-                        parseNestedModule state rules, ListRecovery.Continues
+                        parseNestedModule state rules attributes, ListRecovery.Continues
                     else
                         match rules.Parse state list attributes token with
                         | Some result -> result
@@ -2952,9 +2955,11 @@ module internal Parser =
     and private parseNestedModule
         state
         (rules: DeclarationRules<'Declaration>)
+        attributes
         : 'Declaration option =
         let cursor = state.Cursor
         let moduleToken = cursor.Advance()
+        let accessibility = parseAccessibility cursor
 
         if not (isIdentifier cursor.Current) then
             reportUnsupported state cursor.Current "a module declaration"
@@ -2983,7 +2988,7 @@ module internal Parser =
                     state.Depth
                     - 1
 
-                let range = span moduleToken.Range (emptyAt cursor.LastEnd)
+                let range = span (declarationStart attributes moduleToken) (emptyAt cursor.LastEnd)
 
                 if cursor.Current.Kind = LayoutTokenKind.EndBlock then
                     cursor.Advance()
@@ -2991,6 +2996,8 @@ module internal Parser =
 
                 Some(
                     rules.NestedModule {
+                        Attributes = attributes
+                        Accessibility = accessibility
                         Name = name
                         Declarations = declarations
                         DiscardedByRecovery = discarded

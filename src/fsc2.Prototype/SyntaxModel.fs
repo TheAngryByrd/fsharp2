@@ -207,6 +207,8 @@ type internal SyntaxTypeDefinition = {
 }
 
 type internal SyntaxNestedModule<'Declaration> = {
+    Attributes: ImmutableArray<SyntaxAttributeList>
+    Accessibility: SyntaxAccess option
     Name: SyntaxIdentifier
     Declarations: ImmutableArray<'Declaration>
     DiscardedByRecovery: ImmutableArray<'Declaration>
