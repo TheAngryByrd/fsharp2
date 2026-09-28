@@ -30,6 +30,7 @@
         <Compile Include="ParserGrammarTests.fs" />
         <Compile Include="SyntaxConformanceTests.fs" />
         <Compile Include="SyntaxProjectionTests.fs" />
+        <Compile Include="ParserRobustnessTests.fs" />
         <Compile Include="SourceReuseTests.fs" />
         <Compile Include="CompilerTargetSourceTests.fs" />
         <Compile Include="CompilerContractTests.fs" />

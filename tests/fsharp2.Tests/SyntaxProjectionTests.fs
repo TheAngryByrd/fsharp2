@@ -30,21 +30,14 @@ module SyntaxProjectionTests =
                 SourceChecksum = ImmutableArray.Empty
         })
 
+    let private document logicalPath text =
+        SourceSnapshot.Create(StableIdentity.create logicalPath, logicalPath, text, "content")
+        |> LexicalPipeline.prepare language Array.empty
+
     let private project text =
-        let document =
-            SourceSnapshot.Create(StableIdentity.create "Program.fs", "Program.fs", text, "content")
-            |> LexicalPipeline.prepare language Array.empty
-
-        let result = Parser.parseImplementationFile document
-
-        if
-            document.Directives.IsEmpty
-            && document.Diagnostics.IsEmpty
-            && Frontend.isTokenizedLikeLexicalDocument document
-            && result.Diagnostics.IsEmpty
-        then
-            SyntaxProjection.project (fingerprint text) ImmutableArray.Empty result.File
-        else
+        match SyntaxRouting.tryProject (document "Program.fs" text) with
+        | Some modules -> SyntaxProjectionResult.Projected modules
+        | None ->
             SyntaxProjectionResult.ProjectionUnsupported {
                 Start = { Offset = 0; Line = 1; Column = 1 }
                 End = { Offset = 0; Line = 1; Column = 1 }
@@ -249,7 +242,7 @@ module SyntaxProjectionTests =
                 Expect.isGreaterThan projected 0 "The corpus contains projected sources"
 
             testCase
-                "every identifier that the prototype expression parser matches is excluded from projection"
+                "every name that the prototype parser matches in a pattern or a string comparison is excluded from projection"
             <| fun _ ->
                 let frontend =
                     IO.File.ReadAllText(
@@ -263,14 +256,74 @@ module SyntaxProjectionTests =
                         )
                     )
 
-                let matched =
-                    Text.RegularExpressions.Regex.Matches(frontend, "\| Identifier \"([^\"]+)\"")
+                let names pattern =
+                    Text.RegularExpressions.Regex.Matches(frontend, pattern)
                     |> Seq.map (fun found -> found.Groups[1].Value)
                     |> Set.ofSeq
 
+                let matched =
+                    Set.union
+                        (names "\| Identifier \"([^\"]+)\"")
+                        (names "[A-Za-z]Name (?:=|<>) \"([A-Za-z_][A-Za-z0-9_]*)\"")
+
                 Expect.isEmpty
-                    (Set.difference matched Frontend.specialIdentifiers)
-                    "Each identifier that Frontend.parse matches by name must stay on the prototype path"
+                    (Set.difference matched (Set.add "EntryPoint" Frontend.specialIdentifiers))
+                    "Each name that Frontend.parse matches must stay on the prototype path, except EntryPoint, which the projection checks as an exact attribute list"
+
+            testCase "the syntax parser runs only on sources with a projectable token shape"
+            <| fun _ ->
+                for text in
+                    [
+                        "namespace Sample\nmodule Values =\n    let answer = 42\n"
+                        "module Program\nopen System\nlet answer = 42\n"
+                        "module Program\ntype Point = { X: int }\n"
+                        "module Program\nlet answer = 1 + 2\n"
+                        "module Program\nlet answer = f x\n"
+                        "module Program\nlet rec answer = 42\n"
+                        "module Program\nlet answer = match x with | A -> 1\n"
+                        "module Program\n[<Literal>]\nlet answer = 42\n"
+                        "module Program\nlet answer: int = 42\n"
+                        "module Program\n"
+                        "let answer = 42\n"
+                    ] do
+                    Expect.isFalse
+                        (SyntaxRouting.isEligible (document "Program.fs" text))
+                        $"The syntax parser must not run on this source:\n{text}"
+
+                Expect.isFalse
+                    (SyntaxRouting.isEligible (
+                        document "Program.fsi" "module Program\nlet answer = 42\n"
+                    ))
+                    "The syntax parser must not run on a signature file"
+
+            testCase "the token shape check accepts every source that the projection accepts"
+            <| fun _ ->
+                let mutable projectable = 0
+
+                for text in corpus do
+                    let source = document "Program.fs" text
+                    let syntax = Parser.parseImplementationFile source
+
+                    if
+                        syntax.Diagnostics.IsEmpty
+                        && source.Directives.IsEmpty
+                        && source.Diagnostics.IsEmpty
+                        && Frontend.isTokenizedLikeLexicalDocument source
+                    then
+                        match
+                            SyntaxProjection.project "content" ImmutableArray.Empty syntax.File
+                        with
+                        | SyntaxProjectionResult.Projected _ ->
+                            projectable <-
+                                projectable
+                                + 1
+
+                            Expect.isTrue
+                                (SyntaxRouting.hasProjectableTokenShape source)
+                                $"The token shape check must accept a projectable source:\n{text}"
+                        | SyntaxProjectionResult.ProjectionUnsupported _ -> ()
+
+                Expect.isGreaterThan projectable 0 "The corpus contains projectable sources"
 
             testCase "each supported construct is projected"
             <| fun _ ->
