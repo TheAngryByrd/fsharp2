@@ -17,6 +17,13 @@ module ParserTests =
         prepare logicalPath text
         |> Parser.parseImplementationFile
 
+    let private rootShape kind =
+        match kind with
+        | ModuleOrNamespaceKind.AnonymousModule -> "anonymous module"
+        | ModuleOrNamespaceKind.NamedModule name -> $"module {name.Text}"
+        | ModuleOrNamespaceKind.Namespace(Some name) -> $"namespace {name.Text}"
+        | ModuleOrNamespaceKind.Namespace None -> "namespace <missing>"
+
     let private position (range: SourceRange) =
         range.Start.Line, range.Start.Column, range.End.Line, range.End.Column
 
@@ -118,6 +125,38 @@ module ParserTests =
         | SignatureDeclaration.Skipped _ -> "skipped"
 
     let private signatureRecoveryCases = [
+        "EndWithoutNewline.fsi",
+        "module Program\nval broken:",
+        [
+            "EndWithoutNewline.fsi(2,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ],
+        [ "val broken: <missing>" ]
+
+        "EndAfterNewline.fsi",
+        "module Program\nval broken:\n",
+        [
+            "EndAfterNewline.fsi(3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ],
+        [ "val broken: <missing>" ]
+
+        "EndAfterArrow.fsi",
+        "module Program\nval broken: int ->",
+        [
+            "EndAfterArrow.fsi(2,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ],
+        [ "val broken: (int -> <missing>)" ]
+
+        "RecoveryContinuesAcrossOpen.fsi",
+        "module Program\nval a: )\nopen System\nval c: )\n",
+        [
+            "RecoveryContinuesAcrossOpen.fsi(2,8): error FS0010: Unexpected symbol ')' in value signature"
+        ],
+        [
+            "val a: <missing> (skipped)"
+            "open System"
+            "val c: <missing> (skipped)"
+        ]
+
         "TypeStart.fsi",
         "module Program\n\nval broken: )\nval first: int\n",
         [ "TypeStart.fsi(3,13): error FS0010: Unexpected symbol ')' in value signature" ],
@@ -244,7 +283,180 @@ module ParserTests =
         [ "module M = [val a: int; skipped; val c: int (skipped)]" ]
     ]
 
+    let private tokenClassCases =
+        let symbol text = $"symbol '{text}'"
+        let keyword text = $"keyword '{text}'"
+
+        let closing = [
+            symbol "|]"
+            symbol ">]"
+            keyword "end"
+            keyword "done"
+            keyword "of"
+            keyword "elif"
+        ]
+
+        let tokenText (description: string) = description.Split('\'')[1]
+
+        [
+            "BindingBody",
+            "module Program\n\nlet broken = {0}\n\nlet first = 1\n",
+            (3, 14),
+            "in binding",
+            closing
+            @ [
+                symbol ")"
+                symbol "]"
+                symbol "}"
+                symbol "="
+                symbol ";"
+                symbol ":"
+                symbol "|"
+                symbol "."
+                keyword "finally"
+                keyword "to"
+                keyword "when"
+                keyword "as"
+                keyword "private"
+            ]
+
+            "BindingHead",
+            "module Program\nlet {0} = 1\nlet first = 1\n",
+            (2, 5),
+            "in binding",
+            closing
+            @ [
+                symbol "="
+                symbol ";"
+                symbol ":"
+                symbol "."
+                symbol "|"
+                keyword "as"
+                keyword "to"
+                keyword "when"
+                keyword "finally"
+            ]
+
+            "BindingEquals",
+            "module Program\nlet f x {0} = 1\nlet first = 1\n",
+            (2, 9),
+            "in binding. Expected '=' or other token.",
+            closing
+
+            "BindingEnd",
+            "module Program\nlet f x = g x {0}\nlet first = 1\n",
+            (2, 15),
+            "in binding. Expected incomplete structured construct at or before this point or other token.",
+            closing
+
+            "DefinitionStart",
+            "module Program\nlet f x = 1\n{0}\nlet first = 1\n",
+            (3, 1),
+            "in definition. Expected incomplete structured construct at or before this point or other token.",
+            closing
+            @ [
+                symbol "="
+                symbol ":"
+                symbol "."
+            ]
+        ]
+        |> List.collect (fun (point, template, (line, column), suffix, descriptions) ->
+            descriptions
+            |> List.map (fun description ->
+                let logicalPath = $"{point}.fs"
+                let text = System.String.Format(template, tokenText description)
+
+                logicalPath,
+                text,
+                $"{logicalPath}({line},{column}): error FS0010: Unexpected {description} {suffix}"
+            )
+        )
+
+    let private unsupportedCases = [
+        "TypeApplication.fs", "module Program\nlet y = f<int> x\n", []
+        "PrefixMinus.fs", "module Program\nlet y = f -1\n", []
+        "TypeThenLet.fs",
+        "module Program\ntype T = int\nlet c = )\n",
+        [ "TypeThenLet.fs(3,9): error FS0010: Unexpected symbol ')' in binding" ]
+        "ModuleThenNamespace.fs",
+        "module Program\nlet x = 1\nnamespace N\nlet y = 2\n",
+        [
+            "ModuleThenNamespace.fs(3,1): error FS0010: Unexpected keyword 'namespace' in definition. Expected incomplete structured construct at or before this point or other token."
+            "ModuleThenNamespace.fs(1,1): error FS0530: Only '#' compiler directives may occur prior to the first 'namespace' declaration"
+        ]
+        "ParenthesisClosedByBracket.fs",
+        "module Program\nlet f = (]\nlet y = 2\n",
+        [
+            "ParenthesisClosedByBracket.fs(2,10): error FS0010: Unexpected symbol ']' in binding"
+            "ParenthesisClosedByBracket.fs(2,9): error FS0583: Unmatched '('"
+        ]
+        "OpenDotAtEnd.fs",
+        "module Program\nopen System.\n",
+        [
+            "OpenDotAtEnd.fs(2,12): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+    ]
+
+    let private unsupportedSignatureCases = [
+        "ValueThenLet.fsi",
+        "module Program\nval a: )\nlet b = 1\n",
+        [
+            "ValueThenLet.fsi(2,8): error FS0010: Unexpected symbol ')' in value signature"
+            "ValueThenLet.fsi(4,1): error FS0010: Incomplete structured construct at or before this point in signature file"
+        ]
+    ]
+
+    let private expectExplicitlyUnsupported
+        (oracle: string list)
+        (diagnostics: ImmutableArray<SyntaxDiagnostic>)
+        (lines: string list)
+        =
+        Expect.exists
+            diagnostics
+            (fun diagnostic -> diagnostic.Code = "FSC2P1001")
+            "Unsupported syntax must report an explicit FSC2P1001 diagnostic"
+
+        for line in lines do
+            if not (line.Contains ": error FSC2P1001: ") then
+                Expect.contains
+                    oracle
+                    line
+                    "Each FS diagnostic must be a diagnostic that the Compatibility Oracle reports"
+
+        Expect.equal
+            (diagnostics
+             |> Seq.map _.Range.Start
+             |> Seq.distinct
+             |> Seq.length)
+            diagnostics.Length
+            "One recovery group reports one diagnostic at each position"
+
     let private bindingRecoveryCases = [
+        "TrailingDotOpen.fs",
+        "module Program\nopen System.\nlet y = 2\n",
+        [
+            "TrailingDotOpen.fs(2,14): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ],
+        [
+            "open System"
+            "let y/0"
+        ]
+
+        "TrailingDotExpression.fs",
+        "module Program\nlet x = a.\nlet y = 1\n",
+        [ "TrailingDotExpression.fs(2,10): error FS0599: Missing qualification after '.'" ],
+        [
+            "let x/0"
+            "let y/0"
+        ]
+
+        "OpenAtEndWithoutNewline.fs",
+        "module Program\nopen",
+        [
+            "OpenAtEndWithoutNewline.fs(2,1): error FS0010: Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global', 'type' or other token."
+        ],
+        []
+
         "OpenIncomplete.fs",
         "module Program\nopen\nlet first = 1\n",
         [
@@ -410,13 +622,7 @@ module Later =
 
                 let contents = Expect.wantSome (Seq.tryExactlyOne result.File.Contents) "One root"
 
-                Expect.equal contents.Kind ModuleOrNamespaceKind.Namespace "Namespace root"
-
-                Expect.equal
-                    (contents.Name
-                     |> Option.map _.Text)
-                    (Some "Sample.Core")
-                    "Namespace name"
+                Expect.equal (rootShape contents.Kind) "namespace Sample.Core" "Namespace root"
 
                 Expect.sequenceEqual
                     (contents.Declarations
@@ -454,7 +660,7 @@ module Later =
 
                 let contents = Seq.exactlyOne result.File.Contents
 
-                Expect.equal contents.Kind ModuleOrNamespaceKind.NamedModule "Named module root"
+                Expect.equal (rootShape contents.Kind) "module Program" "Named module root"
 
                 let binding =
                     match Seq.exactlyOne contents.Declarations with
@@ -540,7 +746,8 @@ module Later =
                             "Recovery must keep each later declaration"
             ]
 
-            testCase "SDK-generated assembly attribute files parse without semantic phases"
+            testCase
+                "assembly attribute lists on do declarations parse in SDK-generated input shapes"
             <| fun _ ->
                 let attributeText (attribute: SyntaxAttribute) =
                     let target =
@@ -584,9 +791,8 @@ module Later =
                 let root = Seq.exactlyOne targetFramework.File.Contents
 
                 Expect.equal
-                    (root.Name
-                     |> Option.map _.Text)
-                    (Some "Microsoft.BuildSettings")
+                    (rootShape root.Kind)
+                    "namespace Microsoft.BuildSettings"
                     "Generated namespace"
 
                 Expect.equal
@@ -708,7 +914,7 @@ module Values =
 
                 let contents = Seq.exactlyOne result.File.Contents
 
-                Expect.equal contents.Kind ModuleOrNamespaceKind.Namespace "Namespace root"
+                Expect.equal (rootShape contents.Kind) "namespace Sample.Core" "Namespace root"
 
                 Expect.sequenceEqual
                     (contents.Declarations
@@ -768,6 +974,40 @@ module Values =
                              |> Seq.map signatureShape)
                             declarations
                             "Recovery must keep each later declaration"
+            ]
+
+            testList "each token class reports the Oracle message at its recovery point" [
+                for logicalPath, text, oracle in tokenClassCases ->
+                    testCase text
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        Expect.sequenceEqual
+                            (oracleLines logicalPath result.Diagnostics)
+                            [ oracle ]
+                            "The diagnostic must match the Compatibility Oracle"
+            ]
+
+            testList "unsupported syntax reports explicit diagnostics and no invented FS diagnostic" [
+                for logicalPath, text, oracle in unsupportedCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result.Diagnostics)
+
+                for logicalPath, text, oracle in unsupportedSignatureCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parseSignature logicalPath text
+
+                        expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result.Diagnostics)
             ]
 
             testCase "recovery nodes keep the exact missing and skipped ranges"

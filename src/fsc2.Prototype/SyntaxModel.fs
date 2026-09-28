@@ -164,12 +164,11 @@ type internal SignatureDeclaration =
 [<RequireQualifiedAccess>]
 type internal ModuleOrNamespaceKind =
     | AnonymousModule
-    | NamedModule
-    | Namespace
+    | NamedModule of LongIdentifier
+    | Namespace of LongIdentifier option
 
 type internal ModuleOrNamespaceSyntax<'Declaration> = {
     Kind: ModuleOrNamespaceKind
-    Name: LongIdentifier option
     Declarations: ImmutableArray<'Declaration>
     Range: SourceRange
 }

@@ -176,21 +176,24 @@ module internal Parser =
             "when"
         ]
 
+    let private closesArrayOrAttribute (cursor: Cursor) =
+        let token = cursor.Current
+        let next = cursor.Peek 1
+
+        (isOperator "|" token
+         || isOperator ">" token)
+        && isDelimiter "]" next
+        && next.Range.Start.Offset = token.Range.End.Offset
+
     let private unexpectedToken point (cursor: Cursor) =
         let token = cursor.Current
         let next = cursor.Peek 1
         let text = tokenText token
 
-        let closesArrayOrAttribute =
-            (isOperator "|" token
-             || isOperator ">" token)
-            && isDelimiter "]" next
-            && next.Range.Start.Offset = token.Range.End.Offset
-
         let symbol value range = Some($"symbol '{value}'", range)
         let keyword () = Some($"keyword '{text}'", token.Range)
 
-        if closesArrayOrAttribute then
+        if closesArrayOrAttribute cursor then
             symbol $"{text}]" (span token.Range next.Range)
         elif
             isDelimiter ")" token
@@ -250,7 +253,10 @@ module internal Parser =
                     $"Unexpected {description} in signature file. Expected incomplete structured construct at or before this point or other token."
 
             report state "FS0010" message range
-        | None -> reportUnsupported state state.Cursor.Current context
+            true
+        | None ->
+            reportUnsupported state state.Cursor.Current context
+            false
 
     let private isOffside (context: SourcePosition) (token: LayoutToken) =
         token.Kind = LayoutTokenKind.SourceToken
@@ -307,17 +313,62 @@ module internal Parser =
         Range = token.Range
     }
 
-    let private longIdentifier (cursor: Cursor) =
+    let private afterLastToken (cursor: Cursor) =
+        let position =
+            if isEndOfFile cursor.Current then
+                let eof = cursor.Current.Range.Start
+                // The Compatibility Oracle reports an incomplete construct at end of input at column 1 of the last line.
+                {
+                    eof with
+                        Offset =
+                            eof.Offset
+                            - (eof.Column
+                               - 1)
+                        Column = 1
+                }
+            else
+                // The Compatibility Oracle reports an incomplete construct one column after the last token.
+                {
+                    cursor.LastEnd with
+                        Offset =
+                            cursor.LastEnd.Offset
+                            + 1
+                        Column =
+                            cursor.LastEnd.Column
+                            + 1
+                }
+
+        emptyAt position
+
+    let private reportIncomplete state context =
+        report
+            state
+            "FS0010"
+            $"Incomplete structured construct at or before this point in {context}"
+            (afterLastToken state.Cursor)
+
+    let private endsLine context (token: LayoutToken) =
+        token.Kind = LayoutTokenKind.Separator
+        || token.Kind = LayoutTokenKind.EndBlock
+        || isEndOfFile token
+        || isOffside context token
+
+    let private longIdentifierWith state (onTrailingDot: LayoutToken -> unit) =
+        let cursor = state.Cursor
         let parts = ImmutableArray.CreateBuilder<SyntaxIdentifier>()
+        let mutable stop = false
 
         parts.Add(identifier (cursor.Advance()))
 
-        while isOperator "." cursor.Current do
-            cursor.Advance()
-            |> ignore
+        while not stop
+              && isOperator "." cursor.Current do
+            let dot = cursor.Advance()
 
             if isIdentifier cursor.Current then
                 parts.Add(identifier (cursor.Advance()))
+            else
+                onTrailingDot dot
+                stop <- true
 
         let parts = parts.ToImmutable()
 
@@ -330,6 +381,11 @@ module internal Parser =
                           - 1]
                         .Range
         }
+
+    let private longIdentifier state =
+        longIdentifierWith
+            state
+            (fun _ -> reportUnsupported state state.Cursor.Current "a long identifier")
 
     let private constant (token: LayoutToken) =
         match sourceKind token with
@@ -429,7 +485,27 @@ module internal Parser =
                 precedence
                 >= minimum
                 && not (isOffside context cursor.Current)
+                && not (closesArrayOrAttribute cursor)
                 ->
+                let token = cursor.Current
+                let next = cursor.Peek 1
+                let text = tokenText token
+                let followsWithoutSpace = token.Range.Start.Offset = cursor.LastEnd.Offset
+                let precedesWithoutSpace = next.Range.Start.Offset = token.Range.End.Offset
+
+                if
+                    followsWithoutSpace
+                    && text.StartsWith("<", StringComparison.Ordinal)
+                then
+                    reportUnsupported state token "a type application in an expression"
+                elif
+                    not followsWithoutSpace
+                    && precedesWithoutSpace
+                    && (text = "-"
+                        || text = "+")
+                then
+                    reportUnsupported state token "a prefix operator application"
+
                 let operator = identifier (cursor.Advance())
 
                 let right =
@@ -463,6 +539,7 @@ module internal Parser =
     and private parseAtom state context =
         let cursor = state.Cursor
         let token = cursor.Current
+        let reported = state.Diagnostics.Count
 
         match constant token with
         | Some value ->
@@ -470,7 +547,16 @@ module internal Parser =
             |> ignore
 
             SyntaxExpression.Constant(value, token.Range)
-        | None when isIdentifier token -> SyntaxExpression.Identifier(longIdentifier cursor)
+        | None when isIdentifier token ->
+            longIdentifierWith
+                state
+                (fun dot ->
+                    if endsLine context cursor.Current then
+                        report state "FS0599" "Missing qualification after '.'" dot.Range
+                    else
+                        reportUnsupported state cursor.Current "a long identifier"
+                )
+            |> SyntaxExpression.Identifier
         | None when isDelimiter "(" token ->
             cursor.Advance()
             |> ignore
@@ -485,7 +571,8 @@ module internal Parser =
                     let close = cursor.Advance()
                     SyntaxExpression.Parenthesized(inner, span token.Range close.Range)
                 else
-                    reportUnsupported state cursor.Current "a parenthesized expression"
+                    if state.Diagnostics.Count = reported then
+                        reportUnsupported state cursor.Current "a parenthesized expression"
 
                     SyntaxExpression.Parenthesized(inner, span token.Range (emptyAt cursor.LastEnd))
         | None ->
@@ -497,7 +584,7 @@ module internal Parser =
             }
 
     let private canStartPattern (token: LayoutToken) =
-        isKind LexicalTokenKind.Identifier token
+        isIdentifier token
         || (constant token).IsSome
         || isDelimiter "(" token
 
@@ -531,6 +618,7 @@ module internal Parser =
     and private parseAtomicPattern state context =
         let cursor = state.Cursor
         let token = cursor.Current
+        let reported = state.Diagnostics.Count
 
         match constant token with
         | Some value ->
@@ -546,8 +634,7 @@ module internal Parser =
             |> ignore
 
             SyntaxPattern.Wildcard token.Range
-        | None when isKind LexicalTokenKind.Identifier token ->
-            SyntaxPattern.Named(identifier (cursor.Advance()))
+        | None when isIdentifier token -> SyntaxPattern.Named(identifier (cursor.Advance()))
         | None when isDelimiter "(" token ->
             cursor.Advance()
             |> ignore
@@ -562,7 +649,8 @@ module internal Parser =
                     let close = cursor.Advance()
                     SyntaxPattern.Parenthesized(inner, span token.Range close.Range)
                 else
-                    reportUnsupported state cursor.Current "a parenthesized pattern"
+                    if state.Diagnostics.Count = reported then
+                        reportUnsupported state cursor.Current "a parenthesized pattern"
 
                     SyntaxPattern.Parenthesized(inner, span token.Range (emptyAt cursor.LastEnd))
         | None ->
@@ -659,7 +747,7 @@ module internal Parser =
                     None
 
             if isIdentifier cursor.Current then
-                let name = longIdentifier cursor
+                let name = longIdentifier state
 
                 let argument =
                     if
@@ -733,7 +821,9 @@ module internal Parser =
         let recover point =
             if state.Diagnostics.Count = reported then
                 match point with
-                | Some point -> reportUnexpected state point "a binding"
+                | Some point ->
+                    reportUnexpected state point "a binding"
+                    |> ignore
                 | None -> reportUnsupported state cursor.Current "a binding"
 
             recovered <- true
@@ -898,33 +988,6 @@ module internal Parser =
             span (declarationStart attributes doToken) (emptyAt cursor.LastEnd)
         )
 
-    let private endsDeclaration context (token: LayoutToken) =
-        token.Kind = LayoutTokenKind.Separator
-        || token.Kind = LayoutTokenKind.EndBlock
-        || isEndOfFile token
-        || isOffside context token
-
-    let private afterLastToken (cursor: Cursor) =
-        // The Compatibility Oracle reports an incomplete construct one column after the last token.
-        let position = {
-            cursor.LastEnd with
-                Offset =
-                    cursor.LastEnd.Offset
-                    + 1
-                Column =
-                    cursor.LastEnd.Column
-                    + 1
-        }
-
-        emptyAt position
-
-    let private reportIncomplete state context =
-        report
-            state
-            "FS0010"
-            $"Incomplete structured construct at or before this point in {context}"
-            (afterLastToken state.Cursor)
-
     [<RequireQualifiedAccess>]
     type private TypeGap =
         | UnexpectedToken
@@ -991,7 +1054,7 @@ module internal Parser =
             let missing = missingType token
 
             let gap =
-                if endsDeclaration context token then
+                if endsLine context token then
                     endGap
                 else
                     TypeGap.UnexpectedToken
@@ -1069,7 +1132,7 @@ module internal Parser =
 
         while isIdentifier cursor.Current
               && not (isOffside context cursor.Current) do
-            let typeConstructor = SyntaxType.LongIdentifier(longIdentifier cursor)
+            let typeConstructor = SyntaxType.LongIdentifier(longIdentifier state)
 
             result <-
                 SyntaxType.Application(
@@ -1084,6 +1147,7 @@ module internal Parser =
     and private parseAtomicType state context =
         let cursor = state.Cursor
         let token = cursor.Current
+        let reported = state.Diagnostics.Count
 
         let nested () =
             parseTypeOperand
@@ -1115,10 +1179,12 @@ module internal Parser =
                 let close = cursor.Advance()
                 SyntaxType.Parenthesized(inner, span token.Range close.Range)
             else
-                reportUnsupported state cursor.Current "a parenthesized type"
+                if state.Diagnostics.Count = reported then
+                    reportUnsupported state cursor.Current "a parenthesized type"
+
                 SyntaxType.Parenthesized(inner, span token.Range (emptyAt cursor.LastEnd))
         else
-            let name = SyntaxType.LongIdentifier(longIdentifier cursor)
+            let name = SyntaxType.LongIdentifier(longIdentifier state)
 
             if isOperator "<" cursor.Current then
                 cursor.Advance()
@@ -1143,7 +1209,8 @@ module internal Parser =
                         span name.Range close.Range
                     )
                 else
-                    reportUnsupported state cursor.Current "type arguments"
+                    if state.Diagnostics.Count = reported then
+                        reportUnsupported state cursor.Current "type arguments"
 
                     SyntaxType.Application(
                         name,
@@ -1153,6 +1220,11 @@ module internal Parser =
                     )
             else
                 name
+
+    [<RequireQualifiedAccess>]
+    type private ListRecovery =
+        | Continues
+        | Discards
 
     let private parseVal state nested attributes =
         let cursor = state.Cursor
@@ -1165,6 +1237,7 @@ module internal Parser =
         let recover point =
             if state.Diagnostics.Count = reported then
                 reportUnexpected state point "a value signature"
+                |> ignore
 
             recovered <- true
             skipped <- skipUntil state context
@@ -1204,7 +1277,7 @@ module internal Parser =
 
         if
             not recovered
-            && not (endsDeclaration context cursor.Current)
+            && not (endsLine context cursor.Current)
         then
             recover (
                 if nested then
@@ -1223,7 +1296,11 @@ module internal Parser =
                 Range = span (declarationStart attributes valToken) (emptyAt cursor.LastEnd)
             }
 
-        Some value, recovered
+        Some value,
+        (if recovered then
+             ListRecovery.Discards
+         else
+             ListRecovery.Continues)
 
     let private parseOpen state =
         let cursor = state.Cursor
@@ -1234,9 +1311,21 @@ module internal Parser =
             isIdentifier cursor.Current
             && not (isOffside context cursor.Current)
         then
-            let name = longIdentifier cursor
+            let name =
+                longIdentifierWith
+                    state
+                    (fun _ ->
+                        if
+                            endsLine context cursor.Current
+                            && not (isEndOfFile cursor.Current)
+                        then
+                            reportIncomplete state "open declaration"
+                        else
+                            reportUnsupported state cursor.Current "an open declaration"
+                    )
+
             Some(name, span openToken.Range name.Range)
-        elif endsDeclaration context cursor.Current then
+        elif endsLine context cursor.Current then
             report
                 state
                 "FS0010"
@@ -1254,7 +1343,8 @@ module internal Parser =
                 -> bool
                 -> ImmutableArray<SyntaxAttributeList>
                 -> LayoutToken
-                -> ('Declaration option * bool) option
+                -> ('Declaration option * ListRecovery) option
+        ContinuesRecovery: LayoutToken -> bool
         StartPoint: bool -> RecoveryPoint
         Open: LongIdentifier * SourceRange -> 'Declaration
         NestedModule:
@@ -1275,6 +1365,7 @@ module internal Parser =
         let cursor = state.Cursor
         let declarations = ImmutableArray.CreateBuilder<'Declaration>()
         let mutable suppressFrom = None
+        let mutable interrupted = false
         let mutable stop = false
 
         while not stop do
@@ -1286,34 +1377,47 @@ module internal Parser =
             elif isDeclarationListEnd token then
                 stop <- true
             else
+                match suppressFrom with
+                | Some _ when
+                    not interrupted
+                    && not (rules.ContinuesRecovery token)
+                    ->
+                    reportUnsupported state token "a declaration after syntax recovery"
+                    interrupted <- true
+                    suppressFrom <- Some state.Diagnostics.Count
+                | _ -> ()
+
                 let reported = state.Diagnostics.Count
                 let attributes = parseAttributeLists state
                 let token = cursor.Current
 
-                let parsed, discardsList =
+                let parsed, recovery =
                     if
                         not attributes.IsEmpty
                         && (isKeyword "open" token
                             || isKeyword "module" token)
                     then
                         reportUnsupported state token "an attributed declaration"
-                        None, false
+                        None, ListRecovery.Continues
                     elif isKeyword "open" token then
                         parseOpen state
                         |> Option.map rules.Open,
-                        false
+                        ListRecovery.Continues
                     elif isKeyword "module" token then
-                        parseNestedModule state rules, false
+                        parseNestedModule state rules, ListRecovery.Continues
                     else
                         match rules.Parse state nested attributes token with
                         | Some result -> result
                         | None ->
-                            reportUnexpected
-                                state
-                                (rules.StartPoint nested)
-                                "a module or namespace declaration"
-
-                            None, true
+                            if
+                                reportUnexpected
+                                    state
+                                    (rules.StartPoint nested)
+                                    "a module or namespace declaration"
+                            then
+                                None, ListRecovery.Discards
+                            else
+                                None, ListRecovery.Continues
 
                 parsed
                 |> Option.iter declarations.Add
@@ -1335,21 +1439,20 @@ module internal Parser =
                         >> declarations.Add
                     )
 
-                if
-                    discardsList
+                match suppressFrom with
+                | Some first ->
+                    state.Diagnostics.RemoveRange(
+                        first,
+                        state.Diagnostics.Count
+                        - first
+                    )
+                | None when
+                    recovery = ListRecovery.Discards
                     && not nested
-                    && suppressFrom.IsNone
-                then
+                    ->
+                    // The Compatibility Oracle reports no later diagnostic for continuing declarations after this recovery.
                     suppressFrom <- Some state.Diagnostics.Count
-
-        match suppressFrom with
-        | Some first ->
-            state.Diagnostics.RemoveRange(
-                first,
-                state.Diagnostics.Count
-                - first
-            )
-        | None -> ()
+                | None -> ()
 
         declarations.ToImmutable()
 
@@ -1407,9 +1510,8 @@ module internal Parser =
             else
                 parseDeclarations state rules false
 
-        let root kind name (start: SourceRange) declarations = {
+        let root kind (start: SourceRange) declarations = {
             Kind = kind
-            Name = name
             Declarations = declarations
             Range = span start (emptyAt cursor.LastEnd)
         }
@@ -1420,7 +1522,7 @@ module internal Parser =
 
                 let name =
                     if isIdentifier cursor.Current then
-                        Some(longIdentifier cursor)
+                        Some(longIdentifier state)
                     else
                         reportUnsupported state cursor.Current "a namespace declaration"
                         None
@@ -1428,7 +1530,7 @@ module internal Parser =
                 let declarations = rootDeclarations ()
 
                 roots.Add(
-                    root ModuleOrNamespaceKind.Namespace name namespaceToken.Range declarations
+                    root (ModuleOrNamespaceKind.Namespace name) namespaceToken.Range declarations
                 )
         else
             let first = cursor.Current
@@ -1446,7 +1548,7 @@ module internal Parser =
                     && not (isOperator "=" (cursor.Peek offset))
                 then
                     let moduleToken = cursor.Advance()
-                    Some(moduleToken, longIdentifier cursor)
+                    Some(moduleToken, longIdentifier state)
                 else
                     None
 
@@ -1455,16 +1557,18 @@ module internal Parser =
                 let declarations = rootDeclarations ()
 
                 roots.Add(
-                    root
-                        ModuleOrNamespaceKind.NamedModule
-                        (Some name)
-                        moduleToken.Range
-                        declarations
+                    root (ModuleOrNamespaceKind.NamedModule name) moduleToken.Range declarations
                 )
             | None ->
                 let declarations = rootDeclarations ()
+                roots.Add(root ModuleOrNamespaceKind.AnonymousModule first.Range declarations)
 
-                roots.Add(root ModuleOrNamespaceKind.AnonymousModule None first.Range declarations)
+        if not (isEndOfFile cursor.Current) then
+            reportUnsupported state cursor.Current "a module or namespace declaration"
+
+            while not (isEndOfFile cursor.Current) do
+                cursor.Advance()
+                |> ignore
 
         roots.ToImmutable()
 
@@ -1472,11 +1576,12 @@ module internal Parser =
         Parse =
             fun state _ attributes token ->
                 if isKeyword "let" token then
-                    Some(Some(parseLet state attributes), false)
+                    Some(Some(parseLet state attributes), ListRecovery.Continues)
                 elif isKeyword "do" token then
-                    Some(Some(parseDo state attributes), false)
+                    Some(Some(parseDo state attributes), ListRecovery.Continues)
                 else
                     None
+        ContinuesRecovery = isKeyword "let"
         StartPoint = fun _ -> RecoveryPoint.DefinitionStart
         Open = ImplementationDeclaration.Open
         NestedModule =
@@ -1492,6 +1597,10 @@ module internal Parser =
                     Some(parseVal state nested attributes)
                 else
                     None
+        ContinuesRecovery =
+            fun token ->
+                isKeyword "val" token
+                || isKeyword "open" token
         StartPoint =
             fun nested ->
                 if nested then
