@@ -294,3 +294,23 @@ type internal SignatureFileParseResult = {
     File: SignatureFileSyntax
     Diagnostics: ImmutableArray<SyntaxDiagnostic>
 }
+
+[<RequireQualifiedAccess>]
+type internal SyntaxCompilationTarget =
+    | Executable
+    | Library
+
+[<RequireQualifiedAccess>]
+type internal SyntaxFile =
+    | Implementation of ImplementationFileSyntax
+    | Signature of SignatureFileSyntax
+
+type internal SyntaxFileDiagnostic = {
+    LogicalPath: string
+    Diagnostic: SyntaxDiagnostic
+}
+
+type internal SyntaxCompilationResult = {
+    Files: ImmutableArray<SyntaxFile>
+    Diagnostics: ImmutableArray<SyntaxFileDiagnostic>
+}

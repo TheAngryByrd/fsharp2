@@ -2900,3 +2900,130 @@ module internal Parser =
             }
             Diagnostics = ImmutableArray.CreateRange state.Diagnostics
         }
+
+    let private missingDeclarationMessage =
+        "Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+
+    let private nextTokenStart (document: LexicalDocument) offset =
+        let token =
+            document.LayoutTokens
+            |> Seq.find (fun token ->
+                token.Kind = LayoutTokenKind.SourceToken
+                && token.Range.Start.Offset
+                   >= offset
+            )
+
+        token.Range.Start
+
+    let private anonymousRoot (contents: ImmutableArray<ModuleOrNamespaceSyntax<_>>) =
+        contents
+        |> Seq.tryFind (fun root ->
+            match root.Kind with
+            | ModuleOrNamespaceKind.AnonymousModule -> true
+            | ModuleOrNamespaceKind.NamedModule _
+            | ModuleOrNamespaceKind.Namespace _ -> false
+        )
+
+    let private anonymousImplementationRange
+        (document: LexicalDocument)
+        (root: ModuleOrNamespaceSyntax<ImplementationDeclaration>)
+        =
+        let start = nextTokenStart document 0
+
+        let finish =
+            let kept =
+                root.Declarations
+                |> Seq.filter (fun declaration ->
+                    match declaration with
+                    | ImplementationDeclaration.Skipped _ -> false
+                    | _ -> true
+                )
+
+            match Seq.tryLast kept with
+            | None -> start
+            | Some(ImplementationDeclaration.Open(_, range)) -> range.End
+            | Some last -> nextTokenStart document last.Range.End.Offset
+
+        if finish.Line > start.Line then
+            {
+                Start = start
+                End =
+                    SourceMap.positionAt
+                        document.SourceMap
+                        document.SourceMap.LineStarts[start.Line]
+            }
+        else
+            { Start = start; End = finish }
+
+    let private anonymousSignatureRange
+        (document: LexicalDocument)
+        (root: ModuleOrNamespaceSyntax<SignatureDeclaration>)
+        =
+        let start = nextTokenStart document 0
+
+        match Seq.tryLast root.Declarations with
+        | None -> emptyAt start
+        | Some(SignatureDeclaration.Skipped skipped) -> {
+            Start = start
+            End = skipped.Range.End
+          }
+        | Some last -> {
+            Start = start
+            End = nextTokenStart document last.Range.End.Offset
+          }
+
+    let parseCompilation
+        (target: SyntaxCompilationTarget)
+        (documents: ImmutableArray<LexicalDocument>)
+        =
+        let files = ImmutableArray.CreateBuilder<SyntaxFile>()
+        let diagnostics = ImmutableArray.CreateBuilder<SyntaxFileDiagnostic>()
+
+        documents
+        |> Seq.iteri (fun index document ->
+            let file, fileDiagnostics, anonymousRange =
+                if document.LogicalPath.EndsWith(".fsi", StringComparison.OrdinalIgnoreCase) then
+                    let result = parseSignatureFile document
+
+                    SyntaxFile.Signature result.File,
+                    result.Diagnostics,
+                    anonymousRoot result.File.Contents
+                    |> Option.map (anonymousSignatureRange document)
+                else
+                    let result = parseImplementationFile document
+
+                    SyntaxFile.Implementation result.File,
+                    result.Diagnostics,
+                    anonymousRoot result.File.Contents
+                    |> Option.map (anonymousImplementationRange document)
+
+            let add diagnostic =
+                diagnostics.Add {
+                    LogicalPath = document.LogicalPath
+                    Diagnostic = diagnostic
+                }
+
+            files.Add file
+            Seq.iter add fileDiagnostics
+
+            let requiresDeclaration =
+                match target with
+                | SyntaxCompilationTarget.Library -> true
+                | SyntaxCompilationTarget.Executable ->
+                    index < documents.Length
+                            - 1
+
+            match anonymousRange with
+            | Some range when requiresDeclaration ->
+                add {
+                    Code = "FS0222"
+                    Message = missingDeclarationMessage
+                    Range = range
+                }
+            | _ -> ()
+        )
+
+        {
+            Files = files.ToImmutable()
+            Diagnostics = diagnostics.ToImmutable()
+        }
