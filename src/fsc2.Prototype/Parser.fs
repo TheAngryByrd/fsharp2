@@ -17,14 +17,31 @@ module internal Parser =
         member _.LastEnd = lastEnd
 
         member _.EndBefore offset =
-            tokens
-            |> Seq.filter (fun token ->
-                token.Kind = LayoutTokenKind.SourceToken
-                && token.Range.End.Offset
-                   <= offset
-            )
-            |> Seq.last
-            |> fun token -> token.Range.End
+            let mutable position =
+                min
+                    index
+                    (tokens.Length
+                     - 1)
+
+            let mutable found = None
+
+            while found.IsNone
+                  && position
+                     >= 0 do
+                let token = tokens[position]
+
+                if
+                    token.Kind = LayoutTokenKind.SourceToken
+                    && token.Range.End.Offset
+                       <= offset
+                then
+                    found <- Some token.Range.End
+
+                position <-
+                    position
+                    - 1
+
+            found
 
         member this.Peek offset =
             if offset = 0 then
@@ -2087,7 +2104,16 @@ module internal Parser =
         bindings.Add(parseBinding state context attributes)
         let firstBindingRecovered = reportedSince state reported
 
-        while isKeyword "and" cursor.Current do
+        let continuesWithAnd () =
+            isKeyword "and" cursor.Current
+            || (cursor.Current.Kind = LayoutTokenKind.Separator
+                && isKeyword "and" (cursor.Peek 1))
+
+        while continuesWithAnd () do
+            if cursor.Current.Kind = LayoutTokenKind.Separator then
+                cursor.Advance()
+                |> ignore
+
             let previousEnd = cursor.LastEnd
             let andToken = cursor.Advance()
 
@@ -2103,8 +2129,8 @@ module internal Parser =
             let finish =
                 state.Diagnostics
                 |> Seq.skip reported
-                |> Seq.tryFind (fun diagnostic -> diagnostic.Severity = DiagnosticSeverity.Error)
-                |> Option.map (fun diagnostic -> cursor.EndBefore diagnostic.Range.Start.Offset)
+                |> Seq.tryFind (fun diagnostic -> isRecoveryCode diagnostic.Code)
+                |> Option.bind (fun diagnostic -> cursor.EndBefore diagnostic.Range.Start.Offset)
                 |> Option.defaultValue cursor.LastEnd
 
             reportWarning

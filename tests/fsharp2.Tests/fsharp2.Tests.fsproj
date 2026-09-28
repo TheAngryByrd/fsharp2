@@ -41,6 +41,7 @@
         <Compile Include="DiagnosticCompatibilityTests.fs" />
         <Compile Include="CompilerTargetTests.fs" />
         <Compile Include="Tests.fs" />
+        <Compile Include="ParserProbe.fs" />
         <Compile Include="Main.fs" />
     </ItemGroup>
 </Project>
