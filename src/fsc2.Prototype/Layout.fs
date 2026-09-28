@@ -242,6 +242,7 @@ module internal Layout =
                             Message = "Unexpected syntax or possible incorrect indentation."
                             Range = { Start = position; End = position }
                             Order = order
+                            Severity = LexicalSeverity.Error
                         }
 
                         order <- order + 1L

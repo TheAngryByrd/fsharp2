@@ -405,17 +405,21 @@ module internal Directives =
         let mutable warningOrder = 0L
         let mutable diagnosticOrder = int64 diagnostics.Count
 
-        let addDiagnostic code message range =
+        let addDiagnosticWith severity code message range =
             diagnostics.Add {
                 Code = code
                 Message = message
                 Range = range
                 Order = diagnosticOrder
+                Severity = severity
             }
 
             diagnosticOrder <-
                 diagnosticOrder
                 + 1L
+
+        let addDiagnostic code message range =
+            addDiagnosticWith LexicalSeverity.Error code message range
 
         let blank startOffset endOffset =
             for index = startOffset to endOffset
@@ -685,13 +689,18 @@ module internal Directives =
                 | [| number |] ->
                     match Int32.TryParse number with
                     | true, logicalLine when logicalLine > 0 ->
+                        let currentPath =
+                            (SourceMap.positionAt sourceMap startOffset
+                             |> SourceMap.mapPosition sourceMap)
+                                .LogicalPath
+
                         sourceMap <-
                             SourceMap.addLineMapping
                                 sourceMap
                                 (lineIndex
                                  + 2)
                                 logicalLine
-                                None
+                                currentPath
                     | _ -> ()
                 | [| number; rest |] ->
                     match Int32.TryParse number, quotedValue rest with
@@ -753,8 +762,16 @@ module internal Directives =
                         "Warn directives must have warning number(s) as argument(s)"
                         { Start = position; End = position }
 
-                for code, _ in arguments do
-                    if isWarningNumber code then
+                for code, argumentOffset in arguments do
+                    if not (isWarningNumber code) then
+                        let position = SourceMap.positionAt source.Map argumentOffset
+
+                        addDiagnosticWith
+                            LexicalSeverity.Warning
+                            "FS0203"
+                            $"Invalid warning number '{code}'"
+                            { Start = position; End = position }
+                    else
                         let action =
                             if trimmed.StartsWith("#warnon", StringComparison.Ordinal) then
                                 LocalWarningDirectiveAction.Enable

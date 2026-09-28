@@ -346,7 +346,27 @@ module internal CompilationPipeline =
                                     sourceDiagnosticOptions request preparedSources
 
                                 let diagnostics =
-                                    Seq.empty<CompilationDiagnostic>
+                                    preparedSources
+                                    |> Seq.collect service.LexicalWarnings
+                                    |> Seq.mapi (fun order warning ->
+                                        CompilationDiagnostic.Create(
+                                            int64 order,
+                                            warning.Code,
+                                            Int32.Parse(warning.Code.Substring(2)),
+                                            None,
+                                            DiagnosticStage.Compilation CompilationPhase.Source,
+                                            DiagnosticSeverity.Warning,
+                                            DiagnosticSeverity.Warning,
+                                            DiagnosticDisposition.Emitted,
+                                            None,
+                                            warning.Message,
+                                            warning.Path,
+                                            warning.Range,
+                                            [||],
+                                            [||],
+                                            Some DiagnosticStream.StandardError
+                                        )
+                                    )
                                     |> Seq.map (DiagnosticPolicy.input None false true)
                                     |> DiagnosticPolicy.apply diagnosticOptions
                                     |> Seq.filter (fun diagnostic ->
@@ -354,14 +374,29 @@ module internal CompilationPipeline =
                                     )
                                     |> ImmutableArray.CreateRange
 
-                                Ok {
-                                    Query = query
-                                    SymbolicAssembly = symbolic
-                                    Artifacts = artifacts
-                                    Diagnostics = diagnostics
-                                    DiagnosticOptions = diagnosticOptions
-                                    LinkElapsedMicroseconds = elapsedMicroseconds linkStarted
-                                }
+                                if
+                                    diagnostics
+                                    |> Seq.exists DiagnosticPolicy.isEffectiveError
+                                then
+                                    diagnostics
+                                    |> Seq.filter DiagnosticPolicy.isEffectiveError
+                                    |> Seq.map (fun diagnostic -> {
+                                        Code = diagnostic.Code
+                                        Message = diagnostic.Message
+                                        Path = diagnostic.LogicalPath
+                                        Range = diagnostic.Range
+                                    })
+                                    |> Seq.toList
+                                    |> Error
+                                else
+                                    Ok {
+                                        Query = query
+                                        SymbolicAssembly = symbolic
+                                        Artifacts = artifacts
+                                        Diagnostics = diagnostics
+                                        DiagnosticOptions = diagnosticOptions
+                                        LinkElapsedMicroseconds = elapsedMicroseconds linkStarted
+                                    }
                         with ex ->
                             Error [ diagnostic "FSC2P9999" ex.Message ]
 

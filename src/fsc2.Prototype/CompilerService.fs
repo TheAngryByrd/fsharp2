@@ -26376,6 +26376,12 @@ type internal CompilerService() =
 
     member _.LexicalDiagnostics(source: LexicalDocument) : CompilerDiagnostic seq =
         source.Diagnostics
+        |> Seq.filter (fun diagnostic -> diagnostic.Severity = LexicalSeverity.Error)
+        |> Seq.map (lexicalDiagnostic source)
+
+    member _.LexicalWarnings(source: LexicalDocument) : CompilerDiagnostic seq =
+        source.Diagnostics
+        |> Seq.filter (fun diagnostic -> diagnostic.Severity = LexicalSeverity.Warning)
         |> Seq.map (lexicalDiagnostic source)
 
     member _.Compile
@@ -26448,8 +26454,14 @@ type internal CompilerService() =
             =
             match remaining with
             | [] -> Ok(List.rev parsed, List.rev keys)
-            | source :: _ when not source.Diagnostics.IsEmpty ->
-                Error(lexicalDiagnostic source source.Diagnostics[0])
+            | source :: _ when
+                source.Diagnostics
+                |> Seq.exists (fun diagnostic -> diagnostic.Severity = LexicalSeverity.Error)
+                ->
+                source.Diagnostics
+                |> Seq.find (fun diagnostic -> diagnostic.Severity = LexicalSeverity.Error)
+                |> lexicalDiagnostic source
+                |> Error
             | source :: tail ->
                 match parse source with
                 | Error diagnostic -> Error diagnostic
