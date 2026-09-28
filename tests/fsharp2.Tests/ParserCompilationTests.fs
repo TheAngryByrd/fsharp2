@@ -39,7 +39,7 @@ module ParserCompilationTests =
             let diagnostic = fileDiagnostic.Diagnostic
             let range = diagnostic.Range
 
-            $"{fileDiagnostic.LogicalPath}({range.Start.Line},{range.Start.Column},{range.End.Line},{range.End.Column}): error {diagnostic.Code}: {diagnostic.Message}"
+            $"{fileDiagnostic.LogicalPath}({range.Start.Line},{range.Start.Column},{range.End.Line},{range.End.Column}): {SyntaxDiagnosticText.severity diagnostic} {diagnostic.Code}: {diagnostic.Message}"
         )
         |> Seq.toList
 

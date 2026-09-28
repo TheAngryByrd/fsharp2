@@ -26,6 +26,7 @@
         <Compile Include="DirectiveTests.fs" />
         <Compile Include="LayoutTests.fs" />
         <Compile Include="LexicalPipelineTests.fs" />
+        <Compile Include="SyntaxDiagnosticText.fs" />
         <Compile Include="ParserTests.fs" />
         <Compile Include="ParserGrammarTests.fs" />
         <Compile Include="ParserLanguageVersionTests.fs" />

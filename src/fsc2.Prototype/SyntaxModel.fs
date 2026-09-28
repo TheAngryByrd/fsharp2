@@ -280,6 +280,7 @@ type internal SignatureFileSyntax = {
 }
 
 type internal SyntaxDiagnostic = {
+    Severity: LexicalSeverity
     Code: string
     Message: string
     Range: SourceRange

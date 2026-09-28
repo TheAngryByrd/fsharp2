@@ -74,6 +74,7 @@ module SyntaxConformanceTests =
             let diagnostic = fileDiagnostic.Diagnostic
 
             fileDiagnostic.LogicalPath,
+            SyntaxDiagnosticText.severity diagnostic,
             diagnostic.Code,
             diagnostic.Message,
             diagnostic.Range.Start.Line,
@@ -94,6 +95,7 @@ module SyntaxConformanceTests =
                 let range = diagnostic.GetProperty("range")
 
                 text diagnostic "logicalSource",
+                text diagnostic "originalSeverity",
                 text diagnostic "code",
                 text diagnostic "message",
                 range.GetProperty("startLine").GetInt32(),

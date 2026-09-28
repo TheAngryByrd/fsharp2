@@ -136,6 +136,7 @@ module internal Parser =
         |> ignore
 
         state.Diagnostics.Add {
+            Severity = LexicalSeverity.Error
             Code = code
             Message = message
             Range = range
@@ -3017,6 +3018,7 @@ module internal Parser =
             match anonymousRange with
             | Some range when requiresDeclaration ->
                 add {
+                    Severity = LexicalSeverity.Error
                     Code = "FS0222"
                     Message = missingDeclarationMessage
                     Range = range

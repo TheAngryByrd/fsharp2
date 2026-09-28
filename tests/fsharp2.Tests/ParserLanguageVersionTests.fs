@@ -18,7 +18,7 @@ module ParserLanguageVersionTests =
         |> Seq.map (fun diagnostic ->
             let range = diagnostic.Range
 
-            $"{logicalPath}({range.Start.Line},{range.Start.Column},{range.End.Line},{range.End.Column}): error {diagnostic.Code}: {diagnostic.Message}"
+            $"{logicalPath}({range.Start.Line},{range.Start.Column},{range.End.Line},{range.End.Column}): {SyntaxDiagnosticText.severity diagnostic} {diagnostic.Code}: {diagnostic.Message}"
         )
         |> Seq.toList
 
