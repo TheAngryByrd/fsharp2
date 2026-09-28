@@ -32,6 +32,7 @@ The script writes these files in the probe directory:
 | `oracle.json` | The Oracle diagnostics of each case from `fsc --parseonly --vserrors`. |
 | `parser.json` | The parser diagnostics of each case from `Parser.parseCompilation`. |
 | `compare.txt` | One status line per case, then the Oracle (`O`) and parser (`P`) lines of each case that is not exact. |
+| `parser-test.log` | The output of the parser probe test run. Read it when the script reports that the test failed. |
 
 Each diagnostic line has the form `<file>(<start line>,<start column>,<end line>,<end column>): <severity> <code>: <message>`. The severity is `error` or `warning`, exactly as the Oracle prints `parse error` or `parse warning`. A message on more than one line keeps its line breaks.
 
@@ -52,5 +53,7 @@ The last output line gives the count of each status.
 
 ## Limits
 
+- The script needs PowerShell 7. It uses `dotnet.exe` on Windows and `dotnet` on other platforms, from `-SdkRoot`. The default SDK root is `fsharp2-sdk-10.0.110` in the local application data folder of the platform. The script was run on Windows only.
+- On a file system that ignores letter case, two cases whose file names differ only in case use the same file. Put such cases in separate probe directories.
 - Oracle diagnostics without a source range, such as FS0226, appear as `unparsed:` lines.
 - Type-check evidence (`--typecheckonly`) is not part of this tool.
