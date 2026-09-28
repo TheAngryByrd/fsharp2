@@ -37,13 +37,8 @@ type internal LexicalTrivia = {
     Range: SourceRange
 }
 
-[<RequireQualifiedAccess>]
-type internal LexicalSeverity =
-    | Error
-    | Warning
-
 type internal SourceLexicalDiagnostic = {
-    Severity: LexicalSeverity
+    Severity: DiagnosticSeverity
     Code: string
     Message: string
     Range: SourceRange
@@ -188,7 +183,7 @@ module internal Lexer =
                 Message = message
                 Range = range startOffset endOffset
                 Order = diagnosticOrder
-                Severity = LexicalSeverity.Error
+                Severity = DiagnosticSeverity.Error
             }
 
             diagnosticOrder <-

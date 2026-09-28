@@ -506,13 +506,7 @@ module internal CompilationPipeline =
                         CompilationPhase.Source,
                         lexical
                         |> List.map (fun (severity, diagnostic) ->
-                            compilerDiagnosticAt
-                                CompilationPhase.Source
-                                (if severity = LexicalSeverity.Error then
-                                     DiagnosticSeverity.Error
-                                 else
-                                     DiagnosticSeverity.Warning)
-                                diagnostic
+                            compilerDiagnosticAt CompilationPhase.Source severity diagnostic
                         ),
                         options
                     else
