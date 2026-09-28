@@ -136,7 +136,7 @@ module internal Parser =
         |> ignore
 
         state.Diagnostics.Add {
-            Severity = LexicalSeverity.Error
+            Severity = DiagnosticSeverity.Error
             Code = code
             Message = message
             Range = range
@@ -3081,7 +3081,7 @@ module internal Parser =
 
                 if requiresDeclaration then
                     add {
-                        Severity = LexicalSeverity.Error
+                        Severity = DiagnosticSeverity.Error
                         Code = "FS0222"
                         Message = missingDeclarationMessage
                         Range = anonymous.Range
@@ -3090,7 +3090,7 @@ module internal Parser =
                 match invalidImplicitModuleName document.LogicalPath with
                 | Some(moduleName, fileName) when anonymous.HasDeclarations ->
                     add {
-                        Severity = LexicalSeverity.Warning
+                        Severity = DiagnosticSeverity.Warning
                         Code = "FS0221"
                         Message = implicitModuleMessage moduleName fileName
                         Range = anonymous.Range
