@@ -1067,6 +1067,20 @@ module internal Parser =
             "||"
             "&&"
             "|>"
+            ":"
+            "["
+            "]"
+            "}"
+        ]
+
+    let private typeArgumentScanStopKeywords =
+        HashSet [
+            "then"
+            "let"
+            "with"
+            "in"
+            "do"
+            "else"
         ]
 
     let private typeArgumentScanContinues =
@@ -1076,6 +1090,7 @@ module internal Parser =
             "-"
             ";"
             "."
+            "->"
         ]
 
     let rec private parseExpression state context =
@@ -1141,16 +1156,21 @@ module internal Parser =
                             (offset + 1)
                             (parentheses
                              + 1)
-                    elif isKeyword "then" token then
+                    elif
+                        isKind LexicalTokenKind.Keyword token
+                        && typeArgumentScanStopKeywords.Contains text
+                    then
                         true
                     elif
-                        isKind LexicalTokenKind.Operator token
+                        (isKind LexicalTokenKind.Operator token
+                         || isKind LexicalTokenKind.Delimiter token)
                         && typeArgumentScanStops.Contains text
                     then
                         true
                     elif
                         isIdentifier token
                         || isKind LexicalTokenKind.NumericLiteral token
+                        || isKind LexicalTokenKind.StringLiteral token
                         || ((isKind LexicalTokenKind.Operator token
                              || isKind LexicalTokenKind.Delimiter token)
                             && typeArgumentScanContinues.Contains text)
