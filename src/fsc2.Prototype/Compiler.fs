@@ -500,67 +500,6 @@ type Compiler() =
         |]
         |> ImmutableArray.CreateRange
 
-    let numericDiagnosticCode (code: string) =
-        if code.StartsWith("FS", StringComparison.Ordinal) then
-            match Int32.TryParse(code[2..]) with
-            | true, value -> value
-            | false, _ -> 0
-        else
-            0
-
-    let failureDiagnostic failedPhase (diagnostic: CompilerDiagnostic) =
-        CompilationDiagnostic.Create(
-            0L,
-            diagnostic.Code,
-            numericDiagnosticCode diagnostic.Code,
-            None,
-            DiagnosticStage.Compilation failedPhase,
-            DiagnosticSeverity.Error,
-            DiagnosticSeverity.Error,
-            DiagnosticDisposition.Emitted,
-            None,
-            diagnostic.Message,
-            diagnostic.Path,
-            diagnostic.Range,
-            [||],
-            [||],
-            Some DiagnosticStream.StandardError
-        )
-
-    let effectiveDiagnosticOptions (request: CompilationRequest) =
-        let language =
-            LanguageVersion.normalize request.SemanticOptions.LanguageVersion
-            |> Result.defaultWith invalidOp
-
-        let existing = request.DiagnosticOptions.LocalWarningDirectives
-
-        let firstSourceOrder =
-            existing
-            |> Seq.map _.Order
-            |> Seq.fold max -1L
-            |> (+) 1L
-
-        let sourceDirectives =
-            request.Sources
-            |> Seq.collect (fun source ->
-                service
-                    .PrepareSource(language, request.SemanticOptions.Defines, source)
-                    .Document.WarningDirectives
-            )
-            |> Seq.mapi (fun index directive -> {
-                directive with
-                    Order =
-                        firstSourceOrder
-                        + int64 index
-            })
-
-        {
-            request.DiagnosticOptions with
-                LocalWarningDirectives =
-                    Seq.append existing sourceDirectives
-                    |> ImmutableArray.CreateRange
-        }
-
     member _.Compile(request: CompilationRequest, cancellationToken: CancellationToken) =
         if cancellationToken.IsCancellationRequested then
             cancelledResult request
@@ -575,8 +514,6 @@ type Compiler() =
 
                 unsupportedResult failure phaseResults
             | None ->
-                let diagnosticOptions = effectiveDiagnosticOptions request
-
                 match CompilationPipeline.compileRequest service request with
                 | Error { Errors = [ diagnostic ] } when diagnostic.Code = "FSC2C2002" ->
                     let failure = {

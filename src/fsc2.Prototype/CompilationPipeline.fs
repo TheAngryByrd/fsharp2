@@ -274,30 +274,6 @@ module internal CompilationPipeline =
                     |> ImmutableArray.CreateRange
         }
 
-    let private sourceWarnings (service: CompilerService) (preparedSources: LexicalDocument list) =
-        preparedSources
-        |> Seq.collect service.LexicalWarnings
-        |> Seq.mapi (fun order warning ->
-            CompilationDiagnostic.Create(
-                int64 order,
-                warning.Code,
-                Int32.Parse(warning.Code.Substring(2)),
-                None,
-                DiagnosticStage.Compilation CompilationPhase.Source,
-                DiagnosticSeverity.Warning,
-                DiagnosticSeverity.Warning,
-                DiagnosticDisposition.Emitted,
-                None,
-                warning.Message,
-                warning.Path,
-                warning.Range,
-                [||],
-                [||],
-                Some DiagnosticStream.StandardError
-            )
-        )
-        |> Seq.toList
-
     let private compileRequestCore (service: CompilerService) (request: CompilationRequest) =
         match
             ReferenceTypeIndex.Create(request.TargetReferences),
@@ -376,29 +352,16 @@ module internal CompilationPipeline =
                                 let diagnosticOptions =
                                     sourceDiagnosticOptions request preparedSources
 
-                                let diagnostics =
-                                    sourceWarnings service preparedSources
-                                    |> Seq.map (DiagnosticPolicy.input None false true)
-                                    |> DiagnosticPolicy.apply diagnosticOptions
-                                    |> Seq.filter (fun diagnostic ->
-                                        diagnostic.Disposition = DiagnosticDisposition.Emitted
-                                    )
-                                    |> ImmutableArray.CreateRange
+                                let diagnostics = ImmutableArray<CompilationDiagnostic>.Empty
 
-                                if
-                                    diagnostics
-                                    |> Seq.exists DiagnosticPolicy.isEffectiveError
-                                then
-                                    Error []
-                                else
-                                    Ok {
-                                        Query = query
-                                        SymbolicAssembly = symbolic
-                                        Artifacts = artifacts
-                                        Diagnostics = diagnostics
-                                        DiagnosticOptions = diagnosticOptions
-                                        LinkElapsedMicroseconds = elapsedMicroseconds linkStarted
-                                    }
+                                Ok {
+                                    Query = query
+                                    SymbolicAssembly = symbolic
+                                    Artifacts = artifacts
+                                    Diagnostics = diagnostics
+                                    DiagnosticOptions = diagnosticOptions
+                                    LinkElapsedMicroseconds = elapsedMicroseconds linkStarted
+                                }
                         with ex ->
                             Error [ diagnostic "FSC2P9999" ex.Message ]
 
@@ -513,9 +476,16 @@ module internal CompilationPipeline =
                             >> Seq.toList
                         )
 
+                    let lexicalErrors =
+                        preparedSources
+                        |> List.collect (
+                            service.LexicalDiagnostics
+                            >> Seq.toList
+                        )
+
                     let hasLexicalError =
-                        lexical
-                        |> List.exists (fun (severity, _) -> severity = LexicalSeverity.Error)
+                        not lexicalErrors.IsEmpty
+                        && lexicalErrors = errors
 
                     let options = sourceDiagnosticOptions request preparedSources
 
@@ -540,9 +510,8 @@ module internal CompilationPipeline =
                                 phaseForErrors ()
 
                         phase,
-                        sourceWarnings service preparedSources
-                        @ (errors
-                           |> List.map (compilerDiagnosticAt phase DiagnosticSeverity.Error)),
+                        errors
+                        |> List.map (compilerDiagnosticAt phase DiagnosticSeverity.Error),
                         options
 
             Error {
