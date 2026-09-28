@@ -1052,11 +1052,25 @@ module ParserCompilationTests =
             ]
 
             testList "an unmodeled shape after a signature recovery stays explicit" [
-                for logicalPath, text in
+                for logicalPath, text, oracle in
                     [
-                        "C4.fsi", "module M\n)\nmodule N =\nval b: int\n"
-                        "B6.fsi", "module M\nval a: )\nmodule Inner =\n    val b: )\n"
-                        "C2.fsi", "module M\n)\nval y: int\n    )\n"
+                        "C4.fsi",
+                        "module M\n)\nmodule N =\nval b: int\n",
+                        [
+                            "C4.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+                            "C4.fsi(4,1,4,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+                        ]
+                        "B6.fsi",
+                        "module M\nval a: )\nmodule Inner =\n    val b: )\n",
+                        [
+                            "B6.fsi(2,8,2,9): error FS0010: Unexpected symbol ')' in value signature"
+                            "B6.fsi(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in signature file"
+                        ]
+                        "C2.fsi",
+                        "module M\n)\nval y: int\n    )\n",
+                        [
+                            "C2.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+                        ]
                     ] ->
                     testCase logicalPath
                     <| fun _ ->
@@ -1066,10 +1080,11 @@ module ParserCompilationTests =
                                 last
                             ]
 
-                        Expect.exists
-                            result.Diagnostics
-                            (fun fileDiagnostic -> fileDiagnostic.Diagnostic.Code = "FSC2P1001")
-                            "The parser does not model this shape after recovery, so it reports FSC2P1001"
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            (result.Diagnostics
+                             |> Seq.map _.Diagnostic)
+                            (oracleLines result)
             ]
 
             testCase "files keep their order and their kind"
