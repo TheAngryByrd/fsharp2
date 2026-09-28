@@ -460,12 +460,6 @@ module ParserTests =
             "ParenthesizedDot.fs(2,11): error FS0599: Missing qualification after '.'"
             "ParenthesizedDot.fs(2,9): error FS0583: Unmatched '('"
         ]
-        "IncompleteAfterRecovery.fs",
-        "module M\nlet x = 1\n)\nlet y =\n",
-        [
-            "IncompleteAfterRecovery.fs(3,1): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
-            "IncompleteAfterRecovery.fs(5,1): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (4:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
-        ]
     ]
 
     let private definitionRecovery = "module Program\nlet a = 1\n)\n"

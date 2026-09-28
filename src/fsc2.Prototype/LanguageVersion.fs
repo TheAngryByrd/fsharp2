@@ -154,3 +154,15 @@ module internal LanguageFeature =
         match feature with
         | LanguageFeature.UnderscoreDotShorthand ->
             $"Feature 'underscore dot shorthand for accessor only function' is not available in F# {language.CanonicalMode}. Please use language version 8.0 or greater."
+
+[<RequireQualifiedAccess>]
+type internal LanguageBehavior = | StrictIndentation
+
+module internal LanguageBehavior =
+    let private minimumLevel behavior =
+        match behavior with
+        | LanguageBehavior.StrictIndentation -> 80
+
+    let isActive (language: LanguageVersionIdentity) behavior =
+        language.FeatureLevel
+        >= minimumLevel behavior

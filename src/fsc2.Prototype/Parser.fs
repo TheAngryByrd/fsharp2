@@ -130,6 +130,13 @@ module internal Parser =
         | MakesNextIncomplete
         | Unmodeled
 
+    // The Compatibility Oracle loses the signature module header for the rest of the file after a nested recovery.
+    [<RequireQualifiedAccess>]
+    type private SignatureHeader =
+        | Kept
+        | Lost
+        | LostAtEnd of SourceRange
+
     type private ParserState = {
         Cursor: Cursor
         Diagnostics: ResizeArray<SyntaxDiagnostic>
@@ -138,8 +145,7 @@ module internal Parser =
         mutable Recovery: Recovery
         mutable InAnonymousRoot: bool
         mutable Depth: int
-        mutable UnresumedAtEnd: SourceRange option
-        mutable HeaderLost: bool
+        mutable SignatureHeader: SignatureHeader
     }
 
     [<RequireQualifiedAccess>]
@@ -223,6 +229,8 @@ module internal Parser =
 
     let private letAndCode = "FS0576"
 
+    let private offsideCode = "FS0058"
+
     let private isRecoveryCode code =
         code
         <> featureGateCode
@@ -232,6 +240,8 @@ module internal Parser =
            <> useInModuleCode
         && code
            <> letAndCode
+        && code
+           <> offsideCode
 
     let private reportedAt state (token: LayoutToken) =
         state.ReportedStarts.Contains token.Range.Start.Offset
@@ -617,6 +627,42 @@ module internal Parser =
                 }
                 End = next.Range.Start
             }
+
+    let private nextTokenOrEndRange (cursor: Cursor) =
+        let rec next offset =
+            let token = cursor.Peek offset
+
+            match token.Kind with
+            | LayoutTokenKind.SourceToken -> token
+            | LayoutTokenKind.EndBlock
+            | LayoutTokenKind.BeginBlock
+            | LayoutTokenKind.Separator -> next (offset + 1)
+
+        let token = next 0
+
+        if isEndOfFile token then
+            let eof = token.Range.Start
+
+            {
+                Start = {
+                    eof with
+                        Offset =
+                            eof.Offset
+                            - (eof.Column
+                               - 1)
+                        Column = 1
+                }
+                End = eof
+            }
+        else
+            token.Range
+
+    let private reportOffside state (context: SourcePosition) range =
+        report
+            state
+            offsideCode
+            $"Unexpected syntax or possible incorrect indentation: this token is offside of context started at position ({context.Line}:{context.Column}). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            range
 
     let private reportIncomplete state context =
         report
@@ -2054,6 +2100,24 @@ module internal Parser =
         else
             attributes[0].Range
 
+    let private isSuppressing state =
+        match state.Recovery with
+        | Recovery.Parsing -> false
+        | Recovery.Suppressing _
+        | Recovery.Interrupted _ -> true
+
+    let private pendingDeclaration state =
+        match state.Recovery with
+        | Recovery.Suppressing(_, next) -> Some next
+        | Recovery.Parsing
+        | Recovery.Interrupted _ -> None
+
+    let private discardsSilently state =
+        match pendingDeclaration state with
+        | Some(DeclarationAfterRecovery.Discarded _)
+        | Some(DeclarationAfterRecovery.SkippedInSignatureModule _) -> true
+        | _ -> false
+
     let private parseBinding state context attributes =
         let cursor = state.Cursor
         let reported = state.Diagnostics.Count
@@ -2128,6 +2192,32 @@ module internal Parser =
                         |> ignore
 
                     body
+                elif
+                    endsBinding context cursor.Current
+                    && not (isKeyword "and" cursor.Current)
+                    && LanguageBehavior.isActive state.Language LanguageBehavior.StrictIndentation
+                then
+                    let missing = missingExpression cursor.Current
+                    let range = nextTokenOrEndRange cursor
+
+                    if
+                        isSuppressing state
+                        && not (discardsSilently state)
+                    then
+                        reportUnsupported
+                            state
+                            cursor.Current
+                            "a binding without a body after syntax recovery"
+
+                    reportOffside state context range
+
+                    report
+                        state
+                        "FS0010"
+                        "Incomplete structured construct at or before this point in binding"
+                        range
+
+                    missing
                 elif endsBinding context cursor.Current then
                     let missing = missingExpression cursor.Current
                     recover None
@@ -2869,24 +2959,6 @@ module internal Parser =
         reportUnsupported state token "a declaration after syntax recovery"
         state.Recovery <- Recovery.Interrupted state.Diagnostics.Count
 
-    let private isSuppressing state =
-        match state.Recovery with
-        | Recovery.Parsing -> false
-        | Recovery.Suppressing _
-        | Recovery.Interrupted _ -> true
-
-    let private pendingDeclaration state =
-        match state.Recovery with
-        | Recovery.Suppressing(_, next) -> Some next
-        | Recovery.Parsing
-        | Recovery.Interrupted _ -> None
-
-    let private discardsSilently state =
-        match pendingDeclaration state with
-        | Some(DeclarationAfterRecovery.Discarded _)
-        | Some(DeclarationAfterRecovery.SkippedInSignatureModule _) -> true
-        | _ -> false
-
     let private offsetAfterAttributeLists (cursor: Cursor) =
         let rec after offset =
             let token = cursor.Peek offset
@@ -3043,7 +3115,8 @@ module internal Parser =
             isEndOfFile state.Cursor.Current
             ->
             if reportsAtEnd then
-                state.UnresumedAtEnd <- Some(emptyAt state.Cursor.Current.Range.Start)
+                state.SignatureHeader <-
+                    SignatureHeader.LostAtEnd(emptyAt state.Cursor.Current.Range.Start)
         | Some(DeclarationAfterRecovery.ReportedAtRoot _)
         | Some DeclarationAfterRecovery.IncompleteAtNext ->
             let token = state.Cursor.Current
@@ -3083,7 +3156,9 @@ module internal Parser =
                 state.Diagnostics
                 |> Seq.skip suppressFrom
                 |> Seq.filter (fun diagnostic ->
-                    diagnostic.Code = unsupportedCode
+                    (diagnostic.Code = unsupportedCode
+                     || (diagnostic.Code = offsideCode
+                         && discardsSilently state))
                     && rootReportStart
                        <> Some diagnostic.Range.Start.Offset
                 )
@@ -3240,7 +3315,10 @@ module internal Parser =
                                     rules.FirstNestedPoint
                                 else
                                     match rules.StartPoint list with
-                                    | RecoveryPoint.SignatureFile when state.HeaderLost ->
+                                    | RecoveryPoint.SignatureFile when
+                                        (state.SignatureHeader
+                                         <> SignatureHeader.Kept)
+                                        ->
                                         RecoveryPoint.NestedSignature
                                     | point -> point
 
@@ -3320,18 +3398,21 @@ module internal Parser =
                     | ListRecovery.Discards, DeclarationList.NestedModule
                     | ListRecovery.DiscardsInValue, DeclarationList.NestedModule ->
                         // The Compatibility Oracle skips the next tokens silently until a value, open, module, or namespace.
-                        state.HeaderLost <- true
+                        state.SignatureHeader <- SignatureHeader.Lost
 
                         suppress
                             state
                             (DeclarationAfterRecovery.SkippedInSignatureModule(state.Depth, true))
                     | ListRecovery.DiscardsInsideValueType, DeclarationList.NestedModule ->
-                        state.HeaderLost <- true
+                        state.SignatureHeader <- SignatureHeader.Lost
 
                         suppress
                             state
                             (DeclarationAfterRecovery.SkippedInSignatureModule(state.Depth, false))
-                    | ListRecovery.Discards, _ when state.HeaderLost ->
+                    | ListRecovery.Discards, _ when
+                        (state.SignatureHeader
+                         <> SignatureHeader.Kept)
+                        ->
                         suppress
                             state
                             (DeclarationAfterRecovery.SkippedInSignatureModule(
@@ -3343,7 +3424,10 @@ module internal Parser =
                     | ListRecovery.DiscardsAfterDeclaration, _ ->
                         // The Compatibility Oracle discards the rest of the file after this recovery and reports no diagnostic for it.
                         suppress state (DeclarationAfterRecovery.Discarded None)
-                    | ListRecovery.DiscardsInValue, _ when state.HeaderLost ->
+                    | ListRecovery.DiscardsInValue, _ when
+                        (state.SignatureHeader
+                         <> SignatureHeader.Kept)
+                        ->
                         // The Compatibility Oracle keeps the lost module header, so this recovery also reports FS0222 at the end.
                         suppress
                             state
@@ -3576,7 +3660,8 @@ module internal Parser =
                         parseVal
                             state
                             (list = DeclarationList.NestedModule
-                             || state.HeaderLost)
+                             || (state.SignatureHeader
+                                 <> SignatureHeader.Kept))
                             attributes
                     )
                 else
@@ -3605,8 +3690,7 @@ module internal Parser =
         Recovery = Recovery.Parsing
         InAnonymousRoot = false
         Depth = 0
-        UnresumedAtEnd = None
-        HeaderLost = false
+        SignatureHeader = SignatureHeader.Kept
     }
 
     let parseImplementationFile (document: LexicalDocument) : ImplementationFileParseResult =
@@ -3633,7 +3717,11 @@ module internal Parser =
                 Contents = contents
             }
             Diagnostics = ImmutableArray.CreateRange state.Diagnostics
-            UnresumedRecoveryAtEnd = state.UnresumedAtEnd
+            UnresumedRecoveryAtEnd =
+                match state.SignatureHeader with
+                | SignatureHeader.LostAtEnd range -> Some range
+                | SignatureHeader.Kept
+                | SignatureHeader.Lost -> None
         }
 
     let private missingDeclarationMessage =
