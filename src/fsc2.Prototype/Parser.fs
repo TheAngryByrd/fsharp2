@@ -1995,23 +1995,36 @@ module internal Parser =
             span (declarationStart attributes doToken) (emptyAt cursor.LastEnd)
         )
 
-    let private parseExpressionDeclaration state attributes =
-        let cursor = state.Cursor
-        let start = cursor.Current
-        let body = parseExpression state start.Range.Start
-
-        ImplementationDeclaration.Expression(
-            attributes,
-            body,
-            span (declarationStart attributes start) (emptyAt cursor.LastEnd)
-        )
-
     [<RequireQualifiedAccess>]
     type private ListRecovery =
         | Continues
         | Discards
         | DiscardsInValue
         | Unmodeled
+
+    let private parseExpressionDeclaration state point attributes =
+        let cursor = state.Cursor
+        let start = cursor.Current
+        let context = start.Range.Start
+        let reported = state.Diagnostics.Count
+        let body = parseExpression state context
+        let range = span (declarationStart attributes start) (emptyAt cursor.LastEnd)
+
+        let recovery =
+            if
+                reportedSince state reported
+                || endsLine context cursor.Current
+            then
+                ListRecovery.Continues
+            elif reportUnexpected state point "an expression declaration" then
+                skipUntil state context
+                |> ignore
+
+                ListRecovery.Discards
+            else
+                ListRecovery.Continues
+
+        ImplementationDeclaration.Expression(attributes, body, range), recovery
 
     let private parseVal state nested attributes =
         let cursor = state.Cursor
@@ -2873,9 +2886,16 @@ module internal Parser =
 
         roots.ToImmutable()
 
+    let private implementationStartPoint list =
+        match list with
+        | DeclarationList.NamespaceRoot -> RecoveryPoint.NamespaceFile
+        | DeclarationList.AnonymousRoot -> RecoveryPoint.AnonymousFile
+        | DeclarationList.ModuleRoot
+        | DeclarationList.NestedModule -> RecoveryPoint.DefinitionStart
+
     let private implementationRules = {
         Parse =
-            fun state _ attributes token ->
+            fun state list attributes token ->
                 if isKeyword "let" token then
                     Some(Some(parseLet state attributes), ListRecovery.Continues)
                 elif isKeyword "do" token then
@@ -2883,19 +2903,16 @@ module internal Parser =
                 elif isKeyword "type" token then
                     Some(parseTypeDefinition state attributes)
                 elif canStartExpression token then
-                    Some(Some(parseExpressionDeclaration state attributes), ListRecovery.Continues)
+                    let declaration, recovery =
+                        parseExpressionDeclaration state (implementationStartPoint list) attributes
+
+                    Some(Some declaration, recovery)
                 else
                     None
         NestedRecoveryDiscards = true
         SkipsUnrecognizedAfterRecovery = false
         FirstNestedPoint = RecoveryPoint.NestedFirstDefinition
-        StartPoint =
-            fun list ->
-                match list with
-                | DeclarationList.NamespaceRoot -> RecoveryPoint.NamespaceFile
-                | DeclarationList.AnonymousRoot -> RecoveryPoint.AnonymousFile
-                | DeclarationList.ModuleRoot
-                | DeclarationList.NestedModule -> RecoveryPoint.DefinitionStart
+        StartPoint = implementationStartPoint
         Open = ImplementationDeclaration.Open
         NestedModule = ImplementationDeclaration.NestedModule
         Skipped = ImplementationDeclaration.Skipped

@@ -1096,6 +1096,165 @@ x.y = 1
         []
     ]
 
+    let private expressionDeclarationCases = [
+        "Y2.fs",
+        "module M\nf x )\n",
+        [
+            "Y2.fs(2,5,2,6): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "Y3.fs",
+        "module M\nmatch 1 with\n| _ )\n",
+        [
+            "Y3.fs(3,5,3,6): error FS0010: Unexpected symbol ')' in pattern matching. Expected '->' or other token."
+        ]
+
+        "Y4.fs",
+        "module M\nfun x )\n",
+        [
+            "Y4.fs(2,7,2,8): error FS0010: Unexpected symbol ')' in lambda expression. Expected '->' or other token."
+        ]
+
+        "Y5.fs",
+        "module M\n{ A = ) }\n",
+        [ "Y5.fs(2,7,2,8): error FS0010: Unexpected symbol ')' in expression" ]
+
+        "Y7.fs",
+        "module M\nf x )\nlet b = 1\n",
+        [
+            "Y7.fs(2,5,2,6): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "Y9.fs",
+        "module M\nmatch 1 )\n",
+        [
+            "Y9.fs(2,9,2,10): error FS0010: Unexpected symbol ')' in expression. Expected 'with' or other token."
+        ]
+
+        "Y14.fs",
+        "f x )\n",
+        [
+            "Y14.fs(1,5,1,6): error FS0010: Unexpected symbol ')' in implementation file"
+            "Y14.fs(1,1,1,4): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "Y15.fs",
+        "module M\nf x\n)\n",
+        [
+            "Y15.fs(3,1,3,2): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "Y16.fs",
+        "namespace N\nf x )\n",
+        [
+            "Y16.fs(2,5,2,6): error FS0010: Unexpected symbol ')' in implementation file. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "Y17.fs",
+        "namespace N\nf x )\nlet b = 1\n",
+        [
+            "Y17.fs(2,5,2,6): error FS0010: Unexpected symbol ')' in implementation file. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "Y19.fs",
+        "module M\nf x )\nf y )\n",
+        [
+            "Y19.fs(2,5,2,6): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "Y20.fs",
+        "f x )\nlet b = 1\n",
+        [
+            "Y20.fs(1,5,1,6): error FS0010: Unexpected symbol ')' in implementation file"
+            "Y20.fs(1,1,1,4): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "Y23.fs",
+        "module M\nf ]\n",
+        [
+            "Y23.fs(2,3,2,4): error FS0010: Unexpected symbol ']' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "Y24.fs",
+        "module M\n1 )\n",
+        [
+            "Y24.fs(2,3,2,4): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "Y26.fs",
+        "module M\n(1) )\n",
+        [
+            "Y26.fs(2,5,2,6): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "Y27.fs",
+        "module M\nf x end\n",
+        [
+            "Y27.fs(2,5,2,8): error FS0010: Unexpected keyword 'end' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+    ]
+
+    let private unmodeledExpressionDeclarationCases = [
+        "Y1.fs",
+        "module M\n1 +\n",
+        [
+            "Y1.fs(3,1,3,1): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "Y1.fs(2,3,2,4): error FS3156: Unexpected token '+' or incomplete expression"
+        ]
+
+        "Y6.fs",
+        "module M\n(1, )\n",
+        [ "Y6.fs(2,3,2,4): error FS3100: Expected an expression after this point" ]
+
+        "Y8.fs",
+        "module M\nif true then )\n",
+        [
+            "Y8.fs(2,14,2,15): error FS0010: Unexpected symbol ')' in expression"
+            "Y8.fs(3,1,3,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "Y10.fs",
+        "module M\n[1; )\n",
+        [
+            "Y10.fs(2,5,2,6): error FS0010: Unexpected symbol ')' in expression. Expected ']' or other token."
+            "Y10.fs(2,1,2,2): error FS0598: Unmatched '['"
+        ]
+
+        "Y11.fs",
+        "module M\nf (\n",
+        [
+            "Y11.fs(3,1,3,1): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (1:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "Y11.fs(2,3,2,4): error FS0583: Unmatched '('"
+        ]
+
+        "Y13.fs",
+        "module M\nmodule N =\n    f x )\n    let b = 1\n",
+        [
+            "Y13.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "Y13.fs(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "Y18.fs",
+        "module M\nmodule N =\n    let a = 1\n    f x )\n",
+        [
+            "Y18.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "Y18.fs(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "Y25.fs",
+        "module M\nmodule N =\n    let a = 1\n    f x )\n    let b = 2\n",
+        [
+            "Y25.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "Y25.fs(6,1,6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "Y28.fs",
+        "module M\nf x in\n",
+        [
+            "Y28.fs(2,5,2,7): error FS0010: Unexpected keyword 'in' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+    ]
+
     [<Tests>]
     let tests =
         testList "Issue29.ParserCompilation" [
@@ -1202,6 +1361,38 @@ x.y = 1
                             "C2.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
                         ]
                     ] ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result =
+                            parse SyntaxCompilationTarget.Executable [
+                                logicalPath, text
+                                last
+                            ]
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            (result.Diagnostics
+                             |> Seq.map _.Diagnostic)
+                            (oracleLines result)
+            ]
+
+            testList "a top-level expression declaration reports the Oracle diagnostics" [
+                for logicalPath, text, expected in expressionDeclarationCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        Expect.sequenceEqual
+                            (oracleLines (
+                                parse SyntaxCompilationTarget.Executable [
+                                    logicalPath, text
+                                    last
+                                ]
+                            ))
+                            expected
+                            "The diagnostics must match the Compatibility Oracle"
+            ]
+
+            testList "an unmodeled error in a top-level expression declaration stays explicit" [
+                for logicalPath, text, oracle in unmodeledExpressionDeclarationCases ->
                     testCase logicalPath
                     <| fun _ ->
                         let result =
