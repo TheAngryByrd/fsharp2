@@ -203,6 +203,13 @@
       "requiredPolarities": ["positive", "negative"],
       "requiredPhases": ["source", "syntax"],
       "envelope": "unsupported"
+    },
+    {
+      "id": "syntax.ordered-files",
+      "title": "Ordered source files and module or namespace headers",
+      "requiredPolarities": ["positive", "negative"],
+      "requiredPhases": ["source", "syntax"],
+      "envelope": "unsupported"
     }
   ],
   "integrationCorpora": [
