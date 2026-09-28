@@ -76,7 +76,7 @@ module ParserTests =
         | ImplementationDeclaration.Type definition -> $"type {definition.Name.Text}"
         | ImplementationDeclaration.Do(attributes, _, _) ->
             $"do [{attributes.Length} attribute lists]"
-        | ImplementationDeclaration.Expression(attributes, _, _) ->
+        | ImplementationDeclaration.Expression(attributes, _, _, _) ->
             $"expr [{attributes.Length} attribute lists]"
         | ImplementationDeclaration.Skipped _ -> "skipped"
 
@@ -1222,4 +1222,29 @@ module Values =
                         "]"
                     ]
                     "Skipped tokens"
+
+            testCase "an expression declaration keeps the tokens skipped after its recovery"
+            <| fun _ ->
+                let result = parse "Skipped.fs" "module Program\nf x ) g\n"
+
+                match Seq.exactlyOne (Seq.exactlyOne result.File.Contents).Declarations with
+                | ImplementationDeclaration.Expression(_, _, skipped, range) ->
+                    Expect.equal
+                        (position range)
+                        (2, 1, 2, 4)
+                        "The declaration range ends at the expression"
+
+                    let skipped = Expect.wantSome skipped "Skipped tokens"
+
+                    Expect.equal (position skipped.Range) (2, 5, 2, 8) "Skipped range"
+
+                    Expect.sequenceEqual
+                        (skipped.Tokens
+                         |> Seq.map _.Text)
+                        [
+                            ")"
+                            "g"
+                        ]
+                        "Skipped tokens"
+                | other -> failtest $"Expected an expression declaration, found {other}"
         ]

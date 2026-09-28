@@ -192,9 +192,9 @@ module ParserGrammarTests =
                 |> String.concat " "
 
             $"let {head} = {expressionShape binding.Body}"
-        | ImplementationDeclaration.Expression(attributes, body, _) when attributes.IsEmpty ->
+        | ImplementationDeclaration.Expression(attributes, body, _, _) when attributes.IsEmpty ->
             $"expr {expressionShape body}"
-        | ImplementationDeclaration.Expression(attributes, body, _) ->
+        | ImplementationDeclaration.Expression(attributes, body, _, _) ->
             $"expr [{attributes.Length} attribute lists] {expressionShape body}"
         | ImplementationDeclaration.NestedModule nested ->
             let inner =

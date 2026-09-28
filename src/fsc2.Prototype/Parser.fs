@@ -2011,21 +2011,18 @@ module internal Parser =
         let body = parseExpression state context
         let range = span (declarationStart attributes start) (emptyAt cursor.LastEnd)
 
-        let recovery =
+        let skipped, recovery =
             if
                 reportedSince state reported
                 || endsLine context cursor.Current
             then
-                ListRecovery.Continues
+                None, ListRecovery.Continues
             elif reportUnexpected state point "an expression declaration" then
-                skipUntil state context
-                |> ignore
-
-                ListRecovery.DiscardsAfterDeclaration
+                skipUntil state context, ListRecovery.DiscardsAfterDeclaration
             else
-                ListRecovery.Continues
+                None, ListRecovery.Continues
 
-        ImplementationDeclaration.Expression(attributes, body, range), recovery
+        ImplementationDeclaration.Expression(attributes, body, skipped, range), recovery
 
     let private parseVal state nested attributes =
         let cursor = state.Cursor
@@ -3036,7 +3033,7 @@ module internal Parser =
                 let finish =
                     match last with
                     | ImplementationDeclaration.Open(_, range)
-                    | ImplementationDeclaration.Expression(_, _, range) -> range.End
+                    | ImplementationDeclaration.Expression(_, _, _, range) -> range.End
                     | _ -> nextTokenStart document last.Range.End.Offset
 
                 if finish.Line > start.Line then
