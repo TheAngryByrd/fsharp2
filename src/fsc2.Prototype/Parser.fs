@@ -1052,6 +1052,32 @@ module internal Parser =
 
     let private parsePattern state context = parsePatternWith false state context
 
+    let private comparisonOperatorsAfterOperand =
+        HashSet [
+            "<<<"
+            "<="
+            "<>"
+            "<|"
+        ]
+
+    let private typeArgumentScanStops =
+        HashSet [
+            "+"
+            "="
+            "||"
+            "&&"
+            "|>"
+        ]
+
+    let private typeArgumentScanContinues =
+        HashSet [
+            ","
+            "*"
+            "-"
+            ";"
+            "."
+        ]
+
     let rec private parseExpression state context =
         let cursor = state.Cursor
         let first = parseInfix state context 0
@@ -1083,6 +1109,58 @@ module internal Parser =
         else
             first
 
+    and private adjacentLessThanIsOperator (cursor: Cursor) =
+        let text = tokenText cursor.Current
+
+        if
+            text
+            <> "<"
+        then
+            comparisonOperatorsAfterOperand.Contains text
+        else
+            // The Compatibility Oracle reads an adjacent '<' as type arguments when a scan across lines finds the closing '>'.
+            let rec scan offset parentheses =
+                let token = cursor.Peek offset
+                let text = tokenText token
+
+                match token.Kind with
+                | LayoutTokenKind.BeginBlock
+                | LayoutTokenKind.Separator
+                | LayoutTokenKind.EndBlock -> scan (offset + 1) parentheses
+                | LayoutTokenKind.SourceToken ->
+                    if isEndOfFile token then
+                        true
+                    elif isDelimiter ")" token then
+                        parentheses = 0
+                        || scan
+                            (offset + 1)
+                            (parentheses
+                             - 1)
+                    elif isDelimiter "(" token then
+                        scan
+                            (offset + 1)
+                            (parentheses
+                             + 1)
+                    elif isKeyword "then" token then
+                        true
+                    elif
+                        isKind LexicalTokenKind.Operator token
+                        && typeArgumentScanStops.Contains text
+                    then
+                        true
+                    elif
+                        isIdentifier token
+                        || isKind LexicalTokenKind.NumericLiteral token
+                        || ((isKind LexicalTokenKind.Operator token
+                             || isKind LexicalTokenKind.Delimiter token)
+                            && typeArgumentScanContinues.Contains text)
+                    then
+                        scan (offset + 1) parentheses
+                    else
+                        false
+
+            scan 1 0
+
     and private parseInfix state context minimum =
         let cursor = state.Cursor
         let mutable left = parseApplication state context
@@ -1105,6 +1183,7 @@ module internal Parser =
                 if
                     followsWithoutSpace
                     && text.StartsWith("<", StringComparison.Ordinal)
+                    && not (adjacentLessThanIsOperator cursor)
                 then
                     reportUnsupported state token "a type application in an expression"
                 elif

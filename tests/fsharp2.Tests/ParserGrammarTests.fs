@@ -486,9 +486,89 @@ module ParserGrammarTests =
         ]
     ]
 
+    let private lessThanPrelude =
+        "module Lt\nlet a = 1\nlet b = 2\nlet f (x: int) = x\n"
+
+    let private adjacentComparisonCases = [
+        "a<b", "{a < b}"
+        "a< b", "{a < b}"
+        "a<<<1", "{a <<< 1}"
+        "a<=b", "{a <= b}"
+        "a<>b", "{a <> b}"
+        "a<b && b>a", "{{a < b} && {b > a}}"
+        "(a)<b", "{(a) < b}"
+        "1<b", "{1 < b}"
+        "a<b = true", "{{a < b} = Boolean true}"
+        "f a<b", "{[f a] < b}"
+        "f<|1", "{f <| 1}"
+        "a<b + 1", "{a < {b + 1}}"
+        "a<1", "{a < 1}"
+        "a<1 && b>a", "{{a < 1} && {b > a}}"
+        "a<b || b>a", "{{a < b} || {b > a}}"
+        "if a<b then b>a else false", "if {a < b} then {b > a} else Boolean false"
+        "a<(b)", "{a < (b)}"
+        "(a<b)", "({a < b})"
+    ]
+
+    let private adjacentTypeArgumentCases = [
+        "TypeApp.fs", "let c = id<int> 1\n", []
+        "TypeClose.fs", "let c = a<b>a\n", []
+        "TypeComma.fs", "let c = (a<b, b>a)\n", []
+        "TypeLines.fs",
+        "let c = a<b\nb>a\n",
+        [
+            "TypeLines.fs(6,3): error FS0010: Unexpected identifier in binding. Expected incomplete structured construct at or before this point or other token."
+            "TypeLines.fs(5,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "TypeLinesComma.fs", "let c = (a<b,\n         b>a)\n", []
+        "TypeMinus.fs",
+        "let c = a<b - 1>a\n",
+        [
+            "TypeMinus.fs(5,13): error FS0010: Unexpected symbol '-' in type arguments. Expected ',' or other token."
+            "TypeMinus.fs(5,13): error FS1241: Expected type argument or static argument"
+        ]
+        "TypeStar.fs", "let c = a<b * b>a\n", []
+        "TypeSemicolon.fs",
+        "let c = [a<b; b>a]\n",
+        [
+            "TypeSemicolon.fs(5,13): error FS0010: Unexpected symbol ';' in type arguments. Expected ',' or other token."
+            "TypeSemicolon.fs(5,13): error FS1241: Expected type argument or static argument"
+        ]
+        "TypeNumber.fs", "let c = a<1>a\n", []
+        "TypeDot.fs", "let c = a<b.x>a\n", []
+    ]
+
     [<Tests>]
     let tests =
         testList "Issue29.ParserGrammar" [
+            testList "an adjacent less-than without closing type arguments is a comparison" [
+                for text, expected in adjacentComparisonCases ->
+                    testCase text
+                    <| fun _ ->
+                        let declarations, _ = shapes "Lt.fs" $"{lessThanPrelude}let c = {text}\n"
+
+                        Expect.equal
+                            (List.last declarations)
+                            $"let c = {expected}"
+                            "The Oracle type checker accepts this binding as a comparison"
+            ]
+
+            testList "an adjacent less-than with closing type arguments stays explicit" [
+                for logicalPath, text, oracle in adjacentTypeArgumentCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result =
+                            parse
+                                logicalPath
+                                (lessThanPrelude
+                                 + text)
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
             testCase "top-level expressions are declarations with their structure and ranges"
             <| fun _ ->
                 let declarations, ranges =
