@@ -1374,6 +1374,75 @@ let main _ =
                     ]
                     "The Compatibility Oracle reports both errors in source order"
 
+            testCase "an invalid reference image fails with a diagnostic"
+            <| fun _ ->
+                let baseline =
+                    createRequest
+                        (defaultSemanticOptions ())
+                        (defaultDiagnosticOptions ())
+                        (defaultEmissionOptions ())
+                        (defaultSigningOptions ())
+                        (emptyResources ())
+                        defaultRequestedArtifacts
+                        "module Program\nlet answer () = 42\n"
+
+                let invalidImage = [|
+                    1uy
+                    2uy
+                    3uy
+                |]
+
+                let request =
+                    CompilationRequest.Create(
+                        baseline.ContractVersion,
+                        baseline.RequestIdentity,
+                        baseline.AssemblyIdentity,
+                        baseline.Sources
+                        |> Seq.toArray,
+                        [|
+                            yield! baseline.TargetReferences
+                            TargetReferenceSnapshot.Create(
+                                StableIdentity.create "reference:invalid",
+                                "Invalid.dll",
+                                invalidImage,
+                                fingerprint invalidImage
+                            )
+                        |],
+                        baseline.SemanticOptions,
+                        baseline.DiagnosticOptions,
+                        baseline.EmissionOptions,
+                        baseline.SigningOptions,
+                        baseline.Resources,
+                        baseline.RequestedArtifacts
+                        |> Seq.toArray
+                    )
+
+                let result = compileRequest request
+
+                Expect.equal
+                    result.Outcome
+                    CompilationOutcome.Failed
+                    "The invalid reference stops the compilation"
+
+                Expect.isEmpty result.Artifacts "A failed compilation publishes no artifacts"
+
+                Expect.sequenceEqual
+                    (result.Diagnostics
+                     |> Seq.map (fun diagnostic ->
+                         diagnostic.Code, diagnostic.LogicalPath, diagnostic.Stage
+                     ))
+                    [
+                        "FSC2P1003",
+                        Some "Invalid.dll",
+                        DiagnosticStage.Compilation CompilationPhase.ResolvedSymbols
+                    ]
+                    "The invalid reference is named in a reference diagnostic"
+
+                Expect.stringStarts
+                    (Seq.exactlyOne result.Diagnostics).Message
+                    "Error opening binary file 'Invalid.dll': "
+                    "The message follows the Compatibility Oracle wording"
+
             testCase "reused parsing rebinds the physical source checksum"
             <| fun _ ->
                 let sourceText = "module Program\nlet answer () = 42\n"
