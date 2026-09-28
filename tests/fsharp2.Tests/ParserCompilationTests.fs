@@ -2884,16 +2884,16 @@ module M =
         [
             "l_nested.fs(3,5,3,8): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
         ]
-    ]
-
-    let private unmodeledLetKeywordCases = [
-        "u_local.fs", "module M\nlet f () =\n    use c = 3\n    c\n", []
 
         "u_sig.fsi",
         "module M\nuse c: int\n",
         [
             "u_sig.fsi(2,1,2,4): error FS0010: Unexpected keyword 'let' or 'use'. Expected incomplete structured construct at or before this point or other token."
         ]
+    ]
+
+    let private unmodeledLetKeywordCases = [
+        "u_local.fs", "module M\nlet f () =\n    use c = 3\n    c\n", []
 
         "d_first.fs",
         "module M\nmodule N =\n    )\n    use c = 3\nlet d = 4\n",
@@ -2987,6 +2987,864 @@ module M =
         [
             "n_indented_and.fs(2,1,2,4): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
         ]
+    ]
+
+    let private signatureRecoveryCases = [
+        "mod_let.fsi",
+        "module M\nlet c: int\n",
+        [
+            "mod_let.fsi(2,1,2,4): error FS0010: Unexpected keyword 'let' or 'use'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "mod_use.fsi",
+        "module M\nuse c: int\n",
+        [
+            "mod_use.fsi(2,1,2,4): error FS0010: Unexpected keyword 'let' or 'use'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "mod_letrec.fsi",
+        "module M\nlet rec c: int\n",
+        [
+            "mod_letrec.fsi(2,1,2,4): error FS0010: Unexpected keyword 'let' or 'use'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "mod_letbang.fsi",
+        "module M\nlet! c = 1\n",
+        [
+            "mod_letbang.fsi(2,1,2,5): error FS0010: Unexpected binder keyword. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "mod_do.fsi",
+        "module M\ndo ()\n",
+        [
+            "mod_do.fsi(2,1,2,3): error FS0010: Unexpected keyword 'do'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "mod_ident.fsi",
+        "module M\nc: int\n",
+        [
+            "mod_ident.fsi(2,1,2,2): error FS0010: Unexpected identifier. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "mod_num.fsi",
+        "module M\n1\n",
+        [
+            "mod_num.fsi(2,1,2,2): error FS0010: Unexpected integer literal. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "mod_str.fsi",
+        "module M\n\"a\"\n",
+        [
+            "mod_str.fsi(2,1,2,4): error FS0010: Unexpected string literal. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "mod_lparen.fsi",
+        "module M\n(c)\n",
+        [
+            "mod_lparen.fsi(2,1,2,2): error FS0010: Unexpected symbol '('. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "mod_lbrack.fsi",
+        "module M\n[1]\n",
+        [
+            "mod_lbrack.fsi(2,1,2,2): error FS0010: Unexpected symbol '['. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "mod_if.fsi",
+        "module M\nif true then ()\n",
+        [
+            "mod_if.fsi(2,1,2,3): error FS0010: Unexpected keyword 'if'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "mod_match.fsi",
+        "module M\nmatch 1 with _ -> ()\n",
+        [
+            "mod_match.fsi(2,1,2,6): error FS0010: Unexpected keyword 'match'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "mod_fun.fsi",
+        "module M\nfun x -> x\n",
+        [
+            "mod_fun.fsi(2,1,2,4): error FS0010: Unexpected keyword 'fun'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "mod_bar.fsi",
+        "module M\n| A\n",
+        [
+            "mod_bar.fsi(2,1,2,2): error FS0010: Unexpected symbol '|'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "mod_under.fsi",
+        "module M\n_\n",
+        [
+            "mod_under.fsi(2,1,2,2): error FS0010: Unexpected symbol '_'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "mod_inline.fsi",
+        "module M\ninline c: int\n",
+        [
+            "mod_inline.fsi(2,1,2,7): error FS0010: Unexpected keyword 'inline'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "mod_and.fsi",
+        "module M\nand c: int\n",
+        [
+            "mod_and.fsi(2,1,2,4): error FS0010: Unexpected keyword 'and'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "mod_rbrace.fsi",
+        "module M\n}\n",
+        [
+            "mod_rbrace.fsi(2,1,2,2): error FS0010: Unexpected symbol '}'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "mod_end.fsi",
+        "module M\nend\n",
+        [
+            "mod_end.fsi(2,1,2,4): error FS0010: Unexpected keyword 'end'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "nested_let.fsi",
+        "module M\nmodule N =\n    let c: int\n",
+        [
+            "nested_let.fsi(3,5,3,8): error FS0010: Unexpected keyword 'let' or 'use' in signature file"
+            "nested_let.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "nested_use.fsi",
+        "module M\nmodule N =\n    use c: int\n",
+        [
+            "nested_use.fsi(3,5,3,8): error FS0010: Unexpected keyword 'let' or 'use' in signature file"
+            "nested_use.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "nested_letrec.fsi",
+        "module M\nmodule N =\n    let rec c: int\n",
+        [
+            "nested_letrec.fsi(3,5,3,8): error FS0010: Unexpected keyword 'let' or 'use' in signature file"
+            "nested_letrec.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "nested_letbang.fsi",
+        "module M\nmodule N =\n    let! c = 1\n",
+        [
+            "nested_letbang.fsi(3,5,3,9): error FS0010: Unexpected binder keyword in signature file"
+            "nested_letbang.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "nested_do.fsi",
+        "module M\nmodule N =\n    do ()\n",
+        [
+            "nested_do.fsi(3,5,3,7): error FS0010: Unexpected keyword 'do' in signature file"
+            "nested_do.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "nested_num.fsi",
+        "module M\nmodule N =\n    1\n",
+        [
+            "nested_num.fsi(3,5,3,6): error FS0010: Unexpected integer literal in signature file"
+            "nested_num.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "nested_str.fsi",
+        "module M\nmodule N =\n    \"a\"\n",
+        [
+            "nested_str.fsi(3,5,3,8): error FS0010: Unexpected string literal in signature file"
+            "nested_str.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "nested_lparen.fsi",
+        "module M\nmodule N =\n    (c)\n",
+        [
+            "nested_lparen.fsi(3,5,3,6): error FS0010: Unexpected symbol '(' in signature file"
+            "nested_lparen.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "nested_lbrack.fsi",
+        "module M\nmodule N =\n    [1]\n",
+        [
+            "nested_lbrack.fsi(3,5,3,6): error FS0010: Unexpected symbol '[' in signature file"
+            "nested_lbrack.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "nested_if.fsi",
+        "module M\nmodule N =\n    if true then ()\n",
+        [
+            "nested_if.fsi(3,5,3,7): error FS0010: Unexpected keyword 'if' in signature file"
+            "nested_if.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "nested_match.fsi",
+        "module M\nmodule N =\n    match 1 with _ -> ()\n",
+        [
+            "nested_match.fsi(3,5,3,10): error FS0010: Unexpected keyword 'match' in signature file"
+            "nested_match.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "nested_fun.fsi",
+        "module M\nmodule N =\n    fun x -> x\n",
+        [
+            "nested_fun.fsi(3,5,3,8): error FS0010: Unexpected keyword 'fun' in signature file"
+            "nested_fun.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "nested_eq.fsi",
+        "module M\nmodule N =\n    = 1\n",
+        [
+            "nested_eq.fsi(3,5,3,6): error FS0010: Unexpected symbol '=' in signature file"
+            "nested_eq.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "nested_bar.fsi",
+        "module M\nmodule N =\n    | A\n",
+        [
+            "nested_bar.fsi(3,5,3,6): error FS0010: Unexpected symbol '|' in signature file"
+            "nested_bar.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "nested_under.fsi",
+        "module M\nmodule N =\n    _\n",
+        [
+            "nested_under.fsi(3,5,3,6): error FS0010: Unexpected symbol '_' in signature file"
+            "nested_under.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "nested_inline.fsi",
+        "module M\nmodule N =\n    inline c: int\n",
+        [
+            "nested_inline.fsi(3,5,3,11): error FS0010: Unexpected keyword 'inline' in signature file"
+            "nested_inline.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "nested_and.fsi",
+        "module M\nmodule N =\n    and c: int\n",
+        [
+            "nested_and.fsi(3,5,3,8): error FS0010: Unexpected keyword 'and' in signature file"
+            "nested_and.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "nested_rbrace.fsi",
+        "module M\nmodule N =\n    }\n",
+        [
+            "nested_rbrace.fsi(3,5,3,6): error FS0010: Unexpected symbol '}' in signature file"
+            "nested_rbrace.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "nested_end.fsi",
+        "module M\nmodule N =\n    end\n",
+        [
+            "nested_end.fsi(3,5,3,8): error FS0010: Unexpected keyword 'end' in signature file"
+            "nested_end.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "after_let.fsi",
+        "module M\nval a: int\nlet c: int\n",
+        [
+            "after_let.fsi(3,1,3,4): error FS0010: Unexpected keyword 'let' or 'use'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "after_use.fsi",
+        "module M\nval a: int\nuse c: int\n",
+        [
+            "after_use.fsi(3,1,3,4): error FS0010: Unexpected keyword 'let' or 'use'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "after_letrec.fsi",
+        "module M\nval a: int\nlet rec c: int\n",
+        [
+            "after_letrec.fsi(3,1,3,4): error FS0010: Unexpected keyword 'let' or 'use'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "after_letbang.fsi",
+        "module M\nval a: int\nlet! c = 1\n",
+        [
+            "after_letbang.fsi(3,1,3,5): error FS0010: Unexpected binder keyword. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "after_do.fsi",
+        "module M\nval a: int\ndo ()\n",
+        [
+            "after_do.fsi(3,1,3,3): error FS0010: Unexpected keyword 'do'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "after_ident.fsi",
+        "module M\nval a: int\nc: int\n",
+        [
+            "after_ident.fsi(3,1,3,2): error FS0010: Unexpected identifier. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "after_num.fsi",
+        "module M\nval a: int\n1\n",
+        [
+            "after_num.fsi(3,1,3,2): error FS0010: Unexpected integer literal. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "after_str.fsi",
+        "module M\nval a: int\n\"a\"\n",
+        [
+            "after_str.fsi(3,1,3,4): error FS0010: Unexpected string literal. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "after_lparen.fsi",
+        "module M\nval a: int\n(c)\n",
+        [
+            "after_lparen.fsi(3,1,3,2): error FS0010: Unexpected symbol '('. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "after_lbrack.fsi",
+        "module M\nval a: int\n[1]\n",
+        [
+            "after_lbrack.fsi(3,1,3,2): error FS0010: Unexpected symbol '['. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "after_if.fsi",
+        "module M\nval a: int\nif true then ()\n",
+        [
+            "after_if.fsi(3,1,3,3): error FS0010: Unexpected keyword 'if'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "after_match.fsi",
+        "module M\nval a: int\nmatch 1 with _ -> ()\n",
+        [
+            "after_match.fsi(3,1,3,6): error FS0010: Unexpected keyword 'match'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "after_fun.fsi",
+        "module M\nval a: int\nfun x -> x\n",
+        [
+            "after_fun.fsi(3,1,3,4): error FS0010: Unexpected keyword 'fun'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "after_eq.fsi",
+        "module M\nval a: int\n= 1\n",
+        [
+            "after_eq.fsi(3,1,3,2): error FS0010: Unexpected symbol '='. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "after_bar.fsi",
+        "module M\nval a: int\n| A\n",
+        [
+            "after_bar.fsi(3,1,3,2): error FS0010: Unexpected symbol '|'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "after_under.fsi",
+        "module M\nval a: int\n_\n",
+        [
+            "after_under.fsi(3,1,3,2): error FS0010: Unexpected symbol '_'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "after_inline.fsi",
+        "module M\nval a: int\ninline c: int\n",
+        [
+            "after_inline.fsi(3,1,3,7): error FS0010: Unexpected keyword 'inline'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "after_and.fsi",
+        "module M\nval a: int\nand c: int\n",
+        [
+            "after_and.fsi(3,1,3,4): error FS0010: Unexpected keyword 'and'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "after_rbrace.fsi",
+        "module M\nval a: int\n}\n",
+        [
+            "after_rbrace.fsi(3,1,3,2): error FS0010: Unexpected symbol '}'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "after_end.fsi",
+        "module M\nval a: int\nend\n",
+        [
+            "after_end.fsi(3,1,3,4): error FS0010: Unexpected keyword 'end'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "ns_let.fsi",
+        "namespace Q\nlet c: int\n",
+        [
+            "ns_let.fsi(2,1,2,4): error FS0010: Unexpected keyword 'let' or 'use'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "ns_use.fsi",
+        "namespace Q\nuse c: int\n",
+        [
+            "ns_use.fsi(2,1,2,4): error FS0010: Unexpected keyword 'let' or 'use'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "ns_letrec.fsi",
+        "namespace Q\nlet rec c: int\n",
+        [
+            "ns_letrec.fsi(2,1,2,4): error FS0010: Unexpected keyword 'let' or 'use'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "ns_letbang.fsi",
+        "namespace Q\nlet! c = 1\n",
+        [
+            "ns_letbang.fsi(2,1,2,5): error FS0010: Unexpected binder keyword. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "ns_do.fsi",
+        "namespace Q\ndo ()\n",
+        [
+            "ns_do.fsi(2,1,2,3): error FS0010: Unexpected keyword 'do'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "ns_ident.fsi",
+        "namespace Q\nc: int\n",
+        [
+            "ns_ident.fsi(2,1,2,2): error FS0010: Unexpected identifier. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "ns_num.fsi",
+        "namespace Q\n1\n",
+        [
+            "ns_num.fsi(2,1,2,2): error FS0010: Unexpected integer literal. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "ns_str.fsi",
+        "namespace Q\n\"a\"\n",
+        [
+            "ns_str.fsi(2,1,2,4): error FS0010: Unexpected string literal. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "ns_lparen.fsi",
+        "namespace Q\n(c)\n",
+        [
+            "ns_lparen.fsi(2,1,2,2): error FS0010: Unexpected symbol '('. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "ns_lbrack.fsi",
+        "namespace Q\n[1]\n",
+        [
+            "ns_lbrack.fsi(2,1,2,2): error FS0010: Unexpected symbol '['. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "ns_if.fsi",
+        "namespace Q\nif true then ()\n",
+        [
+            "ns_if.fsi(2,1,2,3): error FS0010: Unexpected keyword 'if'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "ns_match.fsi",
+        "namespace Q\nmatch 1 with _ -> ()\n",
+        [
+            "ns_match.fsi(2,1,2,6): error FS0010: Unexpected keyword 'match'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "ns_fun.fsi",
+        "namespace Q\nfun x -> x\n",
+        [
+            "ns_fun.fsi(2,1,2,4): error FS0010: Unexpected keyword 'fun'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "ns_eq.fsi",
+        "namespace Q\n= 1\n",
+        [
+            "ns_eq.fsi(2,1,2,2): error FS0010: Unexpected symbol '='. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "ns_bar.fsi",
+        "namespace Q\n| A\n",
+        [
+            "ns_bar.fsi(2,1,2,2): error FS0010: Unexpected symbol '|'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "ns_under.fsi",
+        "namespace Q\n_\n",
+        [
+            "ns_under.fsi(2,1,2,2): error FS0010: Unexpected symbol '_'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "ns_inline.fsi",
+        "namespace Q\ninline c: int\n",
+        [
+            "ns_inline.fsi(2,1,2,7): error FS0010: Unexpected keyword 'inline'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "ns_and.fsi",
+        "namespace Q\nand c: int\n",
+        [
+            "ns_and.fsi(2,1,2,4): error FS0010: Unexpected keyword 'and'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "ns_rbrace.fsi",
+        "namespace Q\n}\n",
+        [
+            "ns_rbrace.fsi(2,1,2,2): error FS0010: Unexpected symbol '}'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "ns_end.fsi",
+        "namespace Q\nend\n",
+        [
+            "ns_end.fsi(2,1,2,4): error FS0010: Unexpected keyword 'end'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "first_end.fsi",
+        "module M\nmodule N =\n    end\n",
+        [
+            "first_end.fsi(3,5,3,8): error FS0010: Unexpected keyword 'end' in signature file"
+            "first_end.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "first_end_val.fsi",
+        "module M\nmodule N =\n    end\nval b: int\n",
+        [ "first_end_val.fsi(3,5,3,8): error FS0010: Unexpected keyword 'end' in signature file" ]
+
+        "first_end_nested_val.fsi",
+        "module M\nmodule N =\n    end\n    val c: int\nval b: int\n",
+        [
+            "first_end_nested_val.fsi(3,5,3,8): error FS0010: Unexpected keyword 'end' in signature file"
+        ]
+
+        "first_end_blank.fsi",
+        "module M\nmodule N =\n    end\n\n\n",
+        [
+            "first_end_blank.fsi(3,5,3,8): error FS0010: Unexpected keyword 'end' in signature file"
+            "first_end_blank.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "first_end_nonl.fsi",
+        "module M\nmodule N =\n    end",
+        [
+            "first_end_nonl.fsi(3,5,3,8): error FS0010: Unexpected keyword 'end' in signature file"
+            "first_end_nonl.fsi(3,8,3,8): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "first_end_module.fsi",
+        "module M\nmodule N =\n    end\nmodule O =\n    val c: int\n",
+        [
+            "first_end_module.fsi(3,5,3,8): error FS0010: Unexpected keyword 'end' in signature file"
+        ]
+
+        "first_end_ns.fsi",
+        "namespace Q\nmodule N =\n    end\n",
+        [
+            "first_end_ns.fsi(3,5,3,8): error FS0010: Unexpected keyword 'end' in signature file"
+            "first_end_ns.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "first_end_ns2.fsi",
+        "namespace Q\nmodule N =\n    end\nnamespace R\nval c: int\n",
+        [ "first_end_ns2.fsi(3,5,3,8): error FS0010: Unexpected keyword 'end' in signature file" ]
+
+        "second_end.fsi",
+        "module M\nmodule N =\n    val a: int\n    end\n",
+        [
+            "second_end.fsi(4,5,4,8): error FS0010: Unexpected keyword 'end' in signature file. Expected incomplete structured construct at or before this point or other token."
+            "second_end.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "second_end_val.fsi",
+        "module M\nmodule N =\n    val a: int\n    end\nval b: int\n",
+        [
+            "second_end_val.fsi(4,5,4,8): error FS0010: Unexpected keyword 'end' in signature file. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "first_paren.fsi",
+        "module M\nmodule N =\n    )\n",
+        [
+            "first_paren.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "first_paren.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "first_val_err.fsi",
+        "module M\nmodule N =\n    val a: )\n",
+        [
+            "first_val_err.fsi(3,12,3,13): error FS0010: Unexpected symbol ')' in value signature"
+            "first_val_err.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "deep_first_end.fsi",
+        "module M\nmodule N =\n    module O =\n        end\n",
+        [
+            "deep_first_end.fsi(4,9,4,12): error FS0010: Unexpected keyword 'end' in signature file"
+            "deep_first_end.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "first_end_lib.fsi",
+        "module M\nmodule N =\n    end\n",
+        [
+            "first_end_lib.fsi(3,5,3,8): error FS0010: Unexpected keyword 'end' in signature file"
+            "first_end_lib.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "same_level_val.fsi",
+        "module M\nmodule N =\n    end\n    val c: int\n",
+        [ "same_level_val.fsi(3,5,3,8): error FS0010: Unexpected keyword 'end' in signature file" ]
+
+        "same_level_two.fsi",
+        "module M\nmodule N =\n    val a: int\n    end\n    val c: int\n",
+        [
+            "same_level_two.fsi(4,5,4,8): error FS0010: Unexpected keyword 'end' in signature file. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "deep_then_outer.fsi",
+        "module M\nmodule N =\n    module O =\n        end\n    val c: int\n",
+        [
+            "deep_then_outer.fsi(4,9,4,12): error FS0010: Unexpected keyword 'end' in signature file"
+        ]
+
+        "err_then_open.fsi",
+        "module M\nmodule N =\n    end\nopen System\n",
+        [ "err_then_open.fsi(3,5,3,8): error FS0010: Unexpected keyword 'end' in signature file" ]
+
+        "err_then_comment.fsi",
+        "module M\nmodule N =\n    end\n// c\n",
+        [
+            "err_then_comment.fsi(3,5,3,8): error FS0010: Unexpected keyword 'end' in signature file"
+            "err_then_comment.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "clean_then_err.fsi",
+        "module M\nmodule O =\n    val d: int\nmodule N =\n    end\n",
+        [
+            "clean_then_err.fsi(5,5,5,8): error FS0010: Unexpected keyword 'end' in signature file"
+            "clean_then_err.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "root_err.fsi",
+        "module M\nval a: int\n)\n",
+        [
+            "root_err.fsi(3,1,3,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "val_err_root.fsi",
+        "module M\nval a: )\n",
+        [ "val_err_root.fsi(2,8,2,9): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "nested_val_err_then_val.fsi",
+        "module M\nmodule N =\n    val a: )\n    val c: int\n",
+        [
+            "nested_val_err_then_val.fsi(3,12,3,13): error FS0010: Unexpected symbol ')' in value signature"
+        ]
+
+        "two_errors.fsi",
+        "module M\nmodule N =\n    end\n    )\n",
+        [
+            "two_errors.fsi(3,5,3,8): error FS0010: Unexpected keyword 'end' in signature file"
+            "two_errors.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "first-end.fsi",
+        "module M\nmodule N =\n    end\n",
+        [
+            "first-end.fsi(3,5,3,8): error FS0010: Unexpected keyword 'end' in signature file"
+            "first-end.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "later_let.fsi",
+        "module M\nmodule N =\n    val a: int\n    let c: int\n",
+        [
+            "later_let.fsi(4,5,4,8): error FS0010: Unexpected keyword 'let' or 'use' in signature file. Expected incomplete structured construct at or before this point or other token."
+            "later_let.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "later_do.fsi",
+        "module M\nmodule N =\n    val a: int\n    do ()\n",
+        [
+            "later_do.fsi(4,5,4,7): error FS0010: Unexpected keyword 'do' in signature file. Expected incomplete structured construct at or before this point or other token."
+            "later_do.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "later_num.fsi",
+        "module M\nmodule N =\n    val a: int\n    1\n",
+        [
+            "later_num.fsi(4,5,4,6): error FS0010: Unexpected integer literal in signature file. Expected incomplete structured construct at or before this point or other token."
+            "later_num.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "later_letbang.fsi",
+        "module M\nmodule N =\n    val a: int\n    let! c = 1\n",
+        [
+            "later_letbang.fsi(4,5,4,9): error FS0010: Unexpected binder keyword in signature file. Expected incomplete structured construct at or before this point or other token."
+            "later_letbang.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "later_paren_val.fsi",
+        "module M\nmodule N =\n    val a: int\n    )\n    val c: int\n",
+        [
+            "later_paren_val.fsi(4,5,4,6): error FS0010: Unexpected symbol ')' in signature file. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "first_paren_paren_val.fsi",
+        "module M\nmodule N =\n    )\n    )\n    val c: int\n",
+        [
+            "first_paren_paren_val.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+        ]
+
+        "first_then_nested_err.fsi",
+        "module M\nmodule N =\n    end\n    val c: int\n    )\n",
+        [
+            "first_then_nested_err.fsi(3,5,3,8): error FS0010: Unexpected keyword 'end' in signature file"
+            "first_then_nested_err.fsi(5,5,5,6): error FS0010: Unexpected symbol ')' in signature file. Expected incomplete structured construct at or before this point or other token."
+            "first_then_nested_err.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "first_then_val_then_root.fsi",
+        "module M\nmodule N =\n    end\n    val c: )\nval b: int\n",
+        [
+            "first_then_val_then_root.fsi(3,5,3,8): error FS0010: Unexpected keyword 'end' in signature file"
+            "first_then_val_then_root.fsi(4,12,4,13): error FS0010: Unexpected symbol ')' in value signature"
+        ]
+
+        "fixture.fsi",
+        "namespace SyntaxSignatures\n\nmodule Values =\n    val broken: )\n    val first: int\n    val other int\n\nmodule Later =\n    val second: int -> ]\n",
+        [
+            "fixture.fsi(4,17,4,18): error FS0010: Unexpected symbol ')' in value signature"
+            "fixture.fsi(6,15,6,18): error FS0010: Unexpected identifier in value signature. Expected ':' or other token."
+            "fixture.fsi(9,24,9,25): error FS0010: Unexpected symbol ']' in value signature"
+        ]
+
+        "ns_val_paren.fsi",
+        "namespace Q\nmodule N =\n    val a: )\n",
+        [
+            "ns_val_paren.fsi(3,12,3,13): error FS0010: Unexpected symbol ')' in value signature"
+            "ns_val_paren.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "ns_val_arrow.fsi",
+        "namespace Q\nmodule N =\n    val a: int -> ]\n",
+        [ "ns_val_arrow.fsi(3,19,3,20): error FS0010: Unexpected symbol ']' in value signature" ]
+
+        "mod_val_arrow.fsi",
+        "module M\nmodule N =\n    val a: int -> ]\n",
+        [ "mod_val_arrow.fsi(3,19,3,20): error FS0010: Unexpected symbol ']' in value signature" ]
+
+        "mod_val_bracket.fsi",
+        "module M\nmodule N =\n    val a: ]\n",
+        [
+            "mod_val_bracket.fsi(3,12,3,13): error FS0010: Unexpected symbol ']' in value signature"
+            "mod_val_bracket.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "mod_val_colon.fsi",
+        "module M\nmodule N =\n    val a int\n",
+        [
+            "mod_val_colon.fsi(3,11,3,14): error FS0010: Unexpected identifier in value signature. Expected ':' or other token."
+            "mod_val_colon.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "mod_val_name.fsi",
+        "module M\nmodule N =\n    val )\n",
+        [
+            "mod_val_name.fsi(3,9,3,10): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+            "mod_val_name.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "sig222d-ns_end.fsi",
+        "namespace Q\nmodule N =\n    end\n",
+        [
+            "sig222d-ns_end.fsi(3,5,3,8): error FS0010: Unexpected keyword 'end' in signature file"
+            "sig222d-ns_end.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "mod_second_val_paren.fsi",
+        "module M\nmodule N =\n    val b: int\n    val a: )\n",
+        [
+            "mod_second_val_paren.fsi(4,12,4,13): error FS0010: Unexpected symbol ')' in value signature"
+            "mod_second_val_paren.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "n_trail_paren.fsi",
+        "module M\nmodule N =\n    val a: int )\n",
+        [
+            "n_trail_paren.fsi(3,16,3,17): error FS0010: Unexpected symbol ')' in signature file. Expected incomplete structured construct at or before this point or other token."
+            "n_trail_paren.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "n_trail_paren_val.fsi",
+        "module M\nmodule N =\n    val a: int )\n    val b: int\n",
+        [
+            "n_trail_paren_val.fsi(3,16,3,17): error FS0010: Unexpected symbol ')' in signature file. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "n_trail_num.fsi",
+        "module M\nmodule N =\n    val a: int 1\n",
+        [
+            "n_trail_num.fsi(3,16,3,17): error FS0010: Unexpected integer literal in signature file. Expected incomplete structured construct at or before this point or other token."
+            "n_trail_num.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "r_trail_num.fsi",
+        "module M\nval a: int 1\n",
+        [
+            "r_trail_num.fsi(2,12,2,13): error FS0010: Unexpected integer literal. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "r_trail_str.fsi",
+        "module M\nval a: int \"s\"\n",
+        [
+            "r_trail_str.fsi(2,12,2,15): error FS0010: Unexpected string literal. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "r_trail_let.fsi",
+        "module M\nval a: int let\n",
+        [
+            "r_trail_let.fsi(2,12,2,15): error FS0010: Unexpected keyword 'let' or 'use'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "n_arrow_then_paren.fsi",
+        "module M\nmodule N =\n    val a: int -> ]\n    )\n",
+        [
+            "n_arrow_then_paren.fsi(3,19,3,20): error FS0010: Unexpected symbol ']' in value signature"
+        ]
+
+        "n_star.fsi",
+        "module M\nmodule N =\n    val a: int * ]\n",
+        [ "n_star.fsi(3,18,3,19): error FS0010: Unexpected symbol ']' in value signature" ]
+
+        "n_list.fsi",
+        "module M\nmodule N =\n    val a: int list ]\n",
+        [
+            "n_list.fsi(3,21,3,22): error FS0010: Unexpected symbol ']' in signature file. Expected incomplete structured construct at or before this point or other token."
+            "n_list.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+    ]
+
+    let private unmodeledSignatureRecoveryCases = [
+        "mod_eq.fsi",
+        "module M\n= 1\n",
+        [
+            "mod_eq.fsi(2,3,2,4): error FS0010: Unexpected integer literal in signature file"
+            "mod_eq.fsi(3,1,3,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "mod_private.fsi",
+        "module M\nprivate c: int\n",
+        [ "mod_private.fsi(2,9,2,10): error FS0010: Unexpected identifier" ]
+
+        "nested_ident.fsi",
+        "module M\nmodule N =\n    c: int\n",
+        [
+            "nested_ident.fsi(3,6,3,7): error FS0010: Unexpected symbol ':' in signature file. Expected incomplete structured construct at or before this point, '.' or other token."
+            "nested_ident.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "nested_private.fsi",
+        "module M\nmodule N =\n    private c: int\n",
+        [
+            "nested_private.fsi(3,13,3,14): error FS0010: Unexpected identifier in signature file"
+            "nested_private.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "after_private.fsi",
+        "module M\nval a: int\nprivate c: int\n",
+        [
+            "after_private.fsi(3,9,3,10): error FS0010: Unexpected identifier in signature file"
+            "after_private.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "ns_private.fsi",
+        "namespace Q\nprivate c: int\n",
+        [ "ns_private.fsi(2,9,2,10): error FS0010: Unexpected identifier" ]
+
+        "deep_then_root.fsi",
+        "module M\nmodule N =\n    module O =\n        end\nval c: int\n",
+        [
+            "deep_then_root.fsi(4,9,4,12): error FS0010: Unexpected keyword 'end' in signature file"
+            "deep_then_root.fsi(6,1,6,1): error FS0010: Unexpected end of input in signature file. Expected incomplete structured construct at or before this point or other token."
+            "deep_then_root.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "r_trail_eq.fsi", "module M\nval a: int = 1\n", []
     ]
 
     [<Tests>]
@@ -3320,6 +4178,79 @@ module private N =
                              |> Seq.map _.Diagnostic)
                             (oracleLines result)
             ]
+
+            testList "a signature recovery reports the Oracle diagnostics" [
+                for logicalPath, text, expected in signatureRecoveryCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        Expect.sequenceEqual
+                            (oracleLines (
+                                parse SyntaxCompilationTarget.Executable [
+                                    logicalPath, text
+                                    last
+                                ]
+                            ))
+                            expected
+                            "The diagnostics must match the Compatibility Oracle"
+            ]
+
+            testList "an unmodeled signature recovery stays explicit" [
+                for logicalPath, text, oracle in unmodeledSignatureRecoveryCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result =
+                            parse SyntaxCompilationTarget.Executable [
+                                logicalPath, text
+                                last
+                            ]
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            (result.Diagnostics
+                             |> Seq.map _.Diagnostic)
+                            (oracleLines result)
+            ]
+
+            testList
+                "a nested signature recovery at the end of input follows the FS0222 target rule"
+                [
+                    for name, target, files, expected in
+                        [
+                            "the last file of an executable",
+                            SyntaxCompilationTarget.Executable,
+                            [
+                                last
+                                "first_end.fsi", "module M\nmodule N =\n    end\n"
+                            ],
+                            [
+                                "first_end.fsi(3,5,3,8): error FS0010: Unexpected keyword 'end' in signature file"
+                            ]
+                            "a library",
+                            SyntaxCompilationTarget.Library,
+                            [ "first_end_lib.fsi", "module M\nmodule N =\n    end\n" ],
+                            [
+                                "first_end_lib.fsi(3,5,3,8): error FS0010: Unexpected keyword 'end' in signature file"
+                                "first_end_lib.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+                            ]
+                            "a value type error after an arrow in a library",
+                            SyntaxCompilationTarget.Library,
+                            [
+                                "fixture.fsi",
+                                "namespace SyntaxSignatures\n\nmodule Values =\n    val broken: )\n    val first: int\n    val other int\n\nmodule Later =\n    val second: int -> ]\n"
+                            ],
+                            [
+                                "fixture.fsi(4,17,4,18): error FS0010: Unexpected symbol ')' in value signature"
+                                "fixture.fsi(6,15,6,18): error FS0010: Unexpected identifier in value signature. Expected ':' or other token."
+                                "fixture.fsi(9,24,9,25): error FS0010: Unexpected symbol ']' in value signature"
+                            ]
+                        ] ->
+                        testCase name
+                        <| fun _ ->
+                            Expect.sequenceEqual
+                                (oracleLines (parse target files))
+                                expected
+                                "The diagnostics must match the Compatibility Oracle"
+                ]
 
             testCase "a module-level use keeps its keyword in the tree"
             <| fun _ ->

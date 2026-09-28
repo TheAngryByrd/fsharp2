@@ -116,6 +116,7 @@ module internal Parser =
         | DiscardedIfValueOrOpen
         | ReportedAtRoot of recoveryDepth: int
         | IncompleteAtNext
+        | SkippedInSignatureModule of recoveryDepth: int * reportsAtEnd: bool
 
     [<RequireQualifiedAccess>]
     type private Recovery =
@@ -137,6 +138,7 @@ module internal Parser =
         mutable Recovery: Recovery
         mutable InAnonymousRoot: bool
         mutable Depth: int
+        mutable UnresumedAtEnd: SourceRange option
     }
 
     [<RequireQualifiedAccess>]
@@ -336,8 +338,26 @@ module internal Parser =
         && isDelimiter "]" next
         && next.Range.Start.Offset = token.Range.End.Offset
 
+    let private signatureStartKeywords =
+        HashSet [
+            "do"
+            "if"
+            "match"
+            "fun"
+            "inline"
+            "and"
+        ]
+
     let private unexpectedToken point (cursor: Cursor) =
         let token = cursor.Current
+
+        let signatureStart =
+            match point with
+            | RecoveryPoint.SignatureFile
+            | RecoveryPoint.NestedSignature
+            | RecoveryPoint.NestedFirstSignature -> true
+            | _ -> false
+
         let next = cursor.Peek 1
         let text = tokenText token
 
@@ -395,6 +415,54 @@ module internal Parser =
             | RecoveryPoint.ValueColon when isIdentifier token -> Some("identifier", token.Range)
             | RecoveryPoint.LambdaStart when isOperator "->" token -> symbol text token.Range
             | RecoveryPoint.NestedFirstDefinition when isOperator "=" token ->
+                symbol text token.Range
+            | _ when
+                signatureStart
+                && (isKeyword "let" token
+                    || isKeyword "use" token)
+                && isOperator "!" next
+                && next.Range.Start.Offset = token.Range.End.Offset
+                ->
+                Some("binder keyword", span token.Range next.Range)
+            | _ when
+                signatureStart
+                && (isKeyword "let" token
+                    || isKeyword "use" token)
+                ->
+                Some("keyword 'let' or 'use'", token.Range)
+            | _ when
+                signatureStart
+                && isKind LexicalTokenKind.Keyword token
+                && signatureStartKeywords.Contains text
+                ->
+                keyword ()
+            | _ when
+                signatureStart
+                && text = "_"
+                ->
+                symbol text token.Range
+            | RecoveryPoint.SignatureFile when isKind LexicalTokenKind.Identifier token ->
+                Some("identifier", token.Range)
+            | _ when
+                signatureStart
+                && isKind LexicalTokenKind.NumericLiteral token
+                && Seq.forall Char.IsAsciiDigit text
+                ->
+                Some("integer literal", token.Range)
+            | _ when
+                signatureStart
+                && isKind LexicalTokenKind.StringLiteral token
+                && text.StartsWith("\"", StringComparison.Ordinal)
+                && not (text.StartsWith("\"\"\"", StringComparison.Ordinal))
+                ->
+                Some("string literal", token.Range)
+            | _ when
+                signatureStart
+                && (isDelimiter "(" token
+                    || isDelimiter "[" token
+                    || isOperator "=" token
+                    || isOperator "|" token)
+                ->
                 symbol text token.Range
             | _ -> None
 
@@ -2207,6 +2275,7 @@ module internal Parser =
         | Discards
         | DiscardsAfterDeclaration
         | DiscardsInValue
+        | DiscardsInsideValueType
         | Unmodeled
 
     let private parseExpressionDeclaration state point attributes =
@@ -2236,6 +2305,8 @@ module internal Parser =
         let context = valToken.Range.Start
         let reported = state.Diagnostics.Count
         let mutable recovered = None
+        let mutable typeStart = -1
+        let mutable recoveredInsideType = false
         let mutable skipped = None
 
         let recover point =
@@ -2244,6 +2315,12 @@ module internal Parser =
                 |> ignore
 
             recovered <- Some point
+
+            recoveredInsideType <-
+                point = RecoveryPoint.ValueType
+                && cursor.Current.Range.Start.Offset
+                   <> typeStart
+
             skipped <- skipUntil state context
 
         let onGap gap =
@@ -2268,6 +2345,8 @@ module internal Parser =
                 cursor.Advance()
                 |> ignore
 
+                typeStart <- cursor.Current.Range.Start.Offset
+
                 parseTypeOperand
                     state
                     context
@@ -2280,6 +2359,14 @@ module internal Parser =
                 missing
 
         if
+            recovered.IsNone
+            && isOperator "=" cursor.Current
+            && not (endsLine context cursor.Current)
+        then
+            reportUnsupported state cursor.Current "a literal value signature"
+            recovered <- Some RecoveryPoint.ValueType
+            skipped <- skipUntil state context
+        elif
             recovered.IsNone
             && not (endsLine context cursor.Current)
         then
@@ -2305,6 +2392,7 @@ module internal Parser =
             | None -> ListRecovery.Continues
             | Some RecoveryPoint.SignatureFile
             | Some RecoveryPoint.NestedSignature -> ListRecovery.Discards
+            | Some _ when recoveredInsideType -> ListRecovery.DiscardsInsideValueType
             | Some _ -> ListRecovery.DiscardsInValue
 
         Some value, recovery
@@ -2778,8 +2866,14 @@ module internal Parser =
 
     let private discardsSilently state =
         match pendingDeclaration state with
-        | Some(DeclarationAfterRecovery.Discarded _) -> true
+        | Some(DeclarationAfterRecovery.Discarded _)
+        | Some(DeclarationAfterRecovery.SkippedInSignatureModule _) -> true
         | _ -> false
+
+    let private resumesSignatureModule (token: LayoutToken) =
+        isKeyword "val" token
+        || isKeyword "open" token
+        || isKeyword "module" token
 
     let private suppress state next =
         state.Recovery <- Recovery.Suppressing(state.Diagnostics.Count, next)
@@ -2891,6 +2985,13 @@ module internal Parser =
 
     let private reportPendingAtEnd state =
         match pendingDeclaration state with
+        | Some(DeclarationAfterRecovery.SkippedInSignatureModule(_, reportsAtEnd)) when
+            isEndOfFile state.Cursor.Current
+            ->
+            if reportsAtEnd then
+                state.UnresumedAtEnd <- Some(emptyAt state.Cursor.Current.Range.Start)
+        | Some(DeclarationAfterRecovery.SkippedInSignatureModule _) ->
+            state.Recovery <- Recovery.Parsing
         | Some(DeclarationAfterRecovery.ReportedAtRoot _)
         | Some DeclarationAfterRecovery.IncompleteAtNext ->
             let token = state.Cursor.Current
@@ -2973,6 +3074,20 @@ module internal Parser =
             elif isDeclarationListEnd token then
                 stop <- true
             else
+                match pendingDeclaration state with
+                | Some(DeclarationAfterRecovery.SkippedInSignatureModule(recoveryDepth, _)) when
+                    resumesSignatureModule token
+                    ->
+                    if
+                        state.Depth
+                        + 1
+                        >= recoveryDepth
+                    then
+                        state.Recovery <- Recovery.Parsing
+                    else
+                        reportAfterRecovery state token
+                | _ -> ()
+
                 let target = if isSuppressing state then discarded else declarations
 
                 let firstInNestedModule =
@@ -3004,7 +3119,8 @@ module internal Parser =
                     | None
                     | Some(DeclarationAfterRecovery.Discarded _)
                     | Some(DeclarationAfterRecovery.ReportedAtRoot _)
-                    | Some DeclarationAfterRecovery.IncompleteAtNext -> false
+                    | Some DeclarationAfterRecovery.IncompleteAtNext
+                    | Some(DeclarationAfterRecovery.SkippedInSignatureModule _) -> false
                     | Some(DeclarationAfterRecovery.Unmodeled _) -> true
                     | Some DeclarationAfterRecovery.DiscardedIfValueOrOpen ->
                         not (
@@ -3136,12 +3252,21 @@ module internal Parser =
                         // The Compatibility Oracle discards the rest of the file, also after the first declaration of the module, and reports one more diagnostic.
                         suppressAfterNestedRecovery state
                     | ListRecovery.Discards, DeclarationList.NestedModule
-                    | ListRecovery.DiscardsInValue, DeclarationList.NestedModule -> ()
+                    | ListRecovery.DiscardsInValue, DeclarationList.NestedModule ->
+                        // The Compatibility Oracle skips the next tokens silently until a value, open, module, or namespace.
+                        suppress
+                            state
+                            (DeclarationAfterRecovery.SkippedInSignatureModule(state.Depth, true))
+                    | ListRecovery.DiscardsInsideValueType, DeclarationList.NestedModule ->
+                        suppress
+                            state
+                            (DeclarationAfterRecovery.SkippedInSignatureModule(state.Depth, false))
                     | ListRecovery.Discards, _
                     | ListRecovery.DiscardsAfterDeclaration, _ ->
                         // The Compatibility Oracle discards the rest of the file after this recovery and reports no diagnostic for it.
                         suppress state (DeclarationAfterRecovery.Discarded None)
-                    | ListRecovery.DiscardsInValue, _ ->
+                    | ListRecovery.DiscardsInValue, _
+                    | ListRecovery.DiscardsInsideValueType, _ ->
                         // The Compatibility Oracle discards later values and opens, and reports FS0010 at the end for other declarations.
                         suppress state DeclarationAfterRecovery.DiscardedIfValueOrOpen
                     | ListRecovery.Unmodeled, _ ->
@@ -3385,6 +3510,7 @@ module internal Parser =
         Recovery = Recovery.Parsing
         InAnonymousRoot = false
         Depth = 0
+        UnresumedAtEnd = None
     }
 
     let parseImplementationFile (document: LexicalDocument) : ImplementationFileParseResult =
@@ -3411,6 +3537,7 @@ module internal Parser =
                 Contents = contents
             }
             Diagnostics = ImmutableArray.CreateRange state.Diagnostics
+            UnresumedRecoveryAtEnd = state.UnresumedAtEnd
         }
 
     let private missingDeclarationMessage =
@@ -3566,21 +3693,23 @@ module internal Parser =
         |> Seq.iteri (fun index source ->
             let document = source.Document
 
-            let file, fileDiagnostics, anonymous =
+            let file, fileDiagnostics, anonymous, unresumedAtEnd =
                 if source.Kind = SyntaxSourceKind.Signature then
                     let result = parseSignatureFile document
 
                     SyntaxFile.Signature result.File,
                     result.Diagnostics,
                     anonymousRoot result.File.Contents
-                    |> Option.map (anonymousSignature document)
+                    |> Option.map (anonymousSignature document),
+                    result.UnresumedRecoveryAtEnd
                 else
                     let result = parseImplementationFile document
 
                     SyntaxFile.Implementation result.File,
                     result.Diagnostics,
                     anonymousRoot result.File.Contents
-                    |> Option.map (anonymousImplementation document)
+                    |> Option.map (anonymousImplementation document),
+                    None
 
             let add diagnostic =
                 diagnostics.Add {
@@ -3595,17 +3724,29 @@ module internal Parser =
                 fileDiagnostics
                 |> Seq.exists (fun diagnostic -> diagnostic.Code = unsupportedCode)
 
-            match source.Kind, anonymous with
-            | SyntaxSourceKind.Script, _
-            | _, None -> ()
-            | _, Some _ when unmodeled -> ()
-            | _, Some anonymous ->
-                let requiresDeclaration =
-                    match target with
-                    | SyntaxCompilationTarget.Library -> true
-                    | SyntaxCompilationTarget.Executable ->
-                        index < sources.Length
-                                - 1
+            let requiresDeclaration =
+                match target with
+                | SyntaxCompilationTarget.Library -> true
+                | SyntaxCompilationTarget.Executable ->
+                    index < sources.Length
+                            - 1
+
+            match source.Kind, anonymous, unresumedAtEnd with
+            | SyntaxSourceKind.Script, _, _ -> ()
+            | _, None, Some range when
+                requiresDeclaration
+                && not unmodeled
+                ->
+                // The Compatibility Oracle loses the module header when a nested signature recovery reaches the end of input.
+                add {
+                    Severity = DiagnosticSeverity.Error
+                    Code = "FS0222"
+                    Message = missingDeclarationMessage
+                    Range = range
+                }
+            | _, None, _ -> ()
+            | _, Some _, _ when unmodeled -> ()
+            | _, Some anonymous, _ ->
 
                 if requiresDeclaration then
                     add {
