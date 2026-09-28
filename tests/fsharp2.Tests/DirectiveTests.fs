@@ -205,7 +205,7 @@ let selected = 1
                     |> Seq.map (fun diagnostic ->
                         Expect.equal
                             diagnostic.Severity
-                            LexicalSeverity.Error
+                            DiagnosticSeverity.Error
                             $"{diagnostic.Code} is an Oracle error"
 
                         diagnostic.Code, diagnostic.Range.Start.Column

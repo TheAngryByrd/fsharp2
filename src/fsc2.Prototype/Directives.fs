@@ -419,7 +419,7 @@ module internal Directives =
                 + 1L
 
         let addDiagnostic code message range =
-            addDiagnosticWith LexicalSeverity.Error code message range
+            addDiagnosticWith DiagnosticSeverity.Error code message range
 
         let blank startOffset endOffset =
             for index = startOffset to endOffset
@@ -767,7 +767,7 @@ module internal Directives =
                         let position = SourceMap.positionAt source.Map argumentOffset
 
                         addDiagnosticWith
-                            LexicalSeverity.Error
+                            DiagnosticSeverity.Error
                             "FS0203"
                             $"Invalid warning number '{code}'"
                             { Start = position; End = position }

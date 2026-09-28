@@ -471,6 +471,19 @@ module ParserCompilationTests =
                 "a`b", "A`b"
                 "a\U0001D400b", "A\U0001D400b"
                 "a²b", "A²b"
+                "\U0001D400ab", "\U0001D400ab"
+                "\U0001D41A-b", "\U0001D41A-b"
+                "\U00010428-b", "\U00010428-b"
+                "ǆa-b", "Ǆa-b"
+                "Ǆa-b", "Ǆa-b"
+                "ßa-b", "ßa-b"
+                "ĳa-b", "Ĳa-b"
+                "ﬁa-b", "ﬁa-b"
+                "i-b", "I-b"
+                "ı-b", "ı-b"
+                "ς-b", "Σ-b"
+                "æ-b", "Æ-b"
+                "ᾀ-b", "ᾈ-b"
             ]
             |> List.map (fun (stem, moduleName) ->
                 let fileName = $"{stem}.fs"
@@ -815,6 +828,57 @@ module ParserCompilationTests =
             "C1.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
         ]
 
+        "an attributed open is discarded after a stray token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "E1.fsi", "module M\n)\n[<A>]\nopen System\n"
+            last
+        ],
+        [
+            "E1.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "an attributed nested module is discarded after a stray token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "E2.fsi", "module M\n)\n[<A>]\nmodule N =\n    val b: int\n"
+            last
+        ],
+        [
+            "E2.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "an attributed open is discarded after a stray first token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "E3.fsi", ")\n[<A>] open System\n"
+            last
+        ],
+        [
+            "E3.fsi(1,1,1,2): error FS0010: Unexpected symbol ')' in signature file"
+            missingDeclaration "E3.fsi" 1 1 1 2
+        ]
+
+        "an attributed open is discarded after a definition recovery",
+        SyntaxCompilationTarget.Executable,
+        [
+            "E4.fs", "module M\nlet a = 1\n)\n[<A>]\nopen System\n"
+            last
+        ],
+        [
+            "E4.fs(3,1,3,2): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "an attributed nested module is discarded after a definition recovery",
+        SyntaxCompilationTarget.Executable,
+        [
+            "E5.fs", "module M\nlet a = 1\n)\n[<A>]\nmodule N =\n    let b = 1\n"
+            last
+        ],
+        [
+            "E5.fs(3,1,3,2): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
         "a do declaration is discarded after a stray token",
         SyntaxCompilationTarget.Executable,
         [
@@ -856,6 +920,136 @@ module ParserCompilationTests =
             "A7.fsi(1,1,1,2): error FS0010: Unexpected symbol ')' in signature file"
             missingDeclaration "A7.fsi" 1 1 1 2
         ]
+
+        "an expression before a let declaration",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A1.fs",
+            "1 + 2
+let b = 1
+"
+            last
+        ],
+        [ missingDeclaration "A1.fs" 1 1 2 1 ]
+
+        "a multi-line expression",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A2.fs",
+            "f (
+    1)
+"
+            last
+        ],
+        [ missingDeclaration "A2.fs" 1 1 2 1 ]
+
+        "a multi-line expression before a let declaration",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A3.fs",
+            "f (
+    1)
+let b = 1
+"
+            last
+        ],
+        [ missingDeclaration "A3.fs" 1 1 2 1 ]
+
+        "a last expression on the next line",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A4.fs",
+            "let a = 1
+f 2
+"
+            last
+        ],
+        [ missingDeclaration "A4.fs" 1 1 2 1 ]
+
+        "a last expression before blank lines",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A5.fs",
+            "let a = 1
+f 2
+
+"
+            last
+        ],
+        [ missingDeclaration "A5.fs" 1 1 2 1 ]
+
+        "a last multi-line expression on the next line",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A6.fs",
+            "let a = 1
+f (
+  2)
+"
+            last
+        ],
+        [ missingDeclaration "A6.fs" 1 1 2 1 ]
+
+        "a single-line expression range ends at its last token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A7.fs",
+            "1
+"
+            last
+        ],
+        [ missingDeclaration "A7.fs" 1 1 1 2 ]
+
+        "a single-line expression range ignores trailing space",
+        SyntaxCompilationTarget.Executable,
+        [
+            "S15.fs",
+            "1 + 2   
+"
+            last
+        ],
+        [ missingDeclaration "S15.fs" 1 1 1 6 ]
+
+        "a single-line expression range without a line break",
+        SyntaxCompilationTarget.Executable,
+        [
+            "S5.fs", "f ()"
+            last
+        ],
+        [ missingDeclaration "S5.fs" 1 1 1 5 ]
+
+        "a module header is not followed by an application on the next line",
+        SyntaxCompilationTarget.Executable,
+        [
+            "Y12.fs",
+            "module M
+f x = 1
+"
+            last
+        ],
+        []
+
+        "a module header is not followed by a name on the next line",
+        SyntaxCompilationTarget.Executable,
+        [
+            "Y21.fs",
+            "module M
+x = 1
+"
+            last
+        ],
+        []
+
+        "a dotted module header is not followed by a dotted name on the next line",
+        SyntaxCompilationTarget.Executable,
+        [
+            "Y22.fs",
+            "module A.B
+x.y = 1
+"
+            last
+        ],
+        []
 
         "a nested module in an anonymous root",
         SyntaxCompilationTarget.Executable,
@@ -900,6 +1094,165 @@ module ParserCompilationTests =
             "LastSig.fsi", "val a: int\n"
         ],
         []
+    ]
+
+    let private expressionDeclarationCases = [
+        "Y2.fs",
+        "module M\nf x )\n",
+        [
+            "Y2.fs(2,5,2,6): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "Y3.fs",
+        "module M\nmatch 1 with\n| _ )\n",
+        [
+            "Y3.fs(3,5,3,6): error FS0010: Unexpected symbol ')' in pattern matching. Expected '->' or other token."
+        ]
+
+        "Y4.fs",
+        "module M\nfun x )\n",
+        [
+            "Y4.fs(2,7,2,8): error FS0010: Unexpected symbol ')' in lambda expression. Expected '->' or other token."
+        ]
+
+        "Y5.fs",
+        "module M\n{ A = ) }\n",
+        [ "Y5.fs(2,7,2,8): error FS0010: Unexpected symbol ')' in expression" ]
+
+        "Y7.fs",
+        "module M\nf x )\nlet b = 1\n",
+        [
+            "Y7.fs(2,5,2,6): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "Y9.fs",
+        "module M\nmatch 1 )\n",
+        [
+            "Y9.fs(2,9,2,10): error FS0010: Unexpected symbol ')' in expression. Expected 'with' or other token."
+        ]
+
+        "Y14.fs",
+        "f x )\n",
+        [
+            "Y14.fs(1,5,1,6): error FS0010: Unexpected symbol ')' in implementation file"
+            "Y14.fs(1,1,1,4): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "Y15.fs",
+        "module M\nf x\n)\n",
+        [
+            "Y15.fs(3,1,3,2): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "Y16.fs",
+        "namespace N\nf x )\n",
+        [
+            "Y16.fs(2,5,2,6): error FS0010: Unexpected symbol ')' in implementation file. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "Y17.fs",
+        "namespace N\nf x )\nlet b = 1\n",
+        [
+            "Y17.fs(2,5,2,6): error FS0010: Unexpected symbol ')' in implementation file. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "Y19.fs",
+        "module M\nf x )\nf y )\n",
+        [
+            "Y19.fs(2,5,2,6): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "Y20.fs",
+        "f x )\nlet b = 1\n",
+        [
+            "Y20.fs(1,5,1,6): error FS0010: Unexpected symbol ')' in implementation file"
+            "Y20.fs(1,1,1,4): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "Y23.fs",
+        "module M\nf ]\n",
+        [
+            "Y23.fs(2,3,2,4): error FS0010: Unexpected symbol ']' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "Y24.fs",
+        "module M\n1 )\n",
+        [
+            "Y24.fs(2,3,2,4): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "Y26.fs",
+        "module M\n(1) )\n",
+        [
+            "Y26.fs(2,5,2,6): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "Y27.fs",
+        "module M\nf x end\n",
+        [
+            "Y27.fs(2,5,2,8): error FS0010: Unexpected keyword 'end' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+    ]
+
+    let private unmodeledExpressionDeclarationCases = [
+        "Y1.fs",
+        "module M\n1 +\n",
+        [
+            "Y1.fs(3,1,3,1): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "Y1.fs(2,3,2,4): error FS3156: Unexpected token '+' or incomplete expression"
+        ]
+
+        "Y6.fs",
+        "module M\n(1, )\n",
+        [ "Y6.fs(2,3,2,4): error FS3100: Expected an expression after this point" ]
+
+        "Y8.fs",
+        "module M\nif true then )\n",
+        [
+            "Y8.fs(2,14,2,15): error FS0010: Unexpected symbol ')' in expression"
+            "Y8.fs(3,1,3,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "Y10.fs",
+        "module M\n[1; )\n",
+        [
+            "Y10.fs(2,5,2,6): error FS0010: Unexpected symbol ')' in expression. Expected ']' or other token."
+            "Y10.fs(2,1,2,2): error FS0598: Unmatched '['"
+        ]
+
+        "Y11.fs",
+        "module M\nf (\n",
+        [
+            "Y11.fs(3,1,3,1): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (1:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "Y11.fs(2,3,2,4): error FS0583: Unmatched '('"
+        ]
+
+        "Y13.fs",
+        "module M\nmodule N =\n    f x )\n    let b = 1\n",
+        [
+            "Y13.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "Y13.fs(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "Y18.fs",
+        "module M\nmodule N =\n    let a = 1\n    f x )\n",
+        [
+            "Y18.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "Y18.fs(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "Y25.fs",
+        "module M\nmodule N =\n    let a = 1\n    f x )\n    let b = 2\n",
+        [
+            "Y25.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "Y25.fs(6,1,6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "Y28.fs",
+        "module M\nf x in\n",
+        [
+            "Y28.fs(2,5,2,7): error FS0010: Unexpected keyword 'in' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
     ]
 
     [<Tests>]
@@ -988,11 +1341,25 @@ module ParserCompilationTests =
             ]
 
             testList "an unmodeled shape after a signature recovery stays explicit" [
-                for logicalPath, text in
+                for logicalPath, text, oracle in
                     [
-                        "C4.fsi", "module M\n)\nmodule N =\nval b: int\n"
-                        "B6.fsi", "module M\nval a: )\nmodule Inner =\n    val b: )\n"
-                        "C2.fsi", "module M\n)\nval y: int\n    )\n"
+                        "C4.fsi",
+                        "module M\n)\nmodule N =\nval b: int\n",
+                        [
+                            "C4.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+                            "C4.fsi(4,1,4,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+                        ]
+                        "B6.fsi",
+                        "module M\nval a: )\nmodule Inner =\n    val b: )\n",
+                        [
+                            "B6.fsi(2,8,2,9): error FS0010: Unexpected symbol ')' in value signature"
+                            "B6.fsi(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in signature file"
+                        ]
+                        "C2.fsi",
+                        "module M\n)\nval y: int\n    )\n",
+                        [
+                            "C2.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+                        ]
                     ] ->
                     testCase logicalPath
                     <| fun _ ->
@@ -1002,10 +1369,43 @@ module ParserCompilationTests =
                                 last
                             ]
 
-                        Expect.exists
-                            result.Diagnostics
-                            (fun fileDiagnostic -> fileDiagnostic.Diagnostic.Code = "FSC2P1001")
-                            "The parser does not model this shape after recovery, so it reports FSC2P1001"
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            (result.Diagnostics
+                             |> Seq.map _.Diagnostic)
+                            (oracleLines result)
+            ]
+
+            testList "a top-level expression declaration reports the Oracle diagnostics" [
+                for logicalPath, text, expected in expressionDeclarationCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        Expect.sequenceEqual
+                            (oracleLines (
+                                parse SyntaxCompilationTarget.Executable [
+                                    logicalPath, text
+                                    last
+                                ]
+                            ))
+                            expected
+                            "The diagnostics must match the Compatibility Oracle"
+            ]
+
+            testList "an unmodeled error in a top-level expression declaration stays explicit" [
+                for logicalPath, text, oracle in unmodeledExpressionDeclarationCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result =
+                            parse SyntaxCompilationTarget.Executable [
+                                logicalPath, text
+                                last
+                            ]
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            (result.Diagnostics
+                             |> Seq.map _.Diagnostic)
+                            (oracleLines result)
             ]
 
             testCase "files keep their order and their kind"

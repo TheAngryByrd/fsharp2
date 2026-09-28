@@ -26386,12 +26386,12 @@ type internal CompilerService() =
 
     member _.LexicalDiagnostics(source: LexicalDocument) : CompilerDiagnostic seq =
         source.Diagnostics
-        |> Seq.filter (fun diagnostic -> diagnostic.Severity = LexicalSeverity.Error)
+        |> Seq.filter (fun diagnostic -> diagnostic.Severity = DiagnosticSeverity.Error)
         |> Seq.map (lexicalDiagnostic source)
 
     member _.OrderedLexicalDiagnostics
         (source: LexicalDocument)
-        : (LexicalSeverity * CompilerDiagnostic) seq =
+        : (DiagnosticSeverity * CompilerDiagnostic) seq =
         source.Diagnostics
         |> Seq.map (fun diagnostic -> diagnostic.Severity, lexicalDiagnostic source diagnostic)
 
@@ -26468,10 +26468,10 @@ type internal CompilerService() =
             | [] -> Ok(List.rev parsed, List.rev keys)
             | source :: _ when
                 source.Diagnostics
-                |> Seq.exists (fun diagnostic -> diagnostic.Severity = LexicalSeverity.Error)
+                |> Seq.exists (fun diagnostic -> diagnostic.Severity = DiagnosticSeverity.Error)
                 ->
                 source.Diagnostics
-                |> Seq.find (fun diagnostic -> diagnostic.Severity = LexicalSeverity.Error)
+                |> Seq.find (fun diagnostic -> diagnostic.Severity = DiagnosticSeverity.Error)
                 |> lexicalDiagnostic source
                 |> Error
             | source :: tail ->

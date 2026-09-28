@@ -76,6 +76,8 @@ module ParserTests =
         | ImplementationDeclaration.Type definition -> $"type {definition.Name.Text}"
         | ImplementationDeclaration.Do(attributes, _, _) ->
             $"do [{attributes.Length} attribute lists]"
+        | ImplementationDeclaration.Expression(attributes, _, _) ->
+            $"expr [{attributes.Length} attribute lists]"
         | ImplementationDeclaration.Skipped _ -> "skipped"
 
     let private parseSignature logicalPath text =
@@ -513,31 +515,6 @@ module ParserTests =
             "ValueThenLet.fsi(4,1): error FS0010: Incomplete structured construct at or before this point in signature file"
         ]
     ]
-
-    let private expectExplicitlyUnsupported
-        (oracle: string list)
-        (diagnostics: ImmutableArray<SyntaxDiagnostic>)
-        (lines: string list)
-        =
-        Expect.exists
-            diagnostics
-            (fun diagnostic -> diagnostic.Code = "FSC2P1001")
-            "Unsupported syntax must report an explicit FSC2P1001 diagnostic"
-
-        for line in lines do
-            if not (line.Contains ": error FSC2P1001: ") then
-                Expect.contains
-                    oracle
-                    line
-                    "Each FS diagnostic must be a diagnostic that the Compatibility Oracle reports"
-
-        Expect.equal
-            (diagnostics
-             |> Seq.map _.Range.Start
-             |> Seq.distinct
-             |> Seq.length)
-            diagnostics.Length
-            "One recovery group reports one diagnostic at each position"
 
     let private bindingRecoveryCases = [
         "TypeThenLet.fs",
@@ -1112,7 +1089,7 @@ module Values =
                     <| fun _ ->
                         let result = parse logicalPath text
 
-                        expectExplicitlyUnsupported
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
                             oracle
                             result.Diagnostics
                             (oracleLines logicalPath result.Diagnostics)
@@ -1126,7 +1103,7 @@ module Values =
                                 (definitionRecovery
                                  + later)
 
-                        expectExplicitlyUnsupported
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
                             [ definitionRecoveryOracle logicalPath ]
                             result.Diagnostics
                             (oracleLines logicalPath result.Diagnostics)
@@ -1136,7 +1113,7 @@ module Values =
                     <| fun _ ->
                         let result = parseSignature logicalPath text
 
-                        expectExplicitlyUnsupported
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
                             oracle
                             result.Diagnostics
                             (oracleLines logicalPath result.Diagnostics)

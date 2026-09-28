@@ -218,6 +218,7 @@ type internal ImplementationDeclaration =
     | Open of LongIdentifier * SourceRange
     | Let of isRecursive: bool * ImmutableArray<SyntaxBinding> * SourceRange
     | Do of ImmutableArray<SyntaxAttributeList> * SyntaxExpression * SourceRange
+    | Expression of ImmutableArray<SyntaxAttributeList> * SyntaxExpression * SourceRange
     | Type of SyntaxTypeDefinition
     | NestedModule of SyntaxNestedModule<ImplementationDeclaration>
     | Skipped of SkippedSyntax
@@ -226,7 +227,8 @@ type internal ImplementationDeclaration =
         match this with
         | Open(_, range)
         | Let(_, _, range)
-        | Do(_, _, range) -> range
+        | Do(_, _, range)
+        | Expression(_, _, range) -> range
         | NestedModule nested -> nested.Range
         | Type definition -> definition.Range
         | Skipped skipped -> skipped.Range
