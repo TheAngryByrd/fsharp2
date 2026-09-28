@@ -1322,40 +1322,14 @@ let main _ =
                     "_arg1"
                     "The entry-point wildcard must use the Oracle metadata name."
 
-            testCase "invalid warning directive arguments compile with an Oracle warning"
+            testCase "invalid warning directive arguments stop the compilation"
             <| fun _ ->
                 let result = compile "module Program\n#nowarn \"abc\"\nlet answer () = 42\n"
 
                 Expect.equal
                     result.Outcome
-                    CompilationOutcome.Succeeded
-                    "An FS0203 warning does not stop the compilation"
-
-                Expect.sequenceEqual
-                    (result.Diagnostics
-                     |> Seq.map (fun diagnostic ->
-                         diagnostic.Code, diagnostic.EffectiveSeverity, diagnostic.Message
-                     ))
-                    [ "FS0203", DiagnosticSeverity.Warning, "Invalid warning number 'abc'" ]
-                    "The invalid argument is reported as a warning"
-
-            testCase "warnings as errors stop an invalid warning directive argument"
-            <| fun _ ->
-                let result =
-                    createRequest
-                        (defaultSemanticOptions ())
-                        (DiagnosticOptions.Create(None, [||], true, [||]))
-                        (defaultEmissionOptions ())
-                        (defaultSigningOptions ())
-                        (emptyResources ())
-                        defaultRequestedArtifacts
-                        "module Program\n#nowarn \"abc\"\nlet answer () = 42\n"
-                    |> compileRequest
-
-                Expect.equal
-                    result.Outcome
                     CompilationOutcome.Failed
-                    "A promoted FS0203 stops the compilation"
+                    "The Compatibility Oracle reports FS0203 as an error"
 
                 Expect.isEmpty result.Artifacts "A failed compilation publishes no artifacts"
 
@@ -1364,39 +1338,41 @@ let main _ =
                      |> Seq.map (fun diagnostic ->
                          diagnostic.Code,
                          diagnostic.OriginalSeverity,
-                         diagnostic.EffectiveSeverity,
-                         diagnostic.Stage
+                         diagnostic.Stage,
+                         diagnostic.Message,
+                         diagnostic.Range
+                         |> Option.map (fun range -> range.Start.Line, range.Start.Column)
                      ))
                     [
                         "FS0203",
-                        DiagnosticSeverity.Warning,
                         DiagnosticSeverity.Error,
-                        DiagnosticStage.Compilation CompilationPhase.Source
+                        DiagnosticStage.Compilation CompilationPhase.Source,
+                        "Invalid warning number 'abc'",
+                        Some(2, 9)
                     ]
-                    "The source warning is promoted to an error"
+                    "The invalid argument is a source-phase error at the Oracle position"
 
-            testCase "a lexical error keeps warnings from the same source"
+            testCase "lexical errors are reported in source order"
             <| fun _ ->
-                let result =
-                    compile
-                        "module Program
-#nowarn \"abc\"
-let answer () = 12abc
-"
+                let result = compile "module Program\nlet answer () = 12abc\n#nowarn \"abc\"\n"
 
                 Expect.equal
                     result.Outcome
                     CompilationOutcome.Failed
-                    "The malformed literal stops the compilation"
+                    "Lexical errors stop the compilation"
 
                 Expect.sequenceEqual
                     (result.Diagnostics
-                     |> Seq.map (fun diagnostic -> diagnostic.Code, diagnostic.EffectiveSeverity))
+                     |> Seq.map (fun diagnostic ->
+                         diagnostic.Code,
+                         diagnostic.Range
+                         |> Option.map (fun range -> range.Start.Line)
+                     ))
                     [
-                        "FS0203", DiagnosticSeverity.Warning
-                        "FS1156", DiagnosticSeverity.Error
+                        "FS1156", Some 2
+                        "FS0203", Some 3
                     ]
-                    "The warning and the error are both reported in source order"
+                    "The Compatibility Oracle reports both errors in source order"
 
             testCase "reused parsing rebinds the physical source checksum"
             <| fun _ ->

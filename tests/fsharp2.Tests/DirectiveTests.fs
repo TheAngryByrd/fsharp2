@@ -205,11 +205,8 @@ let selected = 1
                     |> Seq.map (fun diagnostic ->
                         Expect.equal
                             diagnostic.Severity
-                            (if diagnostic.Code = "FS0203" then
-                                 LexicalSeverity.Warning
-                             else
-                                 LexicalSeverity.Error)
-                            $"{diagnostic.Code} severity"
+                            LexicalSeverity.Error
+                            $"{diagnostic.Code} is an Oracle error"
 
                         diagnostic.Code, diagnostic.Range.Start.Column
                     )
@@ -233,7 +230,7 @@ let selected = 1
                         ]
                     ))
                     [ "FS0203", 9 ]
-                    "An unquoted invalid argument is an Oracle warning"
+                    "An unquoted invalid argument is an Oracle error"
 
                 Expect.equal
                     (diagnosticsFor (
@@ -243,7 +240,7 @@ let selected = 1
                         ]
                     ))
                     [ "FS0203", 9 ]
-                    "A quoted invalid argument is an Oracle warning"
+                    "A quoted invalid argument is an Oracle error"
 
                 Expect.sequenceEqual
                     ((prepare

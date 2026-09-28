@@ -590,43 +590,12 @@ type Compiler() =
                         failure
                         (unsupportedPhaseResults request failure.StoppingPhase)
                 | Error requestFailure ->
-                    let failedPhase =
-                        match requestFailure.Errors with
-                        | [] -> CompilationPhase.Source
-                        | diagnostic :: _ when diagnostic.Code = "FS0001" ->
-                            CompilationPhase.TypedDeclarations
-                        | diagnostic :: _ when diagnostic.Code = "FS0039" ->
-                            CompilationPhase.ResolvedSymbols
-                        | _ -> CompilationPhase.Syntax
+                    let failedPhase = requestFailure.FailedPhase
 
                     let diagnostics =
-                        Seq.append
-                            requestFailure.Warnings
-                            (requestFailure.Errors
-                             |> Seq.map (failureDiagnostic failedPhase))
-                        |> Seq.mapi (fun order diagnostic ->
-                            CompilationDiagnostic.Create(
-                                int64 order,
-                                diagnostic.Code,
-                                diagnostic.NumericCode,
-                                diagnostic.Subcategory,
-                                diagnostic.Stage,
-                                diagnostic.OriginalSeverity,
-                                diagnostic.EffectiveSeverity,
-                                diagnostic.Disposition,
-                                diagnostic.Suppression,
-                                diagnostic.Message,
-                                diagnostic.LogicalPath,
-                                diagnostic.Range,
-                                diagnostic.RelatedInformation
-                                |> Seq.toArray,
-                                diagnostic.Suggestions
-                                |> Seq.toArray,
-                                diagnostic.Stream
-                            )
-                        )
+                        requestFailure.Diagnostics
                         |> Seq.map (DiagnosticPolicy.input None false true)
-                        |> DiagnosticPolicy.apply diagnosticOptions
+                        |> DiagnosticPolicy.apply requestFailure.DiagnosticOptions
 
                     {
                         Outcome = CompilationOutcome.Failed
