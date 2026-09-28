@@ -275,95 +275,106 @@ module internal CompilationPipeline =
         }
 
     let private compileRequestCore (service: CompilerService) (request: CompilationRequest) =
-        match
-            ReferenceTypeIndex.Create(request.TargetReferences),
-            LanguageVersion.normalize request.SemanticOptions.LanguageVersion
-        with
-        | Error message, _ -> Error [ diagnostic "FSC2P1001" message ]
-        | _, Error message -> Error [ diagnostic "FSC2C2001" message ]
-        | Ok references, Ok language ->
-            let sources =
-                request.Sources
-                |> List.ofSeq
+        match ReferenceTypeIndex.TryFindInvalidImage(request.TargetReferences) with
+        | Some(logicalPath, message) ->
+            Error [
+                {
+                    Code = "FSC2P1003"
+                    Message = $"Error opening binary file '{logicalPath}': {message}"
+                    Path = Some logicalPath
+                    Range = None
+                }
+            ]
+        | None ->
+            match
+                ReferenceTypeIndex.Create(request.TargetReferences),
+                LanguageVersion.normalize request.SemanticOptions.LanguageVersion
+            with
+            | Error message, _ -> Error [ diagnostic "FSC2P1001" message ]
+            | _, Error message -> Error [ diagnostic "FSC2C2001" message ]
+            | Ok references, Ok language ->
+                let sources =
+                    request.Sources
+                    |> List.ofSeq
 
-            let defines = List.ofSeq request.SemanticOptions.Defines
+                let defines = List.ofSeq request.SemanticOptions.Defines
 
-            let preparedSources =
-                sources
-                |> List.map (fun source ->
-                    service.PrepareSource(language, defines, source).Document
-                )
-
-            let lexicalDiagnostics =
-                preparedSources
-                |> Seq.collect service.LexicalDiagnostics
-                |> Seq.toList
-
-            if not lexicalDiagnostics.IsEmpty then
-                Error lexicalDiagnostics
-            else
-                match
-                    service.Compile(
-                        request.AssemblyIdentity.Name,
-                        language,
-                        defines,
-                        references,
-                        sources
+                let preparedSources =
+                    sources
+                    |> List.map (fun source ->
+                        service.PrepareSource(language, defines, source).Document
                     )
-                with
-                | Error compilerDiagnostic -> Error [ compilerDiagnostic ]
-                | Ok query ->
-                    match request.SemanticOptions.Optimization with
-                    | OptimizationMode.Enabled ->
-                        Error [
-                            diagnostic
-                                "FSC2C2002"
-                                "Enabled optimization is not supported by this compiler contract."
-                        ]
-                    | OptimizationMode.Disabled ->
-                        try
-                            let symbolic = SymbolicEmission.emit query.LoweredCompilation
 
-                            let entryPointCount =
-                                symbolic.Module.Types
-                                |> List.collect _.Methods
-                                |> List.filter (fun methodFragment ->
-                                    methodFragment.Kind = EntryPoint
-                                )
-                                |> List.length
+                let lexicalDiagnostics =
+                    preparedSources
+                    |> Seq.collect service.LexicalDiagnostics
+                    |> Seq.toList
 
-                            match request.EmissionOptions.Target, entryPointCount with
-                            | CompilationTarget.Executable, 0 ->
-                                Error [
-                                    diagnostic
-                                        "FSC2P1001"
-                                        "An executable compilation requires one entry point."
-                                ]
-                            | CompilationTarget.Executable, count when count > 1 ->
-                                Error [
-                                    diagnostic
-                                        "FSC2P1001"
-                                        "An executable compilation cannot contain more than one entry point."
-                                ]
-                            | _ ->
-                                let linkStarted = Stopwatch.GetTimestamp()
-                                let artifacts = Linker.link request symbolic
+                if not lexicalDiagnostics.IsEmpty then
+                    Error lexicalDiagnostics
+                else
+                    match
+                        service.Compile(
+                            request.AssemblyIdentity.Name,
+                            language,
+                            defines,
+                            references,
+                            sources
+                        )
+                    with
+                    | Error compilerDiagnostic -> Error [ compilerDiagnostic ]
+                    | Ok query ->
+                        match request.SemanticOptions.Optimization with
+                        | OptimizationMode.Enabled ->
+                            Error [
+                                diagnostic
+                                    "FSC2C2002"
+                                    "Enabled optimization is not supported by this compiler contract."
+                            ]
+                        | OptimizationMode.Disabled ->
+                            try
+                                let symbolic = SymbolicEmission.emit query.LoweredCompilation
 
-                                let diagnosticOptions =
-                                    sourceDiagnosticOptions request preparedSources
+                                let entryPointCount =
+                                    symbolic.Module.Types
+                                    |> List.collect _.Methods
+                                    |> List.filter (fun methodFragment ->
+                                        methodFragment.Kind = EntryPoint
+                                    )
+                                    |> List.length
 
-                                let diagnostics = ImmutableArray<CompilationDiagnostic>.Empty
+                                match request.EmissionOptions.Target, entryPointCount with
+                                | CompilationTarget.Executable, 0 ->
+                                    Error [
+                                        diagnostic
+                                            "FSC2P1001"
+                                            "An executable compilation requires one entry point."
+                                    ]
+                                | CompilationTarget.Executable, count when count > 1 ->
+                                    Error [
+                                        diagnostic
+                                            "FSC2P1001"
+                                            "An executable compilation cannot contain more than one entry point."
+                                    ]
+                                | _ ->
+                                    let linkStarted = Stopwatch.GetTimestamp()
+                                    let artifacts = Linker.link request symbolic
 
-                                Ok {
-                                    Query = query
-                                    SymbolicAssembly = symbolic
-                                    Artifacts = artifacts
-                                    Diagnostics = diagnostics
-                                    DiagnosticOptions = diagnosticOptions
-                                    LinkElapsedMicroseconds = elapsedMicroseconds linkStarted
-                                }
-                        with ex ->
-                            Error [ diagnostic "FSC2P9999" ex.Message ]
+                                    let diagnosticOptions =
+                                        sourceDiagnosticOptions request preparedSources
+
+                                    let diagnostics = ImmutableArray<CompilationDiagnostic>.Empty
+
+                                    Ok {
+                                        Query = query
+                                        SymbolicAssembly = symbolic
+                                        Artifacts = artifacts
+                                        Diagnostics = diagnostics
+                                        DiagnosticOptions = diagnosticOptions
+                                        LinkElapsedMicroseconds = elapsedMicroseconds linkStarted
+                                    }
+                            with ex ->
+                                Error [ diagnostic "FSC2P9999" ex.Message ]
 
     let private responseDiagnostic code numericCode stage message =
         CompilationDiagnostic.Create(
@@ -447,6 +458,8 @@ module internal CompilationPipeline =
                 | diagnostic :: _ when diagnostic.Code = "FS0001" ->
                     CompilationPhase.TypedDeclarations
                 | diagnostic :: _ when diagnostic.Code = "FS0039" ->
+                    CompilationPhase.ResolvedSymbols
+                | diagnostic :: _ when diagnostic.Code = "FSC2P1003" ->
                     CompilationPhase.ResolvedSymbols
                 | _ -> CompilationPhase.Syntax
 

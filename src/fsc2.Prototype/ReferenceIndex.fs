@@ -909,6 +909,21 @@ type internal ReferenceTypeIndex
                     $"the type '{ReferenceTypeName.fullName syntaxName}' is not defined by the target references"
                 )
 
+    static member TryFindInvalidImage(references: ImmutableArray<TargetReferenceSnapshot>) =
+        references
+        |> Seq.tryPick (fun reference ->
+            try
+                use pe = new PEReader(reference.PeImage)
+
+                if pe.HasMetadata then
+                    pe.GetMetadataReader()
+                    |> ignore
+
+                None
+            with :? BadImageFormatException as error ->
+                Some(reference.LogicalPath, error.Message)
+        )
+
     static member Create(references: ImmutableArray<TargetReferenceSnapshot>) =
         let normalizedReferences =
             references
