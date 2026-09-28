@@ -4,7 +4,7 @@
   "lockId": "syntax.expressions-negative",
   "family": "syntax",
   "caseId": "language.syntax.expressions-negative",
-  "caseHash": "sha256:9ae97a3e59cef704d229865a324733eafe76299af157262e5f99f2312373cfb6",
+  "caseHash": "sha256:ce47b712b172f1f2be96fd3a5009fbe1d02917967c3869e0332a619ea9db6dfd",
   "oracleIdentity": {
     "sdkVersion": "10.0.110",
     "sdkCommit": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd",
@@ -36,11 +36,11 @@
       "textHash": "sha256:4d9efaf1c69fd2f1088ecef67012b9f589c03ca1700275fd67b10d914f009f33"
     },
     "stderr": {
-      "base64": "CkM6XFVzZXJzXGppbW15XEFwcERhdGFcTG9jYWxcVGVtcFxmMmNhcDI5YlxvcmFjbGUtbGFuZ3VhZ2Utc3ludGF4LWV4cHJlc3Npb25zLW5lZ2F0aXZlLTIwMjYwOTI4VDAzMjAzNjM0NlotNWI2Mzk1YTM0OGZjNGM5YmFjOWI3OGZjMjZjY2RmZjBcbGFuZXNcb3JhY2xlXHdvcmtcc3JjXExpYnJhcnkuZnMoNSwxNCw1LDE1KTogcGFyc2UgZXJyb3IgRlMwMDEwOiBVbmV4cGVjdGVkIHN5bWJvbCAnKScgaW4gcGF0dGVybiBtYXRjaGluZy4gRXhwZWN0ZWQgJy0+JyBvciBvdGhlciB0b2tlbi4NCgpDOlxVc2Vyc1xqaW1teVxBcHBEYXRhXExvY2FsXFRlbXBcZjJjYXAyOWJcb3JhY2xlLWxhbmd1YWdlLXN5bnRheC1leHByZXNzaW9ucy1uZWdhdGl2ZS0yMDI2MDkyOFQwMzIwMzYzNDZaLTViNjM5NWEzNDhmYzRjOWJhYzliNzhmYzI2Y2NkZmYwXGxhbmVzXG9yYWNsZVx3b3JrXHNyY1xMaWJyYXJ5LmZzKDgsMjMsOCwyNCk6IHBhcnNlIGVycm9yIEZTMDAxMDogVW5leHBlY3RlZCBzeW1ib2wgJ10nIGluIGxhbWJkYSBleHByZXNzaW9uLiBFeHBlY3RlZCAnLT4nIG9yIG90aGVyIHRva2VuLg0KCkM6XFVzZXJzXGppbW15XEFwcERhdGFcTG9jYWxcVGVtcFxmMmNhcDI5YlxvcmFjbGUtbGFuZ3VhZ2Utc3ludGF4LWV4cHJlc3Npb25zLW5lZ2F0aXZlLTIwMjYwOTI4VDAzMjAzNjM0NlotNWI2Mzk1YTM0OGZjNGM5YmFjOWI3OGZjMjZjY2RmZjBcbGFuZXNcb3JhY2xlXHdvcmtcc3JjXExpYnJhcnkuZnMoMTAsMjAsMTAsMjMpOiBwYXJzZSBlcnJvciBGUzAwMTA6IFVuZXhwZWN0ZWQga2V5d29yZCAnZW5kJyBpbiBleHByZXNzaW9uDQo=",
-      "byteLength": 809,
-      "byteHash": "sha256:892de3c01a0947f3719c0e9bdaec971b71a994e909b236caf0a17b71a381b7ff",
-      "text": "\nC:\\Users\\jimmy\\AppData\\Local\\Temp\\f2cap29b\\oracle-language-syntax-expressions-negative-20260928T032036346Z-5b6395a348fc4c9bac9b78fc26ccdff0\\lanes\\oracle\\work\\src\\Library.fs(5,14,5,15): parse error FS0010: Unexpected symbol ')' in pattern matching. Expected '->' or other token.\r\n\nC:\\Users\\jimmy\\AppData\\Local\\Temp\\f2cap29b\\oracle-language-syntax-expressions-negative-20260928T032036346Z-5b6395a348fc4c9bac9b78fc26ccdff0\\lanes\\oracle\\work\\src\\Library.fs(8,23,8,24): parse error FS0010: Unexpected symbol ']' in lambda expression. Expected '->' or other token.\r\n\nC:\\Users\\jimmy\\AppData\\Local\\Temp\\f2cap29b\\oracle-language-syntax-expressions-negative-20260928T032036346Z-5b6395a348fc4c9bac9b78fc26ccdff0\\lanes\\oracle\\work\\src\\Library.fs(10,20,10,23): parse error FS0010: Unexpected keyword 'end' in expression\r\n",
-      "textHash": "sha256:892de3c01a0947f3719c0e9bdaec971b71a994e909b236caf0a17b71a381b7ff"
+      "base64": "Ci9fZnNoYXJwMl9jb25mb3JtYW5jZS9yb290L3NyYy9MaWJyYXJ5LmZzKDUsMTQsNSwxNSk6IHBhcnNlIGVycm9yIEZTMDAxMDogVW5leHBlY3RlZCBzeW1ib2wgJyknIGluIHBhdHRlcm4gbWF0Y2hpbmcuIEV4cGVjdGVkICctPicgb3Igb3RoZXIgdG9rZW4uDQoKL19mc2hhcnAyX2NvbmZvcm1hbmNlL3Jvb3Qvc3JjL0xpYnJhcnkuZnMoOCwyMyw4LDI0KTogcGFyc2UgZXJyb3IgRlMwMDEwOiBVbmV4cGVjdGVkIHN5bWJvbCAnXScgaW4gbGFtYmRhIGV4cHJlc3Npb24uIEV4cGVjdGVkICctPicgb3Igb3RoZXIgdG9rZW4uDQoKL19mc2hhcnAyX2NvbmZvcm1hbmNlL3Jvb3Qvc3JjL0xpYnJhcnkuZnMoMTAsMjAsMTAsMjMpOiBwYXJzZSBlcnJvciBGUzAwMTA6IFVuZXhwZWN0ZWQga2V5d29yZCAnZW5kJyBpbiBleHByZXNzaW9uDQo=",
+      "byteLength": 416,
+      "byteHash": "sha256:cde966d8420e496c9966e73743e6180cd8a70a4dc7f277dfe9b762604319b3be",
+      "text": "\n/_fsharp2_conformance/root/src/Library.fs(5,14,5,15): parse error FS0010: Unexpected symbol ')' in pattern matching. Expected '->' or other token.\r\n\n/_fsharp2_conformance/root/src/Library.fs(8,23,8,24): parse error FS0010: Unexpected symbol ']' in lambda expression. Expected '->' or other token.\r\n\n/_fsharp2_conformance/root/src/Library.fs(10,20,10,23): parse error FS0010: Unexpected keyword 'end' in expression\r\n",
+      "textHash": "sha256:cde966d8420e496c9966e73743e6180cd8a70a4dc7f277dfe9b762604319b3be"
     }
   },
   "process": {

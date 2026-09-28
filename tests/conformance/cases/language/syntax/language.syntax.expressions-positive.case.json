@@ -25,9 +25,7 @@
       1
     ],
     "languageVersions": [
-      "default",
-      "9.0",
-      "10.0"
+      "default"
     ],
     "targetFrameworks": [
       "net10.0"

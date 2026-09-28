@@ -4,7 +4,7 @@
   "lockId": "syntax.type-definitions-negative",
   "family": "syntax",
   "caseId": "language.syntax.type-definitions-negative",
-  "caseHash": "sha256:712bb81661566cf37e1736260d834972a1b35ea8b86a4ca9ab73cd2c69cb44cf",
+  "caseHash": "sha256:aba59ceda4582b9c79bdc356606d0b652998989443c015997fe3c888bbd618d2",
   "oracleIdentity": {
     "sdkVersion": "10.0.110",
     "sdkCommit": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd",
@@ -36,11 +36,11 @@
       "textHash": "sha256:4d9efaf1c69fd2f1088ecef67012b9f589c03ca1700275fd67b10d914f009f33"
     },
     "stderr": {
-      "base64": "CkM6XFVzZXJzXGppbW15XEFwcERhdGFcTG9jYWxcVGVtcFxmMmNhcDI5YlxvcmFjbGUtbGFuZ3VhZ2Utc3ludGF4LXR5cGUtZGVmaW5pdGlvbnMtbmVnYXRpdmUtMjAyNjA5MjhUMDMyMDI4MjM1Wi0zZmFiZDlkM2RhZGU0ZTkyOGRmNDNiYWMwOTZkODNmMVxsYW5lc1xvcmFjbGVcd29ya1xzcmNcTGlicmFyeS5mcygzLDI3LDMsMjgpOiBwYXJzZSBlcnJvciBGUzAwMTA6IFVuZXhwZWN0ZWQgc3ltYm9sICcpJyBpbiBmaWVsZCBkZWNsYXJhdGlvbg0KCkM6XFVzZXJzXGppbW15XEFwcERhdGFcTG9jYWxcVGVtcFxmMmNhcDI5YlxvcmFjbGUtbGFuZ3VhZ2Utc3ludGF4LXR5cGUtZGVmaW5pdGlvbnMtbmVnYXRpdmUtMjAyNjA5MjhUMDMyMDI4MjM1Wi0zZmFiZDlkM2RhZGU0ZTkyOGRmNDNiYWMwOTZkODNmMVxsYW5lc1xvcmFjbGVcd29ya1xzcmNcTGlicmFyeS5mcyg1LDIxLDUsMjIpOiBwYXJzZSBlcnJvciBGUzAwMTA6IFVuZXhwZWN0ZWQgc3ltYm9sICddJyBpbiBmaWVsZCBkZWNsYXJhdGlvbi4gRXhwZWN0ZWQgJzonIG9yIG90aGVyIHRva2VuLg0K",
-      "byteLength": 540,
-      "byteHash": "sha256:bd9304f244a53c2f463047f579666d60747da9b526a8012fa1890f5651ceca3c",
-      "text": "\nC:\\Users\\jimmy\\AppData\\Local\\Temp\\f2cap29b\\oracle-language-syntax-type-definitions-negative-20260928T032028235Z-3fabd9d3dade4e928df43bac096d83f1\\lanes\\oracle\\work\\src\\Library.fs(3,27,3,28): parse error FS0010: Unexpected symbol ')' in field declaration\r\n\nC:\\Users\\jimmy\\AppData\\Local\\Temp\\f2cap29b\\oracle-language-syntax-type-definitions-negative-20260928T032028235Z-3fabd9d3dade4e928df43bac096d83f1\\lanes\\oracle\\work\\src\\Library.fs(5,21,5,22): parse error FS0010: Unexpected symbol ']' in field declaration. Expected ':' or other token.\r\n",
-      "textHash": "sha256:bd9304f244a53c2f463047f579666d60747da9b526a8012fa1890f5651ceca3c"
+      "base64": "Ci9fZnNoYXJwMl9jb25mb3JtYW5jZS9yb290L3NyYy9MaWJyYXJ5LmZzKDMsMjcsMywyOCk6IHBhcnNlIGVycm9yIEZTMDAxMDogVW5leHBlY3RlZCBzeW1ib2wgJyknIGluIGZpZWxkIGRlY2xhcmF0aW9uDQoKL19mc2hhcnAyX2NvbmZvcm1hbmNlL3Jvb3Qvc3JjL0xpYnJhcnkuZnMoNSwyMSw1LDIyKTogcGFyc2UgZXJyb3IgRlMwMDEwOiBVbmV4cGVjdGVkIHN5bWJvbCAnXScgaW4gZmllbGQgZGVjbGFyYXRpb24uIEV4cGVjdGVkICc6JyBvciBvdGhlciB0b2tlbi4NCg==",
+      "byteLength": 268,
+      "byteHash": "sha256:0baa45d798a7001a335246dbd37765187f10ed7038320d08134691b96be7d74d",
+      "text": "\n/_fsharp2_conformance/root/src/Library.fs(3,27,3,28): parse error FS0010: Unexpected symbol ')' in field declaration\r\n\n/_fsharp2_conformance/root/src/Library.fs(5,21,5,22): parse error FS0010: Unexpected symbol ']' in field declaration. Expected ':' or other token.\r\n",
+      "textHash": "sha256:0baa45d798a7001a335246dbd37765187f10ed7038320d08134691b96be7d74d"
     }
   },
   "process": {

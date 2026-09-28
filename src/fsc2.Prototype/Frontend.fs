@@ -94,6 +94,88 @@ module internal Frontend =
 
     let private parseResult = ParseResultBuilder()
 
+    let private keywordTokens =
+        Map [
+            "module", ModuleKeyword
+            "namespace", NamespaceKeyword
+            "open", OpenKeyword
+            "assembly", AssemblyKeyword
+            "internal", InternalKeyword
+            "type", TypeKeyword
+            "static", StaticKeyword
+            "inline", InlineKeyword
+            "inherit", InheritKeyword
+            "new", NewKeyword
+            "override", OverrideKeyword
+            "try", TryKeyword
+            "match", MatchKeyword
+            "as", AsKeyword
+            "with", WithKeyword
+            "when", WhenKeyword
+            "and", AndKeyword
+            "member", MemberKeyword
+            "null", NullKeyword
+            "let", LetKeyword
+            "do", DoKeyword
+            "val", ValKeyword
+            "mutable", MutableKeyword
+            "fun", FunKeyword
+            "if", IfKeyword
+            "then", ThenKeyword
+            "else", ElseKeyword
+            "not", NotKeyword
+        ]
+
+    let internal specialIdentifiers =
+        set [
+            "_"
+            "array"
+            "false"
+            "finally"
+            "for"
+            "ignore"
+            "int"
+            "isNull"
+            "list"
+            "option"
+            "return"
+            "seq"
+            "struct"
+            "true"
+            "use"
+            "ValueOption"
+            "voption"
+            "while"
+        ]
+
+    let internal isTokenizedLikeLexicalDocument (document: LexicalDocument) =
+        document.Trivia
+        |> Seq.forall (fun trivia ->
+            trivia.Kind
+            <> LexicalTriviaKind.BlockComment
+        )
+        && document.SourceMap.Newlines
+           |> Seq.forall (fun newline ->
+               newline
+               <> NewlineForm.CarriageReturn
+           )
+        && document.Tokens
+           |> Seq.forall (fun token ->
+               match token.Kind with
+               | LexicalTokenKind.EscapedIdentifier -> false
+               | LexicalTokenKind.Identifier ->
+                   not (keywordTokens.ContainsKey token.Text)
+                   && not (specialIdentifiers.Contains token.Text)
+               | LexicalTokenKind.StringLiteral ->
+                   token.Text.IndexOfAny(
+                       [|
+                           '\r'
+                           '\n'
+                       |]
+                   ) < 0
+               | _ -> true
+           )
+
     let private diagnostic code path range message = {
         Code = code
         Message = message
@@ -381,36 +463,9 @@ module internal Frontend =
                         - first
                     )
 
-                match value with
-                | "module" -> add ModuleKeyword start
-                | "namespace" -> add NamespaceKeyword start
-                | "open" -> add OpenKeyword start
-                | "assembly" -> add AssemblyKeyword start
-                | "internal" -> add InternalKeyword start
-                | "type" -> add TypeKeyword start
-                | "static" -> add StaticKeyword start
-                | "inline" -> add InlineKeyword start
-                | "inherit" -> add InheritKeyword start
-                | "new" -> add NewKeyword start
-                | "override" -> add OverrideKeyword start
-                | "try" -> add TryKeyword start
-                | "match" -> add MatchKeyword start
-                | "as" -> add AsKeyword start
-                | "with" -> add WithKeyword start
-                | "when" -> add WhenKeyword start
-                | "and" -> add AndKeyword start
-                | "member" -> add MemberKeyword start
-                | "null" -> add NullKeyword start
-                | "let" -> add LetKeyword start
-                | "do" -> add DoKeyword start
-                | "val" -> add ValKeyword start
-                | "mutable" -> add MutableKeyword start
-                | "fun" -> add FunKeyword start
-                | "if" -> add IfKeyword start
-                | "then" -> add ThenKeyword start
-                | "else" -> add ElseKeyword start
-                | "not" -> add NotKeyword start
-                | _ -> add (Identifier value) start
+                match keywordTokens.TryFind value with
+                | Some keyword -> add keyword start
+                | None -> add (Identifier value) start
             elif Char.IsDigit(current) then
                 let start = position ()
                 let first = offset

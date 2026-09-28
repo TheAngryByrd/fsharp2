@@ -1158,6 +1158,7 @@ type internal CompilerService() =
     let lastSuccessfulContent = Dictionary<string, string>(StringComparer.Ordinal)
     let mutable parseHits = 0
     let mutable parseMisses = 0
+    let mutable syntaxProjections = 0
     let mutable checkHits = 0
     let mutable checkMisses = 0
     let mutable lowerHits = 0
@@ -1290,18 +1291,57 @@ type internal CompilerService() =
                 ContentFingerprint = source.ContentFingerprint
             }
 
-            match Frontend.parse [] compatibilitySource with
-            | Error error -> Error(mappedCompilerDiagnostic source error)
-            | Ok parsed ->
-                let rebound =
-                    parsed
-                    |> List.map (fun parsedModule -> {
-                        parsedModule with
-                            SourceChecksum = source.SourceChecksum
-                    })
+            let projected =
+                if
+                    source.LogicalPath.EndsWith(".fs", StringComparison.OrdinalIgnoreCase)
+                    && source.Directives.IsEmpty
+                    && source.Diagnostics.IsEmpty
+                    && Frontend.isTokenizedLikeLexicalDocument source
+                then
+                    let syntax = Parser.parseImplementationFile source
 
-                parseCache.Add(key, rebound)
-                Ok(rebound, key)
+                    if syntax.Diagnostics.IsEmpty then
+                        let contentFingerprint =
+                            source.CompatibilityText
+                            |> Encoding.UTF8.GetBytes
+                            |> SHA256.HashData
+                            |> Convert.ToHexString
+                            |> _.ToLowerInvariant()
+
+                        match
+                            SyntaxProjection.project
+                                contentFingerprint
+                                source.SourceChecksum
+                                syntax.File
+                        with
+                        | SyntaxProjectionResult.Projected parsed -> Some parsed
+                        | SyntaxProjectionResult.ProjectionUnsupported _ -> None
+                    else
+                        None
+                else
+                    None
+
+            match projected with
+            | Some parsed ->
+                syntaxProjections <-
+                    syntaxProjections
+                    + 1
+
+                parseCache.Add(key, parsed)
+                Ok(parsed, key)
+            | None ->
+                match Frontend.parse [] compatibilitySource with
+                | Error error -> Error(mappedCompilerDiagnostic source error)
+                | Ok parsed ->
+                    let rebound =
+                        parsed
+                        |> List.map (fun parsedModule -> {
+                            parsedModule with
+                                SourceChecksum = source.SourceChecksum
+                        })
+
+                    parseCache.Add(key, rebound)
+                    Ok(rebound, key)
 
     let expressionChildren =
         function
@@ -26426,6 +26466,7 @@ type internal CompilerService() =
             CheckMisses = checkMisses
             LowerHits = lowerHits
             LowerMisses = lowerMisses
+            SyntaxProjections = syntaxProjections
         }
 
         let decision hitsBefore hitsAfter missesBefore missesAfter =
@@ -26633,4 +26674,5 @@ type internal CompilerService() =
         CheckMisses = checkMisses
         LowerHits = lowerHits
         LowerMisses = lowerMisses
+        SyntaxProjections = syntaxProjections
     }

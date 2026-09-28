@@ -17,10 +17,6 @@ module SyntaxConformanceTests =
         "syntax.expressions"
     ]
 
-    let private language =
-        LanguageVersion.normalize (Some "10.0")
-        |> Result.defaultWith failtest
-
     let private json (path: string) =
         use document = JsonDocument.Parse(File.ReadAllBytes path)
         document.RootElement.Clone()
@@ -35,7 +31,7 @@ module SyntaxConformanceTests =
         |> Array.sort
         |> Array.map json
 
-    let private parserDiagnostics (source: JsonElement) =
+    let private parserDiagnostics language (source: JsonElement) =
         let logicalPath = text source "logicalPath"
 
         let document =
@@ -59,7 +55,9 @@ module SyntaxConformanceTests =
             diagnostic.Code,
             diagnostic.Message,
             diagnostic.Range.Start.Line,
-            diagnostic.Range.Start.Column
+            diagnostic.Range.Start.Column,
+            diagnostic.Range.End.Line,
+            diagnostic.Range.End.Column
         )
 
     let private oracleDiagnostics (case: JsonElement) =
@@ -76,7 +74,9 @@ module SyntaxConformanceTests =
                 text diagnostic "code",
                 text diagnostic "message",
                 range.GetProperty("startLine").GetInt32(),
-                range.GetProperty("startColumn").GetInt32()
+                range.GetProperty("startColumn").GetInt32(),
+                range.GetProperty("endLine").GetInt32(),
+                range.GetProperty("endColumn").GetInt32()
             )
             |> Seq.toList
         else
@@ -113,13 +113,24 @@ module SyntaxConformanceTests =
                 for case in cases do
                     let caseId = text case "caseId"
 
-                    let actual =
-                        case.GetProperty("sources").EnumerateArray()
-                        |> Seq.collect parserDiagnostics
-                        |> Seq.toList
+                    for mode in
+                        case
+                            .GetProperty("envelope")
+                            .GetProperty("languageVersions")
+                            .EnumerateArray() do
+                        let mode = mode.GetString()
 
-                    Expect.sequenceEqual
-                        actual
-                        (oracleDiagnostics case)
-                        $"Case '{caseId}' must match its Oracle lock"
+                        let language =
+                            LanguageVersion.normalize (Some mode)
+                            |> Result.defaultWith failtest
+
+                        let actual =
+                            case.GetProperty("sources").EnumerateArray()
+                            |> Seq.collect (parserDiagnostics language)
+                            |> Seq.toList
+
+                        Expect.sequenceEqual
+                            actual
+                            (oracleDiagnostics case)
+                            $"Case '{caseId}' with language version '{mode}' must match its Oracle lock"
         ]

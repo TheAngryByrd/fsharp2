@@ -202,21 +202,28 @@ type internal SyntaxTypeDefinition = {
     Range: SourceRange
 }
 
+type internal SyntaxNestedModule<'Declaration> = {
+    Name: SyntaxIdentifier
+    Declarations: ImmutableArray<'Declaration>
+    DiscardedByRecovery: ImmutableArray<'Declaration>
+    Range: SourceRange
+}
+
 [<RequireQualifiedAccess>]
 type internal ImplementationDeclaration =
     | Open of LongIdentifier * SourceRange
     | Let of isRecursive: bool * ImmutableArray<SyntaxBinding> * SourceRange
     | Do of ImmutableArray<SyntaxAttributeList> * SyntaxExpression * SourceRange
     | Type of SyntaxTypeDefinition
-    | NestedModule of SyntaxIdentifier * ImmutableArray<ImplementationDeclaration> * SourceRange
+    | NestedModule of SyntaxNestedModule<ImplementationDeclaration>
     | Skipped of SkippedSyntax
 
     member this.Range =
         match this with
         | Open(_, range)
         | Let(_, _, range)
-        | Do(_, _, range)
-        | NestedModule(_, _, range) -> range
+        | Do(_, _, range) -> range
+        | NestedModule nested -> nested.Range
         | Type definition -> definition.Range
         | Skipped skipped -> skipped.Range
 
@@ -233,13 +240,13 @@ type internal SyntaxValueSignature = {
 type internal SignatureDeclaration =
     | Open of LongIdentifier * SourceRange
     | Val of SyntaxValueSignature
-    | NestedModule of SyntaxIdentifier * ImmutableArray<SignatureDeclaration> * SourceRange
+    | NestedModule of SyntaxNestedModule<SignatureDeclaration>
     | Skipped of SkippedSyntax
 
     member this.Range =
         match this with
-        | Open(_, range)
-        | NestedModule(_, _, range) -> range
+        | Open(_, range) -> range
+        | NestedModule nested -> nested.Range
         | Val value -> value.Range
         | Skipped skipped -> skipped.Range
 
