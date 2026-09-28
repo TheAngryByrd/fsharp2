@@ -120,7 +120,7 @@ module ParserGrammarTests =
                    |> Seq.map fieldText
                    |> String.concat "; "}}}"""
         | SyntaxExpression.DotLambda(body, _) -> $"_.{expressionShape body}"
-        | SyntaxExpression.Index(target, index, _) ->
+        | SyntaxExpression.BracketApplication(target, index, _) ->
             $"{expressionShape target}[{expressionShape index}]"
         | SyntaxExpression.Missing _ -> "<missing>"
 

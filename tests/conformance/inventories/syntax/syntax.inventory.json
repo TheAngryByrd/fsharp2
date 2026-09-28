@@ -15,7 +15,8 @@
     "language.syntax.underscore-dot-shorthand-positive",
     "language.syntax.underscore-dot-shorthand-negative",
     "language.syntax.successive-arguments-positive",
-    "language.syntax.successive-arguments-negative"
+    "language.syntax.successive-arguments-negative",
+    "language.syntax.successive-arguments-5-positive"
   ],
   "positiveCaseIds": [
     "language.syntax.implementation-declarations-positive",
@@ -23,7 +24,8 @@
     "language.syntax.type-definitions-positive",
     "language.syntax.expressions-positive",
     "language.syntax.underscore-dot-shorthand-positive",
-    "language.syntax.successive-arguments-positive"
+    "language.syntax.successive-arguments-positive",
+    "language.syntax.successive-arguments-5-positive"
   ],
   "negativeCaseIds": [
     "language.syntax.implementation-recovery-negative",
@@ -44,7 +46,8 @@
   "languageVersions": [
     "default",
     "8.0",
-    "7.0"
+    "7.0",
+    "5.0"
   ],
   "optionCells": [
     "debug-optimize-minus-tailcalls-minus-portable-deterministic",

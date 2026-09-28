@@ -89,7 +89,7 @@ type internal SyntaxExpression =
     | List of ImmutableArray<SyntaxExpression> * SourceRange
     | Record of ImmutableArray<SyntaxRecordFieldValue> * SourceRange
     | DotLambda of body: SyntaxExpression * SourceRange
-    | Index of SyntaxExpression * SyntaxExpression * SourceRange
+    | BracketApplication of SyntaxExpression * SyntaxExpression * SourceRange
     | Missing of MissingSyntax
 
     member this.Range =
@@ -106,7 +106,7 @@ type internal SyntaxExpression =
         | List(_, range)
         | Record(_, range)
         | DotLambda(_, range)
-        | Index(_, _, range) -> range
+        | BracketApplication(_, _, range) -> range
         | Missing missing -> missing.Range
 
 and internal SyntaxMatchClause = {

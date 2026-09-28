@@ -1163,10 +1163,7 @@ module internal Parser =
         token.Kind = LayoutTokenKind.SourceToken
         && token.Range.Start.Offset = state.Cursor.LastEnd.Offset
         && (isDelimiter "(" token
-            || (isDelimiter "[" token
-                && LanguageFeature.isAvailable
-                    state.Language
-                    LanguageFeature.IndexerNotationWithoutDot))
+            || isDelimiter "[" token)
 
     and private parsePostfix state context maximumSteps target =
         let cursor = state.Cursor
@@ -1195,13 +1192,19 @@ module internal Parser =
 
                 if isDelimiter "]" cursor.Current then
                     let close = cursor.Advance()
-                    result <- SyntaxExpression.Index(result, index, span result.Range close.Range)
+
+                    result <-
+                        SyntaxExpression.BracketApplication(
+                            result,
+                            index,
+                            span result.Range close.Range
+                        )
                 else
                     if not (reportedAt state cursor.Current) then
                         reportUnsupported state cursor.Current "an index expression"
 
                     result <-
-                        SyntaxExpression.Index(
+                        SyntaxExpression.BracketApplication(
                             result,
                             index,
                             span result.Range (emptyAt cursor.LastEnd)
