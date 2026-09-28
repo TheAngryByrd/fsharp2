@@ -828,6 +828,57 @@ module ParserCompilationTests =
             "C1.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
         ]
 
+        "an attributed open is discarded after a stray token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "E1.fsi", "module M\n)\n[<A>]\nopen System\n"
+            last
+        ],
+        [
+            "E1.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "an attributed nested module is discarded after a stray token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "E2.fsi", "module M\n)\n[<A>]\nmodule N =\n    val b: int\n"
+            last
+        ],
+        [
+            "E2.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "an attributed open is discarded after a stray first token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "E3.fsi", ")\n[<A>] open System\n"
+            last
+        ],
+        [
+            "E3.fsi(1,1,1,2): error FS0010: Unexpected symbol ')' in signature file"
+            missingDeclaration "E3.fsi" 1 1 1 2
+        ]
+
+        "an attributed open is discarded after a definition recovery",
+        SyntaxCompilationTarget.Executable,
+        [
+            "E4.fs", "module M\nlet a = 1\n)\n[<A>]\nopen System\n"
+            last
+        ],
+        [
+            "E4.fs(3,1,3,2): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "an attributed nested module is discarded after a definition recovery",
+        SyntaxCompilationTarget.Executable,
+        [
+            "E5.fs", "module M\nlet a = 1\n)\n[<A>]\nmodule N =\n    let b = 1\n"
+            last
+        ],
+        [
+            "E5.fs(3,1,3,2): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
         "a do declaration is discarded after a stray token",
         SyntaxCompilationTarget.Executable,
         [

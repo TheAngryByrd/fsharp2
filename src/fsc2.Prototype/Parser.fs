@@ -2617,7 +2617,18 @@ module internal Parser =
                         && (isKeyword "open" token
                             || isKeyword "module" token)
                     then
-                        reportUnsupported state token "an attributed declaration"
+                        if
+                            state.SuppressFrom.IsSome
+                            && state.NextDeclaration = DeclarationAfterRecovery.Discarded
+                        then
+                            skipUntil state token.Range.Start
+                            |> Option.iter (
+                                rules.Skipped
+                                >> target.Add
+                            )
+                        else
+                            reportUnsupported state token "an attributed declaration"
+
                         None, ListRecovery.Continues
                     elif isKeyword "open" token then
                         parseOpen state
