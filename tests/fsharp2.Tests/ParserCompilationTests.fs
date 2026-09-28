@@ -3847,6 +3847,428 @@ module M =
         "r_trail_eq.fsi", "module M\nval a: int = 1\n", []
     ]
 
+    let private headerLossCases = [
+        "attr_mod.fsi",
+        "module M\nmodule N =\n    )\n[<A>]\nmodule O =\n    val b: )\n",
+        [
+            "attr_mod.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "attr_mod.fsi(6,12,6,13): error FS0010: Unexpected symbol ')' in value signature"
+            "attr_mod.fsi(7,1,7,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "attr_val_line.fsi",
+        "module M\nmodule N =\n    )\n    [<A>] val b: )\n",
+        [
+            "attr_val_line.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "attr_val_line.fsi(4,18,4,19): error FS0010: Unexpected symbol ')' in value signature"
+            "attr_val_line.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "attr_val_ok.fsi",
+        "module M\nmodule N =\n    )\n    [<A>]\n    val b: int\n",
+        [ "attr_val_ok.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file" ]
+
+        "attr_val_root.fsi",
+        "module M\nmodule N =\n    )\n[<A>]\nval b: )\n",
+        [
+            "attr_val_root.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "attr_val_root.fsi(5,8,5,9): error FS0010: Unexpected symbol ')' in value signature"
+            "attr_val_root.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "attr_val.fsi",
+        "module M\nmodule N =\n    )\n    [<A>]\n    val b: )\n",
+        [
+            "attr_val.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "attr_val.fsi(5,12,5,13): error FS0010: Unexpected symbol ')' in value signature"
+            "attr_val.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "ns_after_ns_mod.fsi",
+        "namespace P\nmodule N =\n    )\nnamespace Q\nmodule O =\n    val x: )\n",
+        [
+            "ns_after_ns_mod.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "ns_after_ns_mod.fsi(6,12,6,13): error FS0010: Unexpected symbol ')' in value signature"
+            "ns_after_ns_mod.fsi(7,1,7,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "ns_after_ns.fsi",
+        "namespace P\nmodule N =\n    )\nnamespace Q\nval x: )\n",
+        [
+            "ns_after_ns.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "ns_after_ns.fsi(5,8,5,9): error FS0010: Unexpected symbol ')' in value signature"
+            "ns_after_ns.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "inside_type_then_root_err.fsi",
+        "module M\nmodule N =\n    val a: int -> ]\nval c: )\n",
+        [
+            "inside_type_then_root_err.fsi(3,19,3,20): error FS0010: Unexpected symbol ']' in value signature"
+            "inside_type_then_root_err.fsi(4,8,4,9): error FS0010: Unexpected symbol ')' in value signature"
+            "inside_type_then_root_err.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "nested_ok_then_root_err.fsi",
+        "module M\nmodule N =\n    )\nmodule O =\n    val d: int\nval c: )\n",
+        [
+            "nested_ok_then_root_err.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "nested_ok_then_root_err.fsi(6,8,6,9): error FS0010: Unexpected symbol ')' in value signature"
+            "nested_ok_then_root_err.fsi(7,1,7,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "no_lost_root_err.fsi",
+        "module M\nval c: )\n",
+        [ "no_lost_root_err.fsi(2,8,2,9): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "root_arrow.fsi",
+        "module M\nmodule N =\n    )\nval b: int -> ]\n",
+        [
+            "root_arrow.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "root_arrow.fsi(4,15,4,16): error FS0010: Unexpected symbol ']' in value signature"
+        ]
+
+        "root_ok_then_err.fsi",
+        "module M\nmodule N =\n    )\nval b: int\nval c: )\n",
+        [
+            "root_ok_then_err.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "root_ok_then_err.fsi(5,8,5,9): error FS0010: Unexpected symbol ')' in value signature"
+            "root_ok_then_err.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "root_ok_then_stray.fsi",
+        "module M\nmodule N =\n    )\nval b: int\n)\n",
+        [
+            "root_ok_then_stray.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "root_ok_then_stray.fsi(5,1,5,2): error FS0010: Unexpected symbol ')' in signature file. Expected incomplete structured construct at or before this point or other token."
+            "root_ok_then_stray.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "root_open_then_err.fsi",
+        "module M\nmodule N =\n    )\nopen System\nval c: )\n",
+        [
+            "root_open_then_err.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "root_open_then_err.fsi(5,8,5,9): error FS0010: Unexpected symbol ')' in value signature"
+            "root_open_then_err.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "root_trail.fsi",
+        "module M\nmodule N =\n    )\nval b: int )\n",
+        [
+            "root_trail.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "root_trail.fsi(4,12,4,13): error FS0010: Unexpected symbol ')' in signature file. Expected incomplete structured construct at or before this point or other token."
+            "root_trail.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "root_val_colon.fsi",
+        "module M\nmodule N =\n    )\nval b int\n",
+        [
+            "root_val_colon.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "root_val_colon.fsi(4,7,4,10): error FS0010: Unexpected identifier in value signature. Expected ':' or other token."
+            "root_val_colon.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "root_val_err_then_err.fsi",
+        "module M\nmodule N =\n    )\nval b: )\nval c: )\n",
+        [
+            "root_val_err_then_err.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "root_val_err_then_err.fsi(4,8,4,9): error FS0010: Unexpected symbol ')' in value signature"
+            "root_val_err_then_err.fsi(5,8,5,9): error FS0010: Unexpected symbol ')' in value signature"
+            "root_val_err_then_err.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "root_val_err_then_val.fsi",
+        "module M\nmodule N =\n    )\nval b: )\nval c: int\n",
+        [
+            "root_val_err_then_val.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "root_val_err_then_val.fsi(4,8,4,9): error FS0010: Unexpected symbol ')' in value signature"
+        ]
+
+        "root_val_err.fsi",
+        "module M\nmodule N =\n    )\nval b: )\n",
+        [
+            "root_val_err.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "root_val_err.fsi(4,8,4,9): error FS0010: Unexpected symbol ')' in value signature"
+            "root_val_err.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "nested_name_first.fsi",
+        "module M\nmodule N =\n    val )\n",
+        [
+            "nested_name_first.fsi(3,9,3,10): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+            "nested_name_first.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "ns_lost_then_stray.fsi",
+        "namespace P\nmodule N =\n    )\nnamespace Q\nval b: int\n)\n",
+        [
+            "ns_lost_then_stray.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "ns_lost_then_stray.fsi(6,1,6,2): error FS0010: Unexpected symbol ')' in signature file. Expected incomplete structured construct at or before this point or other token."
+            "ns_lost_then_stray.fsi(7,1,7,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "root_inside_type_then_val.fsi",
+        "module M\nmodule N =\n    )\nval b: int -> ]\nval c: int\n",
+        [
+            "root_inside_type_then_val.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "root_inside_type_then_val.fsi(4,15,4,16): error FS0010: Unexpected symbol ']' in value signature"
+        ]
+
+        "root_inside_type.fsi",
+        "module M\nmodule N =\n    )\nval b: int -> ]\n",
+        [
+            "root_inside_type.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "root_inside_type.fsi(4,15,4,16): error FS0010: Unexpected symbol ']' in value signature"
+        ]
+
+        "root_stray_then_val.fsi",
+        "module M\nmodule N =\n    )\nval b: int\n)\nval c: )\n",
+        [
+            "root_stray_then_val.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "root_stray_then_val.fsi(5,1,5,2): error FS0010: Unexpected symbol ')' in signature file. Expected incomplete structured construct at or before this point or other token."
+            "root_stray_then_val.fsi(6,8,6,9): error FS0010: Unexpected symbol ')' in value signature"
+            "root_stray_then_val.fsi(7,1,7,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+    ]
+
+    let private unmodeledHeaderLossCases = [
+        "ns_after_mod_clean.fsi",
+        "module M\nmodule N =\n    )\nnamespace Q\nval x: int\n",
+        [ "ns_after_mod_clean.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file" ]
+
+        "ns_after_mod_ok.fsi",
+        "module M\nmodule N =\n    val a: int\nnamespace Q\nval x: int\n",
+        [
+            "ns_after_mod_ok.fsi(4,1,4,10): error FS0010: Unexpected keyword 'namespace'. Expected incomplete structured construct at or before this point or other token."
+            "ns_after_mod_ok.fsi(1,1,3,15): error FS0530: Only '#' compiler directives may occur prior to the first 'namespace' declaration"
+            "ns_after_mod_ok.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "ns_after_mod.fsi",
+        "module M\nmodule N =\n    )\nnamespace Q\nval x: )\n",
+        [
+            "ns_after_mod.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "ns_after_mod.fsi(5,8,5,9): error FS0010: Unexpected symbol ')' in value signature"
+            "ns_after_mod.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "root_val_name.fsi",
+        "module M\nmodule N =\n    )\nval )\n",
+        [
+            "root_val_name.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "root_val_name.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "nested_name_then_val.fsi",
+        "module M\nmodule N =\n    )\n    val )\n    val c: )\n",
+        [
+            "nested_name_then_val.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "nested_name_then_val.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "nested_name.fsi",
+        "module M\nmodule N =\n    )\n    val )\n",
+        [
+            "nested_name.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "nested_name.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "root_name_then_val.fsi",
+        "module M\nmodule N =\n    )\nval )\nval c: )\n",
+        [
+            "root_name_then_val.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "root_name_then_val.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+    ]
+
+    let private incompleteConstructCases = [
+        "v_colon_eof.fsi",
+        "module M\nval a:\n",
+        [
+            "v_colon_eof.fsi(3,1,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "v_colon_nested_root.fsi",
+        "module M\nmodule N =\n    val a:\nval b: int\n",
+        [
+            "v_colon_nested_root.fsi(4,1,4,4): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "v_colon_next.fsi",
+        "module M\nval a:\nval b: int\n",
+        [
+            "v_colon_next.fsi(2,8,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "v_nested_blank_root.fsi",
+        "module M\nmodule N =\n    val a: int ->\n\nval b: int\n",
+        [
+            "v_nested_blank_root.fsi(5,1,5,4): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "v_nested_eof.fsi",
+        "module M\nmodule N =\n    val a: int ->\n",
+        [
+            "v_nested_eof.fsi(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "v_nested_next.fsi",
+        "module M\nmodule N =\n    val a: int ->\n    val b: int\n",
+        [
+            "v_nested_next.fsi(3,19,4,5): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "v_nested_root.fsi",
+        "module M\nmodule N =\n    val a: int ->\nval b: int\n",
+        [
+            "v_nested_root.fsi(4,1,4,4): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "v_root_blank.fsi",
+        "module M\nval a: int ->\n\n\nval b: int\n",
+        [
+            "v_root_blank.fsi(2,15,5,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "v_root_eof_nonl.fsi",
+        "module M\nval a: int ->",
+        [
+            "v_root_eof_nonl.fsi(2,1,2,14): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "v_root_eof.fsi",
+        "module M\nval a: int ->\n",
+        [
+            "v_root_eof.fsi(3,1,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "v_root_next.fsi",
+        "module M\nval a: int ->\nval b: int\n",
+        [
+            "v_root_next.fsi(2,15,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "o_nested_eof.fs",
+        "module M\nmodule N =\n    open\n",
+        [
+            "o_nested_eof.fs(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global', 'type' or other token."
+        ]
+
+        "o_nested_next.fs",
+        "module M\nmodule N =\n    open\n    let b = 1\n",
+        [
+            "o_nested_next.fs(3,10,4,5): error FS0010: Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global', 'type' or other token."
+        ]
+
+        "o_nested_root.fs",
+        "module M\nmodule N =\n    open\nlet b = 1\n",
+        [
+            "o_nested_root.fs(4,1,4,4): error FS0010: Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global', 'type' or other token."
+        ]
+
+        "o_root_blank.fs",
+        "module M\nopen\n\nlet b = 1\n",
+        [
+            "o_root_blank.fs(2,6,4,1): error FS0010: Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global', 'type' or other token."
+        ]
+
+        "o_root_eof.fs",
+        "module M\nopen\n",
+        [
+            "o_root_eof.fs(3,1,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global', 'type' or other token."
+        ]
+
+        "o_root_next.fs",
+        "module M\nopen\nlet b = 1\n",
+        [
+            "o_root_next.fs(2,6,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global', 'type' or other token."
+        ]
+
+        "od_nested_next.fs",
+        "module M\nmodule N =\n    open System.\n    let b = 1\n",
+        [
+            "od_nested_next.fs(3,18,4,5): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "od_root_next.fs",
+        "module M\nopen System.\nlet b = 1\n",
+        [
+            "od_root_next.fs(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "os_nested_root.fsi",
+        "module M\nmodule N =\n    open\nval b: int\n",
+        [
+            "os_nested_root.fsi(4,1,4,4): error FS0010: Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global', 'type' or other token."
+        ]
+
+        "os_root_next.fsi",
+        "module M\nopen\nval b: int\n",
+        [
+            "os_root_next.fsi(2,6,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global', 'type' or other token."
+        ]
+
+        "n_arrow_end.fsi",
+        "module M\nmodule N =\n    val a: int ->\n",
+        [
+            "n_arrow_end.fsi(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+    ]
+
+    let private unmodeledIncompleteConstructCases = [
+        "b_comment_next.fs",
+        "module M\nlet a = // c\nlet b = 1\n",
+        [
+            "b_comment_next.fs(3,1,3,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "b_comment_next.fs(3,1,3,4): error FS0010: Incomplete structured construct at or before this point in binding"
+        ]
+
+        "b_nested_next.fs",
+        "module M\nmodule N =\n    let a =\n    let b = 1\n",
+        [
+            "b_nested_next.fs(4,5,4,8): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "b_nested_next.fs(4,5,4,8): error FS0010: Incomplete structured construct at or before this point in binding"
+        ]
+
+        "b_nested_root.fs",
+        "module M\nmodule N =\n    let a =\nlet b = 1\n",
+        [
+            "b_nested_root.fs(4,1,4,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "b_nested_root.fs(4,1,4,4): error FS0010: Incomplete structured construct at or before this point in binding"
+        ]
+
+        "b_root_eof.fs",
+        "module M\nlet a =\n",
+        [
+            "b_root_eof.fs(3,1,3,1): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "b_root_eof.fs(3,1,3,1): error FS0010: Incomplete structured construct at or before this point in binding"
+        ]
+
+        "b_root_next.fs",
+        "module M\nlet a =\nlet b = 1\n",
+        [
+            "b_root_next.fs(3,1,3,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "b_root_next.fs(3,1,3,4): error FS0010: Incomplete structured construct at or before this point in binding"
+        ]
+
+        "od_nested_root.fs",
+        "module M\nmodule N =\n    open System.\nlet b = 1\n",
+        [
+            "od_nested_root.fs(3,16,3,17): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "od_root_eof_nonl.fs",
+        "module M\nopen System.",
+        [
+            "od_root_eof_nonl.fs(2,12,2,13): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "od_root_eof.fs",
+        "module M\nopen System.\n",
+        [
+            "od_root_eof.fs(2,12,2,13): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+    ]
+
     [<Tests>]
     let tests =
         testList "Issue29.ParserCompilation" [
@@ -4251,6 +4673,70 @@ module private N =
                                 expected
                                 "The diagnostics must match the Compatibility Oracle"
                 ]
+
+            testList "a lost signature module header reports the Oracle diagnostics" [
+                for logicalPath, text, expected in headerLossCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        Expect.sequenceEqual
+                            (oracleLines (
+                                parse SyntaxCompilationTarget.Executable [
+                                    logicalPath, text
+                                    last
+                                ]
+                            ))
+                            expected
+                            "The diagnostics must match the Compatibility Oracle"
+            ]
+
+            testList "an unmodeled lost signature module header stays explicit" [
+                for logicalPath, text, oracle in unmodeledHeaderLossCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result =
+                            parse SyntaxCompilationTarget.Executable [
+                                logicalPath, text
+                                last
+                            ]
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            (result.Diagnostics
+                             |> Seq.map _.Diagnostic)
+                            (oracleLines result)
+            ]
+
+            testList "an incomplete construct reports the Oracle range" [
+                for logicalPath, text, expected in incompleteConstructCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        Expect.sequenceEqual
+                            (oracleLines (
+                                parse SyntaxCompilationTarget.Executable [
+                                    logicalPath, text
+                                    last
+                                ]
+                            ))
+                            expected
+                            "The diagnostics must match the Compatibility Oracle"
+            ]
+
+            testList "an unmodeled incomplete construct stays explicit" [
+                for logicalPath, text, oracle in unmodeledIncompleteConstructCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result =
+                            parse SyntaxCompilationTarget.Executable [
+                                logicalPath, text
+                                last
+                            ]
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            (result.Diagnostics
+                             |> Seq.map _.Diagnostic)
+                            (oracleLines result)
+            ]
 
             testCase "a module-level use keeps its keyword in the tree"
             <| fun _ ->
