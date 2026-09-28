@@ -7,8 +7,8 @@ open Expecto
 open FSharp2.Compiler
 
 module ParserRobustnessTests =
-    let private language =
-        LanguageVersion.normalize (Some "10.0")
+    let private language mode =
+        LanguageVersion.normalize (Some mode)
         |> Result.defaultWith failtest
 
     let private limit = TimeSpan.FromSeconds 10.0
@@ -21,10 +21,13 @@ module ParserRobustnessTests =
             Parser.parseImplementationFile document
             |> ignore
 
-    let private expectCompletes (logicalPath: string) (text: string) =
+            SyntaxRouting.tryProject document
+            |> ignore
+
+    let private expectCompletesIn mode (logicalPath: string) (text: string) =
         let document =
             SourceSnapshot.Create(StableIdentity.create logicalPath, logicalPath, text, "content")
-            |> LexicalPipeline.prepare language Array.empty
+            |> LexicalPipeline.prepare (language mode) Array.empty
 
         let work = Task.Run(fun () -> parse logicalPath document)
 
@@ -33,11 +36,46 @@ module ParserRobustnessTests =
                 work.Wait limit
             with :? AggregateException as failure ->
                 failtest
-                    $"The parser threw {failure.InnerException.GetType().Name}: {failure.InnerException.Message}\nInput {logicalPath}:\n{text}"
+                    $"The parser threw {failure.InnerException.GetType().Name}: {failure.InnerException.Message}\nInput {logicalPath} ({mode}):\n{text}"
 
         Expect.isTrue
             completed
-            $"The parser must finish within {limit.TotalSeconds} seconds for {logicalPath}:\n{text}"
+            $"The parser must finish within {limit.TotalSeconds} seconds for {logicalPath} ({mode}):\n{text}"
+
+    let private expectCompletes logicalPath text =
+        for mode in
+            [
+                "7.0"
+                "10.0"
+            ] do
+            expectCompletesIn mode logicalPath text
+
+    let private nested depth (opening: string) (closing: string) (body: string) =
+        String.replicate depth opening
+        + body
+        + String.replicate depth closing
+
+    let private deeplyNested = [
+        "Parentheses.fs", $"""module Program{"\n"}let x = {nested 200 "(" ")" "1"}{"\n"}"""
+        "Lists.fs", $"""module Program{"\n"}let x = {nested 200 "[ " " ]" "1"}{"\n"}"""
+        "Records.fs", $"""module Program{"\n"}let x = {nested 200 "{ A = " " }" "1"}{"\n"}"""
+        "Lambdas.fs", $"""module Program{"\n"}let x = {nested 200 "fun a -> " "" "a"}{"\n"}"""
+        "Conditions.fs",
+        $"""module Program{"\n"}let x = {nested 200 "if a then " " else 0" "1"}{"\n"}"""
+        "DotLambdas.fs", $"""module Program{"\n"}let x = {nested 200 "f (_.A " ")" "1"}{"\n"}"""
+        "Types.fsi", $"""module Program{"\n"}val x: {nested 200 "(" ")" "int"}{"\n"}"""
+        "Functions.fsi", $"""module Program{"\n"}val x: {nested 200 "int -> " "" "int"}{"\n"}"""
+        "Unclosed.fs", $"""module Program{"\n"}let x = {String.replicate 200 "("}1{"\n"}"""
+        "Modules.fs",
+        "module Program\n"
+        + String.concat "" [
+            for level in 0..60 ->
+                String.replicate (level * 4) " "
+                + $"module M{level} =\n"
+        ]
+        + String.replicate (61 * 4) " "
+        + "let x = 1\n"
+    ]
 
     let private fragments = [|
         "module"
@@ -150,6 +188,11 @@ module ParserRobustnessTests =
             testCase "the parser finishes without an exception on generated token sequences"
             <| fun _ ->
                 for logicalPath, text in generated do
+                    expectCompletes logicalPath text
+
+            testCase "the parser finishes without an exception on deeply nested input"
+            <| fun _ ->
+                for logicalPath, text in deeplyNested do
                     expectCompletes logicalPath text
 
             testCase "the parser finishes without an exception on every repository F# source"

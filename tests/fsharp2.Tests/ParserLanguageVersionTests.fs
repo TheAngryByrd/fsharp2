@@ -175,6 +175,9 @@ module ParserLanguageVersionTests =
                         "module Program\nlet f = _\nlet g = 1\n"
                         "module Program\nlet f = _ + 1\n"
                         "module Program\nlet f = _.\n"
+                        "module Program\nlet f = _.A._\n"
+                        "module Program\nlet f = x._\n"
+                        "module Program\nlet f = x._.A\n"
                     ] do
                     let result = parse "10.0" "Underscore.fs" text
 

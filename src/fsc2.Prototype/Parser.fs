@@ -488,7 +488,11 @@ module internal Parser =
               && isOperator "." cursor.Current do
             let dot = cursor.Advance()
 
-            if isIdentifier cursor.Current then
+            if
+                isIdentifier cursor.Current
+                && tokenText cursor.Current
+                   <> "_"
+            then
                 parts.Add(identifier (cursor.Advance()))
             else
                 onTrailingDot dot
