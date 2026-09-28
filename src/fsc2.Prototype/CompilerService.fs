@@ -1291,37 +1291,7 @@ type internal CompilerService() =
                 ContentFingerprint = source.ContentFingerprint
             }
 
-            let projected =
-                if
-                    source.LogicalPath.EndsWith(".fs", StringComparison.OrdinalIgnoreCase)
-                    && source.Directives.IsEmpty
-                    && source.Diagnostics.IsEmpty
-                    && Frontend.isTokenizedLikeLexicalDocument source
-                then
-                    let syntax = Parser.parseImplementationFile source
-
-                    if syntax.Diagnostics.IsEmpty then
-                        let contentFingerprint =
-                            source.CompatibilityText
-                            |> Encoding.UTF8.GetBytes
-                            |> SHA256.HashData
-                            |> Convert.ToHexString
-                            |> _.ToLowerInvariant()
-
-                        match
-                            SyntaxProjection.project
-                                contentFingerprint
-                                source.SourceChecksum
-                                syntax.File
-                        with
-                        | SyntaxProjectionResult.Projected parsed -> Some parsed
-                        | SyntaxProjectionResult.ProjectionUnsupported _ -> None
-                    else
-                        None
-                else
-                    None
-
-            match projected with
+            match SyntaxRouting.tryProject source with
             | Some parsed ->
                 syntaxProjections <-
                     syntaxProjections

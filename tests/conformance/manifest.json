@@ -189,6 +189,13 @@
       "requiredPolarities": ["positive", "negative"],
       "requiredPhases": ["source", "syntax"],
       "envelope": "unsupported"
+    },
+    {
+      "id": "syntax.underscore-dot-shorthand",
+      "title": "Language-version gate for the underscore dot shorthand",
+      "requiredPolarities": ["positive", "negative"],
+      "requiredPhases": ["source", "syntax"],
+      "envelope": "unsupported"
     }
   ],
   "integrationCorpora": [
