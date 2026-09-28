@@ -613,7 +613,118 @@ module internal Parser =
             { Kind = kind; Range = token.Range }
         )
 
-    let private parseBinding state context =
+    let private isAttributeListStart (cursor: Cursor) =
+        let token = cursor.Current
+        let next = cursor.Peek 1
+
+        isDelimiter "[" token
+        && isOperator "<" next
+        && next.Range.Start.Offset = token.Range.End.Offset
+
+    let private isAttributeListEnd (cursor: Cursor) =
+        let token = cursor.Current
+        let next = cursor.Peek 1
+
+        isOperator ">" token
+        && isDelimiter "]" next
+        && next.Range.Start.Offset = token.Range.End.Offset
+
+    let private parseAttributeList state =
+        let cursor = state.Cursor
+        let openBracket = cursor.Advance()
+
+        cursor.Advance()
+        |> ignore
+
+        let context = openBracket.Range.Start
+        let attributes = ImmutableArray.CreateBuilder<SyntaxAttribute>()
+        let mutable stop = false
+
+        while not stop do
+            let start = cursor.Current
+
+            let target =
+                if
+                    (isIdentifier start
+                     || isKind LexicalTokenKind.Keyword start)
+                    && isOperator ":" (cursor.Peek 1)
+                then
+                    let target = identifier (cursor.Advance())
+
+                    cursor.Advance()
+                    |> ignore
+
+                    Some target
+                else
+                    None
+
+            if isIdentifier cursor.Current then
+                let name = longIdentifier cursor
+
+                let argument =
+                    if
+                        canStartAtom cursor.Current
+                        && not (isOffside context cursor.Current)
+                    then
+                        Some(parseAtom state context)
+                    else
+                        None
+
+                attributes.Add {
+                    Target = target
+                    Name = name
+                    Argument = argument
+                    Range = span start.Range (emptyAt cursor.LastEnd)
+                }
+
+                if isDelimiter ";" cursor.Current then
+                    cursor.Advance()
+                    |> ignore
+                else
+                    stop <- true
+            else
+                stop <- true
+
+        if isAttributeListEnd cursor then
+            cursor.Advance()
+            |> ignore
+
+            cursor.Advance()
+            |> ignore
+        else
+            reportUnsupported state cursor.Current "an attribute list"
+
+            skipUntil state context
+            |> ignore
+
+        {
+            Attributes = attributes.ToImmutable()
+            Range = span openBracket.Range (emptyAt cursor.LastEnd)
+        }
+
+    let private parseAttributeLists state =
+        let cursor = state.Cursor
+        let lists = ImmutableArray.CreateBuilder<SyntaxAttributeList>()
+
+        while isAttributeListStart cursor do
+            lists.Add(parseAttributeList state)
+
+            while cursor.Current.Kind = LayoutTokenKind.Separator do
+                cursor.Advance()
+                |> ignore
+
+        lists.ToImmutable()
+
+    let private declarationStart
+        (attributes: ImmutableArray<SyntaxAttributeList>)
+        (keyword: LayoutToken)
+        =
+        if attributes.IsEmpty then
+            keyword.Range
+        else
+            attributes[0].Range
+
+    let private parseBinding state context attributes =
         let cursor = state.Cursor
         let reported = state.Diagnostics.Count
         let mutable recovered = false
@@ -696,6 +807,7 @@ module internal Parser =
             recover (Some RecoveryPoint.BindingEnd)
 
         {
+            Attributes = attributes
             Accessibility = accessibility
             Head = head
             Parameters = parameters.ToImmutable()
@@ -709,7 +821,7 @@ module internal Parser =
                     (emptyAt cursor.LastEnd)
         }
 
-    let private parseLet state =
+    let private parseLet state attributes =
         let cursor = state.Cursor
         let letToken = cursor.Advance()
         let context = letToken.Range.Start
@@ -724,18 +836,66 @@ module internal Parser =
                 false
 
         let bindings = ImmutableArray.CreateBuilder<SyntaxBinding>()
-        bindings.Add(parseBinding state context)
+        bindings.Add(parseBinding state context attributes)
 
         while isKeyword "and" cursor.Current do
             cursor.Advance()
             |> ignore
 
-            bindings.Add(parseBinding state context)
+            bindings.Add(parseBinding state context ImmutableArray.Empty)
 
         ImplementationDeclaration.Let(
             isRecursive,
             bindings.ToImmutable(),
-            span letToken.Range (emptyAt cursor.LastEnd)
+            span (declarationStart attributes letToken) (emptyAt cursor.LastEnd)
+        )
+
+    let private parseDo state attributes =
+        let cursor = state.Cursor
+        let doToken = cursor.Advance()
+        let context = doToken.Range.Start
+        let reported = state.Diagnostics.Count
+
+        let body =
+            if cursor.Current.Kind = LayoutTokenKind.BeginBlock then
+                cursor.Advance()
+                |> ignore
+
+                let body =
+                    if canStartAtom cursor.Current then
+                        parseExpression state context
+                    else
+                        reportUnsupported state cursor.Current "a do declaration"
+                        missingExpression cursor.Current
+
+                if
+                    cursor.Current.Kind
+                    <> LayoutTokenKind.EndBlock
+                then
+                    if state.Diagnostics.Count = reported then
+                        reportUnsupported state cursor.Current "a do declaration"
+
+                    skipUntil state context
+                    |> ignore
+
+                if cursor.Current.Kind = LayoutTokenKind.EndBlock then
+                    cursor.Advance()
+                    |> ignore
+
+                body
+            elif
+                canStartAtom cursor.Current
+                && not (isOffside context cursor.Current)
+            then
+                parseExpression state context
+            else
+                reportUnsupported state cursor.Current "a do declaration"
+                missingExpression cursor.Current
+
+        ImplementationDeclaration.Do(
+            attributes,
+            body,
+            span (declarationStart attributes doToken) (emptyAt cursor.LastEnd)
         )
 
     let private endsDeclaration context (token: LayoutToken) =
@@ -994,7 +1154,7 @@ module internal Parser =
             else
                 name
 
-    let private parseVal state nested =
+    let private parseVal state nested attributes =
         let cursor = state.Cursor
         let valToken = cursor.Advance()
         let context = valToken.Range.Start
@@ -1055,11 +1215,12 @@ module internal Parser =
 
         let value =
             SignatureDeclaration.Val {
+                Attributes = attributes
                 Accessibility = accessibility
                 Name = name
                 Type = valueType
                 Skipped = skipped
-                Range = span valToken.Range (emptyAt cursor.LastEnd)
+                Range = span (declarationStart attributes valToken) (emptyAt cursor.LastEnd)
             }
 
         Some value, recovered
@@ -1088,7 +1249,12 @@ module internal Parser =
             None
 
     type private DeclarationRules<'Declaration> = {
-        Parse: ParserState -> bool -> LayoutToken -> ('Declaration option * bool) option
+        Parse:
+            ParserState
+                -> bool
+                -> ImmutableArray<SyntaxAttributeList>
+                -> LayoutToken
+                -> ('Declaration option * bool) option
         StartPoint: bool -> RecoveryPoint
         Open: LongIdentifier * SourceRange -> 'Declaration
         NestedModule:
@@ -1121,16 +1287,25 @@ module internal Parser =
                 stop <- true
             else
                 let reported = state.Diagnostics.Count
+                let attributes = parseAttributeLists state
+                let token = cursor.Current
 
                 let parsed, discardsList =
-                    if isKeyword "open" token then
+                    if
+                        not attributes.IsEmpty
+                        && (isKeyword "open" token
+                            || isKeyword "module" token)
+                    then
+                        reportUnsupported state token "an attributed declaration"
+                        None, false
+                    elif isKeyword "open" token then
                         parseOpen state
                         |> Option.map rules.Open,
                         false
                     elif isKeyword "module" token then
                         parseNestedModule state rules, false
                     else
-                        match rules.Parse state nested token with
+                        match rules.Parse state nested attributes token with
                         | Some result -> result
                         | None ->
                             reportUnexpected
@@ -1217,6 +1392,21 @@ module internal Parser =
         let cursor = state.Cursor
         let roots = ImmutableArray.CreateBuilder<ModuleOrNamespaceSyntax<_>>()
 
+        let rootDeclarations () =
+            if cursor.Current.Kind = LayoutTokenKind.BeginBlock then
+                cursor.Advance()
+                |> ignore
+
+                let declarations = parseDeclarations state rules false
+
+                if cursor.Current.Kind = LayoutTokenKind.EndBlock then
+                    cursor.Advance()
+                    |> ignore
+
+                declarations
+            else
+                parseDeclarations state rules false
+
         let root kind name (start: SourceRange) declarations = {
             Kind = kind
             Name = name
@@ -1235,7 +1425,7 @@ module internal Parser =
                         reportUnsupported state cursor.Current "a namespace declaration"
                         None
 
-                let declarations = parseDeclarations state rules false
+                let declarations = rootDeclarations ()
 
                 roots.Add(
                     root ModuleOrNamespaceKind.Namespace name namespaceToken.Range declarations
@@ -1262,7 +1452,7 @@ module internal Parser =
 
             match header with
             | Some(moduleToken, name) ->
-                let declarations = parseDeclarations state rules false
+                let declarations = rootDeclarations ()
 
                 roots.Add(
                     root
@@ -1272,7 +1462,7 @@ module internal Parser =
                         declarations
                 )
             | None ->
-                let declarations = parseDeclarations state rules false
+                let declarations = rootDeclarations ()
 
                 roots.Add(root ModuleOrNamespaceKind.AnonymousModule None first.Range declarations)
 
@@ -1280,9 +1470,11 @@ module internal Parser =
 
     let private implementationRules = {
         Parse =
-            fun state _ token ->
+            fun state _ attributes token ->
                 if isKeyword "let" token then
-                    Some(Some(parseLet state), false)
+                    Some(Some(parseLet state attributes), false)
+                elif isKeyword "do" token then
+                    Some(Some(parseDo state attributes), false)
                 else
                     None
         StartPoint = fun _ -> RecoveryPoint.DefinitionStart
@@ -1295,9 +1487,9 @@ module internal Parser =
 
     let private signatureRules = {
         Parse =
-            fun state nested token ->
+            fun state nested attributes token ->
                 if isKeyword "val" token then
-                    Some(parseVal state nested)
+                    Some(parseVal state nested attributes)
                 else
                     None
         StartPoint =

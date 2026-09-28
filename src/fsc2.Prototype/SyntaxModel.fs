@@ -67,6 +67,18 @@ type internal SyntaxExpression =
         | Infix(_, _, _, range) -> range
         | Missing missing -> missing.Range
 
+type internal SyntaxAttribute = {
+    Target: SyntaxIdentifier option
+    Name: LongIdentifier
+    Argument: SyntaxExpression option
+    Range: SourceRange
+}
+
+type internal SyntaxAttributeList = {
+    Attributes: ImmutableArray<SyntaxAttribute>
+    Range: SourceRange
+}
+
 [<RequireQualifiedAccess>]
 type internal SyntaxAccessibility =
     | Public
@@ -79,6 +91,7 @@ type internal SyntaxAccess = {
 }
 
 type internal SyntaxBinding = {
+    Attributes: ImmutableArray<SyntaxAttributeList>
     Accessibility: SyntaxAccess option
     Head: SyntaxPattern
     Parameters: ImmutableArray<SyntaxPattern>
@@ -91,6 +104,7 @@ type internal SyntaxBinding = {
 type internal ImplementationDeclaration =
     | Open of LongIdentifier * SourceRange
     | Let of isRecursive: bool * ImmutableArray<SyntaxBinding> * SourceRange
+    | Do of ImmutableArray<SyntaxAttributeList> * SyntaxExpression * SourceRange
     | NestedModule of SyntaxIdentifier * ImmutableArray<ImplementationDeclaration> * SourceRange
     | Skipped of SkippedSyntax
 
@@ -98,6 +112,7 @@ type internal ImplementationDeclaration =
         match this with
         | Open(_, range)
         | Let(_, _, range)
+        | Do(_, _, range)
         | NestedModule(_, _, range) -> range
         | Skipped skipped -> skipped.Range
 
@@ -124,6 +139,7 @@ type internal SyntaxType =
         | Missing missing -> missing.Range
 
 type internal SyntaxValueSignature = {
+    Attributes: ImmutableArray<SyntaxAttributeList>
     Accessibility: SyntaxAccess option
     Name: SyntaxIdentifier option
     Type: SyntaxType
