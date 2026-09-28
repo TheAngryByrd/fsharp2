@@ -13,28 +13,33 @@
     "language.syntax.expressions-positive",
     "language.syntax.expressions-negative",
     "language.syntax.underscore-dot-shorthand-positive",
-    "language.syntax.underscore-dot-shorthand-negative"
+    "language.syntax.underscore-dot-shorthand-negative",
+    "language.syntax.successive-arguments-positive",
+    "language.syntax.successive-arguments-negative"
   ],
   "positiveCaseIds": [
     "language.syntax.implementation-declarations-positive",
     "language.syntax.signature-declarations-positive",
     "language.syntax.type-definitions-positive",
     "language.syntax.expressions-positive",
-    "language.syntax.underscore-dot-shorthand-positive"
+    "language.syntax.underscore-dot-shorthand-positive",
+    "language.syntax.successive-arguments-positive"
   ],
   "negativeCaseIds": [
     "language.syntax.implementation-recovery-negative",
     "language.syntax.signature-recovery-negative",
     "language.syntax.type-definitions-negative",
     "language.syntax.expressions-negative",
-    "language.syntax.underscore-dot-shorthand-negative"
+    "language.syntax.underscore-dot-shorthand-negative",
+    "language.syntax.successive-arguments-negative"
   ],
   "featureRows": [
     "syntax.implementation-declarations",
     "syntax.signature-declarations",
     "syntax.type-definitions",
     "syntax.expressions",
-    "syntax.underscore-dot-shorthand"
+    "syntax.underscore-dot-shorthand",
+    "syntax.successive-arguments"
   ],
   "languageVersions": [
     "default",

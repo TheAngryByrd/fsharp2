@@ -262,9 +262,11 @@ module SyntaxProjectionTests =
                     |> Set.ofSeq
 
                 let matched =
-                    Set.union
-                        (names "\| Identifier \"([^\"]+)\"")
-                        (names "[A-Za-z]Name (?:=|<>) \"([A-Za-z_][A-Za-z0-9_]*)\"")
+                    Set.unionMany [
+                        names "\| Identifier \"([^\"]+)\""
+                        names "(?<!ToString\(\) )(?:=|<>) \"([A-Za-z_][A-Za-z0-9_]*)\""
+                        names "\|\s*\"([A-Za-z_][A-Za-z0-9_]*)\"\s*(?:->|when|\|)"
+                    ]
 
                 Expect.isEmpty
                     (Set.difference matched (Set.add "EntryPoint" Frontend.specialIdentifiers))

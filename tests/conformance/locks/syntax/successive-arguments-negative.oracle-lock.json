@@ -1,0 +1,156 @@
+{
+  "documentKind": "oracle-lock-v1",
+  "schemaVersion": 1,
+  "lockId": "syntax.successive-arguments-negative",
+  "family": "syntax",
+  "caseId": "language.syntax.successive-arguments-negative",
+  "caseHash": "sha256:e88be2595b2b74d520a4a17a788584e1a794b9adb52c03e8d0546c618a558143",
+  "oracleIdentity": {
+    "sdkVersion": "10.0.110",
+    "sdkCommit": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd",
+    "compiler": {
+      "logicalPath": "sdk/10.0.110/FSharp/fsc.dll",
+      "sha256": "sha256:8cb573be4b7f70886929a572024ab26fc1893cfdd795ef124c58627610ddbf22",
+      "productVersion": "14.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "msbuildTask": {
+      "logicalPath": "sdk/10.0.110/FSharp/FSharp.Build.dll",
+      "sha256": "sha256:ab62157b2111ae5f172e863d086f7035503f83c0bdb9a9efc2e2450891df6e1a",
+      "productVersion": "14.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "fsharpCore": {
+      "logicalPath": "sdk/10.0.110/FSharp/FSharp.Core.dll",
+      "sha256": "sha256:ff83cead5566c9111b69e920c2703e6d8d125305d6ac1ac08692cafee3890968",
+      "productVersion": "10.0.110-servicing.26326.116+f7d90799ce4ef09a0bb257852a57248d2a8fb8dd"
+    },
+    "culture": "en-US",
+    "encoding": "utf-8",
+    "optionHash": "sha256:734c11396c4166a04f43e8b247bd3c57a60024049a015053a9a57c18bda9f5ca"
+  },
+  "streams": {
+    "stdout": {
+      "base64": "TWljcm9zb2Z0IChSKSBGIyBDb21waWxlciB2ZXJzaW9uIDE0LjAuMTEwLjAgZm9yIEYjIDEwLjANCkNvcHlyaWdodCAoYykgTWljcm9zb2Z0IENvcnBvcmF0aW9uLiBBbGwgUmlnaHRzIFJlc2VydmVkLg0K",
+      "byteLength": 117,
+      "byteHash": "sha256:4d9efaf1c69fd2f1088ecef67012b9f589c03ca1700275fd67b10d914f009f33",
+      "text": "Microsoft (R) F# Compiler version 14.0.110.0 for F# 10.0\r\nCopyright (c) Microsoft Corporation. All Rights Reserved.\r\n",
+      "textHash": "sha256:4d9efaf1c69fd2f1088ecef67012b9f589c03ca1700275fd67b10d914f009f33"
+    },
+    "stderr": {
+      "base64": "Ci9fZnNoYXJwMl9jb25mb3JtYW5jZS9yb290L3NyYy9MaWJyYXJ5LmZzKDMsMTEsMywxNSk6IHBhcnNlIGVycm9yIEZTMDU5NzogU3VjY2Vzc2l2ZSBhcmd1bWVudHMgc2hvdWxkIGJlIHNlcGFyYXRlZCBieSBzcGFjZXMgb3IgdHVwbGVkLCBhbmQgYXJndW1lbnRzIGludm9sdmluZyBmdW5jdGlvbiBvciBtZXRob2QgYXBwbGljYXRpb25zIHNob3VsZCBiZSBwYXJlbnRoZXNpemVkDQoKL19mc2hhcnAyX2NvbmZvcm1hbmNlL3Jvb3Qvc3JjL0xpYnJhcnkuZnMoNSwxMSw1LDE1KTogcGFyc2UgZXJyb3IgRlMwNTk3OiBTdWNjZXNzaXZlIGFyZ3VtZW50cyBzaG91bGQgYmUgc2VwYXJhdGVkIGJ5IHNwYWNlcyBvciB0dXBsZWQsIGFuZCBhcmd1bWVudHMgaW52b2x2aW5nIGZ1bmN0aW9uIG9yIG1ldGhvZCBhcHBsaWNhdGlvbnMgc2hvdWxkIGJlIHBhcmVudGhlc2l6ZWQNCgovX2ZzaGFycDJfY29uZm9ybWFuY2Uvcm9vdC9zcmMvTGlicmFyeS5mcyg1LDE2LDUsMjApOiBwYXJzZSBlcnJvciBGUzA1OTc6IFN1Y2Nlc3NpdmUgYXJndW1lbnRzIHNob3VsZCBiZSBzZXBhcmF0ZWQgYnkgc3BhY2VzIG9yIHR1cGxlZCwgYW5kIGFyZ3VtZW50cyBpbnZvbHZpbmcgZnVuY3Rpb24gb3IgbWV0aG9kIGFwcGxpY2F0aW9ucyBzaG91bGQgYmUgcGFyZW50aGVzaXplZA0K",
+      "byteLength": 654,
+      "byteHash": "sha256:5d1d90e226bb4a34495504c202d010752cc4fd3a41e30596162f72c0513401d1",
+      "text": "\n/_fsharp2_conformance/root/src/Library.fs(3,11,3,15): parse error FS0597: Successive arguments should be separated by spaces or tupled, and arguments involving function or method applications should be parenthesized\r\n\n/_fsharp2_conformance/root/src/Library.fs(5,11,5,15): parse error FS0597: Successive arguments should be separated by spaces or tupled, and arguments involving function or method applications should be parenthesized\r\n\n/_fsharp2_conformance/root/src/Library.fs(5,16,5,20): parse error FS0597: Successive arguments should be separated by spaces or tupled, and arguments involving function or method applications should be parenthesized\r\n",
+      "textHash": "sha256:5d1d90e226bb4a34495504c202d010752cc4fd3a41e30596162f72c0513401d1"
+    }
+  },
+  "process": {
+    "exitCode": 1,
+    "targetResult": "failed"
+  },
+  "diagnostics": [
+    {
+      "identity": "diagnostic.fs0597.0",
+      "code": "FS0597",
+      "subcategory": "parse",
+      "message": "Successive arguments should be separated by spaces or tupled, and arguments involving function or method applications should be parenthesized",
+      "logicalSource": "/src/Library.fs",
+      "range": {
+        "startLine": 3,
+        "startColumn": 11,
+        "endLine": 3,
+        "endColumn": 15
+      },
+      "recoveryContext": "syntax-recovery",
+      "originalSeverity": "error",
+      "adjustedSeverity": "error",
+      "stream": "stderr",
+      "sequence": 0,
+      "occurrenceCount": 1,
+      "related": [],
+      "warningLevel": 5,
+      "suppressed": false,
+      "promoted": false,
+      "languageGate": null
+    },
+    {
+      "identity": "diagnostic.fs0597.1",
+      "code": "FS0597",
+      "subcategory": "parse",
+      "message": "Successive arguments should be separated by spaces or tupled, and arguments involving function or method applications should be parenthesized",
+      "logicalSource": "/src/Library.fs",
+      "range": {
+        "startLine": 5,
+        "startColumn": 11,
+        "endLine": 5,
+        "endColumn": 15
+      },
+      "recoveryContext": "syntax-recovery",
+      "originalSeverity": "error",
+      "adjustedSeverity": "error",
+      "stream": "stderr",
+      "sequence": 1,
+      "occurrenceCount": 1,
+      "related": [],
+      "warningLevel": 5,
+      "suppressed": false,
+      "promoted": false,
+      "languageGate": null
+    },
+    {
+      "identity": "diagnostic.fs0597.2",
+      "code": "FS0597",
+      "subcategory": "parse",
+      "message": "Successive arguments should be separated by spaces or tupled, and arguments involving function or method applications should be parenthesized",
+      "logicalSource": "/src/Library.fs",
+      "range": {
+        "startLine": 5,
+        "startColumn": 16,
+        "endLine": 5,
+        "endColumn": 20
+      },
+      "recoveryContext": "syntax-recovery",
+      "originalSeverity": "error",
+      "adjustedSeverity": "error",
+      "stream": "stderr",
+      "sequence": 2,
+      "occurrenceCount": 1,
+      "related": [],
+      "warningLevel": 5,
+      "suppressed": false,
+      "promoted": false,
+      "languageGate": null
+    }
+  ],
+  "artifacts": {
+    "preRun": [
+      {
+        "logicalPath": "/output/case.dll",
+        "state": "absent",
+        "sha256": null
+      },
+      {
+        "logicalPath": "/output/case.pdb",
+        "state": "absent",
+        "sha256": null
+      }
+    ],
+    "postRun": [
+      {
+        "logicalPath": "/output/case.dll",
+        "state": "absent",
+        "sha256": null
+      },
+      {
+        "logicalPath": "/output/case.pdb",
+        "state": "absent",
+        "sha256": null
+      }
+    ]
+  },
+  "review": {
+    "owner": "parser-compatibility",
+    "sourceIssue": "#29",
+    "capturedAt": "2026-09-28T00:00:28.7614087-06:00",
+    "expiryCondition": "Refresh when the case hash, Oracle SDK identity, options, culture, encoding, or source fixture changes."
+  }
+}

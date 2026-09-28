@@ -159,7 +159,13 @@ module internal Parser =
 
     let private featureGateCode = "FS3350"
 
-    let private underscoreDotShorthandLevel = 80
+    let private successiveArgumentsCode = "FS0597"
+
+    let private isRecoveryCode code =
+        code
+        <> featureGateCode
+        && code
+           <> successiveArgumentsCode
 
     let private reportedAt state (token: LayoutToken) =
         state.ReportedStarts.Contains token.Range.Start.Offset
@@ -171,7 +177,7 @@ module internal Parser =
         }
         |> Seq.exists (fun index ->
             state.Diagnostics[index].Code
-            <> featureGateCode
+            |> isRecoveryCode
         )
 
     let private keepFirstDiagnosticSince state count =
@@ -182,7 +188,7 @@ module internal Parser =
             }
             |> Seq.tryFind (fun index ->
                 state.Diagnostics[index].Code
-                <> featureGateCode
+                |> isRecoveryCode
             )
 
         match firstRecovery with
@@ -1108,14 +1114,100 @@ module internal Parser =
 
     and private parseApplication state context =
         let cursor = state.Cursor
-        let mutable result = parseAtom state context
+
+        let result =
+            match parseAtom state context with
+            | SyntaxExpression.DotLambda _ as dotLambda ->
+                if
+                    canStartAtom cursor.Current
+                    && not (isOffside context cursor.Current)
+                    && not (reportedAt state cursor.Current)
+                then
+                    reportUnsupported
+                        state
+                        cursor.Current
+                        "an argument after an underscore dot shorthand"
+
+                dotLambda
+            | head -> parsePostfix state context Int32.MaxValue head
+
+        let mutable result = result
 
         while canStartAtom cursor.Current
               && not (isOffside context cursor.Current) do
-            let argument = parseAtom state context
+            let argument = parseArgument state context
 
             result <-
                 SyntaxExpression.Application(result, argument, span result.Range argument.Range)
+
+        result
+
+    and private parseArgument state context =
+        match parseAtom state context with
+        | SyntaxExpression.Identifier _ as name ->
+            let argument = parsePostfix state context 1 name
+
+            match argument with
+            | SyntaxExpression.Application(_, _, range) ->
+                report
+                    state
+                    successiveArgumentsCode
+                    "Successive arguments should be separated by spaces or tupled, and arguments involving function or method applications should be parenthesized"
+                    range
+            | _ -> ()
+
+            argument
+        | argument -> argument
+
+    and private isAdjacentStep state (token: LayoutToken) =
+        token.Kind = LayoutTokenKind.SourceToken
+        && token.Range.Start.Offset = state.Cursor.LastEnd.Offset
+        && (isDelimiter "(" token
+            || (isDelimiter "[" token
+                && LanguageFeature.isAvailable
+                    state.Language
+                    LanguageFeature.IndexerNotationWithoutDot))
+
+    and private parsePostfix state context maximumSteps target =
+        let cursor = state.Cursor
+        let mutable result = target
+        let mutable steps = 0
+        let mutable more = true
+
+        while more
+              && steps < maximumSteps
+              && isAdjacentStep state cursor.Current do
+            steps <- steps + 1
+
+            if isDelimiter "(" cursor.Current then
+                let argument = parseAtom state context
+
+                result <-
+                    SyntaxExpression.Application(result, argument, span result.Range argument.Range)
+            else
+                let openToken = cursor.Advance()
+
+                let index =
+                    if canStartExpression cursor.Current then
+                        parseExpression state openToken.Range.Start
+                    else
+                        missingExpression cursor.Current
+
+                if isDelimiter "]" cursor.Current then
+                    let close = cursor.Advance()
+                    result <- SyntaxExpression.Index(result, index, span result.Range close.Range)
+                else
+                    if not (reportedAt state cursor.Current) then
+                        reportUnsupported state cursor.Current "an index expression"
+
+                    result <-
+                        SyntaxExpression.Index(
+                            result,
+                            index,
+                            span result.Range (emptyAt cursor.LastEnd)
+                        )
+
+                    more <- false
 
         result
 
@@ -1133,7 +1225,7 @@ module internal Parser =
             isIdentifier token
             && tokenText token = "_"
             ->
-            parseDotLambda state
+            parseDotLambda state context
         | None when isIdentifier token ->
             longIdentifierWith
                 state
@@ -1171,7 +1263,7 @@ module internal Parser =
             reportUnsupported state token "an expression"
             missingExpression token
 
-    and private parseDotLambda state =
+    and private parseDotLambda state context =
         let cursor = state.Cursor
         let underscore = cursor.Advance()
 
@@ -1190,14 +1282,32 @@ module internal Parser =
             else
                 let members = longIdentifier state
 
-                if state.Language.FeatureLevel < underscoreDotShorthandLevel then
-                    report
-                        state
-                        "FS3350"
-                        $"Feature 'underscore dot shorthand for accessor only function' is not available in F# {state.Language.CanonicalMode}. Please use language version 8.0 or greater."
-                        (span underscore.Range dot.Range)
+                if
+                    not (
+                        LanguageFeature.isAvailable
+                            state.Language
+                            LanguageFeature.UnderscoreDotShorthand
+                    )
+                then
+                    LanguageFeature.unavailableDiagnostic
+                        state.Language
+                        LanguageFeature.UnderscoreDotShorthand
+                    |> Option.iter (fun message ->
+                        report state featureGateCode message (span underscore.Range dot.Range)
+                    )
 
-                SyntaxExpression.DotLambda(members, span underscore.Range members.Range)
+                let body = parsePostfix state context 1 (SyntaxExpression.Identifier members)
+
+                if
+                    isAdjacentStep state cursor.Current
+                    && not (reportedAt state cursor.Current)
+                then
+                    reportUnsupported
+                        state
+                        cursor.Current
+                        "a second adjacent argument in an underscore dot shorthand"
+
+                SyntaxExpression.DotLambda(body, span underscore.Range body.Range)
 
     and private parseBranchStart state context point =
         let cursor = state.Cursor

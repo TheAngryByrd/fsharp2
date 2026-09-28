@@ -119,7 +119,9 @@ module ParserGrammarTests =
             $"""{{{fields
                    |> Seq.map fieldText
                    |> String.concat "; "}}}"""
-        | SyntaxExpression.DotLambda(members, _) -> $"_.{members.Text}"
+        | SyntaxExpression.DotLambda(body, _) -> $"_.{expressionShape body}"
+        | SyntaxExpression.Index(target, index, _) ->
+            $"{expressionShape target}[{expressionShape index}]"
         | SyntaxExpression.Missing _ -> "<missing>"
 
     let private memberShape (value: SyntaxMember) =

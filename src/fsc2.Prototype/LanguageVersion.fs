@@ -137,3 +137,25 @@ module internal LanguageVersion =
                         entry.FeatureLevel
                         >= 100
                 }
+
+[<RequireQualifiedAccess>]
+type internal LanguageFeature =
+    | IndexerNotationWithoutDot
+    | UnderscoreDotShorthand
+
+module internal LanguageFeature =
+    let private minimumLevel feature =
+        match feature with
+        | LanguageFeature.IndexerNotationWithoutDot -> 60
+        | LanguageFeature.UnderscoreDotShorthand -> 80
+
+    let isAvailable (language: LanguageVersionIdentity) feature =
+        language.FeatureLevel
+        >= minimumLevel feature
+
+    let unavailableDiagnostic (language: LanguageVersionIdentity) feature =
+        match feature with
+        | LanguageFeature.IndexerNotationWithoutDot -> None
+        | LanguageFeature.UnderscoreDotShorthand ->
+            Some
+                $"Feature 'underscore dot shorthand for accessor only function' is not available in F# {language.CanonicalMode}. Please use language version 8.0 or greater."

@@ -196,6 +196,13 @@
       "requiredPolarities": ["positive", "negative"],
       "requiredPhases": ["source", "syntax"],
       "envelope": "unsupported"
+    },
+    {
+      "id": "syntax.successive-arguments",
+      "title": "Adjacent arguments and successive argument separation",
+      "requiredPolarities": ["positive", "negative"],
+      "requiredPhases": ["source", "syntax"],
+      "envelope": "unsupported"
     }
   ],
   "integrationCorpora": [

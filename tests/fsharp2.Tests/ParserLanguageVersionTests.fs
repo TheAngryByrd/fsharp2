@@ -49,7 +49,7 @@ module ParserLanguageVersionTests =
 
     let rec private dotLambdaMembers expression =
         match expression with
-        | SyntaxExpression.DotLambda(members, _) -> [ members.Text ]
+        | SyntaxExpression.DotLambda(body, _) -> [ string body ]
         | SyntaxExpression.Application(func, argument, _) ->
             dotLambdaMembers func
             @ dotLambdaMembers argument
@@ -158,7 +158,7 @@ module ParserLanguageVersionTests =
                 let result = parse "10.0" "Chain.fs" "module Program\nlet f = _.A.B\n"
 
                 match bindingBody result with
-                | SyntaxExpression.DotLambda(members, range) ->
+                | SyntaxExpression.DotLambda(SyntaxExpression.Identifier members, range) ->
                     Expect.equal members.Text "A.B" "Member path"
 
                     Expect.equal
