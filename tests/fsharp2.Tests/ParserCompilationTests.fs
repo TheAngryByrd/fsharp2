@@ -434,6 +434,61 @@ module ParserCompilationTests =
             missingDeclaration "Ab1.fs" 1 1 2 1
         ]
 
+        yield!
+            [
+                "a٣b"
+                "aʰb"
+                "aאb"
+                "ǅb"
+                "αb"
+            ]
+            |> List.map (fun stem ->
+                $"a valid implicit module name with the first UTF-16 code units {int stem[0]:X4} {int stem[1]:X4}",
+                SyntaxCompilationTarget.Executable,
+                [
+                    last
+                    $"{stem}.fs",
+                    "let a = 1
+"
+                ],
+                []
+            )
+
+        yield!
+            [
+                "a‿b", "A‿b"
+                "a﹏b", "A﹏b"
+                "éx", "Éx"
+                "aःb", "Aःb"
+                "a­b", "A­b"
+                "a‌b", "A‌b"
+                "aⅠb", "AⅠb"
+                "́ab", "́ab"
+                "‿ab", "‿ab"
+                "Ⅰab", "Ⅰab"
+                "a#b", "A#b"
+                "a$b", "A$b"
+                "a`b", "A`b"
+                "a\U0001D400b", "A\U0001D400b"
+                "a²b", "A²b"
+            ]
+            |> List.map (fun (stem, moduleName) ->
+                let fileName = $"{stem}.fs"
+
+                let codeUnits =
+                    stem
+                    |> Seq.map (fun character -> $"{int character:X4}")
+                    |> String.concat " "
+
+                $"an implicit module name with the UTF-16 code units {codeUnits}",
+                SyntaxCompilationTarget.Executable,
+                [
+                    last
+                    fileName, "let a = 1\n"
+                ],
+                [ implicitModule fileName moduleName fileName 1 1 2 1 ]
+            )
+
         "implicit module names of a signature and its implementation",
         SyntaxCompilationTarget.Executable,
         [
