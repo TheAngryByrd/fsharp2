@@ -125,6 +125,10 @@ module SyntaxProjectionTests =
         "module M\nlet x' = 1\n"
         "module M\nlet x = y'\n"
         "module M\nlet λ = 1\n"
+        "module M\n[<EntryPoint;>]\nlet main argv = 0\n"
+        "module M\n[<EntryPoint; >]\nlet main argv = 0\n"
+        "module M\nlet f x = 1\n[<EntryPoint;>]\nlet main argv = f\n"
+        "module M\n[< EntryPoint >]\nlet main argv = 0\n"
     ]
 
     let private corpus = [

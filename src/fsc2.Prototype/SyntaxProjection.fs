@@ -58,6 +58,10 @@ module internal SyntaxProjection =
                 attribute.Target.IsNone
                 && attribute.Argument.IsNone
                 && attribute.Name.Text = "EntryPoint"
+                && attribute.Range.Start.Offset = list.Range.Start.Offset
+                                                  + 2
+                && attribute.Range.End.Offset
+                   + 2 = list.Range.End.Offset
                 ->
                 Ok true
             | _ -> Error list.Range
