@@ -1,5 +1,6 @@
 namespace fsharp2.Tests
 
+open System.Collections.Immutable
 open Expecto
 open FSharp2.Compiler
 
@@ -35,9 +36,17 @@ module ParserTests =
                 let head =
                     match binding.Head with
                     | SyntaxPattern.Named identifier -> identifier.Text
+                    | SyntaxPattern.Missing _ -> "<missing>"
                     | other -> string other
 
-                $"let {head}/{binding.Parameters.Length}"
+                let body =
+                    match binding.Body with
+                    | SyntaxExpression.Missing _ -> " = <missing>"
+                    | _ -> ""
+
+                let skipped = if binding.Skipped.IsSome then " (skipped)" else ""
+
+                $"let {head}/{binding.Parameters.Length}{body}{skipped}"
             )
             |> String.concat " and "
         | ImplementationDeclaration.NestedModule(name, declarations, _) ->
@@ -48,6 +57,124 @@ module ParserTests =
 
             $"module {name.Text} = [{inner}]"
         | ImplementationDeclaration.Skipped _ -> "skipped"
+
+    let private bindingRecoveryCases = [
+        "BodyStart.fs",
+        "module Program\n\nlet broken = )\n\nlet first = 1\n\nlet second = first\n",
+        [ "BodyStart.fs(3,14): error FS0010: Unexpected symbol ')' in binding" ],
+        [
+            "let broken/0 = <missing> (skipped)"
+            "let first/0"
+            "let second/0"
+        ]
+
+        "Consecutive.fs",
+        "module Program\nlet broken = )\nlet other = ]\nlet first = 1\n",
+        [
+            "Consecutive.fs(2,14): error FS0010: Unexpected symbol ')' in binding"
+            "Consecutive.fs(3,13): error FS0010: Unexpected symbol ']' in binding"
+        ],
+        [
+            "let broken/0 = <missing> (skipped)"
+            "let other/0 = <missing> (skipped)"
+            "let first/0"
+        ]
+
+        "BlockBody.fs",
+        "module Program\nlet f =\n    )\nlet first = 1\n",
+        [ "BlockBody.fs(3,5): error FS0010: Unexpected symbol ')' in binding" ],
+        [
+            "let f/0 = <missing> (skipped)"
+            "let first/0"
+        ]
+
+        "HeadStart.fs",
+        "module Program\nlet ) = 1\nlet first = 1\n",
+        [ "HeadStart.fs(2,5): error FS0010: Unexpected symbol ')' in binding" ],
+        [
+            "let <missing>/0 = <missing> (skipped)"
+            "let first/0"
+        ]
+
+        "Keywords.fs",
+        "module Program\nlet broken = end\nlet guarded = private\nlet first = 1\n",
+        [
+            "Keywords.fs(2,14): error FS0010: Unexpected keyword 'end' in binding"
+            "Keywords.fs(3,15): error FS0010: Unexpected keyword 'private' in binding"
+        ],
+        [
+            "let broken/0 = <missing> (skipped)"
+            "let guarded/0 = <missing> (skipped)"
+            "let first/0"
+        ]
+
+        "MissingEquals.fs",
+        "module Program\nlet f x ) = 1\nlet first = 1\n",
+        [
+            "MissingEquals.fs(2,9): error FS0010: Unexpected symbol ')' in binding. Expected '=' or other token."
+        ],
+        [
+            "let f/1 = <missing> (skipped)"
+            "let first/0"
+        ]
+
+        "Trailing.fs",
+        "module Program\nlet f x = g x ]\nlet first = 1\n",
+        [
+            "Trailing.fs(2,15): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ],
+        [
+            "let f/1 (skipped)"
+            "let first/0"
+        ]
+
+        "MixedRules.fs",
+        "module Program\nlet f x ] = 1\nlet g = 2 }\nlet first = 1\n",
+        [
+            "MixedRules.fs(2,9): error FS0010: Unexpected symbol ']' in binding. Expected '=' or other token."
+            "MixedRules.fs(3,11): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ],
+        [
+            "let f/1 = <missing> (skipped)"
+            "let g/0 (skipped)"
+            "let first/0"
+        ]
+
+        "DeclarationStart.fs",
+        "module Program\nlet f x = 1\n)\nlet first = 1\n",
+        [
+            "DeclarationStart.fs(3,1): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ],
+        [
+            "let f/1"
+            "skipped"
+            "let first/0"
+        ]
+
+        "NestedModule.fs",
+        "namespace Sample\n\nmodule Inner =\n    let broken = }\n    let first = 1\n\nmodule Later =\n    let second = 2\n",
+        [ "NestedModule.fs(4,18): error FS0010: Unexpected symbol '}' in binding" ],
+        [
+            "module Inner = [let broken/0 = <missing> (skipped); let first/0]"
+            "module Later = [let second/0]"
+        ]
+
+        "AccessibilityHead.fs",
+        "module Program\nlet private = 1\nlet first = 1\n",
+        [ "AccessibilityHead.fs(2,13): error FS0010: Unexpected symbol '=' in binding" ],
+        [
+            "let <missing>/0 = <missing> (skipped)"
+            "let first/0"
+        ]
+
+        "RecursiveGroup.fs",
+        "module Program\nlet rec f x = )\nand g = 1\nlet first = 1\n",
+        [ "RecursiveGroup.fs(2,15): error FS0010: Unexpected symbol ')' in binding" ],
+        [
+            "let f/1 = <missing> (skipped) and let g/0"
+            "let first/0"
+        ]
+    ]
 
     [<Tests>]
     let tests =
@@ -151,4 +278,81 @@ module Later =
 
                 Expect.equal (position binding.Body.Range) (2, 13, 2, 35) "Body range"
                 Expect.equal (position binding.Range) (2, 5, 2, 35) "Binding range"
+
+            testCase "let bindings retain accessibility with its exact range"
+            <| fun _ ->
+                let result =
+                    parse
+                        "Access.fs"
+                        "module Program\nlet private seed = 40\nlet internal f x = x\nlet public answer = f seed\n"
+
+                Expect.equal (oracleLines "Access.fs" result) [] "No parse diagnostics"
+
+                Expect.sequenceEqual
+                    ((Seq.exactlyOne result.File.Contents).Declarations
+                     |> Seq.collect (fun declaration ->
+                         match declaration with
+                         | ImplementationDeclaration.Let(_, bindings, _) -> bindings
+                         | other -> failtest $"Expected let declarations, found {other}"
+                     )
+                     |> Seq.map (fun binding ->
+                         binding.Accessibility
+                         |> Option.map (fun access -> access.Kind, position access.Range),
+                         declarationShape (
+                             ImplementationDeclaration.Let(
+                                 false,
+                                 ImmutableArray.Create binding,
+                                 binding.Range
+                             )
+                         )
+                     ))
+                    [
+                        Some(SyntaxAccessibility.Private, (2, 5, 2, 12)), "let seed/0"
+                        Some(SyntaxAccessibility.Internal, (3, 5, 3, 13)), "let f/1"
+                        Some(SyntaxAccessibility.Public, (4, 5, 4, 11)), "let answer/0"
+                    ]
+                    "Accessibility"
+
+            testList "binding and definition recovery keeps later declarations" [
+                for logicalPath, text, oracle, declarations in bindingRecoveryCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        Expect.sequenceEqual
+                            (oracleLines logicalPath result)
+                            oracle
+                            "The diagnostics must match the Compatibility Oracle"
+
+                        Expect.sequenceEqual
+                            (result.File.Contents
+                             |> Seq.collect _.Declarations
+                             |> Seq.map declarationShape)
+                            declarations
+                            "Recovery must keep each later declaration"
+            ]
+
+            testCase "recovery nodes keep the exact missing and skipped ranges"
+            <| fun _ ->
+                let result = parse "Ranges.fs" "module Program\nlet broken = |]\nlet first = 1\n"
+
+                let binding =
+                    match Seq.head (Seq.exactlyOne result.File.Contents).Declarations with
+                    | ImplementationDeclaration.Let(_, bindings, _) -> Seq.exactlyOne bindings
+                    | other -> failtest $"Expected a let declaration, found {other}"
+
+                Expect.equal (position binding.Body.Range) (2, 14, 2, 14) "Missing body range"
+
+                let skipped = Expect.wantSome binding.Skipped "Skipped tokens"
+
+                Expect.equal (position skipped.Range) (2, 14, 2, 16) "Skipped range"
+
+                Expect.sequenceEqual
+                    (skipped.Tokens
+                     |> Seq.map _.Text)
+                    [
+                        "|"
+                        "]"
+                    ]
+                    "Skipped tokens"
         ]

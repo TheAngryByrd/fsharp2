@@ -90,6 +90,98 @@ module internal Parser =
             $"The syntax parser does not support {describe token} in {context}."
             token.Range
 
+    [<RequireQualifiedAccess>]
+    type private RecoveryPoint =
+        | BindingStart
+        | BindingEquals
+        | BindingEnd
+        | DefinitionStart
+
+    let private closingKeywords =
+        set [
+            "done"
+            "elif"
+            "end"
+            "of"
+        ]
+
+    let private bindingStartKeywords =
+        set [
+            "as"
+            "finally"
+            "internal"
+            "private"
+            "public"
+            "to"
+            "when"
+        ]
+
+    let private unexpectedToken point (cursor: Cursor) =
+        let token = cursor.Current
+        let next = cursor.Peek 1
+        let text = tokenText token
+
+        let closesArrayOrAttribute =
+            (isOperator "|" token
+             || isOperator ">" token)
+            && isDelimiter "]" next
+            && next.Range.Start.Offset = token.Range.End.Offset
+
+        let symbol value range = Some($"symbol '{value}'", range)
+        let keyword () = Some($"keyword '{text}'", token.Range)
+
+        if closesArrayOrAttribute then
+            symbol $"{text}]" (span token.Range next.Range)
+        elif
+            isDelimiter ")" token
+            || isDelimiter "]" token
+            || isDelimiter "}" token
+        then
+            symbol text token.Range
+        elif
+            isKind LexicalTokenKind.Keyword token
+            && closingKeywords.Contains text
+        then
+            keyword ()
+        else
+            match point with
+            | RecoveryPoint.BindingStart when
+                isOperator "=" token
+                || isOperator ":" token
+                || isOperator "." token
+                || isOperator "|" token
+                || isDelimiter ";" token
+                ->
+                symbol text token.Range
+            | RecoveryPoint.BindingStart when
+                isKind LexicalTokenKind.Keyword token
+                && bindingStartKeywords.Contains text
+                ->
+                keyword ()
+            | RecoveryPoint.DefinitionStart when
+                isOperator "=" token
+                || isOperator ":" token
+                || isOperator "." token
+                ->
+                symbol text token.Range
+            | _ -> None
+
+    let private reportUnexpected state point context =
+        match unexpectedToken point state.Cursor with
+        | Some(description, range) ->
+            let message =
+                match point with
+                | RecoveryPoint.BindingStart -> $"Unexpected {description} in binding"
+                | RecoveryPoint.BindingEquals ->
+                    $"Unexpected {description} in binding. Expected '=' or other token."
+                | RecoveryPoint.BindingEnd ->
+                    $"Unexpected {description} in binding. Expected incomplete structured construct at or before this point or other token."
+                | RecoveryPoint.DefinitionStart ->
+                    $"Unexpected {description} in definition. Expected incomplete structured construct at or before this point or other token."
+
+            report state "FS0010" message range
+        | None -> reportUnsupported state state.Cursor.Current context
+
     let private isOffside (context: SourcePosition) (token: LayoutToken) =
         token.Kind = LayoutTokenKind.SourceToken
         && token.Range.Start.Line > context.Line
@@ -421,57 +513,132 @@ module internal Parser =
             Range = emptyAt token.Range.Start
         }
 
-    let private parseBindingBody state context =
-        let cursor = state.Cursor
+    let private missingPattern (token: LayoutToken) =
+        SyntaxPattern.Missing {
+            Expected = "pattern"
+            Range = emptyAt token.Range.Start
+        }
 
-        if cursor.Current.Kind = LayoutTokenKind.BeginBlock then
-            let block = cursor.Advance()
-            let body = parseExpression state (emptyAt block.Range.Start).Start
-
-            if cursor.Current.Kind = LayoutTokenKind.EndBlock then
-                cursor.Advance()
-                |> ignore
-            else
-                reportUnsupported state cursor.Current "a binding body"
-
-                skipUntil state context
-                |> ignore
-
-                if cursor.Current.Kind = LayoutTokenKind.EndBlock then
-                    cursor.Advance()
-                    |> ignore
-
-            body
-        elif isOffside context cursor.Current then
-            reportUnsupported state cursor.Current "a binding body"
-            missingExpression cursor.Current
-        else
-            parseExpression state context
+    let private endsBinding context (token: LayoutToken) =
+        token.Kind = LayoutTokenKind.Separator
+        || token.Kind = LayoutTokenKind.EndBlock
+        || isEndOfFile token
+        || isKeyword "and" token
+        || isOffside context token
 
     let private parseBinding state context =
         let cursor = state.Cursor
-        let head = parsePattern state context
+        let reported = state.Diagnostics.Count
+        let mutable recovered = false
+        let mutable skipped = None
+
+        let recover point =
+            if state.Diagnostics.Count = reported then
+                match point with
+                | Some point -> reportUnexpected state point "a binding"
+                | None -> reportUnsupported state cursor.Current "a binding"
+
+            recovered <- true
+            skipped <- skipUntil state context
+
+        let parseBody () =
+            if canStartAtom cursor.Current then
+                parseExpression state context
+            else
+                let missing = missingExpression cursor.Current
+                recover (Some RecoveryPoint.BindingStart)
+                missing
+
+        let accessibility =
+            let token = cursor.Current
+
+            let kind =
+                if isKeyword "public" token then
+                    Some SyntaxAccessibility.Public
+                elif isKeyword "internal" token then
+                    Some SyntaxAccessibility.Internal
+                elif isKeyword "private" token then
+                    Some SyntaxAccessibility.Private
+                else
+                    None
+
+            kind
+            |> Option.map (fun kind ->
+                cursor.Advance()
+                |> ignore
+
+                { Kind = kind; Range = token.Range }
+            )
+
+        let head =
+            if canStartPattern cursor.Current then
+                parsePattern state context
+            else
+                let missing = missingPattern cursor.Current
+                recover (Some RecoveryPoint.BindingStart)
+                missing
+
         let parameters = ImmutableArray.CreateBuilder<SyntaxPattern>()
 
-        while canStartPattern cursor.Current
+        while not recovered
+              && canStartPattern cursor.Current
               && not (isOffside context cursor.Current) do
             parameters.Add(parseAtomicPattern state context)
 
         let body =
-            if isOperator "=" cursor.Current then
+            if recovered then
+                missingExpression cursor.Current
+            elif not (isOperator "=" cursor.Current) then
+                let missing = missingExpression cursor.Current
+                recover (Some RecoveryPoint.BindingEquals)
+                missing
+            else
                 cursor.Advance()
                 |> ignore
 
-                parseBindingBody state context
-            else
-                reportUnsupported state cursor.Current "a binding"
-                missingExpression cursor.Current
+                if cursor.Current.Kind = LayoutTokenKind.BeginBlock then
+                    cursor.Advance()
+                    |> ignore
+
+                    let body = parseBody ()
+
+                    if
+                        not recovered
+                        && cursor.Current.Kind
+                           <> LayoutTokenKind.EndBlock
+                    then
+                        recover None
+
+                    if cursor.Current.Kind = LayoutTokenKind.EndBlock then
+                        cursor.Advance()
+                        |> ignore
+
+                    body
+                elif endsBinding context cursor.Current then
+                    let missing = missingExpression cursor.Current
+                    recover None
+                    missing
+                else
+                    parseBody ()
+
+        if
+            not recovered
+            && not (endsBinding context cursor.Current)
+        then
+            recover (Some RecoveryPoint.BindingEnd)
 
         {
+            Accessibility = accessibility
             Head = head
             Parameters = parameters.ToImmutable()
             Body = body
-            Range = span head.Range (emptyAt cursor.LastEnd)
+            Skipped = skipped
+            Range =
+                span
+                    (accessibility
+                     |> Option.map _.Range
+                     |> Option.defaultValue head.Range)
+                    (emptyAt cursor.LastEnd)
         }
 
     let private parseLet state =
@@ -533,6 +700,8 @@ module internal Parser =
             elif isDeclarationListEnd token then
                 stop <- true
             else
+                let reported = state.Diagnostics.Count
+
                 let parsed =
                     if isKeyword "open" token then
                         parseOpen state
@@ -541,10 +710,10 @@ module internal Parser =
                     elif isKeyword "module" token then
                         parseNestedModule state
                     else
-                        reportUnsupported state token "a module or namespace declaration"
-
-                        cursor.Advance()
-                        |> ignore
+                        reportUnexpected
+                            state
+                            RecoveryPoint.DefinitionStart
+                            "a module or namespace declaration"
 
                         None
 
@@ -559,7 +728,7 @@ module internal Parser =
                        <> LayoutTokenKind.Separator
                     && not (isOffside token.Range.Start next)
                 then
-                    if parsed.IsSome then
+                    if state.Diagnostics.Count = reported then
                         reportUnsupported state next "a module or namespace declaration"
 
                     skipUntil state token.Range.Start

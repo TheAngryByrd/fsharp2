@@ -67,10 +67,23 @@ type internal SyntaxExpression =
         | Infix(_, _, _, range) -> range
         | Missing missing -> missing.Range
 
+[<RequireQualifiedAccess>]
+type internal SyntaxAccessibility =
+    | Public
+    | Internal
+    | Private
+
+type internal SyntaxAccess = {
+    Kind: SyntaxAccessibility
+    Range: SourceRange
+}
+
 type internal SyntaxBinding = {
+    Accessibility: SyntaxAccess option
     Head: SyntaxPattern
     Parameters: ImmutableArray<SyntaxPattern>
     Body: SyntaxExpression
+    Skipped: SkippedSyntax option
     Range: SourceRange
 }
 
