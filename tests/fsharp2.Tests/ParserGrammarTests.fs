@@ -342,13 +342,6 @@ module ParserGrammarTests =
     ]
 
     let private explicitAfterOracleCases = [
-        "NestedRecoveryThenDeclarations.fs",
-        "namespace A\nmodule M =\n    let a = 1\n    )\n    let b = )\nlet c = )\n",
-        [
-            "NestedRecoveryThenDeclarations.fs(4,5): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
-            "NestedRecoveryThenDeclarations.fs(6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
-        ]
-
         "NestedFirstThenNested.fs",
         "module M\nmodule N =\n    )\n    let b = )\nlet c = )\n",
         [
@@ -407,6 +400,13 @@ module ParserGrammarTests =
     ]
 
     let private laterDeclarationCases = [
+        "NestedRecoveryThenDeclarations.fs",
+        "namespace A\nmodule M =\n    let a = 1\n    )\n    let b = )\nlet c = )\n",
+        [
+            "NestedRecoveryThenDeclarations.fs(4,5): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "NestedRecoveryThenDeclarations.fs(6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
         "NestedRecoveryAtEnd.fs",
         "namespace A\nmodule M =\n    let a = 1\n    )\n",
         [

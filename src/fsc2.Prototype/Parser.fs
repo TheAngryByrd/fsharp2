@@ -88,6 +88,13 @@ module internal Parser =
         | Unmodeled
         | DiscardedIfValueOrOpen
         | ReportedAtRoot
+        | IncompleteAtNext
+
+    [<RequireQualifiedAccess>]
+    type private DiscardedDeclaration =
+        | KeepsRootReport
+        | MakesNextIncomplete
+        | Unmodeled
 
     type private ParserState = {
         Cursor: Cursor
@@ -99,6 +106,9 @@ module internal Parser =
         mutable UnmodeledAtEnd: bool
         mutable Interrupted: bool
         mutable InAnonymousRoot: bool
+        mutable RootReportStart: int option
+        mutable Depth: int
+        mutable RecoveryDepth: int
     }
 
     [<RequireQualifiedAccess>]
@@ -2544,6 +2554,7 @@ module internal Parser =
         NestedRecoveryDiscards: bool
         SkipsUnrecognizedAfterRecovery: bool
         StartPoint: DeclarationList -> RecoveryPoint
+        Discarded: 'Declaration -> DiscardedDeclaration
         FirstNestedPoint: RecoveryPoint
         Open: LongIdentifier * SourceRange -> 'Declaration
         NestedModule: SyntaxNestedModule<'Declaration> -> 'Declaration
@@ -2645,6 +2656,7 @@ module internal Parser =
             range
 
         state.NextDeclaration <- DeclarationAfterRecovery.Discarded
+        state.RootReportStart <- Some range.Start.Offset
         state.SuppressFrom <- Some state.Diagnostics.Count
 
     let private reportAtRoot state =
@@ -2652,14 +2664,21 @@ module internal Parser =
         | Some(description, range) ->
             report state "FS0010" $"Unexpected {description} in implementation file" range
             state.NextDeclaration <- DeclarationAfterRecovery.Discarded
+            state.RootReportStart <- Some range.Start.Offset
             state.SuppressFrom <- Some state.Diagnostics.Count
+        | None -> reportAfterRecovery state state.Cursor.Current
+
+    let private reportIncompleteAtNext state =
+        match rootDeclarationToken state.Cursor with
+        | Some(_, range) -> reportIncompleteAtRoot state range
         | None -> reportAfterRecovery state state.Cursor.Current
 
     let private reportPendingAtEnd state =
         if
             state.SuppressFrom.IsSome
             && not state.Interrupted
-            && state.NextDeclaration = DeclarationAfterRecovery.ReportedAtRoot
+            && (state.NextDeclaration = DeclarationAfterRecovery.ReportedAtRoot
+                || state.NextDeclaration = DeclarationAfterRecovery.IncompleteAtNext)
         then
             let token = state.Cursor.Current
 
@@ -2689,30 +2708,18 @@ module internal Parser =
             suppress state DeclarationAfterRecovery.Unmodeled true
         else
             suppress state DeclarationAfterRecovery.ReportedAtRoot false
+            state.RecoveryDepth <- state.Depth
 
     let private removeSuppressedDiagnostics state =
         match state.SuppressFrom with
         | Some first ->
-            // The Compatibility Oracle changes the diagnostic after a nested recovery when the discarded code has an error.
-            if
-                state.Diagnostics.Count > first
-                && state.NextDeclaration = DeclarationAfterRecovery.ReportedAtRoot
-            then
-                state.NextDeclaration <- DeclarationAfterRecovery.Unmodeled
-                state.UnmodeledAtEnd <- true
-
-            let reportedBefore =
-                state.Diagnostics
-                |> Seq.take first
-                |> Seq.map _.Range.Start
-                |> HashSet
-
             let kept =
                 state.Diagnostics
                 |> Seq.skip first
                 |> Seq.filter (fun diagnostic ->
                     diagnostic.Code = unsupportedCode
-                    && not (reportedBefore.Contains diagnostic.Range.Start)
+                    && state.RootReportStart
+                       <> Some diagnostic.Range.Start.Offset
                 )
                 |> Seq.toArray
 
@@ -2762,11 +2769,20 @@ module internal Parser =
                 if
                     state.SuppressFrom.IsSome
                     && not state.Interrupted
-                    && state.NextDeclaration = DeclarationAfterRecovery.ReportedAtRoot
-                    && list
-                       <> DeclarationList.NestedModule
                 then
-                    reportAtRoot state
+                    match state.NextDeclaration with
+                    | DeclarationAfterRecovery.ReportedAtRoot when
+                        list
+                        <> DeclarationList.NestedModule
+                        ->
+                        reportAtRoot state
+                    | DeclarationAfterRecovery.IncompleteAtNext -> reportIncompleteAtNext state
+                    | _ -> ()
+
+                let discardedBeforeRootReport =
+                    state.SuppressFrom.IsSome
+                    && not state.Interrupted
+                    && state.NextDeclaration = DeclarationAfterRecovery.ReportedAtRoot
 
                 let attributes = parseAttributeLists state
                 let token = cursor.Current
@@ -2777,7 +2793,8 @@ module internal Parser =
                     && (
                         match state.NextDeclaration with
                         | DeclarationAfterRecovery.Discarded
-                        | DeclarationAfterRecovery.ReportedAtRoot -> false
+                        | DeclarationAfterRecovery.ReportedAtRoot
+                        | DeclarationAfterRecovery.IncompleteAtNext -> false
                         | DeclarationAfterRecovery.Unmodeled -> true
                         | DeclarationAfterRecovery.DiscardedIfValueOrOpen ->
                             not (
@@ -2792,7 +2809,10 @@ module internal Parser =
                     if
                         not attributes.IsEmpty
                         && (isKeyword "open" token
-                            || isKeyword "module" token)
+                            || (isKeyword "module" token
+                                && attributes[attributes.Length
+                                              - 1]
+                                    .Range.End.Line = token.Range.Start.Line))
                     then
                         if
                             state.SuppressFrom.IsSome
@@ -2812,7 +2832,7 @@ module internal Parser =
                         |> Option.map rules.Open,
                         ListRecovery.Continues
                     elif isKeyword "module" token then
-                        parseNestedModule state rules, ListRecovery.Continues
+                        parseNestedModule state rules attributes, ListRecovery.Continues
                     else
                         match rules.Parse state list attributes token with
                         | Some result -> result
@@ -2847,6 +2867,29 @@ module internal Parser =
 
                 parsed
                 |> Option.iter target.Add
+
+                if
+                    discardedBeforeRootReport
+                    && state.NextDeclaration = DeclarationAfterRecovery.ReportedAtRoot
+                then
+                    let discardedKind =
+                        if state.Depth < state.RecoveryDepth then
+                            // The Compatibility Oracle keeps the root diagnostic for declarations of an outer module.
+                            Some DiscardedDeclaration.KeepsRootReport
+                        elif state.RecoveryDepth = 1 then
+                            parsed
+                            |> Option.map rules.Discarded
+                        else
+                            Some DiscardedDeclaration.Unmodeled
+
+                    match discardedKind with
+                    | None
+                    | Some DiscardedDeclaration.KeepsRootReport -> ()
+                    | Some DiscardedDeclaration.MakesNextIncomplete ->
+                        state.NextDeclaration <- DeclarationAfterRecovery.IncompleteAtNext
+                    | Some DiscardedDeclaration.Unmodeled ->
+                        state.NextDeclaration <- DeclarationAfterRecovery.Unmodeled
+                        state.UnmodeledAtEnd <- true
 
                 let next = cursor.Current
 
@@ -2912,9 +2955,11 @@ module internal Parser =
     and private parseNestedModule
         state
         (rules: DeclarationRules<'Declaration>)
+        attributes
         : 'Declaration option =
         let cursor = state.Cursor
         let moduleToken = cursor.Advance()
+        let accessibility = parseAccessibility cursor
 
         if not (isIdentifier cursor.Current) then
             reportUnsupported state cursor.Current "a module declaration"
@@ -2932,10 +2977,18 @@ module internal Parser =
                 cursor.Advance()
                 |> ignore
 
+                state.Depth <-
+                    state.Depth
+                    + 1
+
                 let declarations, discarded =
                     parseDeclarations state rules DeclarationList.NestedModule
 
-                let range = span moduleToken.Range (emptyAt cursor.LastEnd)
+                state.Depth <-
+                    state.Depth
+                    - 1
+
+                let range = span (declarationStart attributes moduleToken) (emptyAt cursor.LastEnd)
 
                 if cursor.Current.Kind = LayoutTokenKind.EndBlock then
                     cursor.Advance()
@@ -2943,6 +2996,8 @@ module internal Parser =
 
                 Some(
                     rules.NestedModule {
+                        Attributes = attributes
+                        Accessibility = accessibility
                         Name = name
                         Declarations = declarations
                         DiscardedByRecovery = discarded
@@ -3031,6 +3086,14 @@ module internal Parser =
         if not (isEndOfFile cursor.Current) then
             if state.SuppressFrom.IsNone then
                 reportUnsupported state cursor.Current "a module or namespace declaration"
+            elif
+                not state.Interrupted
+                && state.NextDeclaration = DeclarationAfterRecovery.ReportedAtRoot
+            then
+                // The Compatibility Oracle reports FS0530 for a namespace after a named module.
+                reportAfterRecovery state cursor.Current
+            else
+                reportPendingAtEnd state
 
             while not (isEndOfFile cursor.Current) do
                 cursor.Advance()
@@ -3074,6 +3137,18 @@ module internal Parser =
         SkipsUnrecognizedAfterRecovery = false
         FirstNestedPoint = RecoveryPoint.NestedFirstDefinition
         StartPoint = implementationStartPoint
+        Discarded =
+            fun declaration ->
+                match declaration with
+                | ImplementationDeclaration.Expression _
+                | ImplementationDeclaration.Open _
+                | ImplementationDeclaration.Skipped _ -> DiscardedDeclaration.KeepsRootReport
+                | ImplementationDeclaration.Let(_, bindings, _) when bindings.Length = 1 ->
+                    DiscardedDeclaration.MakesNextIncomplete
+                | ImplementationDeclaration.Do _ -> DiscardedDeclaration.MakesNextIncomplete
+                | ImplementationDeclaration.Let _
+                | ImplementationDeclaration.Type _
+                | ImplementationDeclaration.NestedModule _ -> DiscardedDeclaration.Unmodeled
         Open = ImplementationDeclaration.Open
         NestedModule = ImplementationDeclaration.NestedModule
         Skipped = ImplementationDeclaration.Skipped
@@ -3089,6 +3164,7 @@ module internal Parser =
         NestedRecoveryDiscards = false
         SkipsUnrecognizedAfterRecovery = true
         FirstNestedPoint = RecoveryPoint.NestedFirstSignature
+        Discarded = fun _ -> DiscardedDeclaration.Unmodeled
         StartPoint =
             fun list ->
                 match list with
@@ -3111,6 +3187,9 @@ module internal Parser =
         UnmodeledAtEnd = false
         Interrupted = false
         InAnonymousRoot = false
+        RootReportStart = None
+        Depth = 0
+        RecoveryDepth = 0
     }
 
     let parseImplementationFile (document: LexicalDocument) : ImplementationFileParseResult =

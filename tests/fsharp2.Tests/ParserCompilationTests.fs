@@ -1102,6 +1102,36 @@ module M =
         ],
         [ missingDeclaration "OpenThenMod.fs" 1 1 2 1 ]
 
+        "a nested module after a stray first token in an anonymous root",
+        SyntaxCompilationTarget.Executable,
+        [
+            "sk_mod.fs",
+            ")
+module M =
+    let a = 1
+"
+            last
+        ],
+        [
+            "sk_mod.fs(1,1,1,2): error FS0010: Unexpected symbol ')' in implementation file"
+            missingDeclaration "sk_mod.fs" 1 1 1 2
+        ]
+
+        "a nested module after a stray first line in an anonymous root",
+        SyntaxCompilationTarget.Executable,
+        [
+            "sk_mod2.fs",
+            ") x
+module M =
+    let a = 1
+"
+            last
+        ],
+        [
+            "sk_mod2.fs(1,1,1,2): error FS0010: Unexpected symbol ')' in implementation file"
+            missingDeclaration "sk_mod2.fs" 1 1 1 2
+        ]
+
         "a nested module in an anonymous root",
         SyntaxCompilationTarget.Executable,
         [
@@ -1761,6 +1791,20 @@ module M =
             "f_hash.fs(7,1,7,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
         ]
 
+        "f_inner_error.fs",
+        "module M\nmodule N =\n    1 )\n    let b = )\nlet c = 3\n",
+        [
+            "f_inner_error.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "f_inner_error.fs(5,1,5,4): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "f_inner_error_end.fs",
+        "module M\nmodule N =\n    1 )\n    let b = )\n",
+        [
+            "f_inner_error_end.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "f_inner_error_end.fs(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
         "f_root_error.fs",
         "module M\nmodule N =\n    1 )\nlet c = )\n",
         [
@@ -1813,23 +1857,520 @@ module M =
         "r_let.fs",
         "module M\nmodule N =\n    let a = 1\n    type R = { X: ) }\nlet c = 3\n",
         [ "r_let.fs(4,19,4,20): error FS0010: Unexpected symbol ')' in field declaration" ]
+
+        "clean_let__let.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\nlet c = 3\n",
+        [
+            "clean_let__let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "clean_let__let.fs(5,1,5,4): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "clean_let__none.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\n",
+        [
+            "clean_let__none.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "clean_let__none.fs(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "clean_let__expr.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\nf 1\n",
+        [
+            "clean_let__expr.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "clean_let__expr.fs(5,1,5,2): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "clean_let__ns.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\nnamespace Q\n",
+        [
+            "clean_let__ns.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "clean_let__ns.fs(5,1,5,10): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "clean_expr__let.fs",
+        "module M\nmodule N =\n    1 )\n    f 2\nlet c = 3\n",
+        [
+            "clean_expr__let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "clean_expr__let.fs(5,1,5,4): error FS0010: Unexpected keyword 'let' or 'use' in implementation file"
+        ]
+
+        "clean_expr__none.fs",
+        "module M\nmodule N =\n    1 )\n    f 2\n",
+        [
+            "clean_expr__none.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "clean_expr__none.fs(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "clean_expr__expr.fs",
+        "module M\nmodule N =\n    1 )\n    f 2\nf 1\n",
+        [
+            "clean_expr__expr.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "clean_expr__expr.fs(5,1,5,2): error FS0010: Unexpected identifier in implementation file"
+        ]
+
+        "clean_open__let.fs",
+        "module M\nmodule N =\n    1 )\n    open System\nlet c = 3\n",
+        [
+            "clean_open__let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "clean_open__let.fs(5,1,5,4): error FS0010: Unexpected keyword 'let' or 'use' in implementation file"
+        ]
+
+        "clean_open__none.fs",
+        "module M\nmodule N =\n    1 )\n    open System\n",
+        [
+            "clean_open__none.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "clean_open__none.fs(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "clean_open__expr.fs",
+        "module M\nmodule N =\n    1 )\n    open System\nf 1\n",
+        [
+            "clean_open__expr.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "clean_open__expr.fs(5,1,5,2): error FS0010: Unexpected identifier in implementation file"
+        ]
+
+        "clean_mod__let.fs",
+        "module M\nmodule N =\n    1 )\n    module O =\n        let d = 4\nlet c = 3\n",
+        [
+            "clean_mod__let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "clean_mod__let.fs(6,1,6,4): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "clean_mod__none.fs",
+        "module M\nmodule N =\n    1 )\n    module O =\n        let d = 4\n",
+        [
+            "clean_mod__none.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "clean_mod__none.fs(6,1,6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "clean_mod__expr.fs",
+        "module M\nmodule N =\n    1 )\n    module O =\n        let d = 4\nf 1\n",
+        [
+            "clean_mod__expr.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "clean_mod__expr.fs(6,1,6,2): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "clean_mod__ns.fs",
+        "module M\nmodule N =\n    1 )\n    module O =\n        let d = 4\nnamespace Q\n",
+        [
+            "clean_mod__ns.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "clean_mod__ns.fs(6,1,6,10): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "two_lets__let.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\n    let e = 3\nlet c = 3\n",
+        [
+            "two_lets__let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "two_lets__let.fs(5,5,5,8): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "two_lets__none.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\n    let e = 3\n",
+        [
+            "two_lets__none.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "two_lets__none.fs(5,5,5,8): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "two_lets__expr.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\n    let e = 3\nf 1\n",
+        [
+            "two_lets__expr.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "two_lets__expr.fs(5,5,5,8): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "two_lets__ns.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\n    let e = 3\nnamespace Q\n",
+        [
+            "two_lets__ns.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "two_lets__ns.fs(5,5,5,8): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "stray__let.fs",
+        "module M\nmodule N =\n    1 )\n    )\nlet c = 3\n",
+        [
+            "stray__let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "stray__let.fs(5,1,5,4): error FS0010: Unexpected keyword 'let' or 'use' in implementation file"
+        ]
+
+        "stray__none.fs",
+        "module M\nmodule N =\n    1 )\n    )\n",
+        [
+            "stray__none.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "stray__none.fs(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "stray__expr.fs",
+        "module M\nmodule N =\n    1 )\n    )\nf 1\n",
+        [
+            "stray__expr.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "stray__expr.fs(5,1,5,2): error FS0010: Unexpected identifier in implementation file"
+        ]
+
+        "g_app__let.fs",
+        "module M\nmodule N =\n    1 )\n    let b = g f(1)\nlet c = 3\n",
+        [
+            "g_app__let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "g_app__let.fs(5,1,5,4): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "g_app__none.fs",
+        "module M\nmodule N =\n    1 )\n    let b = g f(1)\n",
+        [
+            "g_app__none.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "g_app__none.fs(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "g_app__expr.fs",
+        "module M\nmodule N =\n    1 )\n    let b = g f(1)\nf 1\n",
+        [
+            "g_app__expr.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "g_app__expr.fs(5,1,5,2): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "g_app__ns.fs",
+        "module M\nmodule N =\n    1 )\n    let b = g f(1)\nnamespace Q\n",
+        [
+            "g_app__ns.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "g_app__ns.fs(5,1,5,10): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "dot__let.fs",
+        "module M\nmodule N =\n    1 )\n    let b = _.A\nlet c = 3\n",
+        [
+            "dot__let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "dot__let.fs(5,1,5,4): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "dot__none.fs",
+        "module M\nmodule N =\n    1 )\n    let b = _.A\n",
+        [
+            "dot__none.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "dot__none.fs(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "dot__expr.fs",
+        "module M\nmodule N =\n    1 )\n    let b = _.A\nf 1\n",
+        [
+            "dot__expr.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "dot__expr.fs(5,1,5,2): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "dot__ns.fs",
+        "module M\nmodule N =\n    1 )\n    let b = _.A\nnamespace Q\n",
+        [
+            "dot__ns.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "dot__ns.fs(5,1,5,10): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "do__let.fs",
+        "module M\nmodule N =\n    1 )\n    do ()\nlet c = 3\n",
+        [
+            "do__let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "do__let.fs(5,1,5,4): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "do__none.fs",
+        "module M\nmodule N =\n    1 )\n    do ()\n",
+        [
+            "do__none.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "do__none.fs(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "attr_let__let.fs",
+        "module M\nmodule N =\n    1 )\n    [<A>]\n    let b = 2\nlet c = 3\n",
+        [
+            "attr_let__let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "attr_let__let.fs(6,1,6,4): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "attr_let__none.fs",
+        "module M\nmodule N =\n    1 )\n    [<A>]\n    let b = 2\n",
+        [
+            "attr_let__none.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "attr_let__none.fs(6,1,6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "let_rec__let.fs",
+        "module M\nmodule N =\n    1 )\n    let rec b = 2\nlet c = 3\n",
+        [
+            "let_rec__let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "let_rec__let.fs(5,1,5,4): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "let_rec__none.fs",
+        "module M\nmodule N =\n    1 )\n    let rec b = 2\n",
+        [
+            "let_rec__none.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "let_rec__none.fs(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "expr_let__let.fs",
+        "module M\nmodule N =\n    1 )\n    f 2\n    let b = 2\nlet c = 3\n",
+        [
+            "expr_let__let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "expr_let__let.fs(6,1,6,4): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "expr_let__none.fs",
+        "module M\nmodule N =\n    1 )\n    f 2\n    let b = 2\n",
+        [
+            "expr_let__none.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "expr_let__none.fs(6,1,6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "let_expr__let.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\n    f 2\nlet c = 3\n",
+        [
+            "let_expr__let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "let_expr__let.fs(5,5,5,6): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "let_expr__none.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\n    f 2\n",
+        [
+            "let_expr__none.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "let_expr__none.fs(5,5,5,6): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "open_let__let.fs",
+        "module M\nmodule N =\n    1 )\n    open System\n    let b = 2\nlet c = 3\n",
+        [
+            "open_let__let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "open_let__let.fs(6,1,6,4): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "open_let__none.fs",
+        "module M\nmodule N =\n    1 )\n    open System\n    let b = 2\n",
+        [
+            "open_let__none.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "open_let__none.fs(6,1,6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "let_open__let.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\n    open System\nlet c = 3\n",
+        [
+            "let_open__let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "let_open__let.fs(5,5,5,9): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "let_open__none.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\n    open System\n",
+        [
+            "let_open__none.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "let_open__none.fs(5,5,5,9): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "let_multi__let.fs",
+        "module M\nmodule N =\n    1 )\n    let b =\n        2\nlet c = 3\n",
+        [
+            "let_multi__let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "let_multi__let.fs(6,1,6,4): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "let_multi__none.fs",
+        "module M\nmodule N =\n    1 )\n    let b =\n        2\n",
+        [
+            "let_multi__none.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "let_multi__none.fs(6,1,6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "let_stray__let.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\n    )\nlet c = 3\n",
+        [
+            "let_stray__let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "let_stray__let.fs(5,5,5,6): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "let_stray__none.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\n    )\n",
+        [
+            "let_stray__none.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "let_stray__none.fs(5,5,5,6): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "stray_let__let.fs",
+        "module M\nmodule N =\n    1 )\n    )\n    let b = 2\nlet c = 3\n",
+        [
+            "stray_let__let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "stray_let__let.fs(6,1,6,4): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "stray_let__none.fs",
+        "module M\nmodule N =\n    1 )\n    )\n    let b = 2\n",
+        [
+            "stray_let__none.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "stray_let__none.fs(6,1,6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "mod_two__let.fs",
+        "module M\nmodule N =\n    1 )\n    module O =\n        let d = 4\n        let e = 5\nlet c = 3\n",
+        [
+            "mod_two__let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "mod_two__let.fs(6,9,6,12): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "mod_two__none.fs",
+        "module M\nmodule N =\n    1 )\n    module O =\n        let d = 4\n        let e = 5\n",
+        [
+            "mod_two__none.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "mod_two__none.fs(6,9,6,12): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "ns_expr.fs",
+        "namespace Q\nmodule N =\n    1 )\n    f 2\nnamespace R\n",
+        [
+            "ns_expr.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "ns_expr.fs(5,1,5,10): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "ns_stray.fs",
+        "namespace Q\nmodule N =\n    1 )\n    )\nnamespace R\n",
+        [
+            "ns_stray.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "ns_stray.fs(5,1,5,10): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "n_type.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\n    type T = int\n",
+        [
+            "n_type.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "n_type.fs(5,5,5,9): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "n_module.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\n    module O =\n        let d = 4\n",
+        [
+            "n_module.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "n_module.fs(5,5,5,11): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "n_do.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\n    do ()\n",
+        [
+            "n_do.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "n_do.fs(5,5,5,7): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "n_attr.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\n    [<A>]\n    let e = 3\n",
+        [
+            "n_attr.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "n_attr.fs(5,5,5,7): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "n_exception.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\n    exception E\n",
+        [
+            "n_exception.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "n_exception.fs(5,5,5,14): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "n_num.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\n    1\n",
+        [
+            "n_num.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "n_num.fs(5,5,5,6): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "n_str.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\n    \"a\"\n",
+        [
+            "n_str.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "n_str.fs(5,5,5,8): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "n_lbrack.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\n    [1]\n",
+        [
+            "n_lbrack.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "n_lbrack.fs(5,5,5,6): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "n_ident_root.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\nx\n",
+        [
+            "n_ident_root.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "n_ident_root.fs(5,1,5,2): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "n_attr_root.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\n[<A>]\nlet c = 3\n",
+        [
+            "n_attr_root.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "n_attr_root.fs(5,1,5,3): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "n_type_root.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\ntype T = int\n",
+        [
+            "n_type_root.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "n_type_root.fs(5,1,5,5): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "n_module_root.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\nmodule O =\n    let d = 4\n",
+        [
+            "n_module_root.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "n_module_root.fs(5,1,5,7): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "nsfile_let.fs",
+        "namespace Q\nmodule N =\n    1 )\n    let b = 2\nnamespace R\n",
+        [
+            "nsfile_let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "nsfile_let.fs(5,1,5,10): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "nsfile_let_root.fs",
+        "namespace Q\nmodule N =\n    1 )\n    let b = 2\nlet c = 3\n",
+        [
+            "nsfile_let_root.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "nsfile_let_root.fs(5,1,5,4): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "do_nested_let.fs",
+        "module M\nmodule N =\n    1 )\n    do ()\n    let e = 3\n",
+        [
+            "do_nested_let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "do_nested_let.fs(5,5,5,8): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "o_let_let.fs",
+        "module M\nmodule N =\n    module O =\n        1 )\n    let b = 2\n    let e = 3\nlet c = 3\n",
+        [
+            "o_let_let.fs(4,11,4,12): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "o_let_let.fs(7,1,7,4): error FS0010: Unexpected keyword 'let' or 'use' in implementation file"
+        ]
+
+        "o_let_none.fs",
+        "module M\nmodule N =\n    module O =\n        1 )\n    let b = 2\n",
+        [
+            "o_let_none.fs(4,11,4,12): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "o_let_none.fs(6,1,6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "o_let_expr.fs",
+        "module M\nmodule N =\n    module O =\n        1 )\n    let b = 2\n    f 1\n",
+        [
+            "o_let_expr.fs(4,11,4,12): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "o_let_expr.fs(7,1,7,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "o_do_root.fs",
+        "module M\nmodule N =\n    module O =\n        1 )\n    do ()\nlet c = 3\n",
+        [
+            "o_do_root.fs(4,11,4,12): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "o_do_root.fs(6,1,6,4): error FS0010: Unexpected keyword 'let' or 'use' in implementation file"
+        ]
+
+        "o_type_root.fs",
+        "module M\nmodule N =\n    module O =\n        1 )\n    type T = int\nlet c = 3\n",
+        [
+            "o_type_root.fs(4,11,4,12): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "o_type_root.fs(6,1,6,4): error FS0010: Unexpected keyword 'let' or 'use' in implementation file"
+        ]
     ]
 
     let private unmodeledNestedRecoveryEndCases = [
-        "f_inner_error.fs",
-        "module M\nmodule N =\n    1 )\n    let b = )\nlet c = 3\n",
-        [
-            "f_inner_error.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
-            "f_inner_error.fs(5,1,5,4): error FS0010: Incomplete structured construct at or before this point in implementation file"
-        ]
-
-        "f_inner_error_end.fs",
-        "module M\nmodule N =\n    1 )\n    let b = )\n",
-        [
-            "f_inner_error_end.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
-            "f_inner_error_end.fs(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
-        ]
-
         "f_letbang.fs",
         "module M\nmodule N =\n    1 )\nlet! c = 3\n",
         [
@@ -1870,6 +2411,215 @@ module M =
         [
             "t_first.fs(3,14,3,15): error FS0010: Unexpected symbol ')' in type definition"
             "t_first.fs(4,1,4,4): error FS0010: Unexpected keyword 'let' or 'use' in implementation file"
+        ]
+
+        "clean_expr__ns.fs",
+        "module M\nmodule N =\n    1 )\n    f 2\nnamespace Q\n",
+        [
+            "clean_expr__ns.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "clean_expr__ns.fs(1,1,3,6): error FS0530: Only '#' compiler directives may occur prior to the first 'namespace' declaration"
+            "clean_expr__ns.fs(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "clean_open__ns.fs",
+        "module M\nmodule N =\n    1 )\n    open System\nnamespace Q\n",
+        [
+            "clean_open__ns.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "clean_open__ns.fs(1,1,3,6): error FS0530: Only '#' compiler directives may occur prior to the first 'namespace' declaration"
+            "clean_open__ns.fs(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "clean_type__let.fs",
+        "module M\nmodule N =\n    1 )\n    type T = int\nlet c = 3\n",
+        [
+            "clean_type__let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "clean_type__let.fs(5,1,5,4): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "clean_type__none.fs",
+        "module M\nmodule N =\n    1 )\n    type T = int\n",
+        [
+            "clean_type__none.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "clean_type__none.fs(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "clean_type__expr.fs",
+        "module M\nmodule N =\n    1 )\n    type T = int\nf 1\n",
+        [
+            "clean_type__expr.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "clean_type__expr.fs(5,1,5,2): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "clean_type__ns.fs",
+        "module M\nmodule N =\n    1 )\n    type T = int\nnamespace Q\n",
+        [
+            "clean_type__ns.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "clean_type__ns.fs(5,1,5,10): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "stray__ns.fs",
+        "module M\nmodule N =\n    1 )\n    )\nnamespace Q\n",
+        [
+            "stray__ns.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "stray__ns.fs(1,1,3,6): error FS0530: Only '#' compiler directives may occur prior to the first 'namespace' declaration"
+            "stray__ns.fs(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "exception__let.fs",
+        "module M\nmodule N =\n    1 )\n    exception E\nlet c = 3\n",
+        [
+            "exception__let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "exception__let.fs(5,1,5,4): error FS0010: Unexpected keyword 'let' or 'use' in implementation file"
+        ]
+
+        "exception__none.fs",
+        "module M\nmodule N =\n    1 )\n    exception E\n",
+        [
+            "exception__none.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "exception__none.fs(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "type_type__let.fs",
+        "module M\nmodule N =\n    1 )\n    type T = int\n    type U = int\nlet c = 3\n",
+        [
+            "type_type__let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "type_type__let.fs(5,5,5,9): error FS0010: Unexpected keyword 'type' in implementation file"
+        ]
+
+        "type_type__none.fs",
+        "module M\nmodule N =\n    1 )\n    type T = int\n    type U = int\n",
+        [
+            "type_type__none.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "type_type__none.fs(5,5,5,9): error FS0010: Unexpected keyword 'type' in implementation file"
+        ]
+
+        "mod_let__let.fs",
+        "module M\nmodule N =\n    1 )\n    module O =\n        f 1\nlet c = 3\n",
+        [
+            "mod_let__let.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "mod_let__let.fs(6,1,6,4): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "mod_let__none.fs",
+        "module M\nmodule N =\n    1 )\n    module O =\n        f 1\n",
+        [
+            "mod_let__none.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "mod_let__none.fs(6,1,6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "n_letbang_root.fs",
+        "module M\nmodule N =\n    1 )\n    let b = 2\nlet! c = 3\n",
+        [
+            "n_letbang_root.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "n_letbang_root.fs(5,1,5,5): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "modfile_ns.fs",
+        "module M\nmodule N =\n    1 )\nnamespace R\n",
+        [
+            "modfile_ns.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "modfile_ns.fs(1,1,3,6): error FS0530: Only '#' compiler directives may occur prior to the first 'namespace' declaration"
+            "modfile_ns.fs(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "letrec_and.fs",
+        "module M\nmodule N =\n    1 )\n    let rec b = 2\n    and c = 3\nlet d = 4\n",
+        [
+            "letrec_and.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "letrec_and.fs(5,5,5,8): error FS0010: Unexpected keyword 'and' in implementation file"
+        ]
+
+        "o_inner_let.fs",
+        "module M\nmodule N =\n    module O =\n        1 )\n        let x = 1\n    let b = 2\nlet c = 3\n",
+        [
+            "o_inner_let.fs(4,11,4,12): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "o_inner_let.fs(6,5,6,8): error FS0010: Incomplete structured construct at or before this point in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "o_inner_let_only.fs",
+        "module M\nmodule N =\n    module O =\n        1 )\n        let x = 1\nlet c = 3\n",
+        [
+            "o_inner_let_only.fs(4,11,4,12): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "o_inner_let_only.fs(6,1,6,4): error FS0010: Incomplete structured construct at or before this point in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "o_mod.fs",
+        "module M\nmodule N =\n    module O =\n        1 )\n    module P =\n        let d = 4\nlet c = 3\n",
+        [
+            "o_mod.fs(4,11,4,12): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "o_mod.fs(7,1,7,4): error FS0010: Unexpected keyword 'let' or 'use' in implementation file"
+        ]
+    ]
+
+    let private attributedModuleCases = [
+        "am_ok.fs", "module M\n[<AutoOpen>]\nmodule N =\n    let a = 1\n", []
+
+        "am_two_lists.fs",
+        "module M\n[<AutoOpen>]\n[<RequireQualifiedAccess>]\nmodule N =\n    let a = 1\n",
+        []
+
+        "am_args.fs",
+        "module M\n[<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]\nmodule N =\n    let a = 1\n",
+        []
+
+        "am_nested.fs",
+        "module M\nmodule N =\n    [<AutoOpen>]\n    module O =\n        let a = 1\n",
+        []
+
+        "am_ns.fs", "namespace Q\n[<AutoOpen>]\nmodule N =\n    let a = 1\n", []
+
+        "am_error.fs",
+        "module M\n[<AutoOpen>]\nmodule N =\n    let a = )\nlet b = 2\n",
+        [ "am_error.fs(4,13,4,14): error FS0010: Unexpected symbol ')' in binding" ]
+
+        "am_anon.fs",
+        "[<AutoOpen>]\nmodule N =\n    let a = 1\n",
+        [
+            "am_anon.fs(1,1,2,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration. When using a module declaration at the start of a file the '=' sign is not allowed. If this is a top-level module, consider removing the = to resolve this error."
+        ]
+
+        "am_sig.fsi", "module M\n[<AutoOpen>]\nmodule N =\n    val a: int\n", []
+
+        "am_access.fs", "module M\n[<AutoOpen>]\nmodule private N =\n    let a = 1\n", []
+
+        "ac_internal.fs", "module M\nmodule internal N =\n    let a = 1\n", []
+
+        "ac_public.fs", "module M\nmodule public N =\n    let a = 1\n", []
+
+        "ac_error.fs",
+        "module M\nmodule private N =\n    let a = )\nlet b = 2\n",
+        [ "ac_error.fs(3,13,3,14): error FS0010: Unexpected symbol ')' in binding" ]
+
+        "ac_sig.fsi", "module M\nmodule private N =\n    val a: int\n", []
+
+        "ac_anon.fs",
+        "module private N =\n    let a = 1\n",
+        [
+            "ac_anon.fs(1,1,2,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration. When using a module declaration at the start of a file the '=' sign is not allowed. If this is a top-level module, consider removing the = to resolve this error."
+        ]
+    ]
+
+    let private unmodeledAttributedModuleCases = [
+        "am_same_line.fs",
+        "module M\n[<AutoOpen>] module N =\n    let a = 1\n",
+        [
+            "am_same_line.fs(3,5,3,8): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:14). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "am_same_line.fs(3,5,3,8): error FS0010: Incomplete structured construct at or before this point in definition"
+        ]
+
+        "ao_open.fs",
+        "module M\n[<A>]\nopen System\n",
+        [ "ao_open.fs(3,1,3,5): error FS0010: Unexpected keyword 'open' in definition" ]
+
+        "ao_open_line.fs",
+        "module M\n[<A>] open System\n",
+        [ "ao_open_line.fs(2,7,2,11): error FS0010: Unexpected keyword 'open' in definition" ]
+
+        "ac_twice.fs",
+        "module M\nmodule private private N =\n    let a = 1\n",
+        [
+            "ac_twice.fs(2,16,2,23): error FS0010: Unexpected keyword 'private' in definition. Expected identifier, 'global' or other token."
+            "ac_twice.fs(2,1,2,23): error FS0534: A module abbreviation must be a simple name, not a path"
         ]
     ]
 
@@ -2026,23 +2776,22 @@ module M =
                             (oracleLines result)
             ]
 
-            testCase "an attributed nested module first in an anonymous root stays explicit"
+            testCase
+                "an attributed nested module first in an anonymous root reports the module-equals text"
             <| fun _ ->
-                let result =
-                    parse SyntaxCompilationTarget.Executable [
-                        "AttrMod.fs",
-                        "[<AutoOpen>]
+                Expect.sequenceEqual
+                    (oracleLines (
+                        parse SyntaxCompilationTarget.Executable [
+                            "AttrMod.fs",
+                            "[<AutoOpen>]
 module M =
     let a = 1
 "
-                        last
-                    ]
-
-                SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            last
+                        ]
+                    ))
                     [ moduleEqualsDeclaration "AttrMod.fs" 1 1 2 1 ]
-                    (result.Diagnostics
-                     |> Seq.map _.Diagnostic)
-                    (oracleLines result)
+                    "The diagnostics must match the Compatibility Oracle"
 
             testList
                 "the next root declaration after a nested module recovery reports the Oracle diagnostic"
@@ -2077,6 +2826,70 @@ module M =
                              |> Seq.map _.Diagnostic)
                             (oracleLines result)
             ]
+
+            testList "an attributed or accessible nested module reports the Oracle diagnostics" [
+                for logicalPath, text, expected in attributedModuleCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        Expect.sequenceEqual
+                            (oracleLines (
+                                parse SyntaxCompilationTarget.Executable [
+                                    logicalPath, text
+                                    last
+                                ]
+                            ))
+                            expected
+                            "The diagnostics must match the Compatibility Oracle"
+            ]
+
+            testList "an unmodeled attributed or accessible declaration stays explicit" [
+                for logicalPath, text, oracle in unmodeledAttributedModuleCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result =
+                            parse SyntaxCompilationTarget.Executable [
+                                logicalPath, text
+                                last
+                            ]
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            (result.Diagnostics
+                             |> Seq.map _.Diagnostic)
+                            (oracleLines result)
+            ]
+
+            testCase "a nested module keeps its attributes, accessibility, and range"
+            <| fun _ ->
+                let result =
+                    parse SyntaxCompilationTarget.Executable [
+                        "Attributed.fs",
+                        "module M
+[<AutoOpen>]
+[<RequireQualifiedAccess>]
+module private N =
+    let a = 1
+"
+                    ]
+
+                match result.Files[0] with
+                | SyntaxFile.Implementation file ->
+                    match Seq.exactlyOne (Seq.exactlyOne file.Contents).Declarations with
+                    | ImplementationDeclaration.NestedModule nested ->
+                        Expect.equal nested.Attributes.Length 2 "Both attribute lists"
+
+                        Expect.equal
+                            (nested.Accessibility
+                             |> Option.map _.Kind)
+                            (Some SyntaxAccessibility.Private)
+                            "Accessibility"
+
+                        Expect.equal
+                            (nested.Range.Start.Line, nested.Range.Start.Column)
+                            (2, 1)
+                            "The range starts at the first attribute list"
+                    | other -> failtest $"Expected a nested module, found {other}"
+                | other -> failtest $"Expected an implementation file, found {other}"
 
             testCase "files keep their order and their kind"
             <| fun _ ->
