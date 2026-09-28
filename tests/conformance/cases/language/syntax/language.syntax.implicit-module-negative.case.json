@@ -1,0 +1,384 @@
+{
+  "documentKind": "case-v1",
+  "schemaVersion": 1,
+  "caseId": "language.syntax.implicit-module-negative",
+  "kind": "language",
+  "family": "syntax",
+  "featureRow": "syntax.ordered-files",
+  "polarity": "negative",
+  "title": "An anonymous file whose name is not an F# identifier reports FS0222 and FS0221",
+  "tags": [
+    "language",
+    "syntax",
+    "negative",
+    "issue29"
+  ],
+  "owners": {
+    "owner": "parser-compatibility",
+    "requirements": [
+      "#29"
+    ]
+  },
+  "envelope": {
+    "state": "unsupported",
+    "compilerContractVersions": [
+      1
+    ],
+    "languageVersions": [
+      "default"
+    ],
+    "targetFrameworks": [
+      "net10.0"
+    ],
+    "exclusions": [
+      {
+        "cell": "fsharp2-syntax-parser",
+        "issue": "#29",
+        "owner": "parser-compatibility",
+        "reviewCondition": "Remove when the compiler pipeline uses the Issue #29 syntax parser."
+      }
+    ]
+  },
+  "matrix": {
+    "operatingSystems": {
+      "required": [
+        "windows",
+        "linux",
+        "macos"
+      ],
+      "excluded": []
+    },
+    "runtimeIdentifiers": {
+      "required": [
+        "win-x64",
+        "linux-x64",
+        "osx-x64"
+      ],
+      "excluded": []
+    },
+    "cultures": {
+      "required": [
+        "en-US"
+      ],
+      "excluded": []
+    },
+    "configurations": {
+      "required": [
+        "Debug",
+        "Release"
+      ],
+      "excluded": []
+    },
+    "debugFormats": {
+      "required": [
+        "portable"
+      ],
+      "excluded": []
+    }
+  },
+  "project": {
+    "projectType": "library",
+    "target": "CoreCompile",
+    "assemblyName": "LanguageSyntaximplicit-module-negative",
+    "properties": [
+      {
+        "name": "TargetFramework",
+        "value": "net10.0"
+      },
+      {
+        "name": "Configuration",
+        "value": "Debug"
+      },
+      {
+        "name": "DebugType",
+        "value": "portable"
+      },
+      {
+        "name": "Deterministic",
+        "value": true
+      }
+    ],
+    "items": [],
+    "packageInputs": [],
+    "outputOwnership": {
+      "compilerOwned": [
+        "implementation-assembly",
+        "portable-pdb",
+        "reference-assembly",
+        "xml-documentation"
+      ],
+      "sdkOwned": [
+        "deps-json",
+        "runtimeconfig-json"
+      ]
+    }
+  },
+  "sources": [
+    {
+      "order": 0,
+      "stableId": "source.first",
+      "kind": "implementation",
+      "logicalPath": "/src/First.fs",
+      "fixturePath": "fixtures/language.syntax.implicit-module-negative/First.fs",
+      "sha256": "sha256:0b967c1c7d70362f11310f913444d240ddc7666f1fd9d04fc7d35f9ebe9ab60c"
+    },
+    {
+      "order": 1,
+      "stableId": "source.second",
+      "kind": "implementation",
+      "logicalPath": "/src/second-file.fs",
+      "fixturePath": "fixtures/language.syntax.implicit-module-negative/second-file.fs",
+      "sha256": "sha256:f7993a1c86c9ce925d67e296076caf440965dc275fb98f8ced6994e9e59b3246"
+    }
+  ],
+  "targetReferences": {
+    "closurePath": "expectations/signatures/net10.0.closure.json",
+    "comparison": "exact-ordered-closure"
+  },
+  "options": {
+    "semantic": {
+      "languageVersion": "default",
+      "defines": [
+        "TRACE"
+      ],
+      "optimization": "disabled",
+      "tailCalls": "disabled",
+      "checkedArithmetic": false,
+      "targetProfile": "netcore"
+    },
+    "diagnostic": {
+      "warningLevel": 5,
+      "noWarn": [],
+      "warnAsError": [],
+      "warnAsWarn": [],
+      "fullPaths": true,
+      "flatErrors": true,
+      "consoleColors": false,
+      "culture": "en-US"
+    },
+    "emission": {
+      "debugFormat": "portable",
+      "deterministic": true,
+      "documentation": true,
+      "referenceAssembly": true,
+      "outputType": "library",
+      "pathMap": [
+        {
+          "name": "physical-root",
+          "value": "/_fsharp2_conformance/root"
+        }
+      ]
+    },
+    "signing": {
+      "mode": "none",
+      "publicSign": false
+    },
+    "resources": {
+      "embedded": [],
+      "linked": [],
+      "native": []
+    },
+    "msbuild": {
+      "noFramework": false,
+      "simpleResolution": false,
+      "explicitReferences": true
+    },
+    "compilerArguments": [
+      "--debug:portable",
+      "--deterministic+",
+      "--fullpaths",
+      "--flaterrors",
+      "--consolecolors-",
+      "--optimize-",
+      "--tailcalls-"
+    ]
+  },
+  "expectedDiagnostics": {
+    "mode": "oracle-lock",
+    "lockPath": "locks/syntax/implicit-module-negative.oracle-lock.json",
+    "inlineFacts": []
+  },
+  "expectedArtifacts": [
+    {
+      "kind": "implementation-assembly",
+      "logicalIdentity": "output.implementation",
+      "state": "forbidden",
+      "producer": "compiler",
+      "comparisonClass": "canonical-semantic",
+      "validators": [
+        "absent"
+      ],
+      "consumerProbes": []
+    },
+    {
+      "kind": "portable-pdb",
+      "logicalIdentity": "output.portable-pdb",
+      "state": "forbidden",
+      "producer": "compiler",
+      "comparisonClass": "canonical-semantic",
+      "validators": [
+        "absent"
+      ],
+      "consumerProbes": []
+    },
+    {
+      "kind": "reference-assembly",
+      "logicalIdentity": "output.reference",
+      "state": "forbidden",
+      "producer": "compiler",
+      "comparisonClass": "canonical-semantic",
+      "validators": [
+        "absent"
+      ],
+      "consumerProbes": []
+    },
+    {
+      "kind": "xml-documentation",
+      "logicalIdentity": "output.documentation",
+      "state": "forbidden",
+      "producer": "compiler",
+      "comparisonClass": "normalized",
+      "validators": [
+        "absent"
+      ],
+      "consumerProbes": []
+    }
+  ],
+  "phaseExpectations": {
+    "stopPhase": "syntax",
+    "phases": [
+      {
+        "phase": "source",
+        "status": "completed",
+        "fingerprintRequired": true,
+        "traceRequired": true,
+        "observableProofs": [
+          "core-phase"
+        ]
+      },
+      {
+        "phase": "syntax",
+        "status": "unsupported",
+        "fingerprintRequired": true,
+        "traceRequired": true,
+        "observableProofs": [
+          "core-phase"
+        ]
+      },
+      {
+        "phase": "resolved-symbols",
+        "status": "not-run",
+        "fingerprintRequired": true,
+        "traceRequired": true,
+        "observableProofs": [
+          "core-phase"
+        ]
+      },
+      {
+        "phase": "typed-declarations",
+        "status": "not-run",
+        "fingerprintRequired": true,
+        "traceRequired": true,
+        "observableProofs": [
+          "core-phase"
+        ]
+      },
+      {
+        "phase": "lowered-code",
+        "status": "not-run",
+        "fingerprintRequired": true,
+        "traceRequired": true,
+        "observableProofs": [
+          "core-phase"
+        ]
+      },
+      {
+        "phase": "optimized-code",
+        "status": "not-run",
+        "fingerprintRequired": true,
+        "traceRequired": true,
+        "observableProofs": [
+          "core-phase"
+        ]
+      },
+      {
+        "phase": "symbolic-emission",
+        "status": "not-run",
+        "fingerprintRequired": true,
+        "traceRequired": true,
+        "observableProofs": [
+          "core-phase"
+        ]
+      },
+      {
+        "phase": "final-linking",
+        "status": "not-run",
+        "fingerprintRequired": true,
+        "traceRequired": true,
+        "observableProofs": [
+          "core-phase"
+        ]
+      },
+      {
+        "phase": "load",
+        "status": "not-run",
+        "fingerprintRequired": false,
+        "traceRequired": true,
+        "observableProofs": [
+          "probe-load"
+        ]
+      },
+      {
+        "phase": "execution",
+        "status": "not-run",
+        "fingerprintRequired": false,
+        "traceRequired": true,
+        "observableProofs": [
+          "probe-execution"
+        ]
+      }
+    ]
+  },
+  "probes": [],
+  "comparisons": [
+    {
+      "path": "observations.diagnostics",
+      "class": "exact",
+      "comparator": "diagnostic-exact",
+      "rule": "exact-v1"
+    },
+    {
+      "path": "observations.paths",
+      "class": "normalized",
+      "comparator": "path-newline-normalized",
+      "rule": "logical-root-v1"
+    },
+    {
+      "path": "observations.artifacts",
+      "class": "exact",
+      "comparator": "diagnostic-exact",
+      "rule": "publication-v1"
+    }
+  ],
+  "cleanup": {
+    "retention": "on-failure",
+    "delete": [
+      "lanes/*/tmp",
+      "lanes/*/service",
+      "lanes/*/cache"
+    ],
+    "retain": [
+      "run-result.json",
+      "comparison.json",
+      "lanes/*/stdout.bin",
+      "lanes/*/stderr.bin"
+    ],
+    "lateFailure": "compare-declared-leftovers"
+  },
+  "timeout": {
+    "evaluationMs": 30000,
+    "compileMs": 120000,
+    "probeMs": 60000,
+    "cleanupMs": 30000
+  }
+}
