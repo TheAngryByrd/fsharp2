@@ -273,6 +273,24 @@ module ParserTests =
         ],
         [ "module M = [val a: int (skipped); val c: <missing> (skipped)]" ]
 
+        "AnonymousSignature.fsi",
+        "val a: int\n)\n",
+        [ "AnonymousSignature.fsi(2,1): error FS0010: Unexpected symbol ')' in signature file" ],
+        [
+            "val a: int"
+            "skipped"
+        ]
+
+        "NamespaceSignature.fsi",
+        "namespace A\nval a: int\n)\n",
+        [
+            "NamespaceSignature.fsi(3,1): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ],
+        [
+            "val a: int"
+            "skipped"
+        ]
+
         "IndentedRoot.fsi",
         "namespace N\n    val a: )\n    val b: )\n    val c: int\n",
         [ "IndentedRoot.fsi(2,12): error FS0010: Unexpected symbol ')' in value signature" ],

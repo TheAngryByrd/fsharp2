@@ -86,7 +86,18 @@ module internal Parser =
         Cursor: Cursor
         Diagnostics: ResizeArray<SyntaxDiagnostic>
         ReportedStarts: HashSet<int>
+        mutable SuppressFrom: int option
+        mutable UnmodeledAtNextDeclaration: bool
+        mutable UnmodeledAtEnd: bool
+        mutable Interrupted: bool
     }
+
+    [<RequireQualifiedAccess>]
+    type private DeclarationList =
+        | ModuleRoot
+        | NamespaceRoot
+        | AnonymousRoot
+        | NestedModule
 
     let private sourceKind (token: LayoutToken) =
         token.Token
@@ -155,7 +166,7 @@ module internal Parser =
             let later =
                 state.Diagnostics
                 |> Seq.skip (count + 1)
-                |> Seq.filter (fun diagnostic -> diagnostic.Code = "FSC2P1001")
+                |> Seq.filter (fun diagnostic -> diagnostic.Code = unsupportedCode)
                 |> Seq.toArray
 
             state.Diagnostics.RemoveRange(
@@ -195,6 +206,11 @@ module internal Parser =
         | UnionCaseField
         | UnionCaseName
         | TypeEquals
+        | FirstUnionCaseField
+        | LambdaStart
+        | NamespaceFile
+        | AnonymousFile
+        | AnonymousSignature
 
     let private closingKeywords =
         set [
@@ -281,6 +297,7 @@ module internal Parser =
                 ->
                 symbol text token.Range
             | RecoveryPoint.ValueColon when isIdentifier token -> Some("identifier", token.Range)
+            | RecoveryPoint.LambdaStart when isOperator "->" token -> symbol text token.Range
             | _ -> None
 
     let private reportUnexpected state point context =
@@ -319,6 +336,13 @@ module internal Parser =
                 | RecoveryPoint.UnionCaseName -> $"Unexpected {description} in union case"
                 | RecoveryPoint.TypeEquals ->
                     $"Unexpected {description} in type definition. Expected '=' or other token."
+                | RecoveryPoint.FirstUnionCaseField ->
+                    $"Unexpected {description} in type definition"
+                | RecoveryPoint.LambdaStart -> $"Unexpected {description} in lambda expression"
+                | RecoveryPoint.NamespaceFile ->
+                    $"Unexpected {description} in implementation file. Expected incomplete structured construct at or before this point or other token."
+                | RecoveryPoint.AnonymousFile -> $"Unexpected {description} in implementation file"
+                | RecoveryPoint.AnonymousSignature -> $"Unexpected {description} in signature file"
 
             report state "FS0010" message range
             true
@@ -788,7 +812,10 @@ module internal Parser =
                 skipUntil state context
                 |> ignore
 
-                if obj.ReferenceEquals(before, cursor.Current) then
+                if
+                    cursor.Current.Kind = before.Kind
+                    && cursor.Current.Range = before.Range
+                then
                     cursor.Advance()
                     |> ignore
 
@@ -1173,6 +1200,7 @@ module internal Parser =
                 cursor.Current.Kind = LayoutTokenKind.Separator
                 && (isKeyword "else" (cursor.Peek 1)
                     || isKeyword "elif" (cursor.Peek 1))
+                && (cursor.Peek 1).Range.Start.Column = ifToken.Range.Start.Column
             then
                 cursor.Advance()
                 |> ignore
@@ -1319,7 +1347,10 @@ module internal Parser =
             patterns.Add(parseAtomicPattern state context)
 
         let body =
-            if isOperator "->" cursor.Current then
+            if
+                patterns.Count > 0
+                && isOperator "->" cursor.Current
+            then
                 cursor.Advance()
                 |> ignore
 
@@ -1328,10 +1359,23 @@ module internal Parser =
                 let missing = missingExpression cursor.Current
 
                 if not (reportedAt state cursor.Current) then
-                    reportUnexpected state RecoveryPoint.LambdaArrow "a lambda expression"
+                    let point =
+                        if patterns.Count = 0 then
+                            RecoveryPoint.LambdaStart
+                        else
+                            RecoveryPoint.LambdaArrow
+
+                    reportUnexpected state point "a lambda expression"
                     |> ignore
 
                 missing
+
+        if
+            isOperator "|" cursor.Current
+            && not (closesArrayOrAttribute cursor)
+            && not (reportedAt state cursor.Current)
+        then
+            reportUnsupported state cursor.Current "a lambda expression body"
 
         SyntaxExpression.Lambda(
             patterns.ToImmutable(),
@@ -1971,9 +2015,20 @@ module internal Parser =
         while more do
             let start = cursor.Current
 
-            if isOperator "|" start then
+            let hasBar = isOperator "|" start
+
+            if hasBar then
                 cursor.Advance()
                 |> ignore
+
+            let fieldPoint =
+                if
+                    hasBar
+                    || cases.Count > 0
+                then
+                    RecoveryPoint.UnionCaseField
+                else
+                    RecoveryPoint.FirstUnionCaseField
 
             let context = start.Range.Start
 
@@ -2011,7 +2066,7 @@ module internal Parser =
                                 None
 
                         if not (canStartType cursor) then
-                            reportUnexpected state RecoveryPoint.UnionCaseField "a union case"
+                            reportUnexpected state fieldPoint "a union case"
                             |> ignore
 
                             failed <- true
@@ -2080,12 +2135,12 @@ module internal Parser =
                 cursor.Advance()
                 |> ignore
 
-                let kind, name =
+                let signature =
                     if isStatic then
                         if isIdentifier cursor.Current then
-                            Some SyntaxMemberKind.Static, Some(identifier (cursor.Advance()))
+                            Some(SyntaxMemberKind.Static, identifier (cursor.Advance()))
                         else
-                            None, None
+                            None
                     elif
                         isIdentifier cursor.Current
                         && isOperator "." (cursor.Peek 1)
@@ -2096,12 +2151,12 @@ module internal Parser =
                         cursor.Advance()
                         |> ignore
 
-                        Some(SyntaxMemberKind.Instance self), Some(identifier (cursor.Advance()))
+                        Some(SyntaxMemberKind.Instance self, identifier (cursor.Advance()))
                     else
-                        None, None
+                        None
 
-                match kind, name with
-                | Some kind, Some name ->
+                match signature with
+                | Some(kind, name) ->
                     let parameters = ImmutableArray.CreateBuilder<SyntaxPattern>()
 
                     while canStartPattern cursor.Current
@@ -2136,7 +2191,7 @@ module internal Parser =
                             |> ignore
                         else
                             more <- false
-                | _ ->
+                | None ->
                     if not (reportedAt state cursor.Current) then
                         reportUnsupported state cursor.Current "a class member"
 
@@ -2218,6 +2273,7 @@ module internal Parser =
                         representation, ListRecovery.Continues
                     else
                         parseRepresentation state context, ListRecovery.Continues
+                // The Compatibility Oracle ends the definition at ')', '}', or 'end' after a type name, but reports '=' as expected for other closing tokens.
                 elif
                     isDelimiter ")" cursor.Current
                     || isDelimiter "}" cursor.Current
@@ -2263,12 +2319,13 @@ module internal Parser =
     type private DeclarationRules<'Declaration> = {
         Parse:
             ParserState
-                -> bool
+                -> DeclarationList
                 -> ImmutableArray<SyntaxAttributeList>
                 -> LayoutToken
                 -> ('Declaration option * ListRecovery) option
         ContinuesRecovery: LayoutToken -> bool
-        StartPoint: bool -> RecoveryPoint
+        NestedRecoveryDiscards: bool
+        StartPoint: DeclarationList -> RecoveryPoint
         Open: LongIdentifier * SourceRange -> 'Declaration
         NestedModule:
             SyntaxIdentifier -> ImmutableArray<'Declaration> -> SourceRange -> 'Declaration
@@ -2280,17 +2337,43 @@ module internal Parser =
         || isEndOfFile token
         || isKeyword "namespace" token
 
+    let private reportAfterRecovery state (token: LayoutToken) =
+        reportUnsupported state token "a declaration after syntax recovery"
+        state.Interrupted <- true
+        state.SuppressFrom <- Some state.Diagnostics.Count
+
+    let private suppress state unmodeledAtNextDeclaration unmodeledAtEnd =
+        state.SuppressFrom <- Some state.Diagnostics.Count
+        state.UnmodeledAtNextDeclaration <- unmodeledAtNextDeclaration
+        state.UnmodeledAtEnd <- unmodeledAtEnd
+
+    let private removeSuppressedDiagnostics state =
+        match state.SuppressFrom with
+        | Some first ->
+            let kept =
+                state.Diagnostics
+                |> Seq.skip first
+                |> Seq.filter (fun diagnostic -> diagnostic.Code = unsupportedCode)
+                |> Seq.toArray
+
+            state.Diagnostics.RemoveRange(
+                first,
+                state.Diagnostics.Count
+                - first
+            )
+
+            state.Diagnostics.AddRange kept
+            state.SuppressFrom <- Some state.Diagnostics.Count
+        | None -> ()
+
     let rec private parseDeclarations
         state
         (rules: DeclarationRules<'Declaration>)
-        nested
+        (list: DeclarationList)
         : ImmutableArray<'Declaration> * ImmutableArray<'Declaration> =
         let cursor = state.Cursor
         let declarations = ImmutableArray.CreateBuilder<'Declaration>()
         let discarded = ImmutableArray.CreateBuilder<'Declaration>()
-        let mutable suppressFrom = None
-        let mutable interrupted = false
-        let mutable unmodeled = false
         let mutable stop = false
 
         while not stop do
@@ -2302,22 +2385,23 @@ module internal Parser =
             elif isDeclarationListEnd token then
                 stop <- true
             else
-                let target = if suppressFrom.IsSome then discarded else declarations
+                let target =
+                    if state.SuppressFrom.IsSome then
+                        discarded
+                    else
+                        declarations
 
                 let reported = state.Diagnostics.Count
                 let attributes = parseAttributeLists state
                 let token = cursor.Current
 
-                match suppressFrom with
-                | Some _ when
-                    not interrupted
-                    && (unmodeled
+                if
+                    state.SuppressFrom.IsSome
+                    && not state.Interrupted
+                    && (state.UnmodeledAtNextDeclaration
                         || not (rules.ContinuesRecovery token))
-                    ->
-                    reportUnsupported state token "a declaration after syntax recovery"
-                    interrupted <- true
-                    suppressFrom <- Some state.Diagnostics.Count
-                | _ -> ()
+                then
+                    reportAfterRecovery state token
 
                 let parsed, recovery =
                     if
@@ -2334,7 +2418,7 @@ module internal Parser =
                     elif isKeyword "module" token then
                         parseNestedModule state rules, ListRecovery.Continues
                     else
-                        match rules.Parse state nested attributes token with
+                        match rules.Parse state list attributes token with
                         | Some result -> result
                         | None ->
                             if reportedAt state token then
@@ -2342,7 +2426,7 @@ module internal Parser =
                             elif
                                 reportUnexpected
                                     state
-                                    (rules.StartPoint nested)
+                                    (rules.StartPoint list)
                                     "a module or namespace declaration"
                             then
                                 None, ListRecovery.Discards
@@ -2372,35 +2456,21 @@ module internal Parser =
                         >> target.Add
                     )
 
-                match suppressFrom with
-                | Some first ->
-                    let kept =
-                        state.Diagnostics
-                        |> Seq.skip first
-                        |> Seq.filter (fun diagnostic -> diagnostic.Code = unsupportedCode)
-                        |> Seq.toArray
-
-                    state.Diagnostics.RemoveRange(
-                        first,
-                        state.Diagnostics.Count
-                        - first
-                    )
-
-                    state.Diagnostics.AddRange kept
-                    suppressFrom <- Some state.Diagnostics.Count
-                | None when
-                    recovery = ListRecovery.Discards
-                    && not nested
-                    ->
-                    // The Compatibility Oracle discards later declarations that continue this recovery and reports no diagnostic for them.
-                    suppressFrom <- Some state.Diagnostics.Count
-                | None when
-                    recovery = ListRecovery.Unmodeled
-                    && not nested
-                    ->
-                    suppressFrom <- Some state.Diagnostics.Count
-                    unmodeled <- true
-                | None -> ()
+                if state.SuppressFrom.IsSome then
+                    removeSuppressedDiagnostics state
+                else
+                    match recovery, list with
+                    | ListRecovery.Discards, DeclarationList.NestedModule when
+                        rules.NestedRecoveryDiscards
+                        ->
+                        // The Compatibility Oracle discards the rest of the file after this recovery and reports one more diagnostic at its end.
+                        suppress state true true
+                    | ListRecovery.Discards, DeclarationList.NestedModule -> ()
+                    | ListRecovery.Discards, _ ->
+                        // The Compatibility Oracle discards the rest of the file after this recovery and reports no diagnostic for it.
+                        suppress state false false
+                    | ListRecovery.Unmodeled, _ -> suppress state true false
+                    | ListRecovery.Continues, _ -> ()
 
         declarations.ToImmutable(), discarded.ToImmutable()
 
@@ -2427,7 +2497,7 @@ module internal Parser =
                 cursor.Advance()
                 |> ignore
 
-                let declarations, _ = parseDeclarations state rules true
+                let declarations, _ = parseDeclarations state rules DeclarationList.NestedModule
                 let range = span moduleToken.Range (emptyAt cursor.LastEnd)
 
                 if cursor.Current.Kind = LayoutTokenKind.EndBlock then
@@ -2443,12 +2513,12 @@ module internal Parser =
         let cursor = state.Cursor
         let roots = ImmutableArray.CreateBuilder<ModuleOrNamespaceSyntax<_>>()
 
-        let rootDeclarations () =
+        let rootDeclarations list =
             if cursor.Current.Kind = LayoutTokenKind.BeginBlock then
                 cursor.Advance()
                 |> ignore
 
-                let declarations = parseDeclarations state rules false
+                let declarations = parseDeclarations state rules list
 
                 if cursor.Current.Kind = LayoutTokenKind.EndBlock then
                     cursor.Advance()
@@ -2456,7 +2526,7 @@ module internal Parser =
 
                 declarations
             else
-                parseDeclarations state rules false
+                parseDeclarations state rules list
 
         let root kind (start: SourceRange) (declarations, discarded) = {
             Kind = kind
@@ -2476,7 +2546,7 @@ module internal Parser =
                         reportUnsupported state cursor.Current "a namespace declaration"
                         None
 
-                let declarations = rootDeclarations ()
+                let declarations = rootDeclarations DeclarationList.NamespaceRoot
 
                 roots.Add(
                     root (ModuleOrNamespaceKind.Namespace name) namespaceToken.Range declarations
@@ -2503,21 +2573,29 @@ module internal Parser =
 
             match header with
             | Some(moduleToken, name) ->
-                let declarations = rootDeclarations ()
+                let declarations = rootDeclarations DeclarationList.ModuleRoot
 
                 roots.Add(
                     root (ModuleOrNamespaceKind.NamedModule name) moduleToken.Range declarations
                 )
             | None ->
-                let declarations = rootDeclarations ()
+                let declarations = rootDeclarations DeclarationList.AnonymousRoot
                 roots.Add(root ModuleOrNamespaceKind.AnonymousModule first.Range declarations)
 
         if not (isEndOfFile cursor.Current) then
-            reportUnsupported state cursor.Current "a module or namespace declaration"
+            if state.SuppressFrom.IsNone then
+                reportUnsupported state cursor.Current "a module or namespace declaration"
 
             while not (isEndOfFile cursor.Current) do
                 cursor.Advance()
                 |> ignore
+
+        if
+            state.SuppressFrom.IsSome
+            && state.UnmodeledAtEnd
+            && not state.Interrupted
+        then
+            reportAfterRecovery state cursor.Current
 
         roots.ToImmutable()
 
@@ -2533,7 +2611,14 @@ module internal Parser =
                 else
                     None
         ContinuesRecovery = fun _ -> true
-        StartPoint = fun _ -> RecoveryPoint.DefinitionStart
+        NestedRecoveryDiscards = true
+        StartPoint =
+            fun list ->
+                match list with
+                | DeclarationList.NamespaceRoot -> RecoveryPoint.NamespaceFile
+                | DeclarationList.AnonymousRoot -> RecoveryPoint.AnonymousFile
+                | DeclarationList.ModuleRoot
+                | DeclarationList.NestedModule -> RecoveryPoint.DefinitionStart
         Open = ImplementationDeclaration.Open
         NestedModule =
             fun name declarations range ->
@@ -2543,21 +2628,23 @@ module internal Parser =
 
     let private signatureRules = {
         Parse =
-            fun state nested attributes token ->
+            fun state list attributes token ->
                 if isKeyword "val" token then
-                    Some(parseVal state nested attributes)
+                    Some(parseVal state (list = DeclarationList.NestedModule) attributes)
                 else
                     None
         ContinuesRecovery =
             fun token ->
                 isKeyword "val" token
                 || isKeyword "open" token
+        NestedRecoveryDiscards = false
         StartPoint =
-            fun nested ->
-                if nested then
-                    RecoveryPoint.NestedSignature
-                else
-                    RecoveryPoint.SignatureFile
+            fun list ->
+                match list with
+                | DeclarationList.NestedModule -> RecoveryPoint.NestedSignature
+                | DeclarationList.AnonymousRoot -> RecoveryPoint.AnonymousSignature
+                | DeclarationList.ModuleRoot
+                | DeclarationList.NamespaceRoot -> RecoveryPoint.SignatureFile
         Open = SignatureDeclaration.Open
         NestedModule =
             fun name declarations range ->
@@ -2569,6 +2656,10 @@ module internal Parser =
         Cursor = Cursor(document.LayoutTokens)
         Diagnostics = ResizeArray()
         ReportedStarts = HashSet()
+        SuppressFrom = None
+        UnmodeledAtNextDeclaration = false
+        UnmodeledAtEnd = false
+        Interrupted = false
     }
 
     let parseImplementationFile (document: LexicalDocument) : ImplementationFileParseResult =

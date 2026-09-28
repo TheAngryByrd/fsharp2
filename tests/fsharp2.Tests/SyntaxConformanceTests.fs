@@ -13,6 +13,8 @@ module SyntaxConformanceTests =
     let private syntaxRows = [
         "syntax.implementation-declarations"
         "syntax.signature-declarations"
+        "syntax.type-definitions"
+        "syntax.expressions"
     ]
 
     let private language =

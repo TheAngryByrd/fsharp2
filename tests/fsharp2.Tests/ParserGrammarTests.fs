@@ -277,6 +277,18 @@ module ParserGrammarTests =
             "end"
         ]
 
+        "FirstCaseType", "module Program\ntype U = A of {0}\n", (2, 15), "in type definition", []
+
+        "LambdaStart", "module Program\nlet f = fun {0} -> 1\n", (2, 13), "in lambda expression", []
+
+        "NamespaceDefinitionStart",
+        "namespace A\nlet a = 1\n{0}\n",
+        (3, 1),
+        "in implementation file. Expected incomplete structured construct at or before this point or other token.",
+        []
+
+        "AnonymousDefinitionStart", "let a = 1\n{0}\n", (2, 1), "in implementation file", []
+
         "TypeDefinitionStart",
         "module Program\ntype T {0} int\n",
         (2, 8),
@@ -315,7 +327,60 @@ module ParserGrammarTests =
         "TypeName.fs", "module Program\ntype ) = int\nlet first = 1\n"
     ]
 
+    let private explicitAfterOracleCases = [
+        "NestedRecoveryAtEnd.fs",
+        "namespace A\nmodule M =\n    let a = 1\n    )\n",
+        [
+            "NestedRecoveryAtEnd.fs(4,5): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "NestedRecoveryAtEnd.fs(5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "NestedRecoveryThenDeclarations.fs",
+        "namespace A\nmodule M =\n    let a = 1\n    )\n    let b = )\nlet c = )\n",
+        [
+            "NestedRecoveryThenDeclarations.fs(4,5): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "NestedRecoveryThenDeclarations.fs(6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "LambdaBeforeClauseBar.fs",
+        "module P\nlet f x = match x with | A -> fun y -> y | B -> id\n",
+        [
+            "LambdaBeforeClauseBar.fs(2,42): error FS0010: Unexpected symbol '|' in lambda expression. Expected incomplete structured construct at or before this point or other token."
+            "LambdaBeforeClauseBar.fs(3,1): error FS0010: Incomplete structured construct at or before this point in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+    ]
+
     let private laterDeclarationCases = [
+        "UnionCaseAfterBar.fs",
+        "module P\ntype U = A | B of )\n",
+        [ "UnionCaseAfterBar.fs(2,19): error FS0010: Unexpected symbol ')' in union case" ]
+
+        "BlockFirstCase.fs",
+        "module P\ntype U =\n    A of )\n",
+        [ "BlockFirstCase.fs(3,10): error FS0010: Unexpected symbol ')' in type definition" ]
+
+        "LambdaWithoutPatterns.fs",
+        "module P\nlet f = fun -> 1\n",
+        [
+            "LambdaWithoutPatterns.fs(2,13): error FS0010: Unexpected symbol '->' in lambda expression"
+        ]
+
+        "SecondNamespace.fs",
+        "module P\nlet a = 1\n)\nnamespace B\nlet b = )\n",
+        [
+            "SecondNamespace.fs(3,1): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "NamespaceCascade.fs",
+        "namespace A\nlet a = 1\n)\nlet b = )\nmodule M =\n    let c = )\n",
+        [
+            "NamespaceCascade.fs(3,1): error FS0010: Unexpected symbol ')' in implementation file. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "AnonymousCascade.fs",
+        "let a = 1\n)\nlet b = )\ntype T = { X: ) }\n",
+        [ "AnonymousCascade.fs(2,1): error FS0010: Unexpected symbol ')' in implementation file" ]
+
         "ClauseArrowLater.fs",
         "module Program\nlet f x =\n    match x with\n    | A ) 1\n    | B -> 2\nlet later = )\n",
         [
@@ -481,6 +546,37 @@ let items = [ origin.X; 1 ]
                             oracle
                             "The diagnostics must match the Compatibility Oracle"
             ]
+
+            testList "recovery with more Oracle diagnostics than the parser models stays explicit" [
+                for logicalPath, text, oracle in explicitAfterOracleCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        Expect.exists
+                            result.Diagnostics
+                            (fun diagnostic -> diagnostic.Code = "FSC2P1001")
+                            "The parser must report an explicit FSC2P1001 diagnostic"
+
+                        for line in oracleLines logicalPath result do
+                            if not (line.Contains ": error FSC2P1001: ") then
+                                Expect.contains
+                                    oracle
+                                    line
+                                    "Each FS diagnostic must be a diagnostic that the Compatibility Oracle reports"
+            ]
+
+            testCase "a lambda clause result ends at the next aligned clause"
+            <| fun _ ->
+                let declarations, _ =
+                    shapes
+                        "LambdaClauses.fs"
+                        "module P\nlet f x =\n    match x with\n    | A -> fun y -> y\n    | B -> id\n"
+
+                Expect.sequenceEqual
+                    declarations
+                    [ "let f x = match x with | A -> fun y -> y | B -> id" ]
+                    "Clauses"
 
             testList "unsupported recovery reports one explicit diagnostic per group" [
                 for logicalPath, text in unsupportedCases ->

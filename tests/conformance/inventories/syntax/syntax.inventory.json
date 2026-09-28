@@ -7,19 +7,29 @@
     "language.syntax.implementation-declarations-positive",
     "language.syntax.implementation-recovery-negative",
     "language.syntax.signature-declarations-positive",
-    "language.syntax.signature-recovery-negative"
+    "language.syntax.signature-recovery-negative",
+    "language.syntax.type-definitions-positive",
+    "language.syntax.type-definitions-negative",
+    "language.syntax.expressions-positive",
+    "language.syntax.expressions-negative"
   ],
   "positiveCaseIds": [
     "language.syntax.implementation-declarations-positive",
-    "language.syntax.signature-declarations-positive"
+    "language.syntax.signature-declarations-positive",
+    "language.syntax.type-definitions-positive",
+    "language.syntax.expressions-positive"
   ],
   "negativeCaseIds": [
     "language.syntax.implementation-recovery-negative",
-    "language.syntax.signature-recovery-negative"
+    "language.syntax.signature-recovery-negative",
+    "language.syntax.type-definitions-negative",
+    "language.syntax.expressions-negative"
   ],
   "featureRows": [
     "syntax.implementation-declarations",
-    "syntax.signature-declarations"
+    "syntax.signature-declarations",
+    "syntax.type-definitions",
+    "syntax.expressions"
   ],
   "languageVersions": [
     "default",
