@@ -3848,6 +3848,54 @@ module M =
     ]
 
     let private headerLossCases = [
+        "nested_arrow_then_root_arrow.fsi",
+        "module M\nmodule N =\n    val a: int -> ]\nval c: int -> )\n",
+        [
+            "nested_arrow_then_root_arrow.fsi(3,19,3,20): error FS0010: Unexpected symbol ']' in value signature"
+            "nested_arrow_then_root_arrow.fsi(4,15,4,16): error FS0010: Unexpected symbol ')' in value signature"
+        ]
+
+        "no_lost_root_arrow.fsi",
+        "module M\nval c: int -> )\n",
+        [
+            "no_lost_root_arrow.fsi(2,15,2,16): error FS0010: Unexpected symbol ')' in value signature"
+        ]
+
+        "root_arrow_eof.fsi",
+        "module M\nmodule N =\n    )\nval c: int ->\n",
+        [
+            "root_arrow_eof.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "root_arrow_eof.fsi(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "root_arrow_err_then_err.fsi",
+        "module M\nmodule N =\n    )\nval c: int -> )\nval d: )\n",
+        [
+            "root_arrow_err_then_err.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "root_arrow_err_then_err.fsi(4,15,4,16): error FS0010: Unexpected symbol ')' in value signature"
+        ]
+
+        "root_arrow_err_then_val.fsi",
+        "module M\nmodule N =\n    )\nval c: int -> )\nval d: int\n",
+        [
+            "root_arrow_err_then_val.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "root_arrow_err_then_val.fsi(4,15,4,16): error FS0010: Unexpected symbol ')' in value signature"
+        ]
+
+        "root_arrow_err.fsi",
+        "module M\nmodule N =\n    )\nval c: int -> )\n",
+        [
+            "root_arrow_err.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "root_arrow_err.fsi(4,15,4,16): error FS0010: Unexpected symbol ')' in value signature"
+        ]
+
+        "root_star_err.fsi",
+        "module M\nmodule N =\n    )\nval c: int * ]\n",
+        [
+            "root_star_err.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in signature file"
+            "root_star_err.fsi(4,14,4,15): error FS0010: Unexpected symbol ']' in value signature"
+        ]
+
         "attr_mod.fsi",
         "module M\nmodule N =\n    )\n[<A>]\nmodule O =\n    val b: )\n",
         [
