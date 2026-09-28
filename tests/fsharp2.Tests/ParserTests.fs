@@ -17,6 +17,13 @@ module ParserTests =
         prepare logicalPath text
         |> Parser.parseImplementationFile
 
+    let private rootShapes shape (root: ModuleOrNamespaceSyntax<'Declaration>) =
+        Seq.append
+            (root.Declarations
+             |> Seq.map shape)
+            (root.DiscardedByRecovery
+             |> Seq.map (fun declaration -> $"discarded: {shape declaration}"))
+
     let private rootShape kind =
         match kind with
         | ModuleOrNamespaceKind.AnonymousModule -> "anonymous module"
@@ -153,8 +160,8 @@ module ParserTests =
         ],
         [
             "val a: <missing> (skipped)"
-            "open System"
-            "val c: <missing> (skipped)"
+            "discarded: open System"
+            "discarded: val c: <missing> (skipped)"
         ]
 
         "TypeStart.fsi",
@@ -162,7 +169,7 @@ module ParserTests =
         [ "TypeStart.fsi(3,13): error FS0010: Unexpected symbol ')' in value signature" ],
         [
             "val broken: <missing> (skipped)"
-            "val first: int"
+            "discarded: val first: int"
         ]
 
         "TypeAfterArrow.fsi",
@@ -170,8 +177,8 @@ module ParserTests =
         [ "TypeAfterArrow.fsi(2,20): error FS0010: Unexpected symbol ')' in value signature" ],
         [
             "val broken: (int -> <missing>) (skipped)"
-            "val tuple: (int * <missing>) (skipped)"
-            "val first: int"
+            "discarded: val tuple: (int * <missing>) (skipped)"
+            "discarded: val first: int"
         ]
 
         "Name.fsi",
@@ -181,8 +188,8 @@ module ParserTests =
         ],
         [
             "val <missing>: <missing> (skipped)"
-            "val <missing>: <missing> (skipped)"
-            "val first: int"
+            "discarded: val <missing>: <missing> (skipped)"
+            "discarded: val first: int"
         ]
 
         "Colon.fsi",
@@ -192,8 +199,8 @@ module ParserTests =
         ],
         [
             "val broken: <missing> (skipped)"
-            "val other: <missing> (skipped)"
-            "val first: int"
+            "discarded: val other: <missing> (skipped)"
+            "discarded: val first: int"
         ]
 
         "Trailing.fsi",
@@ -203,8 +210,8 @@ module ParserTests =
         ],
         [
             "val broken: int list (skipped)"
-            "val other: int (skipped)"
-            "val first: int"
+            "discarded: val other: int (skipped)"
+            "discarded: val first: int"
         ]
 
         "DeclarationStart.fsi",
@@ -215,7 +222,7 @@ module ParserTests =
         [
             "val f: int"
             "skipped"
-            "val first: int"
+            "discarded: val first: int"
         ]
 
         "Incomplete.fsi",
@@ -270,8 +277,8 @@ module ParserTests =
         [ "IndentedRoot.fsi(2,12): error FS0010: Unexpected symbol ')' in value signature" ],
         [
             "val a: <missing> (skipped)"
-            "val b: <missing> (skipped)"
-            "val c: int"
+            "discarded: val b: <missing> (skipped)"
+            "discarded: val c: int"
         ]
 
         "NestedDeclarationStart.fsi",
@@ -417,7 +424,47 @@ module ParserTests =
         ]
     ]
 
+    let private definitionRecovery = "module Program\nlet a = 1\n)\n"
+
+    let private definitionRecoveryOracle logicalPath =
+        $"{logicalPath}(3,1): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+
+    let private implementationCascadeCases = [
+        "LetRecAnd.fs", "let rec f x = g x\nand g y = )\n", 1
+        "AttributedLet.fs", "[<Literal>]\nlet f = )\n", 1
+        "NestedModule.fs", "module Inner =\n    let f = )\n", 1
+        "Open.fs", "open System\nlet f = )\n", 2
+        "Accessibility.fs", "let private f x = )\n", 1
+        "BlockError.fs", "let f x =\n  )\n", 1
+    ]
+
+    let private implementationCascadeUnsupportedCases = [
+        "LetBlockBody.fs", "let f =\n    let inner = 1\n    )\nlet z = 1\n"
+        "Do.fs", "do )\n"
+        "Type.fs", "type T = int\nlet f = )\n"
+    ]
+
+    let private valueRecovery = "module Program\nval a: )\n"
+
+    let private valueRecoveryOracle logicalPath =
+        $"{logicalPath}(2,8): error FS0010: Unexpected symbol ')' in value signature"
+
+    let private signatureCascadeCases = [
+        "AttributedVal.fsi", "[<Literal>]\nval b: )\n", 1
+        "PrivateVal.fsi", "val private b: int -> )\n", 1
+        "IncompleteOpen.fsi", "open System\nopen\nval c: int\n", 2
+        "IncompleteVal.fsi", "val b:\nval c: int\n", 2
+    ]
+
     let private unsupportedSignatureCases = [
+        "NestedModuleSig.fsi",
+        valueRecovery
+        + "module Inner =\n    val b: )\n",
+        [
+            valueRecoveryOracle "NestedModuleSig.fsi"
+            "NestedModuleSig.fsi(5,1): error FS0010: Incomplete structured construct at or before this point in signature file"
+        ]
+
         "ValueThenLet.fsi",
         "module Program\nval a: )\nlet b = 1\n",
         [
@@ -492,8 +539,8 @@ module ParserTests =
         [
             "let a/0"
             "skipped"
-            "let b/0"
-            "let c/0 = <missing> (skipped)"
+            "discarded: let b/0"
+            "discarded: let c/0 = <missing> (skipped)"
         ]
 
         "BodyStart.fs",
@@ -585,7 +632,7 @@ module ParserTests =
         [
             "let f/1"
             "skipped"
-            "let first/0"
+            "discarded: let first/0"
         ]
 
         "NestedModule.fs",
@@ -760,10 +807,9 @@ module Later =
 
                         Expect.sequenceEqual
                             (result.File.Contents
-                             |> Seq.collect _.Declarations
-                             |> Seq.map declarationShape)
+                             |> Seq.collect (rootShapes declarationShape))
                             declarations
-                            "Recovery must keep each later declaration"
+                            "Recovery must keep each later declaration and mark each declaration that the Oracle discards"
             ]
 
             testCase
@@ -990,10 +1036,9 @@ module Values =
 
                         Expect.sequenceEqual
                             (result.File.Contents
-                             |> Seq.collect _.Declarations
-                             |> Seq.map signatureShape)
+                             |> Seq.collect (rootShapes signatureShape))
                             declarations
-                            "Recovery must keep each later declaration"
+                            "Recovery must keep each later declaration and mark each declaration that the Oracle discards"
             ]
 
             testList "each token class reports the Oracle message at its recovery point" [
@@ -1021,6 +1066,20 @@ module Values =
                             result.Diagnostics
                             (oracleLines logicalPath result.Diagnostics)
 
+                for logicalPath, later in implementationCascadeUnsupportedCases ->
+                    testCase $"after recovery: {logicalPath}"
+                    <| fun _ ->
+                        let result =
+                            parse
+                                logicalPath
+                                (definitionRecovery
+                                 + later)
+
+                        expectExplicitlyUnsupported
+                            [ definitionRecoveryOracle logicalPath ]
+                            result.Diagnostics
+                            (oracleLines logicalPath result.Diagnostics)
+
                 for logicalPath, text, oracle in unsupportedSignatureCases ->
                     testCase logicalPath
                     <| fun _ ->
@@ -1030,6 +1089,65 @@ module Values =
                             oracle
                             result.Diagnostics
                             (oracleLines logicalPath result.Diagnostics)
+            ]
+
+            testList "the Oracle discards every later declaration after a file-level recovery" [
+                for logicalPath, later, discarded in implementationCascadeCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result =
+                            parse
+                                logicalPath
+                                (definitionRecovery
+                                 + later)
+
+                        let root = Seq.exactlyOne result.File.Contents
+
+                        Expect.equal
+                            (oracleLines logicalPath result.Diagnostics)
+                            [ definitionRecoveryOracle logicalPath ]
+                            "The diagnostics must match the Compatibility Oracle"
+
+                        Expect.sequenceEqual
+                            (root.Declarations
+                             |> Seq.map declarationShape)
+                            [
+                                "let a/0"
+                                "skipped"
+                            ]
+                            "Only the declarations before the recovery stay"
+
+                        Expect.equal
+                            root.DiscardedByRecovery.Length
+                            discarded
+                            "Each later declaration is marked as discarded"
+
+                for logicalPath, later, discarded in signatureCascadeCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result =
+                            parseSignature
+                                logicalPath
+                                (valueRecovery
+                                 + later)
+
+                        let root = Seq.exactlyOne result.File.Contents
+
+                        Expect.equal
+                            (oracleLines logicalPath result.Diagnostics)
+                            [ valueRecoveryOracle logicalPath ]
+                            "The diagnostics must match the Compatibility Oracle"
+
+                        Expect.sequenceEqual
+                            (root.Declarations
+                             |> Seq.map signatureShape)
+                            [ "val a: <missing> (skipped)" ]
+                            "Only the declarations before the recovery stay"
+
+                        Expect.equal
+                            root.DiscardedByRecovery.Length
+                            discarded
+                            "Each later declaration is marked as discarded"
             ]
 
             testCase "recovery nodes keep the exact missing and skipped ranges"

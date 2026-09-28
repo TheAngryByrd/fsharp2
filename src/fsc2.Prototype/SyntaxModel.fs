@@ -170,6 +170,7 @@ type internal ModuleOrNamespaceKind =
 type internal ModuleOrNamespaceSyntax<'Declaration> = {
     Kind: ModuleOrNamespaceKind
     Declarations: ImmutableArray<'Declaration>
+    DiscardedByRecovery: ImmutableArray<'Declaration>
     Range: SourceRange
 }
 

@@ -1,6 +1,7 @@
 namespace FSharp2.Compiler
 
 open System
+open System.Collections.Generic
 open System.Collections.Immutable
 
 module internal Parser =
@@ -84,6 +85,7 @@ module internal Parser =
     type private ParserState = {
         Cursor: Cursor
         Diagnostics: ResizeArray<SyntaxDiagnostic>
+        ReportedStarts: HashSet<int>
     }
 
     let private sourceKind (token: LayoutToken) =
@@ -117,7 +119,10 @@ module internal Parser =
 
     let private emptyAt position = { Start = position; End = position }
 
-    let private report state code message range =
+    let private report state code message (range: SourceRange) =
+        state.ReportedStarts.Add range.Start.Offset
+        |> ignore
+
         state.Diagnostics.Add {
             Code = code
             Message = message
@@ -141,10 +146,7 @@ module internal Parser =
     let private unsupportedCode = "FSC2P1001"
 
     let private reportedAt state (token: LayoutToken) =
-        state.Diagnostics.Count > 0
-        && state.Diagnostics[state.Diagnostics.Count
-                             - 1]
-            .Range.Start = token.Range.Start
+        state.ReportedStarts.Contains token.Range.Start.Offset
 
     let private reportUnsupported state (token: LayoutToken) context =
         report
@@ -1368,9 +1370,10 @@ module internal Parser =
         state
         (rules: DeclarationRules<'Declaration>)
         nested
-        : ImmutableArray<'Declaration> =
+        : ImmutableArray<'Declaration> * ImmutableArray<'Declaration> =
         let cursor = state.Cursor
         let declarations = ImmutableArray.CreateBuilder<'Declaration>()
+        let discarded = ImmutableArray.CreateBuilder<'Declaration>()
         let mutable suppressFrom = None
         let mutable interrupted = false
         let mutable stop = false
@@ -1384,6 +1387,12 @@ module internal Parser =
             elif isDeclarationListEnd token then
                 stop <- true
             else
+                let target = if suppressFrom.IsSome then discarded else declarations
+
+                let reported = state.Diagnostics.Count
+                let attributes = parseAttributeLists state
+                let token = cursor.Current
+
                 match suppressFrom with
                 | Some _ when
                     not interrupted
@@ -1393,10 +1402,6 @@ module internal Parser =
                     interrupted <- true
                     suppressFrom <- Some state.Diagnostics.Count
                 | _ -> ()
-
-                let reported = state.Diagnostics.Count
-                let attributes = parseAttributeLists state
-                let token = cursor.Current
 
                 let parsed, recovery =
                     if
@@ -1429,7 +1434,7 @@ module internal Parser =
                                 None, ListRecovery.Continues
 
                 parsed
-                |> Option.iter declarations.Add
+                |> Option.iter target.Add
 
                 let next = cursor.Current
 
@@ -1448,7 +1453,7 @@ module internal Parser =
                     skipUntil state token.Range.Start
                     |> Option.iter (
                         rules.Skipped
-                        >> declarations.Add
+                        >> target.Add
                     )
 
                 match suppressFrom with
@@ -1471,11 +1476,11 @@ module internal Parser =
                     recovery = ListRecovery.Discards
                     && not nested
                     ->
-                    // The Compatibility Oracle reports no later diagnostic for continuing declarations after this recovery.
+                    // The Compatibility Oracle discards later declarations that continue this recovery and reports no diagnostic for them.
                     suppressFrom <- Some state.Diagnostics.Count
                 | None -> ()
 
-        declarations.ToImmutable()
+        declarations.ToImmutable(), discarded.ToImmutable()
 
     and private parseNestedModule
         state
@@ -1500,7 +1505,7 @@ module internal Parser =
                 cursor.Advance()
                 |> ignore
 
-                let declarations = parseDeclarations state rules true
+                let declarations, _ = parseDeclarations state rules true
                 let range = span moduleToken.Range (emptyAt cursor.LastEnd)
 
                 if cursor.Current.Kind = LayoutTokenKind.EndBlock then
@@ -1531,9 +1536,10 @@ module internal Parser =
             else
                 parseDeclarations state rules false
 
-        let root kind (start: SourceRange) declarations = {
+        let root kind (start: SourceRange) (declarations, discarded) = {
             Kind = kind
             Declarations = declarations
+            DiscardedByRecovery = discarded
             Range = span start (emptyAt cursor.LastEnd)
         }
 
@@ -1602,7 +1608,7 @@ module internal Parser =
                     Some(Some(parseDo state attributes), ListRecovery.Continues)
                 else
                     None
-        ContinuesRecovery = isKeyword "let"
+        ContinuesRecovery = fun _ -> true
         StartPoint = fun _ -> RecoveryPoint.DefinitionStart
         Open = ImplementationDeclaration.Open
         NestedModule =
@@ -1638,6 +1644,7 @@ module internal Parser =
     let private start (document: LexicalDocument) = {
         Cursor = Cursor(document.LayoutTokens)
         Diagnostics = ResizeArray()
+        ReportedStarts = HashSet()
     }
 
     let parseImplementationFile (document: LexicalDocument) : ImplementationFileParseResult =
