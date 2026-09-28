@@ -82,13 +82,19 @@ module internal Parser =
                 }
             | _ -> this.Advance()
 
+    [<RequireQualifiedAccess>]
+    type private DeclarationAfterRecovery =
+        | Discarded
+        | Unmodeled
+        | DiscardedIfValueOrOpen
+
     type private ParserState = {
         Cursor: Cursor
         Diagnostics: ResizeArray<SyntaxDiagnostic>
         ReportedStarts: HashSet<int>
         Language: LanguageVersionIdentity
         mutable SuppressFrom: int option
-        mutable UnmodeledAtNextDeclaration: bool
+        mutable NextDeclaration: DeclarationAfterRecovery
         mutable UnmodeledAtEnd: bool
         mutable Interrupted: bool
     }
@@ -1993,6 +1999,7 @@ module internal Parser =
     type private ListRecovery =
         | Continues
         | Discards
+        | DiscardsInValue
         | Unmodeled
 
     let private parseVal state nested attributes =
@@ -2000,7 +2007,7 @@ module internal Parser =
         let valToken = cursor.Advance()
         let context = valToken.Range.Start
         let reported = state.Diagnostics.Count
-        let mutable recovered = false
+        let mutable recovered = None
         let mutable skipped = None
 
         let recover point =
@@ -2008,7 +2015,7 @@ module internal Parser =
                 reportUnexpected state point "a value signature"
                 |> ignore
 
-            recovered <- true
+            recovered <- Some point
             skipped <- skipUntil state context
 
         let onGap gap =
@@ -2027,7 +2034,7 @@ module internal Parser =
                 None
 
         let valueType =
-            if recovered then
+            if recovered.IsSome then
                 missingType cursor.Current
             elif isOperator ":" cursor.Current then
                 cursor.Advance()
@@ -2045,7 +2052,7 @@ module internal Parser =
                 missing
 
         if
-            not recovered
+            recovered.IsNone
             && not (endsLine context cursor.Current)
         then
             recover (
@@ -2065,11 +2072,14 @@ module internal Parser =
                 Range = span (declarationStart attributes valToken) (emptyAt cursor.LastEnd)
             }
 
-        Some value,
-        (if recovered then
-             ListRecovery.Discards
-         else
-             ListRecovery.Continues)
+        let recovery =
+            match recovered with
+            | None -> ListRecovery.Continues
+            | Some RecoveryPoint.SignatureFile
+            | Some RecoveryPoint.NestedSignature -> ListRecovery.Discards
+            | Some _ -> ListRecovery.DiscardsInValue
+
+        Some value, recovery
 
     let private parseOpen state =
         let cursor = state.Cursor
@@ -2507,8 +2517,8 @@ module internal Parser =
                 -> ImmutableArray<SyntaxAttributeList>
                 -> LayoutToken
                 -> ('Declaration option * ListRecovery) option
-        ContinuesRecovery: LayoutToken -> bool
         NestedRecoveryDiscards: bool
+        SkipsUnrecognizedAfterRecovery: bool
         StartPoint: DeclarationList -> RecoveryPoint
         FirstNestedPoint: RecoveryPoint
         Open: LongIdentifier * SourceRange -> 'Declaration
@@ -2526,9 +2536,9 @@ module internal Parser =
         state.Interrupted <- true
         state.SuppressFrom <- Some state.Diagnostics.Count
 
-    let private suppress state unmodeledAtNextDeclaration unmodeledAtEnd =
+    let private suppress state nextDeclaration unmodeledAtEnd =
         state.SuppressFrom <- Some state.Diagnostics.Count
-        state.UnmodeledAtNextDeclaration <- unmodeledAtNextDeclaration
+        state.NextDeclaration <- nextDeclaration
         state.UnmodeledAtEnd <- unmodeledAtEnd
 
     let private removeSuppressedDiagnostics state =
@@ -2588,8 +2598,16 @@ module internal Parser =
                 if
                     state.SuppressFrom.IsSome
                     && not state.Interrupted
-                    && (state.UnmodeledAtNextDeclaration
-                        || not (rules.ContinuesRecovery token))
+                    && (
+                        match state.NextDeclaration with
+                        | DeclarationAfterRecovery.Discarded -> false
+                        | DeclarationAfterRecovery.Unmodeled -> true
+                        | DeclarationAfterRecovery.DiscardedIfValueOrOpen ->
+                            not (
+                                isKeyword "val" token
+                                || isKeyword "open" token
+                            )
+                    )
                 then
                     reportAfterRecovery state token
 
@@ -2610,6 +2628,19 @@ module internal Parser =
                     else
                         match rules.Parse state list attributes token with
                         | Some result -> result
+                        | None when
+                            rules.SkipsUnrecognizedAfterRecovery
+                            && state.SuppressFrom.IsSome
+                            && state.NextDeclaration = DeclarationAfterRecovery.Discarded
+                            ->
+                            // The Compatibility Oracle discards any declaration after a signature file recovery and reports no diagnostic for it.
+                            skipUntil state token.Range.Start
+                            |> Option.iter (
+                                rules.Skipped
+                                >> target.Add
+                            )
+
+                            None, ListRecovery.Continues
                         | None ->
                             let point =
                                 if firstInNestedModule then
@@ -2658,18 +2689,23 @@ module internal Parser =
                         && firstInNestedModule
                         ->
                         // The Compatibility Oracle discards later declarations of this module only, and reports one more diagnostic if any exist.
-                        suppress state true false
+                        suppress state DeclarationAfterRecovery.Unmodeled false
                         scopedSuppression <- true
                     | ListRecovery.Discards, DeclarationList.NestedModule when
                         rules.NestedRecoveryDiscards
                         ->
                         // The Compatibility Oracle discards the rest of the file after this recovery and reports one more diagnostic at its end.
-                        suppress state true true
-                    | ListRecovery.Discards, DeclarationList.NestedModule -> ()
+                        suppress state DeclarationAfterRecovery.Unmodeled true
+                    | ListRecovery.Discards, DeclarationList.NestedModule
+                    | ListRecovery.DiscardsInValue, DeclarationList.NestedModule -> ()
                     | ListRecovery.Discards, _ ->
                         // The Compatibility Oracle discards the rest of the file after this recovery and reports no diagnostic for it.
-                        suppress state false false
-                    | ListRecovery.Unmodeled, _ -> suppress state true false
+                        suppress state DeclarationAfterRecovery.Discarded false
+                    | ListRecovery.DiscardsInValue, _ ->
+                        // The Compatibility Oracle discards later values and opens, and reports FS0010 at the end for other declarations.
+                        suppress state DeclarationAfterRecovery.DiscardedIfValueOrOpen false
+                    | ListRecovery.Unmodeled, _ ->
+                        suppress state DeclarationAfterRecovery.Unmodeled false
                     | ListRecovery.Continues, _ -> ()
 
         if
@@ -2677,7 +2713,7 @@ module internal Parser =
             && not state.Interrupted
         then
             state.SuppressFrom <- None
-            state.UnmodeledAtNextDeclaration <- false
+            state.NextDeclaration <- DeclarationAfterRecovery.Discarded
 
         declarations.ToImmutable(), discarded.ToImmutable()
 
@@ -2826,8 +2862,8 @@ module internal Parser =
                     Some(parseTypeDefinition state attributes)
                 else
                     None
-        ContinuesRecovery = fun _ -> true
         NestedRecoveryDiscards = true
+        SkipsUnrecognizedAfterRecovery = false
         FirstNestedPoint = RecoveryPoint.NestedFirstDefinition
         StartPoint =
             fun list ->
@@ -2848,11 +2884,8 @@ module internal Parser =
                     Some(parseVal state (list = DeclarationList.NestedModule) attributes)
                 else
                     None
-        ContinuesRecovery =
-            fun token ->
-                isKeyword "val" token
-                || isKeyword "open" token
         NestedRecoveryDiscards = false
+        SkipsUnrecognizedAfterRecovery = true
         FirstNestedPoint = RecoveryPoint.NestedFirstSignature
         StartPoint =
             fun list ->
@@ -2872,7 +2905,7 @@ module internal Parser =
         ReportedStarts = HashSet()
         Language = document.LanguageVersion
         SuppressFrom = None
-        UnmodeledAtNextDeclaration = false
+        NextDeclaration = DeclarationAfterRecovery.Discarded
         UnmodeledAtEnd = false
         Interrupted = false
     }

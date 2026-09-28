@@ -655,6 +655,208 @@ module ParserCompilationTests =
             missingDeclaration "s-k.fsi" 1 1 1 2
         ]
 
+        "a named signature module discards every token after a stray token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A1.fsi", "module M\n)\n)\n"
+            last
+        ],
+        [
+            "A1.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "a named signature module discards a value after a stray token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A2.fsi", "module M\n)\nval a: int\n"
+            last
+        ],
+        [
+            "A2.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "a named signature module discards later stray tokens after a value",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A3.fsi", "module M\nval a: int\n)\nval b: int\n)\n"
+            last
+        ],
+        [
+            "A3.fsi(3,1,3,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "a named signature module reports one stray token on a line",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A4.fsi", "module M\n) )\nval a: int\n"
+            last
+        ],
+        [
+            "A4.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "a named signature module discards an open declaration after a stray token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A5.fsi", "module M\n)\nopen System\n)\n"
+            last
+        ],
+        [
+            "A5.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "a signature namespace discards every token after a stray token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A8.fsi", "namespace N\n)\n)\n"
+            last
+        ],
+        [
+            "A8.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "a stray token after a value discards the next line",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A9.fsi", "module M\nval a: int )\n)\n"
+            last
+        ],
+        [
+            "A9.fsi(2,12,2,13): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "a named signature module discards a let declaration after a stray token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A10.fsi", "module M\n)\nlet a = 1\n"
+            last
+        ],
+        [
+            "A10.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "a named signature module discards a type declaration after a stray token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A11.fsi", "module M\n)\ntype T = int\n)\n"
+            last
+        ],
+        [
+            "A11.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "a later signature namespace is discarded after a stray token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "B1.fsi", "namespace N\n)\nnamespace M\nval a: )\n"
+            last
+        ],
+        [
+            "B1.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "a nested signature module is discarded after a stray token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "B2.fsi", "module M\n)\nmodule Inner =\n    val b: )\n"
+            last
+        ],
+        [
+            "B2.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "an attributed value is discarded after a stray token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "B3.fsi", "module M\n)\n[<A>]\nval b: int\n"
+            last
+        ],
+        [
+            "B3.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "a conditional value is discarded after a stray token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "B4.fsi", "module M\n)\n#if X\nval b: )\n#endif\n"
+            last
+        ],
+        [
+            "B4.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "a multi-line type is discarded after a stray token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "B5.fsi", "module M\n)\ntype T =\n    | A\n    | B\n"
+            last
+        ],
+        [
+            "B5.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "an exception declaration is discarded after a stray token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "B7.fsi", "module M\n)\nexception E\n"
+            last
+        ],
+        [
+            "B7.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "an incomplete value is discarded after a stray token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "C1.fsi", "module M\n)\nval y:\n"
+            last
+        ],
+        [
+            "C1.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "a do declaration is discarded after a stray token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "C3.fsi", "module M\n)\ndo )\n"
+            last
+        ],
+        [
+            "C3.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "a let block is discarded after a stray token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "C5.fsi", "module M\n)\nlet f =\n    let inner = 1\n    )\nlet z = 1\n"
+            last
+        ],
+        [
+            "C5.fsi(2,1,2,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "an anonymous signature file discards every token after a stray first token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A6.fsi", ")\n)\n"
+            last
+        ],
+        [
+            "A6.fsi(1,1,1,2): error FS0010: Unexpected symbol ')' in signature file"
+            missingDeclaration "A6.fsi" 1 1 1 2
+        ]
+
+        "an anonymous signature file discards a value after a stray first token",
+        SyntaxCompilationTarget.Executable,
+        [
+            "A7.fsi", ")\nval a: int\n)\n"
+            last
+        ],
+        [
+            "A7.fsi(1,1,1,2): error FS0010: Unexpected symbol ')' in signature file"
+            missingDeclaration "A7.fsi" 1 1 1 2
+        ]
+
         "a nested module in an anonymous root",
         SyntaxCompilationTarget.Executable,
         [
@@ -783,6 +985,27 @@ module ParserCompilationTests =
                             (SyntaxSourceKind.parse logicalPath)
                             expected
                             "The Oracle accepts .fs, .fsi, .fsx, and .fsscript, needs ML compatibility for .ml and .mli, and reports FS0226 for other extensions"
+            ]
+
+            testList "an unmodeled shape after a signature recovery stays explicit" [
+                for logicalPath, text in
+                    [
+                        "C4.fsi", "module M\n)\nmodule N =\nval b: int\n"
+                        "B6.fsi", "module M\nval a: )\nmodule Inner =\n    val b: )\n"
+                        "C2.fsi", "module M\n)\nval y: int\n    )\n"
+                    ] ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result =
+                            parse SyntaxCompilationTarget.Executable [
+                                logicalPath, text
+                                last
+                            ]
+
+                        Expect.exists
+                            result.Diagnostics
+                            (fun fileDiagnostic -> fileDiagnostic.Diagnostic.Code = "FSC2P1001")
+                            "The parser does not model this shape after recovery, so it reports FSC2P1001"
             ]
 
             testCase "files keep their order and their kind"
