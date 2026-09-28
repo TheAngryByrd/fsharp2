@@ -311,6 +311,7 @@ type internal ImplementationFileParseResult = {
 type internal SignatureFileParseResult = {
     File: SignatureFileSyntax
     Diagnostics: ImmutableArray<SyntaxDiagnostic>
+    UnresumedRecoveryAtEnd: SourceRange option
 }
 
 [<RequireQualifiedAccess>]
