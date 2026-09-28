@@ -26379,6 +26379,12 @@ type internal CompilerService() =
         |> Seq.filter (fun diagnostic -> diagnostic.Severity = LexicalSeverity.Error)
         |> Seq.map (lexicalDiagnostic source)
 
+    member _.OrderedLexicalDiagnostics
+        (source: LexicalDocument)
+        : (LexicalSeverity * CompilerDiagnostic) seq =
+        source.Diagnostics
+        |> Seq.map (fun diagnostic -> diagnostic.Severity, lexicalDiagnostic source diagnostic)
+
     member _.LexicalWarnings(source: LexicalDocument) : CompilerDiagnostic seq =
         source.Diagnostics
         |> Seq.filter (fun diagnostic -> diagnostic.Severity = LexicalSeverity.Warning)

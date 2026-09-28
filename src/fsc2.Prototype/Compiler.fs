@@ -578,7 +578,7 @@ type Compiler() =
                 let diagnosticOptions = effectiveDiagnosticOptions request
 
                 match CompilationPipeline.compileRequest service request with
-                | Error [ diagnostic ] when diagnostic.Code = "FSC2C2002" ->
+                | Error { Errors = [ diagnostic ] } when diagnostic.Code = "FSC2C2002" ->
                     let failure = {
                         Code = diagnostic.Code
                         Message = diagnostic.Message
@@ -589,22 +589,13 @@ type Compiler() =
                     unsupportedResult
                         failure
                         (unsupportedPhaseResults request failure.StoppingPhase)
-                | Error compilerDiagnostics ->
-                    let diagnostic = List.head compilerDiagnostics
-
-                    let failedPhase =
-                        if diagnostic.Code = "FS0001" then
-                            CompilationPhase.TypedDeclarations
-                        elif diagnostic.Code = "FS0039" then
-                            CompilationPhase.ResolvedSymbols
-                        else
-                            CompilationPhase.Syntax
+                | Error requestFailure ->
+                    let failedPhase = requestFailure.FailedPhase
 
                     let diagnostics =
-                        compilerDiagnostics
-                        |> Seq.map (failureDiagnostic failedPhase)
+                        requestFailure.Diagnostics
                         |> Seq.map (DiagnosticPolicy.input None false true)
-                        |> DiagnosticPolicy.apply diagnosticOptions
+                        |> DiagnosticPolicy.apply requestFailure.DiagnosticOptions
 
                     {
                         Outcome = CompilationOutcome.Failed

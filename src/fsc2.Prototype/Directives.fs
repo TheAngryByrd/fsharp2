@@ -767,7 +767,7 @@ module internal Directives =
                         let position = SourceMap.positionAt source.Map argumentOffset
 
                         addDiagnosticWith
-                            LexicalSeverity.Warning
+                            LexicalSeverity.Error
                             "FS0203"
                             $"Invalid warning number '{code}'"
                             { Start = position; End = position }

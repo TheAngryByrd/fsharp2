@@ -1322,48 +1322,57 @@ let main _ =
                     "_arg1"
                     "The entry-point wildcard must use the Oracle metadata name."
 
-            testCase "invalid warning directive arguments compile with an Oracle warning"
+            testCase "invalid warning directive arguments stop the compilation"
             <| fun _ ->
                 let result = compile "module Program\n#nowarn \"abc\"\nlet answer () = 42\n"
 
                 Expect.equal
                     result.Outcome
-                    CompilationOutcome.Succeeded
-                    "An FS0203 warning does not stop the compilation"
-
-                Expect.sequenceEqual
-                    (result.Diagnostics
-                     |> Seq.map (fun diagnostic ->
-                         diagnostic.Code, diagnostic.EffectiveSeverity, diagnostic.Message
-                     ))
-                    [ "FS0203", DiagnosticSeverity.Warning, "Invalid warning number 'abc'" ]
-                    "The invalid argument is reported as a warning"
-
-            testCase "warnings as errors stop an invalid warning directive argument"
-            <| fun _ ->
-                let result =
-                    createRequest
-                        (defaultSemanticOptions ())
-                        (DiagnosticOptions.Create(None, [||], true, [||]))
-                        (defaultEmissionOptions ())
-                        (defaultSigningOptions ())
-                        (emptyResources ())
-                        defaultRequestedArtifacts
-                        "module Program\n#nowarn \"abc\"\nlet answer () = 42\n"
-                    |> compileRequest
-
-                Expect.equal
-                    result.Outcome
                     CompilationOutcome.Failed
-                    "A promoted FS0203 stops the compilation"
+                    "The Compatibility Oracle reports FS0203 as an error"
 
                 Expect.isEmpty result.Artifacts "A failed compilation publishes no artifacts"
 
                 Expect.sequenceEqual
                     (result.Diagnostics
-                     |> Seq.map (fun diagnostic -> diagnostic.Code, diagnostic.EffectiveSeverity))
-                    [ "FS0203", DiagnosticSeverity.Error ]
-                    "The promoted warning is an error"
+                     |> Seq.map (fun diagnostic ->
+                         diagnostic.Code,
+                         diagnostic.OriginalSeverity,
+                         diagnostic.Stage,
+                         diagnostic.Message,
+                         diagnostic.Range
+                         |> Option.map (fun range -> range.Start.Line, range.Start.Column)
+                     ))
+                    [
+                        "FS0203",
+                        DiagnosticSeverity.Error,
+                        DiagnosticStage.Compilation CompilationPhase.Source,
+                        "Invalid warning number 'abc'",
+                        Some(2, 9)
+                    ]
+                    "The invalid argument is a source-phase error at the Oracle position"
+
+            testCase "lexical errors are reported in source order"
+            <| fun _ ->
+                let result = compile "module Program\nlet answer () = 12abc\n#nowarn \"abc\"\n"
+
+                Expect.equal
+                    result.Outcome
+                    CompilationOutcome.Failed
+                    "Lexical errors stop the compilation"
+
+                Expect.sequenceEqual
+                    (result.Diagnostics
+                     |> Seq.map (fun diagnostic ->
+                         diagnostic.Code,
+                         diagnostic.Range
+                         |> Option.map (fun range -> range.Start.Line)
+                     ))
+                    [
+                        "FS1156", Some 2
+                        "FS0203", Some 3
+                    ]
+                    "The Compatibility Oracle reports both errors in source order"
 
             testCase "reused parsing rebinds the physical source checksum"
             <| fun _ ->
