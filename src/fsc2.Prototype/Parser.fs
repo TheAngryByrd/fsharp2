@@ -1292,12 +1292,13 @@ module internal Parser =
                             LanguageFeature.UnderscoreDotShorthand
                     )
                 then
-                    LanguageFeature.unavailableDiagnostic
-                        state.Language
-                        LanguageFeature.UnderscoreDotShorthand
-                    |> Option.iter (fun message ->
-                        report state featureGateCode message (span underscore.Range dot.Range)
-                    )
+                    report
+                        state
+                        featureGateCode
+                        (LanguageFeature.unavailableDiagnostic
+                            state.Language
+                            LanguageFeature.UnderscoreDotShorthand)
+                        (span underscore.Range dot.Range)
 
                 let body = parsePostfix state context 1 (SyntaxExpression.Identifier members)
 
