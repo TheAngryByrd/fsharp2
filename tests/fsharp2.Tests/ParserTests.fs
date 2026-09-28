@@ -397,6 +397,26 @@ module ParserTests =
         ]
     ]
 
+    let private unsupportedAfterOracleCases = [
+        "NestedOpenDot.fs",
+        "module M\nmodule N =\n    open A.\nlet y = 1\n",
+        [
+            "NestedOpenDot.fs(3,11): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+        "ParenthesizedDot.fs",
+        "module M\nlet x = (A.",
+        [
+            "ParenthesizedDot.fs(2,11): error FS0599: Missing qualification after '.'"
+            "ParenthesizedDot.fs(2,9): error FS0583: Unmatched '('"
+        ]
+        "IncompleteAfterRecovery.fs",
+        "module M\nlet x = 1\n)\nlet y =\n",
+        [
+            "IncompleteAfterRecovery.fs(3,1): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "IncompleteAfterRecovery.fs(5,1): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (4:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+        ]
+    ]
+
     let private unsupportedSignatureCases = [
         "ValueThenLet.fsi",
         "module Program\nval a: )\nlet b = 1\n",
@@ -989,7 +1009,9 @@ module Values =
             ]
 
             testList "unsupported syntax reports explicit diagnostics and no invented FS diagnostic" [
-                for logicalPath, text, oracle in unsupportedCases ->
+                for logicalPath, text, oracle in
+                    unsupportedCases
+                    @ unsupportedAfterOracleCases ->
                     testCase logicalPath
                     <| fun _ ->
                         let result = parse logicalPath text

@@ -138,10 +138,18 @@ module internal Parser =
         | LayoutTokenKind.EndBlock, _
         | LayoutTokenKind.SourceToken, None -> "the end of an indented block"
 
+    let private unsupportedCode = "FSC2P1001"
+
+    let private reportedAt state (token: LayoutToken) =
+        state.Diagnostics.Count > 0
+        && state.Diagnostics[state.Diagnostics.Count
+                             - 1]
+            .Range.Start = token.Range.Start
+
     let private reportUnsupported state (token: LayoutToken) context =
         report
             state
-            "FSC2P1001"
+            unsupportedCode
             $"The syntax parser does not support {describe token} in {context}."
             token.Range
 
@@ -539,7 +547,6 @@ module internal Parser =
     and private parseAtom state context =
         let cursor = state.Cursor
         let token = cursor.Current
-        let reported = state.Diagnostics.Count
 
         match constant token with
         | Some value ->
@@ -571,7 +578,7 @@ module internal Parser =
                     let close = cursor.Advance()
                     SyntaxExpression.Parenthesized(inner, span token.Range close.Range)
                 else
-                    if state.Diagnostics.Count = reported then
+                    if not (reportedAt state cursor.Current) then
                         reportUnsupported state cursor.Current "a parenthesized expression"
 
                     SyntaxExpression.Parenthesized(inner, span token.Range (emptyAt cursor.LastEnd))
@@ -618,7 +625,6 @@ module internal Parser =
     and private parseAtomicPattern state context =
         let cursor = state.Cursor
         let token = cursor.Current
-        let reported = state.Diagnostics.Count
 
         match constant token with
         | Some value ->
@@ -649,7 +655,7 @@ module internal Parser =
                     let close = cursor.Advance()
                     SyntaxPattern.Parenthesized(inner, span token.Range close.Range)
                 else
-                    if state.Diagnostics.Count = reported then
+                    if not (reportedAt state cursor.Current) then
                         reportUnsupported state cursor.Current "a parenthesized pattern"
 
                     SyntaxPattern.Parenthesized(inner, span token.Range (emptyAt cursor.LastEnd))
@@ -1147,7 +1153,6 @@ module internal Parser =
     and private parseAtomicType state context =
         let cursor = state.Cursor
         let token = cursor.Current
-        let reported = state.Diagnostics.Count
 
         let nested () =
             parseTypeOperand
@@ -1179,7 +1184,7 @@ module internal Parser =
                 let close = cursor.Advance()
                 SyntaxType.Parenthesized(inner, span token.Range close.Range)
             else
-                if state.Diagnostics.Count = reported then
+                if not (reportedAt state cursor.Current) then
                     reportUnsupported state cursor.Current "a parenthesized type"
 
                 SyntaxType.Parenthesized(inner, span token.Range (emptyAt cursor.LastEnd))
@@ -1209,7 +1214,7 @@ module internal Parser =
                         span name.Range close.Range
                     )
                 else
-                    if state.Diagnostics.Count = reported then
+                    if not (reportedAt state cursor.Current) then
                         reportUnsupported state cursor.Current "type arguments"
 
                     SyntaxType.Application(
@@ -1316,8 +1321,10 @@ module internal Parser =
                     state
                     (fun _ ->
                         if
-                            endsLine context cursor.Current
-                            && not (isEndOfFile cursor.Current)
+                            cursor.Current.Kind = LayoutTokenKind.Separator
+                            || (cursor.Current.Kind = LayoutTokenKind.SourceToken
+                                && not (isEndOfFile cursor.Current)
+                                && isOffside context cursor.Current)
                         then
                             reportIncomplete state "open declaration"
                         else
@@ -1409,7 +1416,9 @@ module internal Parser =
                         match rules.Parse state nested attributes token with
                         | Some result -> result
                         | None ->
-                            if
+                            if reportedAt state token then
+                                None, ListRecovery.Continues
+                            elif
                                 reportUnexpected
                                     state
                                     (rules.StartPoint nested)
@@ -1430,7 +1439,10 @@ module internal Parser =
                        <> LayoutTokenKind.Separator
                     && not (isOffside token.Range.Start next)
                 then
-                    if state.Diagnostics.Count = reported then
+                    if
+                        state.Diagnostics.Count = reported
+                        && not (reportedAt state next)
+                    then
                         reportUnsupported state next "a module or namespace declaration"
 
                     skipUntil state token.Range.Start
@@ -1441,11 +1453,20 @@ module internal Parser =
 
                 match suppressFrom with
                 | Some first ->
+                    let kept =
+                        state.Diagnostics
+                        |> Seq.skip first
+                        |> Seq.filter (fun diagnostic -> diagnostic.Code = unsupportedCode)
+                        |> Seq.toArray
+
                     state.Diagnostics.RemoveRange(
                         first,
                         state.Diagnostics.Count
                         - first
                     )
+
+                    state.Diagnostics.AddRange kept
+                    suppressFrom <- Some state.Diagnostics.Count
                 | None when
                     recovery = ListRecovery.Discards
                     && not nested
