@@ -127,6 +127,25 @@ module LexerTests =
                     [ "$$\"\"\"{x} {{x}} {{{x}}} \"text\" \"\"\"" ]
                     "The extended interpolated string is one literal token"
 
+            testCase "gates extended interpolated strings by language version"
+            <| fun _ ->
+                let diagnosticsFor mode =
+                    let language =
+                        LanguageVersion.normalize (Some mode)
+                        |> Result.defaultWith failtest
+
+                    (Lexer.tokenize language (SourceText.fromString "let a = $$\"\"\"{{x}}\"\"\""))
+                        .Diagnostics
+                    |> Seq.map (fun diagnostic -> diagnostic.Code, diagnostic.Range.Start.Column)
+                    |> Seq.toList
+
+                Expect.equal
+                    (diagnosticsFor "7.0")
+                    [ "FS1251", 9 ]
+                    "F# 7.0 rejects extended interpolation"
+
+                Expect.isEmpty (diagnosticsFor "8.0") "F# 8.0 accepts extended interpolation"
+
             testCase "lexes interpolated strings as one literal"
             <| fun _ ->
                 let result = tokenize "let text = $\"a {1 + 2} \\\" b\" + $\"\"\"x {\"y\"} z\"\"\""

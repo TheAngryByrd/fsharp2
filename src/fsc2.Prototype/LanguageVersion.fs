@@ -13,6 +13,8 @@ type internal LanguageVersionIdentity = {
 }
 
 module internal LanguageVersion =
+    let extendedStringInterpolationLevel = 80
+
     type private Entry = {
         Mode: string
         CanonicalMode: string

@@ -148,7 +148,7 @@ module internal Lexer =
         "!%&*+-./<=>?@^|~:#".IndexOf(character)
         >= 0
 
-    let tokenize (_language: LanguageVersionIdentity) (source: DecodedSource) =
+    let tokenize (language: LanguageVersionIdentity) (source: DecodedSource) =
         let text = source.Text
         let tokens = ResizeArray<LexicalToken>()
         let trivia = ResizeArray<LexicalTrivia>()
@@ -593,6 +593,13 @@ module internal Lexer =
 
                     offset <- cursor
                     addToken LexicalTokenKind.StringLiteral startOffset offset
+
+                    if language.FeatureLevel < LanguageVersion.extendedStringInterpolationLevel then
+                        addDiagnostic
+                            "FS1251"
+                            "Extended string interpolation is not supported in this version of F#."
+                            startOffset
+                            startOffset
 
                     if not closed then
                         addDiagnostic
