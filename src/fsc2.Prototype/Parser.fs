@@ -576,11 +576,22 @@ module internal Parser =
     }
 
     let private afterLastToken (cursor: Cursor) =
-        let position =
-            if isEndOfFile cursor.Current then
-                let eof = cursor.Current.Range.Start
-                // The Compatibility Oracle reports an incomplete construct at end of input at column 1 of the last line.
-                {
+        let rec nextSourceToken offset closesBlock =
+            let token = cursor.Peek offset
+
+            match token.Kind with
+            | LayoutTokenKind.SourceToken -> token, closesBlock
+            | LayoutTokenKind.EndBlock -> nextSourceToken (offset + 1) true
+            | LayoutTokenKind.BeginBlock
+            | LayoutTokenKind.Separator -> nextSourceToken (offset + 1) closesBlock
+
+        let next, closesBlock = nextSourceToken 0 false
+
+        if isEndOfFile next then
+            let eof = next.Range.Start
+            // The Compatibility Oracle reports an incomplete construct at end of input from column 1 of the last line.
+            {
+                Start = {
                     eof with
                         Offset =
                             eof.Offset
@@ -588,9 +599,14 @@ module internal Parser =
                                - 1)
                         Column = 1
                 }
-            else
-                // The Compatibility Oracle reports an incomplete construct one column after the last token.
-                {
+                End = eof
+            }
+        elif closesBlock then
+            next.Range
+        else
+            // The Compatibility Oracle starts an incomplete construct one column after the last token.
+            {
+                Start = {
                     cursor.LastEnd with
                         Offset =
                             cursor.LastEnd.Offset
@@ -599,8 +615,8 @@ module internal Parser =
                             cursor.LastEnd.Column
                             + 1
                 }
-
-        emptyAt position
+                End = next.Range.Start
+            }
 
     let private reportIncomplete state context =
         report

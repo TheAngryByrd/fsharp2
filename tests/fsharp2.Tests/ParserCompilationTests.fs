@@ -4080,6 +4080,195 @@ module M =
         ]
     ]
 
+    let private incompleteConstructCases = [
+        "v_colon_eof.fsi",
+        "module M\nval a:\n",
+        [
+            "v_colon_eof.fsi(3,1,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "v_colon_nested_root.fsi",
+        "module M\nmodule N =\n    val a:\nval b: int\n",
+        [
+            "v_colon_nested_root.fsi(4,1,4,4): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "v_colon_next.fsi",
+        "module M\nval a:\nval b: int\n",
+        [
+            "v_colon_next.fsi(2,8,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "v_nested_blank_root.fsi",
+        "module M\nmodule N =\n    val a: int ->\n\nval b: int\n",
+        [
+            "v_nested_blank_root.fsi(5,1,5,4): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "v_nested_eof.fsi",
+        "module M\nmodule N =\n    val a: int ->\n",
+        [
+            "v_nested_eof.fsi(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "v_nested_next.fsi",
+        "module M\nmodule N =\n    val a: int ->\n    val b: int\n",
+        [
+            "v_nested_next.fsi(3,19,4,5): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "v_nested_root.fsi",
+        "module M\nmodule N =\n    val a: int ->\nval b: int\n",
+        [
+            "v_nested_root.fsi(4,1,4,4): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "v_root_blank.fsi",
+        "module M\nval a: int ->\n\n\nval b: int\n",
+        [
+            "v_root_blank.fsi(2,15,5,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "v_root_eof_nonl.fsi",
+        "module M\nval a: int ->",
+        [
+            "v_root_eof_nonl.fsi(2,1,2,14): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "v_root_eof.fsi",
+        "module M\nval a: int ->\n",
+        [
+            "v_root_eof.fsi(3,1,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "v_root_next.fsi",
+        "module M\nval a: int ->\nval b: int\n",
+        [
+            "v_root_next.fsi(2,15,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "o_nested_eof.fs",
+        "module M\nmodule N =\n    open\n",
+        [
+            "o_nested_eof.fs(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global', 'type' or other token."
+        ]
+
+        "o_nested_next.fs",
+        "module M\nmodule N =\n    open\n    let b = 1\n",
+        [
+            "o_nested_next.fs(3,10,4,5): error FS0010: Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global', 'type' or other token."
+        ]
+
+        "o_nested_root.fs",
+        "module M\nmodule N =\n    open\nlet b = 1\n",
+        [
+            "o_nested_root.fs(4,1,4,4): error FS0010: Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global', 'type' or other token."
+        ]
+
+        "o_root_blank.fs",
+        "module M\nopen\n\nlet b = 1\n",
+        [
+            "o_root_blank.fs(2,6,4,1): error FS0010: Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global', 'type' or other token."
+        ]
+
+        "o_root_eof.fs",
+        "module M\nopen\n",
+        [
+            "o_root_eof.fs(3,1,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global', 'type' or other token."
+        ]
+
+        "o_root_next.fs",
+        "module M\nopen\nlet b = 1\n",
+        [
+            "o_root_next.fs(2,6,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global', 'type' or other token."
+        ]
+
+        "od_nested_next.fs",
+        "module M\nmodule N =\n    open System.\n    let b = 1\n",
+        [
+            "od_nested_next.fs(3,18,4,5): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "od_root_next.fs",
+        "module M\nopen System.\nlet b = 1\n",
+        [
+            "od_root_next.fs(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "os_nested_root.fsi",
+        "module M\nmodule N =\n    open\nval b: int\n",
+        [
+            "os_nested_root.fsi(4,1,4,4): error FS0010: Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global', 'type' or other token."
+        ]
+
+        "os_root_next.fsi",
+        "module M\nopen\nval b: int\n",
+        [
+            "os_root_next.fsi(2,6,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global', 'type' or other token."
+        ]
+
+        "n_arrow_end.fsi",
+        "module M\nmodule N =\n    val a: int ->\n",
+        [
+            "n_arrow_end.fsi(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+    ]
+
+    let private unmodeledIncompleteConstructCases = [
+        "b_comment_next.fs",
+        "module M\nlet a = // c\nlet b = 1\n",
+        [
+            "b_comment_next.fs(3,1,3,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "b_comment_next.fs(3,1,3,4): error FS0010: Incomplete structured construct at or before this point in binding"
+        ]
+
+        "b_nested_next.fs",
+        "module M\nmodule N =\n    let a =\n    let b = 1\n",
+        [
+            "b_nested_next.fs(4,5,4,8): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "b_nested_next.fs(4,5,4,8): error FS0010: Incomplete structured construct at or before this point in binding"
+        ]
+
+        "b_nested_root.fs",
+        "module M\nmodule N =\n    let a =\nlet b = 1\n",
+        [
+            "b_nested_root.fs(4,1,4,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "b_nested_root.fs(4,1,4,4): error FS0010: Incomplete structured construct at or before this point in binding"
+        ]
+
+        "b_root_eof.fs",
+        "module M\nlet a =\n",
+        [
+            "b_root_eof.fs(3,1,3,1): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "b_root_eof.fs(3,1,3,1): error FS0010: Incomplete structured construct at or before this point in binding"
+        ]
+
+        "b_root_next.fs",
+        "module M\nlet a =\nlet b = 1\n",
+        [
+            "b_root_next.fs(3,1,3,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "b_root_next.fs(3,1,3,4): error FS0010: Incomplete structured construct at or before this point in binding"
+        ]
+
+        "od_nested_root.fs",
+        "module M\nmodule N =\n    open System.\nlet b = 1\n",
+        [
+            "od_nested_root.fs(3,16,3,17): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "od_root_eof_nonl.fs",
+        "module M\nopen System.",
+        [
+            "od_root_eof_nonl.fs(2,12,2,13): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "od_root_eof.fs",
+        "module M\nopen System.\n",
+        [
+            "od_root_eof.fs(2,12,2,13): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+    ]
+
     [<Tests>]
     let tests =
         testList "Issue29.ParserCompilation" [
@@ -4502,6 +4691,38 @@ module private N =
 
             testList "an unmodeled lost signature module header stays explicit" [
                 for logicalPath, text, oracle in unmodeledHeaderLossCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result =
+                            parse SyntaxCompilationTarget.Executable [
+                                logicalPath, text
+                                last
+                            ]
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            (result.Diagnostics
+                             |> Seq.map _.Diagnostic)
+                            (oracleLines result)
+            ]
+
+            testList "an incomplete construct reports the Oracle range" [
+                for logicalPath, text, expected in incompleteConstructCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        Expect.sequenceEqual
+                            (oracleLines (
+                                parse SyntaxCompilationTarget.Executable [
+                                    logicalPath, text
+                                    last
+                                ]
+                            ))
+                            expected
+                            "The diagnostics must match the Compatibility Oracle"
+            ]
+
+            testList "an unmodeled incomplete construct stays explicit" [
+                for logicalPath, text, oracle in unmodeledIncompleteConstructCases ->
                     testCase logicalPath
                     <| fun _ ->
                         let result =
