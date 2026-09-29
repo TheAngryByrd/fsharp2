@@ -1585,7 +1585,7 @@ module internal Parser =
 
     and private parseInfix state context minimum =
         let cursor = state.Cursor
-        let mutable left = parseApplication state context
+        let mutable left = parseOperand state context
         let mutable stop = false
 
         while not stop do
@@ -1632,6 +1632,27 @@ module internal Parser =
             | _ -> stop <- true
 
         left
+
+    and private parseOperand state context =
+        let cursor = state.Cursor
+        let target = parseApplication state context
+
+        if
+            not (isOperator "<-" cursor.Current)
+            || isOffside context cursor.Current
+        then
+            target
+        else
+            match target with
+            | SyntaxExpression.Identifier name ->
+                cursor.Advance()
+                |> ignore
+
+                let value = parseBranch state context None
+                SyntaxExpression.LongIdentifierSet(name, value, span target.Range value.Range)
+            | _ ->
+                reportUnsupported state cursor.Current "an assignment to an expression"
+                target
 
     and private parseApplication state context =
         let cursor = state.Cursor

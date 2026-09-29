@@ -154,6 +154,8 @@ module ParserGrammarTests =
             let recursive = if isRecursive then " rec" else ""
 
             $"{keywordText}{recursive} {bindingHead binding} = {expressionShape binding.Body} in {expressionShape body}"
+        | SyntaxExpression.LongIdentifierSet(name, value, _) ->
+            $"{{{name.Text} <- {expressionShape value}}}"
         | SyntaxExpression.Missing _ -> "<missing>"
 
     let private memberShape (value: SyntaxMember) =
@@ -268,6 +270,20 @@ module ParserGrammarTests =
             text "let" range
             :: blockRanges binding.Body
             @ blockRanges body
+        | SyntaxExpression.LongIdentifierSet(_, value, range) ->
+            text "set" range
+            :: blockRanges value
+        | SyntaxExpression.Infix(_, left, right, _) ->
+            blockRanges left
+            @ blockRanges right
+        | SyntaxExpression.Tuple(items, _) ->
+            items
+            |> Seq.collect blockRanges
+            |> Seq.toList
+        | SyntaxExpression.Application(func, argument, _) ->
+            blockRanges func
+            @ blockRanges argument
+        | SyntaxExpression.Parenthesized(inner, _) -> blockRanges inner
         | SyntaxExpression.If(_, thenBranch, elseBranch, _) ->
             blockRanges thenBranch
             @ (elseBranch
@@ -1134,6 +1150,153 @@ module ParserGrammarTests =
         ]
     ]
 
+    // Compatibility Oracle reports no parse diagnostic. Ranges are FCS 43.10.101 LongIdentSet, LetOrUse, and Sequential ranges, 1-based columns.
+    let private assignmentCases = [
+        "AssignLocal.fs",
+        "module A\nlet f () =\n    let mutable x = 0\n    x <- x + 1\n    x\n",
+        [ "let f () = let mutable x = 0 in seq[{x <- {x + 1}}; x]" ],
+        [
+            "let(3,5--5,6)"
+            "seq(4,5--5,6)"
+            "set(4,5--4,15)"
+        ]
+        "AssignLong.fs",
+        "module A\nlet f () =\n    a.b <- 1\n",
+        [ "let f () = {a.b <- 1}" ],
+        [ "set(3,5--3,13)" ]
+        "AssignTuple.fs",
+        "module A\nlet f () =\n    x <- 1, 2\n",
+        [ "let f () = {x <- 1, 2}" ],
+        [ "set(3,5--3,14)" ]
+        "AssignApplication.fs",
+        "module A\nlet f () =\n    x <- g 1\n",
+        [ "let f () = {x <- [g 1]}" ],
+        [ "set(3,5--3,13)" ]
+        "AssignChain.fs",
+        "module A\nlet f () =\n    x <- y <- 1\n",
+        [ "let f () = {x <- {y <- 1}}" ],
+        [
+            "set(3,5--3,16)"
+            "set(3,10--3,16)"
+        ]
+        "AssignIf.fs",
+        "module A\nlet f () =\n    if c then x <- 1 else x <- 2\n",
+        [ "let f () = if c then {x <- 1} else {x <- 2}" ],
+        [
+            "set(3,15--3,21)"
+            "set(3,27--3,33)"
+        ]
+        "AssignLambda.fs",
+        "module A\nlet f () =\n    ignore (fun () -> x <- 1)\n",
+        [ "let f () = [ignore (fun () -> {x <- 1})]" ],
+        [ "set(3,23--3,29)" ]
+        "AssignParenthesized.fs",
+        "module A\nlet f () =\n    ignore (x <- 1)\n",
+        [ "let f () = [ignore ({x <- 1})]" ],
+        [ "set(3,13--3,19)" ]
+        "AssignBlock.fs",
+        "module A\nlet f () =\n    x <-\n        1\n",
+        [ "let f () = {x <- 1}" ],
+        [ "set(3,5--4,10)" ]
+        "AssignBlockSequential.fs",
+        "module A\nlet f () =\n    x <-\n        ignore 1\n        2\n",
+        [ "let f () = {x <- seq[[ignore 1]; 2]}" ],
+        [
+            "set(3,5--5,10)"
+            "seq(4,9--5,10)"
+        ]
+        "AssignClause.fs",
+        "module A\nlet f () =\n    match c with\n    | _ -> x <- 1\n",
+        [ "let f () = match c with | _ -> {x <- 1}" ],
+        [ "set(4,12--4,18)" ]
+        "AssignInfix.fs",
+        "module A\nlet f () =\n    x <- 1 + 2\n",
+        [ "let f () = {x <- {1 + 2}}" ],
+        [ "set(3,5--3,15)" ]
+        "AssignOr.fs",
+        "module A\nlet f () =\n    x <- a || b\n",
+        [ "let f () = {x <- {a || b}}" ],
+        [ "set(3,5--3,16)" ]
+        "AssignEquals.fs",
+        "module A\nlet f () =\n    x <- a = b\n",
+        [ "let f () = {x <- {a = b}}" ],
+        [ "set(3,5--3,15)" ]
+        "AssignPipe.fs",
+        "module A\nlet f () =\n    x <- 1 |> id\n",
+        [ "let f () = {x <- {1 |> id}}" ],
+        [ "set(3,5--3,17)" ]
+        "AssignAfterInfix.fs",
+        "module A\nlet f () =\n    a + b <- 1\n",
+        [ "let f () = {a + {b <- 1}}" ],
+        [ "set(3,9--3,15)" ]
+        "AssignAfterComma.fs",
+        "module A\nlet f () =\n    a, b <- 1\n",
+        [ "let f () = a, {b <- 1}" ],
+        [ "set(3,8--3,14)" ]
+        "AssignIfValue.fs",
+        "module A\nlet f () =\n    x <- if c then 1 else 2\n",
+        [ "let f () = {x <- if c then 1 else 2}" ],
+        [ "set(3,5--3,28)" ]
+        "AssignMatchValue.fs",
+        "module A\nlet f () =\n    x <- match c with _ -> 1\n",
+        [ "let f () = {x <- match c with | _ -> 1}" ],
+        [ "set(3,5--3,29)" ]
+        "AssignLambdaValue.fs",
+        "module A\nlet f () =\n    x <- fun y -> y\n",
+        [ "let f () = {x <- fun y -> y}" ],
+        [ "set(3,5--3,20)" ]
+        "AssignSequential.fs",
+        "module A\nlet f () =\n    x <- 1\n    x\n",
+        [ "let f () = seq[{x <- 1}; x]" ],
+        [
+            "seq(3,5--4,6)"
+            "set(3,5--3,11)"
+        ]
+        "AssignThenBlock.fs",
+        "module A\nlet f () =\n    if c then\n        x <- 1\n    x\n",
+        [ "let f () = seq[if c then {x <- 1}; x]" ],
+        [
+            "seq(3,5--5,6)"
+            "set(4,9--4,15)"
+        ]
+        "AssignBindingLine.fs",
+        "module A\nlet f () = x <- 1\n",
+        [ "let f () = {x <- 1}" ],
+        [ "set(2,12--2,18)" ]
+        "AssignDo.fs", "module A\ndo x <- 1\n", [ "do {x <- 1}" ], [ "set(2,4--2,10)" ]
+        "AssignModuleExpression.fs", "module A\nx <- 1\n", [ "expr {x <- 1}" ], []
+    ]
+
+    let private assignmentExplicitCases = [
+        "AssignToApplication.fs", "module A\nlet f () =\n    g x <- 1\n", []
+        "AssignToParenthesized.fs", "module A\nlet f () =\n    (x) <- 1\n", []
+        "AssignToIndex.fs", "module A\nlet f () =\n    a[0] <- 1\n", []
+        "AssignToConstant.fs", "module A\nlet f () =\n    1 <- 2\n", []
+        "AssignToDotLambda.fs", "module A\nlet f () =\n    _.x <- 1\n", []
+        "AssignClose.fs",
+        "module A\nlet f () =\n    x <- )\n",
+        [ "AssignClose.fs(3,10): error FS0010: Unexpected symbol ')' in expression" ]
+        "AssignMissing.fs",
+        "module A\nlet f () =\n    x <-\n",
+        [
+            "AssignMissing.fs(4,1): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "AssignMissing.fs(4,1): error FS3524: Expecting expression"
+        ]
+        "AssignMissingBeforeRoot.fs",
+        "module A\nlet f () =\n    x <-\nlet g = 1\n",
+        [
+            "AssignMissingBeforeRoot.fs(4,1): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "AssignMissingBeforeRoot.fs(4,1): error FS3524: Expecting expression"
+        ]
+        "AssignValueNextLine.fs", "module A\nlet f () =\n    x <- \n    1\n", []
+        "AssignOperatorNextLine.fs", "module A\nlet f () =\n    x\n        <- 1\n", []
+        "AssignOperatorSameColumn.fs",
+        "module A\nlet f () =\n    x\n    <- 1\n",
+        [
+            "AssignOperatorSameColumn.fs(4,5): error FS0010: Unexpected symbol '<-' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+    ]
+
     let private mutableBindingExplicitCases = [
         "MutableTyped.fs", "module A\nlet mutable x: int = 1\n", []
         "MutableNextLine.fs", "module A\nlet mutable\n    x = 1\n", []
@@ -1599,6 +1762,37 @@ let items = [ origin.X; 1 ]
                             (oracleLines logicalPath result)
                             oracle
                             "The Compatibility Oracle diagnostics"
+            ]
+
+            testList "an assignment sets the long identifier before it to the expression after it" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in assignmentCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with assignments"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect blockRanges)
+                            expectedRanges
+                            "The assignment, local binding, and sequential expression ranges"
+            ]
+
+            testList "an assignment that the parser does not model stays explicit" [
+                for logicalPath, text, oracle in assignmentExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
             ]
 
             testList "a mutable binding that the parser does not model stays explicit" [

@@ -157,6 +157,7 @@ type internal SyntaxExpression =
         SyntaxBinding *
         body: SyntaxExpression *
         SourceRange
+    | LongIdentifierSet of LongIdentifier * value: SyntaxExpression * SourceRange
     | Missing of MissingSyntax
 
     member this.Range =
@@ -175,7 +176,8 @@ type internal SyntaxExpression =
         | DotLambda(_, range)
         | BracketApplication(_, _, range)
         | Sequential(_, _, range)
-        | LetOrUse(_, _, _, _, range) -> range
+        | LetOrUse(_, _, _, _, range)
+        | LongIdentifierSet(_, _, range) -> range
         | Missing missing -> missing.Range
 
 and internal SyntaxMatchClause = {
