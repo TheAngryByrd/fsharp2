@@ -1508,4 +1508,43 @@ and V = bool
                         ]
                         "Skipped tokens"
                 | other -> failtest $"Expected an expression declaration, found {other}"
+
+            testCase "the dotnet new console program is an anonymous module with one expression"
+            <| fun _ ->
+                // Program.fs from the ConsoleApplication-FSharp template in SDK 10.0.110, after UTF-8 decoding.
+                let result =
+                    parse
+                        "Program.fs"
+                        "// For more information see https://aka.ms/fsharp-console-apps\r\nprintfn \"Hello from F#\"\r\n"
+
+                Expect.equal
+                    (oracleLines "Program.fs" result.Diagnostics)
+                    []
+                    "The Compatibility Oracle reports no parse diagnostics for this file"
+
+                let root = Expect.wantSome (Seq.tryExactlyOne result.File.Contents) "One root"
+
+                Expect.equal (rootShape root.Kind) "anonymous module" "Anonymous module root"
+
+                Expect.equal
+                    (position root.Range)
+                    (2, 1, 2, 24)
+                    "The root range starts at the first declaration"
+
+                match Seq.exactlyOne root.Declarations with
+                | ImplementationDeclaration.Expression(attributes,
+                                                       SyntaxExpression.Application(SyntaxExpression.Identifier name,
+                                                                                    SyntaxExpression.Constant(SyntaxConstant.String text,
+                                                                                                              textRange),
+                                                                                    applicationRange),
+                                                       None,
+                                                       range) ->
+                    Expect.isEmpty attributes "No attributes"
+                    Expect.equal name.Text "printfn" "Function name"
+                    Expect.equal (position name.Range) (2, 1, 2, 8) "Function name range"
+                    Expect.equal text "\"Hello from F#\"" "String source text"
+                    Expect.equal (position textRange) (2, 9, 2, 24) "String range"
+                    Expect.equal (position applicationRange) (2, 1, 2, 24) "Application range"
+                    Expect.equal (position range) (2, 1, 2, 24) "Declaration range"
+                | other -> failtest $"Expected an application of printfn to a string, found {other}"
         ]
