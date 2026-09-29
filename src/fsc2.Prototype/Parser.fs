@@ -1102,10 +1102,16 @@ module internal Parser =
 
     and private parseTypeName state context onTrailingDot =
         match parseTypeConstructor state onTrailingDot with
-        | SyntaxType.GlobalLongIdentifier(_, None, _) as globalKeyword -> globalKeyword
-        | name -> parseTypeArguments state context name
+        | SyntaxType.LongIdentifier name ->
+            parseTypeArguments state context (SyntaxTypeName.LongIdentifier name)
+        | SyntaxType.GlobalLongIdentifier(globalKeyword, Some name, range) ->
+            parseTypeArguments
+                state
+                context
+                (SyntaxTypeName.GlobalLongIdentifier(globalKeyword, name, range))
+        | other -> other
 
-    and private parseTypeArguments state context name =
+    and private parseTypeArguments state context (name: SyntaxTypeName) =
         let cursor = state.Cursor
 
         if isOperator "<" cursor.Current then
@@ -1149,19 +1155,24 @@ module internal Parser =
                     reportUnsupported state cursor.Current "type arguments"
 
                 SyntaxType.Application(
-                    name,
+                    name.Type,
                     arguments.ToImmutable(),
                     false,
                     span name.Range (emptyAt cursor.LastEnd)
                 )
         else
-            name
+            name.Type
 
     and private parseNestedName state context (enclosing: SyntaxClosedTypeArguments) =
         let cursor = state.Cursor
 
         let application =
-            SyntaxType.Application(enclosing.TypeName, enclosing.Arguments, false, enclosing.Range)
+            SyntaxType.Application(
+                enclosing.TypeName.Type,
+                enclosing.Arguments,
+                false,
+                enclosing.Range
+            )
 
         if
             isOperator "." cursor.Current
@@ -1179,7 +1190,7 @@ module internal Parser =
                 parseTypeArguments
                     state
                     context
-                    (SyntaxType.NestedName {
+                    (SyntaxTypeName.NestedName {
                         Enclosing = enclosing
                         Dot = dot.Range
                         Name = name

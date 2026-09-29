@@ -77,7 +77,7 @@ module ParserTests =
                 |> Seq.map typeShape
                 |> String.concat ", "
 
-            $"{typeShape nested.Enclosing.TypeName}<{arguments}>.{nested.Name.Text}"
+            $"{typeShape nested.Enclosing.TypeName.Type}<{arguments}>.{nested.Name.Text}"
         | SyntaxType.Array(element, suffix, _) ->
             $"{typeShape element}[{System.String(',', suffix.Commas.Length)}]"
         | SyntaxType.SignatureParameter(name, parameterType, _) ->
@@ -1378,6 +1378,11 @@ val f: global.A<int>.B -> int
                     (nestedRanges "a")
                     ((2, 12, 2, 13), (2, 16, 2, 17), (2, 17, 2, 18), (2, 8, 2, 28))
                     "Ranges when the dot touches the closing bracket"
+
+                Expect.equal
+                    (nestedRanges "c")
+                    ((4, 9, 4, 10), (4, 16, 4, 17), (4, 17, 4, 18), (4, 8, 4, 19))
+                    "Ranges when the cursor splits the second '>' from '>.'"
 
                 Expect.equal
                     (nestedRanges "d")

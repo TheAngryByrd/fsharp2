@@ -70,7 +70,26 @@ module internal SyntaxRouting =
             | _ -> None
         | _ -> None
 
-    let hasProjectableTokenShape (document: LexicalDocument) =
+    let rec private qualifiedName tokens =
+        match tokens with
+        | name :: dot :: (next :: _ as rest) when
+            isIdentifier name
+            && isToken LexicalTokenKind.Operator "." dot
+            && isIdentifier next
+            ->
+            qualifiedName rest
+        | name :: rest when isIdentifier name -> Some rest
+        | _ -> None
+
+    let rec private openDeclarations tokens =
+        match tokens with
+        | openToken :: rest when isToken LexicalTokenKind.Keyword "open" openToken ->
+            match qualifiedName rest with
+            | Some rest -> openDeclarations rest
+            | None -> []
+        | rest -> rest
+
+    let hasProjectableTokenShape implicitModule (document: LexicalDocument) =
         let tokens =
             document.Tokens
             |> Seq.filter (fun token ->
@@ -87,23 +106,36 @@ module internal SyntaxRouting =
                 | Some rest -> declarations rest
                 | None -> false
 
-        match tokens with
-        | moduleToken :: name :: (_ :: _ as rest) when
+        match tokens, implicitModule with
+        | moduleToken :: name :: (_ :: _ as rest), _ when
             isToken LexicalTokenKind.Keyword "module" moduleToken
             && isIdentifier name
             ->
             declarations rest
+        | openToken :: _, ImplicitModule.Accepted _ when
+            isToken LexicalTokenKind.Keyword "open" openToken
+            ->
+            match openDeclarations tokens with
+            | _ :: _ as rest -> declarations rest
+            | [] -> false
         | _ -> false
 
-    let isEligible (document: LexicalDocument) =
+    let isEligible implicitModule (document: LexicalDocument) =
         document.LogicalPath.EndsWith(".fs", StringComparison.OrdinalIgnoreCase)
         && document.Directives.IsEmpty
         && document.Diagnostics.IsEmpty
         && Frontend.isTokenizedLikeLexicalDocument document
-        && hasProjectableTokenShape document
+        && hasProjectableTokenShape implicitModule document
 
-    let tryProject (document: LexicalDocument) =
-        if isEligible document then
+    let isImplicitModuleCandidate implicitModule document =
+        match implicitModule with
+        | ImplicitModule.Rejected -> false
+        | ImplicitModule.Accepted _ ->
+            isEligible implicitModule document
+            && not (isEligible ImplicitModule.Rejected document)
+
+    let tryProject implicitModule (document: LexicalDocument) =
+        if isEligible implicitModule document then
             let syntax = Parser.parseImplementationFile document
 
             if syntax.Diagnostics.IsEmpty then
@@ -115,7 +147,11 @@ module internal SyntaxRouting =
                     |> _.ToLowerInvariant()
 
                 match
-                    SyntaxProjection.project contentFingerprint document.SourceChecksum syntax.File
+                    SyntaxProjection.project
+                        implicitModule
+                        contentFingerprint
+                        document.SourceChecksum
+                        syntax.File
                 with
                 | SyntaxProjectionResult.Projected parsed -> Some parsed
                 | SyntaxProjectionResult.ProjectionUnsupported _ -> None

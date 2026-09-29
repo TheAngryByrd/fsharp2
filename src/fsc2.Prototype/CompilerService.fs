@@ -1324,12 +1324,20 @@ type internal CompilerService() =
                         }
             }
 
-    let parse (source: LexicalDocument) =
+    let parse (implicitModule: ImplicitModule) (source: LexicalDocument) =
         let key =
             Fingerprint.parts [
                 querySchema.ToString(CultureInfo.InvariantCulture)
                 "parse"
                 source.LexicalFingerprint
+
+                match implicitModule with
+                | ImplicitModule.Accepted namespaces when
+                    SyntaxRouting.isImplicitModuleCandidate implicitModule source
+                    ->
+                    "implicit-module"
+                    namespaces.ReferencesFingerprint
+                | _ -> ()
             ]
 
         match parseCache.TryGetValue(key) with
@@ -1357,7 +1365,7 @@ type internal CompilerService() =
                 ContentFingerprint = source.ContentFingerprint
             }
 
-            match SyntaxRouting.tryProject source with
+            match SyntaxRouting.tryProject implicitModule source with
             | Some parsed ->
                 syntaxProjections <-
                     syntaxProjections
@@ -27372,6 +27380,7 @@ type internal CompilerService() =
             language: LanguageVersionIdentity,
             defines: string list,
             references: ReferenceTypeIndex,
+            target: CompilationTarget,
             sources: SourceSnapshot list
         ) =
         let combine values =
@@ -27446,7 +27455,13 @@ type internal CompilerService() =
                 |> lexicalDiagnostic source
                 |> Error
             | source :: tail ->
-                match parse source with
+                let implicitModule =
+                    match target, tail with
+                    | CompilationTarget.Executable, [] ->
+                        ImplicitModule.Accepted references.Namespaces
+                    | _ -> ImplicitModule.Rejected
+
+                match parse implicitModule source with
                 | Error diagnostic -> Error diagnostic
                 | Ok(parsedModules, key) ->
                     let sourceModules =

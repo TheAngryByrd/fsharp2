@@ -66,8 +66,22 @@ type internal SyntaxType =
         | SignatureParameter(_, _, range) -> range
         | Missing missing -> missing.Range
 
+and [<RequireQualifiedAccess>] internal SyntaxTypeName =
+    | LongIdentifier of LongIdentifier
+    | GlobalLongIdentifier of globalKeyword: SourceRange * LongIdentifier * SourceRange
+    | NestedName of SyntaxNestedTypeName
+
+    member this.Type =
+        match this with
+        | LongIdentifier name -> SyntaxType.LongIdentifier name
+        | GlobalLongIdentifier(globalKeyword, name, range) ->
+            SyntaxType.GlobalLongIdentifier(globalKeyword, Some name, range)
+        | NestedName nested -> SyntaxType.NestedName nested
+
+    member this.Range = this.Type.Range
+
 and internal SyntaxClosedTypeArguments = {
-    TypeName: SyntaxType
+    TypeName: SyntaxTypeName
     Arguments: ImmutableArray<SyntaxType>
     Less: SourceRange
     Greater: SourceRange

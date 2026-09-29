@@ -35,7 +35,7 @@ module SyntaxProjectionTests =
         |> LexicalPipeline.prepare language Array.empty
 
     let private project text =
-        match SyntaxRouting.tryProject (document "Program.fs" text) with
+        match SyntaxRouting.tryProject ImplicitModule.Rejected (document "Program.fs" text) with
         | Some modules -> SyntaxProjectionResult.Projected modules
         | None ->
             SyntaxProjectionResult.ProjectionUnsupported {
@@ -178,19 +178,163 @@ module SyntaxProjectionTests =
         |> ReferenceTypeIndex.Create
         |> Result.defaultWith failtest
 
-    let private compileWithService (text: string) =
+    let private snapshot (logicalPath: string) (text: string) =
+        SourceSnapshot.Create(
+            StableIdentity.create $"source:{logicalPath}",
+            logicalPath,
+            text,
+            fingerprint text
+        )
+
+    let private compileFilesWithService target (files: (string * string) list) =
         let service = CompilerService()
 
-        let source =
-            SourceSnapshot.Create(
-                StableIdentity.create "source:program",
-                "Program.fs",
-                text,
-                fingerprint text
+        let result =
+            service.Compile(
+                "Program",
+                language,
+                [],
+                references (),
+                target,
+                files
+                |> List.map (fun (logicalPath, text) -> snapshot logicalPath text)
             )
 
-        let result = service.Compile("Program", language, [], references (), [ source ])
         result, service.Statistics.SyntaxProjections
+
+    let private compileWithService (text: string) =
+        compileFilesWithService CompilationTarget.Executable [ "Program.fs", text ]
+
+    let private implicitModule () =
+        ImplicitModule.Accepted (references ()).Namespaces
+
+    let private projectImplicit logicalPath text =
+        SyntaxRouting.tryProject (implicitModule ()) (document logicalPath text)
+
+    let private implicitOpens = [
+        [ "System.Text" ]
+        [ "System.Collections" ]
+        [
+            "Microsoft.FSharp.Core"
+            "System.Text"
+        ]
+        [
+            "System.Collections"
+            "System.Collections"
+        ]
+    ]
+
+    let private implicitCorpus = [
+        for opens in implicitOpens do
+            let openLines =
+                opens
+                |> List.map (fun name -> $"open {name}")
+
+            for layout in layouts do
+                for body in bodies do
+                    yield
+                        opens,
+                        layout [
+                            yield! openLines
+                            "[<EntryPoint>]"
+                            $"let main argv = {body}"
+                        ]
+
+                    for binding in List.take 5 bindings do
+                        yield
+                            opens,
+                            layout [
+                                yield! openLines
+                                binding body
+                                "[<EntryPoint>]"
+                                "let main argv = 0"
+                            ]
+    ]
+
+    let private withNamedHeader (text: string) =
+        let openLine =
+            Text.RegularExpressions.Regex(
+                "^open [A-Za-z.]+",
+                Text.RegularExpressions.RegexOptions.Multiline
+            )
+
+        let first = openLine.Match text
+
+        let blank =
+            openLine.Replace(
+                text,
+                Text.RegularExpressions.MatchEvaluator(fun found ->
+                    String.replicate found.Length " "
+                )
+            )
+
+        blank.Substring(0, first.Index)
+        + "module Program".PadRight first.Length
+        + blank.Substring(
+            first.Index
+            + first.Length
+        )
+
+    let private compileRequest logicalPath (text: string) =
+        let referenceSnapshot name (path: string) =
+            let image = IO.File.ReadAllBytes path
+
+            TargetReferenceSnapshot.Create(
+                StableIdentity.create $"reference:{name}",
+                $"{name}.dll",
+                image,
+                byteFingerprint image
+            )
+
+        let request =
+            CompilationRequest.Create(
+                CompilerContract.Version,
+                StableIdentity.create "request:program",
+                CompilationAssemblyIdentity.Create(
+                    StableIdentity.create "assembly:Program",
+                    "Program"
+                ),
+                [| snapshot logicalPath text |],
+                [|
+                    referenceSnapshot
+                        "System.Runtime"
+                        (Reflection.Assembly.Load("System.Runtime").Location)
+                    referenceSnapshot
+                        "FSharp.Core"
+                        typeof<Microsoft.FSharp.Core.EntryPointAttribute>.Assembly.Location
+                |],
+                SemanticOptions.Create([||], None, OptimizationMode.Disabled, false, false, None),
+                DiagnosticOptions.Create(None, [||], false, [||]),
+                EmissionOptions.Create(
+                    CompilationTarget.Executable,
+                    true,
+                    false,
+                    DebugFormat.None,
+                    [||],
+                    [| logicalPath |],
+                    [||]
+                ),
+                SigningOptions.Create(SigningMode.Unsigned, [||]),
+                ResourceInputs.Create([||], [||]),
+                [| RequestedArtifact.ImplementationAssembly |]
+            )
+
+        Compiler().Compile(request, Threading.CancellationToken.None)
+
+    let private typeDefinitions (image: ImmutableArray<byte>) =
+        use reader = new Reflection.PortableExecutable.PEReader(image)
+        let metadata = Reflection.Metadata.PEReaderExtensions.GetMetadataReader reader
+
+        metadata.TypeDefinitions
+        |> Seq.map (fun handle ->
+            let definition = metadata.GetTypeDefinition handle
+
+            metadata.GetString definition.Namespace,
+            metadata.GetString definition.Name,
+            definition.Attributes
+            &&& Reflection.TypeAttributes.VisibilityMask
+        )
+        |> List.ofSeq
 
     [<Tests>]
     let tests =
@@ -289,13 +433,15 @@ module SyntaxProjectionTests =
                         "let answer = 42\n"
                     ] do
                     Expect.isFalse
-                        (SyntaxRouting.isEligible (document "Program.fs" text))
+                        (SyntaxRouting.isEligible
+                            ImplicitModule.Rejected
+                            (document "Program.fs" text))
                         $"The syntax parser must not run on this source:\n{text}"
 
                 Expect.isFalse
-                    (SyntaxRouting.isEligible (
-                        document "Program.fsi" "module Program\nlet answer = 42\n"
-                    ))
+                    (SyntaxRouting.isEligible
+                        ImplicitModule.Rejected
+                        (document "Program.fsi" "module Program\nlet answer = 42\n"))
                     "The syntax parser must not run on a signature file"
 
             testCase "the token shape check accepts every source that the projection accepts"
@@ -313,7 +459,11 @@ module SyntaxProjectionTests =
                         && Frontend.isTokenizedLikeLexicalDocument source
                     then
                         match
-                            SyntaxProjection.project "content" ImmutableArray.Empty syntax.File
+                            SyntaxProjection.project
+                                ImplicitModule.Rejected
+                                "content"
+                                ImmutableArray.Empty
+                                syntax.File
                         with
                         | SyntaxProjectionResult.Projected _ ->
                             projectable <-
@@ -321,7 +471,9 @@ module SyntaxProjectionTests =
                                 + 1
 
                             Expect.isTrue
-                                (SyntaxRouting.hasProjectableTokenShape source)
+                                (SyntaxRouting.hasProjectableTokenShape
+                                    ImplicitModule.Rejected
+                                    source)
                                 $"The token shape check must accept a projectable source:\n{text}"
                         | SyntaxProjectionResult.ProjectionUnsupported _ -> ()
 
@@ -343,6 +495,186 @@ module SyntaxProjectionTests =
                     | SyntaxProjectionResult.ProjectionUnsupported range ->
                         failtest
                             $"Expected a projection, but the projection stopped at line {range.Start.Line}, column {range.Start.Column}:\n{text}"
+
+            testCase
+                "the compiler service parses an implicit module with an open declaration in the last file of an executable"
+            <| fun _ ->
+                let result, projections =
+                    compileWithService "open System\n\n[<EntryPoint>]\nlet main argv = 0\n"
+
+                Expect.isOk result "The implicit module compiles"
+                Expect.equal projections 1 "The syntax parser produced the parsed module"
+
+            testCase
+                "an implicit module compiles to the public module that the Compatibility Oracle names"
+            <| fun _ ->
+                // The Compatibility Oracle emits the public type `Program` for both file names.
+                for logicalPath in
+                    [
+                        "Program.fs"
+                        "src/program.fs"
+                    ] do
+                    let result =
+                        compileRequest
+                            logicalPath
+                            "open System\n\n[<EntryPoint>]\nlet main argv = 0\n"
+
+                    Expect.equal
+                        result.Outcome
+                        CompilationOutcome.Succeeded
+                        $"The implicit module in {logicalPath} compiles: %A{result.Diagnostics}"
+
+                    let image =
+                        result.Artifacts
+                        |> Seq.find (fun artifact ->
+                            artifact.Kind = RequestedArtifact.ImplementationAssembly
+                        )
+                        |> _.Bytes
+
+                    Expect.contains
+                        (typeDefinitions image)
+                        ("", "Program", Reflection.TypeAttributes.Public)
+                        $"The assembly for {logicalPath} contains the public module Program"
+
+            testCase "every other implicit module keeps the prototype parser result"
+            <| fun _ ->
+                let entryPoint = "\n[<EntryPoint>]\nlet main argv = 0\n"
+
+                let cases = [
+                    "a library",
+                    CompilationTarget.Library,
+                    [ "Program.fs", $"open System{entryPoint}" ]
+                    "a file before the last file",
+                    CompilationTarget.Executable,
+                    [
+                        "Program.fs", $"open System{entryPoint}"
+                        "Last.fs", "module Last\nlet y = 1\n"
+                    ]
+                    "no open declaration",
+                    CompilationTarget.Executable,
+                    [ "Program.fs", entryPoint ]
+                    "an unknown namespace (FS0039)",
+                    CompilationTarget.Executable,
+                    [ "Program.fs", $"open Nonexistent{entryPoint}" ]
+                    "an unknown nested namespace (FS0039)",
+                    CompilationTarget.Executable,
+                    [ "Program.fs", $"open System.Nope{entryPoint}" ]
+                    "no entry point (FS0988)",
+                    CompilationTarget.Executable,
+                    [ "Program.fs", "open System\nlet x = 1\n" ]
+                    "a file name that is not an identifier (FS0221)",
+                    CompilationTarget.Executable,
+                    [ "my-prog.fs", $"open System{entryPoint}" ]
+                    "a file name that starts with a digit",
+                    CompilationTarget.Executable,
+                    [ "1prog.fs", $"open System{entryPoint}" ]
+                    "an open type declaration",
+                    CompilationTarget.Executable,
+                    [ "Program.fs", $"open type System.Math{entryPoint}" ]
+                    "an open declaration after a binding",
+                    CompilationTarget.Executable,
+                    [ "Program.fs", $"let x = 1\nopen System{entryPoint}" ]
+                    "a global open declaration",
+                    CompilationTarget.Executable,
+                    [ "Program.fs", $"open global.System{entryPoint}" ]
+                ]
+
+                for name, target, files in cases do
+                    let result, projections = compileFilesWithService target files
+                    let logicalPath, text = List.head files
+
+                    Expect.equal projections 0 $"The prototype parser handles {name}"
+
+                    match
+                        result,
+                        Frontend.parse [] {
+                            Path = logicalPath
+                            Text = text
+                            ContentFingerprint = "content"
+                        }
+                    with
+                    | Error actual, Error expected ->
+                        Expect.equal
+                            (actual.Code, actual.Message)
+                            (expected.Code, expected.Message)
+                            $"The result for {name} is the prototype parser diagnostic"
+                    | actual, expected ->
+                        failtest
+                            $"Expected the prototype parser error for {name}, but the result is %A{actual} and the prototype parser result is %A{expected}"
+
+            testCase
+                "every projected implicit module equals the prototype parser result for a named module"
+            <| fun _ ->
+                let mutable projected = 0
+
+                for opens, text in implicitCorpus do
+                    match projectImplicit "Program.fs" text with
+                    | None -> ()
+                    | Some modules ->
+                        projected <-
+                            projected
+                            + 1
+
+                        match prototype (withNamedHeader text) with
+                        | Error diagnostic ->
+                            failtest
+                                $"The prototype parser rejects the named form with {diagnostic.Code}: {diagnostic.Message}\n{withNamedHeader text}"
+                        | Ok expected ->
+                            let expected =
+                                expected
+                                |> List.map (fun parsedModule -> {
+                                    parsedModule with
+                                        OpenedNamespaces = opens
+                                        ContentFingerprint = fingerprint text
+                                })
+
+                            Expect.equal
+                                (withoutChecksum modules)
+                                (withoutChecksum expected)
+                                $"The projection must equal the prototype parser result for:\n{text}"
+
+                Expect.isGreaterThan projected 0 "The corpus contains projected implicit modules"
+
+            testCase
+                "the token shape check accepts every implicit module that the projection accepts"
+            <| fun _ ->
+                let mutable projectable = 0
+
+                for _, text in implicitCorpus do
+                    let source = document "Program.fs" text
+                    let syntax = Parser.parseImplementationFile source
+
+                    if
+                        syntax.Diagnostics.IsEmpty
+                        && source.Directives.IsEmpty
+                        && source.Diagnostics.IsEmpty
+                        && Frontend.isTokenizedLikeLexicalDocument source
+                    then
+                        match
+                            SyntaxProjection.project
+                                (implicitModule ())
+                                (fingerprint text)
+                                ImmutableArray.Empty
+                                syntax.File
+                        with
+                        | SyntaxProjectionResult.Projected _ ->
+                            projectable <-
+                                projectable
+                                + 1
+
+                            Expect.isTrue
+                                (SyntaxRouting.hasProjectableTokenShape (implicitModule ()) source)
+                                $"The token shape check must accept a projectable implicit module:\n{text}"
+
+                            Expect.isFalse
+                                (SyntaxRouting.isEligible ImplicitModule.Rejected source)
+                                $"The syntax parser must not run on an implicit module that the Compatibility Oracle rejects:\n{text}"
+                        | SyntaxProjectionResult.ProjectionUnsupported _ -> ()
+
+                Expect.isGreaterThan
+                    projectable
+                    0
+                    "The corpus contains projectable implicit modules"
 
             testCase "sources with syntax diagnostics are never projected"
             <| fun _ ->

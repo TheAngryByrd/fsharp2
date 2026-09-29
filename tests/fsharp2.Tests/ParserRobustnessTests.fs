@@ -13,6 +13,12 @@ module ParserRobustnessTests =
 
     let private limit = TimeSpan.FromSeconds 10.0
 
+    let private implicitModule =
+        ImplicitModule.Accepted {
+            ReferencesFingerprint = "namespaces"
+            Names = Collections.Immutable.ImmutableHashSet.Create "System"
+        }
+
     let private parse (logicalPath: string) document =
         if logicalPath.EndsWith(".fsi", StringComparison.OrdinalIgnoreCase) then
             Parser.parseSignatureFile document
@@ -21,7 +27,7 @@ module ParserRobustnessTests =
             Parser.parseImplementationFile document
             |> ignore
 
-            SyntaxRouting.tryProject document
+            SyntaxRouting.tryProject implicitModule document
             |> ignore
 
     let private expectCompletesIn mode (logicalPath: string) (text: string) =
