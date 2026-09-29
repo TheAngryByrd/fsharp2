@@ -3939,7 +3939,9 @@ module internal Parser =
             | Recovery.Suppressing(_, DeclarationAfterRecovery.ReportedAtRoot _) ->
                 // The Compatibility Oracle reports FS0530 for a namespace after a named module.
                 reportAfterRecovery state cursor.Current
-            | Recovery.Suppressing(_, DeclarationAfterRecovery.SkippedInSignatureModule _) ->
+            | Recovery.Suppressing(_, DeclarationAfterRecovery.SkippedInSignatureModule _)
+            | Recovery.Suppressing(_, DeclarationAfterRecovery.SkippedAfterRootValue)
+            | Recovery.Suppressing(_, DeclarationAfterRecovery.DiscardedIfValueOrOpen) ->
                 reportAfterRecovery state cursor.Current
             | Recovery.Suppressing _
             | Recovery.Interrupted _ -> reportPendingAtEnd state

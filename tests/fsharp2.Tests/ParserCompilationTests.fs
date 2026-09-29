@@ -6559,6 +6559,10 @@ module M =
             "ns_module.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
         ]
 
+        "ns_ns_after.fsi",
+        "namespace P\nval y: int\nval x: )\nnamespace Q\nval z: int\n",
+        [ "ns_ns_after.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature" ]
+
         "b_and.fs",
         "module M\nlet rec a = 1\nand b =\nlet c = 1\n",
         [
@@ -6915,6 +6919,45 @@ module M =
     ]
 
     let private unmodeledIncompleteConstructCases = [
+        "ns_after_ok.fsi",
+        "module M\nval y: int\nval x: )\nnamespace Q\nval z: int\n",
+        [
+            "ns_after_ok.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature"
+            "ns_after_ok.fsi(6,1,6,1): error FS0010: Incomplete structured construct at or before this point in signature file"
+        ]
+
+        "ns_after_resume.fsi",
+        "module M\nval y: int\nval x: )\nval w: int\nnamespace Q\nval z: int\n",
+        [
+            "ns_after_resume.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature"
+            "ns_after_resume.fsi(5,1,5,10): error FS0010: Unexpected keyword 'namespace'. Expected incomplete structured construct at or before this point or other token."
+            "ns_after_resume.fsi(1,1,4,11): error FS0530: Only '#' compiler directives may occur prior to the first 'namespace' declaration"
+            "ns_after_resume.fsi(7,1,7,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "ns_after.fsi",
+        "module M\nval y: int\nval x: )\nnamespace Q\nval z: )\n",
+        [
+            "ns_after.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature"
+            "ns_after.fsi(5,8,5,9): error FS0010: Unexpected symbol ')' in value signature"
+            "ns_after.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "ns_first_err.fsi",
+        "module M\nval x: )\nnamespace Q\nval z: int\n",
+        [
+            "ns_first_err.fsi(2,8,2,9): error FS0010: Unexpected symbol ')' in value signature"
+            "ns_first_err.fsi(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in signature file"
+        ]
+
+        "ns_plain.fsi",
+        "module M\nval y: int\nnamespace Q\nval z: int\n",
+        [
+            "ns_plain.fsi(3,1,3,10): error FS0010: Unexpected keyword 'namespace'. Expected incomplete structured construct at or before this point or other token."
+            "ns_plain.fsi(1,1,2,11): error FS0530: Only '#' compiler directives may occur prior to the first 'namespace' declaration"
+            "ns_plain.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
         "v114.fsi",
         "module M\nval x: )\ntype T2 = int\n",
         [
