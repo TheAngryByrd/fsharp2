@@ -98,6 +98,8 @@ jobs:
           if ($version -ne '10.0.110') {
             throw "Selected dotnet reported '$version'. Expected '10.0.110'."
           }
+      - name: Restore .NET tools
+        run: dotnet tool restore
       - name: Restore solution
         run: dotnet restore fsharp2.sln --locked-mode
       - name: Publish strict FSharp2 host
