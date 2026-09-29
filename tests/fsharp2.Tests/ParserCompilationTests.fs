@@ -5879,6 +5879,59 @@ module M =
             "t_case_err_and.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
         ]
 
+        "l_do_let.fs",
+        "module M\ntype U = A of )\ndo ()\nlet y = )\n",
+        [
+            "l_do_let.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "l_do_let.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "n_expr.fs",
+        "module M\ntype U = A of )\nmodule N =\n    let x = 1\nf )\n",
+        [
+            "n_expr.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "n_expr.fs(5,3,5,4): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "n_inner_first_open.fs",
+        "module M\ntype U = A of )\nmodule N =\n    open System\n",
+        [
+            "n_inner_first_open.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "n_inner_first_open.fs(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "n_inner_open.fs",
+        "module M\ntype U = A of )\nmodule N =\n    open System\n    let x = )\n",
+        [
+            "n_inner_open.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "n_inner_open.fs(5,13,5,14): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "n_inner_type.fs",
+        "module M\ntype U = A of )\nmodule N =\n    type V = int\n    let x = )\n",
+        [
+            "n_inner_type.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "n_inner_type.fs(5,13,5,14): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "n_let.fs",
+        "module M\ntype U = A of )\nmodule N =\n    let x = 1\nlet y = )\n",
+        [
+            "n_let.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "n_let.fs(5,9,5,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "n_open_let.fs",
+        "module M\ntype U = A of )\nmodule N =\n    let x = 1\nopen System\nlet y = )\n",
+        [
+            "n_open_let.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "n_open_let.fs(6,9,6,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "n_open.fs",
+        "module M\ntype U = A of )\nmodule N =\n    let x = 1\nopen System\n",
+        [ "n_open.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition" ]
+
         "b_and.fs",
         "module M\nlet rec a = 1\nand b =\nlet c = 1\n",
         [
@@ -6235,6 +6288,14 @@ module M =
     ]
 
     let private unmodeledIncompleteConstructCases = [
+        "l_open_let.fs",
+        "module M\ntype U = A of )\nlet x = 1\nopen System\nlet y = )\n",
+        [
+            "l_open_let.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "l_open_let.fs(4,1,4,5): error FS0010: Unexpected keyword 'open' in member definition"
+            "l_open_let.fs(5,9,5,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
         "m_field_let.fs",
         "module M\ntype T = int\nand U = { A: ) }\nlet x = )\n",
         [
