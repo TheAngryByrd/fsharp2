@@ -588,6 +588,22 @@ module internal Parser =
         Range = token.Range
     }
 
+    // The Compatibility Oracle reports an incomplete construct at end of input from column 1 of the last line.
+    let private lastLineToEnd (endOfFile: LayoutToken) =
+        let eof = endOfFile.Range.Start
+
+        {
+            Start = {
+                eof with
+                    Offset =
+                        eof.Offset
+                        - (eof.Column
+                           - 1)
+                    Column = 1
+            }
+            End = eof
+        }
+
     let private afterLastToken (cursor: Cursor) =
         let rec nextSourceToken offset closesBlock =
             let token = cursor.Peek offset
@@ -601,19 +617,7 @@ module internal Parser =
         let next, closesBlock = nextSourceToken 0 false
 
         if isEndOfFile next then
-            let eof = next.Range.Start
-            // The Compatibility Oracle reports an incomplete construct at end of input from column 1 of the last line.
-            {
-                Start = {
-                    eof with
-                        Offset =
-                            eof.Offset
-                            - (eof.Column
-                               - 1)
-                        Column = 1
-                }
-                End = eof
-            }
+            lastLineToEnd next
         elif closesBlock then
             next.Range
         else
@@ -647,19 +651,7 @@ module internal Parser =
         let token = nextSourceToken cursor
 
         if isEndOfFile token then
-            let eof = token.Range.Start
-
-            {
-                Start = {
-                    eof with
-                        Offset =
-                            eof.Offset
-                            - (eof.Column
-                               - 1)
-                        Column = 1
-                }
-                End = eof
-            }
+            lastLineToEnd token
         else
             token.Range
 
@@ -3137,18 +3129,7 @@ module internal Parser =
             let token = state.Cursor.Current
 
             if isEndOfFile token then
-                let eof = token.Range.Start
-
-                let lineStart = {
-                    eof with
-                        Offset =
-                            eof.Offset
-                            - (eof.Column
-                               - 1)
-                        Column = 1
-                }
-
-                reportIncompleteAtRoot state { Start = lineStart; End = eof }
+                reportIncompleteAtRoot state (lastLineToEnd token)
             else
                 reportIncompleteAtRoot state token.Range
         | _ -> ()
