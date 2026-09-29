@@ -3027,11 +3027,21 @@ module internal Parser =
 
         SyntaxTypeRepresentation.Class(members.ToImmutable())
 
-    let private startsUnion (cursor: Cursor) =
+    let private startsUnion (cursor: Cursor) (definition: SourcePosition option) =
+        let bar = cursor.Peek 1
+
+        let continuesAtBar =
+            isOperator "|" bar
+            && (
+                match definition with
+                | Some context -> not (isOffside context bar)
+                | None -> true
+            )
+
         isOperator "|" cursor.Current
         || (isIdentifier cursor.Current
-            && (isKeyword "of" (cursor.Peek 1)
-                || isOperator "|" (cursor.Peek 1)))
+            && (isKeyword "of" bar
+                || continuesAtBar))
 
     let private startsMember (token: LayoutToken) =
         isKeyword "member" token
@@ -3042,7 +3052,7 @@ module internal Parser =
 
         if isDelimiter "{" cursor.Current then
             parseRecordFields state
-        elif startsUnion cursor then
+        elif startsUnion cursor definition then
             parseUnionCases state definition
         elif startsMember cursor.Current then
             parseMembers state

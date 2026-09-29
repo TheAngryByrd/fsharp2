@@ -570,6 +570,25 @@ module ParserGrammarTests =
                             "The Oracle type checker accepts this binding as a comparison"
             ]
 
+            testCase "an offside bar ends a same-line abbreviation or union"
+            <| fun _ ->
+                let firstShape text =
+                    let result = parse "Offside.fs" text
+
+                    (Seq.exactlyOne result.File.Contents).Declarations
+                    |> Seq.head
+                    |> declarationShape
+
+                Expect.equal
+                    (firstShape "module P\ntype U = string\n| B\n")
+                    "type U = string"
+                    "An identifier before an offside '|' is an abbreviation"
+
+                Expect.equal
+                    (firstShape "module P\ntype U = A of int\n| B\n")
+                    "type U = | A of int"
+                    "The union ends before an offside '|'"
+
             testCase "a let keyword on the next line ends the type argument scan"
             <| fun _ ->
                 let declarations, _ =
