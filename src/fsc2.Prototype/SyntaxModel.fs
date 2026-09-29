@@ -29,13 +29,23 @@ type internal SyntaxConstant =
     | Boolean of bool
     | Unit
 
+type internal SyntaxArraySuffix = {
+    Commas: ImmutableArray<SourceRange>
+    Range: SourceRange
+} with
+
+    member this.Rank =
+        this.Commas.Length
+        + 1
+
 [<RequireQualifiedAccess>]
 type internal SyntaxType =
     | LongIdentifier of LongIdentifier
     | GlobalLongIdentifier of globalKeyword: SourceRange * LongIdentifier option * SourceRange
     | Variable of SyntaxIdentifier
     | Application of SyntaxType * ImmutableArray<SyntaxType> * isPostfix: bool * SourceRange
-    | Array of element: SyntaxType * rank: int * SourceRange
+    | Array of element: SyntaxType * SyntaxArraySuffix * SourceRange
+    | NestedName of SyntaxNestedTypeName
     | Function of SyntaxType * SyntaxType * SourceRange
     | Tuple of ImmutableArray<SyntaxType> * SourceRange
     | Parenthesized of SyntaxType * SourceRange
@@ -49,11 +59,27 @@ type internal SyntaxType =
         | GlobalLongIdentifier(_, _, range)
         | Application(_, _, _, range)
         | Array(_, _, range)
+        | NestedName { Range = range }
         | Function(_, _, range)
         | Tuple(_, range)
         | Parenthesized(_, range)
         | SignatureParameter(_, _, range) -> range
         | Missing missing -> missing.Range
+
+and internal SyntaxClosedTypeArguments = {
+    TypeName: SyntaxType
+    Arguments: ImmutableArray<SyntaxType>
+    Less: SourceRange
+    Greater: SourceRange
+    Range: SourceRange
+}
+
+and internal SyntaxNestedTypeName = {
+    Enclosing: SyntaxClosedTypeArguments
+    Dot: SourceRange
+    Name: LongIdentifier
+    Range: SourceRange
+}
 
 [<RequireQualifiedAccess>]
 type internal SyntaxPattern =

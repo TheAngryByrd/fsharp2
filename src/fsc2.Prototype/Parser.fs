@@ -837,6 +837,19 @@ module internal Parser =
         && tokenText token
            |> Seq.forall ((=) '>')
 
+    let private closesTypeArgumentsBeforeDot (token: LayoutToken) =
+        let text = tokenText token
+
+        isKind LexicalTokenKind.Operator token
+        && text.Length > 1
+        && text.EndsWith '.'
+        && text.Substring(
+            0,
+            text.Length
+            - 1
+           )
+           |> Seq.forall ((=) '>')
+
     let private arraySuffixLength (cursor: Cursor) context =
         let rec closeAt offset =
             let token = cursor.Peek offset
@@ -972,12 +985,20 @@ module internal Parser =
         while not stop do
             match arraySuffixLength cursor context with
             | Some closeOffset ->
-                for _ in 1..closeOffset do
-                    cursor.Advance()
-                    |> ignore
+                let openToken = cursor.Advance()
+                let commas = ImmutableArray.CreateBuilder<SourceRange>()
+
+                for _ in 2..closeOffset do
+                    commas.Add(cursor.Advance().Range)
 
                 let close = cursor.Advance()
-                result <- SyntaxType.Array(result, closeOffset, span result.Range close.Range)
+
+                let suffix = {
+                    Commas = commas.ToImmutable()
+                    Range = span openToken.Range close.Range
+                }
+
+                result <- SyntaxType.Array(result, suffix, span result.Range close.Range)
             | None when
                 (isKeyword "global" cursor.Current
                  || (isIdentifier cursor.Current
@@ -1099,25 +1120,30 @@ module internal Parser =
 
                 arguments.Add(parseNestedType state context)
 
-            if closesTypeArguments cursor.Current then
+            let adjacent = openToken.Range.Start.Offset = name.Range.End.Offset
+
+            // The Compatibility Oracle splits `>.` only after type arguments that touch the type name.
+            if
+                closesTypeArguments cursor.Current
+                || (adjacent
+                    && closesTypeArgumentsBeforeDot cursor.Current)
+            then
                 let close = cursor.AdvanceFirstCharacter()
 
-                if
-                    openToken.Range.Start.Offset
-                    <> name.Range.End.Offset
-                then
+                if not adjacent then
                     reportWarning
                         state
                         typeArgumentSpaceCode
                         "Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
                         (span openToken.Range close.Range)
 
-                SyntaxType.Application(
-                    name,
-                    arguments.ToImmutable(),
-                    false,
-                    span name.Range close.Range
-                )
+                parseNestedName state context {
+                    TypeName = name
+                    Arguments = arguments.ToImmutable()
+                    Less = openToken.Range
+                    Greater = close.Range
+                    Range = span name.Range close.Range
+                }
             else
                 if not (reportedAt state cursor.Current) then
                     reportUnsupported state cursor.Current "type arguments"
@@ -1130,6 +1156,40 @@ module internal Parser =
                 )
         else
             name
+
+    and private parseNestedName state context (enclosing: SyntaxClosedTypeArguments) =
+        let cursor = state.Cursor
+
+        let application =
+            SyntaxType.Application(enclosing.TypeName, enclosing.Arguments, false, enclosing.Range)
+
+        if
+            isOperator "." cursor.Current
+            && not (isOffside context cursor.Current)
+        then
+            let dot = cursor.Advance()
+
+            if
+                isIdentifier cursor.Current
+                && tokenText cursor.Current
+                   <> "_"
+            then
+                let name = longIdentifier state
+
+                parseTypeArguments
+                    state
+                    context
+                    (SyntaxType.NestedName {
+                        Enclosing = enclosing
+                        Dot = dot.Range
+                        Name = name
+                        Range = span enclosing.Range name.Range
+                    })
+            else
+                reportUnsupported state cursor.Current "a nested type name"
+                application
+        else
+            application
 
     let private canStartAtom (token: LayoutToken) =
         isIdentifier token
