@@ -1076,9 +1076,350 @@ module CompilerTargetTests =
         finally
             Directory.Delete(root, true)
 
+    let private withNegativeConstructDifferential
+        (temporaryDirectoryName: string)
+        (sourceText: string)
+        oracleDiagnosticCode
+        =
+        let root =
+            Path.Combine(Path.GetTempPath(), temporaryDirectoryName, Guid.NewGuid().ToString("N"))
+
+        Directory.CreateDirectory(root)
+        |> ignore
+
+        try
+            let sourcePath = Path.Combine(root, "Negative.fs")
+            File.WriteAllText(sourcePath, sourceText)
+
+            let fsharpCorePath = typeof<Microsoft.FSharp.Core.StructAttribute>.Assembly.Location
+            let systemRuntimePath = Assembly.Load("System.Runtime").Location
+
+            let commonArguments = [
+                "--nologo"
+                "--target:library"
+                "--targetprofile:netcore"
+                "--fullpaths"
+                "--flaterrors"
+                "--utf8output"
+                "--deterministic+"
+                "--debug:portable"
+                "--optimize-"
+                $"--reference:{fsharpCorePath}"
+                $"--reference:{systemRuntimePath}"
+            ]
+
+            let oracleOutputPath = Path.Combine(root, "Negative-oracle.dll")
+            let oraclePdbPath = Path.Combine(root, "Negative-oracle.pdb")
+            let oracleResponsePath = Path.Combine(root, "oracle.rsp")
+
+            let oracleResult =
+                invokeCompatibilityOracle root oracleResponsePath [
+                    yield! commonArguments
+                    $"--out:{oracleOutputPath}"
+                    $"--pdb:{oraclePdbPath}"
+                    sourcePath
+                ]
+
+            Expect.equal
+                oracleResult.ExitCode
+                1
+                "the Compatibility Oracle should reject the negative construct"
+
+            Expect.stringContains
+                oracleResult.StandardError
+                oracleDiagnosticCode
+                $"the Compatibility Oracle should report {oracleDiagnosticCode}"
+
+            let outputPath = Path.Combine(root, "Negative-fsharp2.dll")
+            let pdbPath = Path.Combine(root, "Negative-fsharp2.pdb")
+            let responsePath = Path.Combine(root, "fsharp2.rsp")
+
+            File.WriteAllLines(
+                responsePath,
+                [|
+                    yield! commonArguments
+                    $"--out:{outputPath}"
+                    $"--pdb:{pdbPath}"
+                    sourcePath
+                |]
+            )
+
+            let result = invokeFsc2 root responsePath
+
+            Expect.equal
+                result.ExitCode
+                oracleResult.ExitCode
+                "FSharp2 and the Compatibility Oracle should reject the same source"
+
+            Expect.equal
+                result.StandardOutput
+                oracleResult.StandardOutput
+                "the rejected source should have the Compatibility Oracle standard-output behavior"
+
+            Expect.isNotEmpty
+                result.StandardError
+                "FSharp2 should report why it rejected the source"
+
+            for artifactPath in
+                [
+                    oracleOutputPath
+                    oraclePdbPath
+                    outputPath
+                    pdbPath
+                ] do
+                Expect.isFalse
+                    (File.Exists artifactPath)
+                    $"a rejected source should not publish {Path.GetFileName(artifactPath)}"
+        finally
+            Directory.Delete(root, true)
+
+    let private negativeConstructCases = [
+        "object member shape rejects a mismatched return value",
+        "object-member-shape",
+        "namespace CompatibilityOracleNegative\n\ntype Builder() =\n    member inline _.Return(value: int) : bool = value\n",
+        "FS0001"
+        "parameterized generic object members reject an explicit result mismatch",
+        "generic-object-member",
+        "namespace CompatibilityOracleNegative\n\ntype Builder() =\n    member inline _.Identity<'T>(value: 'T) : 'T = value\n\nmodule Use =\n    let value: int = Builder().Identity<bool>(true)\n",
+        "FS0193"
+        "FSharpFunc object-member signatures reject the wrong function domain",
+        "function-object-member",
+        "namespace CompatibilityOracleNegative\n\ntype Builder() =\n    member inline _.Apply(callback: int -> int) : int = callback true\n",
+        "FS0001"
+        "generic aliases in member signatures reject a different argument",
+        "generic-alias-member",
+        "namespace CompatibilityOracleNegative\n\ntype Values<'T> = 'T list\n\ntype Builder() =\n    member inline _.Identity(values: Values<int>) : Values<bool> = values\n",
+        "FS0001"
+        "local generic structs in member signatures reject a different argument",
+        "local-generic-struct-member",
+        "namespace CompatibilityOracleNegative\n\n[<Struct>]\ntype Data<'T> = { Value: 'T }\n\ntype Builder() =\n    member inline _.Identity(value: Data<int>) : Data<bool> = value\n",
+        "FS0001"
+        "resumable Return closures reject a mismatched result",
+        "resumable-return",
+        "namespace CompatibilityOracleNegative\n\nopen Microsoft.FSharp.Core.CompilerServices\n\ntype Builder() =\n    member inline _.Return(value: int) : ResumableCode<int, bool> =\n        ResumableCode<int, bool>(fun _ -> value)\n",
+        "FS0001"
+        "flexible type constraints reject an incompatible result",
+        "flexible-type-constraint",
+        "namespace CompatibilityOracleNegative\n\ntype Builder() =\n    member inline _.Identity(value: #seq<int>) : int = value\n",
+        "FS0001"
+        "object-member attributes do not hide a return mismatch",
+        "object-member-attribute",
+        "namespace CompatibilityOracleNegative\n\ntype Builder() =\n    [<DefaultValue>]\n    member inline _.Return(value: int) : bool = value\n",
+        "FS0001"
+        "resumable TryFinally shapes reject a non-unit finalizer",
+        "resumable-try-finally",
+        "namespace CompatibilityOracleNegative\n\nmodule Program =\n    let value: int =\n        try\n            1\n        finally\n            let finalizerValue: int = true\n            ignore finalizerValue\n",
+        "FS0001"
+        "attributed static object members reject a mismatched result",
+        "attributed-static-member",
+        "namespace CompatibilityOracleNegative\n\ntype Builder =\n    [<NoEagerConstraintApplication>]\n    static member inline Return(value: int) : bool = value\n",
+        "FS0001"
+        "parenthesized function types reject the wrong function domain",
+        "parenthesized-function-type",
+        "namespace CompatibilityOracleNegative\n\nmodule Program =\n    let apply (callback: (int -> int)) : int = callback true\n",
+        "FS0001"
+        "local let bindings reject a mismatched annotation",
+        "local-let-binding",
+        "namespace CompatibilityOracleNegative\n\ntype Builder() =\n    member _.Read() =\n        let value: int = true\n        value\n",
+        "FS0001"
+        "whitespace-applied static calls reject the wrong argument",
+        "whitespace-static-call",
+        "namespace CompatibilityOracleNegative\n\ntype Helper =\n    static member Identity(value: int) = value\n\nmodule Program =\n    let value = Helper.Identity true\n",
+        "FS0001"
+        "grouped FSharpFunc applications reject the wrong result",
+        "grouped-function-application",
+        "namespace CompatibilityOracleNegative\n\nmodule Program =\n    let value: int = (id) true\n",
+        "FS0001"
+        "grouped expression member calls reject the wrong result",
+        "grouped-member-call",
+        "namespace CompatibilityOracleNegative\n\ntype Box() =\n    member _.Read() = true\n\nmodule Program =\n    let value: int = (Box()).Read()\n",
+        "FS0193"
+        "if-then-else expressions reject different branch types",
+        "if-then-else",
+        "namespace CompatibilityOracleNegative\n\nmodule Program =\n    let choose flag = if flag then 1 else false\n",
+        "FS0001"
+        "constrained generic upcasts reject an incompatible result",
+        "constrained-upcast",
+        "namespace CompatibilityOracleNegative\n\ntype Base() = class end\n\nmodule Program =\n    let inline convert<'T when 'T :> Base> (value: 'T) : int = upcast value\n",
+        "FS0193"
+        "multi-expression conditional branches reject different result types",
+        "multi-expression-conditional",
+        "namespace CompatibilityOracleNegative\n\nmodule Program =\n    let choose flag =\n        if flag then\n            let value = 1\n            value\n        else\n            false\n",
+        "FS0001"
+        "mutable local assignments reject a different value type",
+        "mutable-local-assignment",
+        "namespace CompatibilityOracleNegative\n\nmodule Program =\n    let run () =\n        let mutable value = 1\n        value <- true\n        value\n",
+        "FS0001"
+        "Boolean negation rejects a non-Boolean operand",
+        "boolean-negation",
+        "namespace CompatibilityOracleNegative\n\nmodule Program =\n    let value = not 1\n",
+        "FS0001"
+        "postfix calls on call results reject the wrong argument",
+        "postfix-call-result",
+        "namespace CompatibilityOracleNegative\n\ntype Box() =\n    member _.Next() = Box()\n    member _.Take(value: int) = value\n\nmodule Program =\n    let value = Box().Next().Take(true)\n",
+        "FS0001"
+        "unit-valued conditionals without else reject a value branch",
+        "unit-conditional",
+        "namespace CompatibilityOracleNegative\n\nmodule Program =\n    let run flag =\n        if flag then\n            1\n",
+        "FS0001"
+        "address-of member expressions reject a different byref type",
+        "address-of-member-expression",
+        "namespace CompatibilityOracleNegative\n\nmodule Program =\n    let read (value: byref<int>) = value\n    let run () =\n        let mutable flag = true\n        read &flag\n",
+        "FS0001"
+        "captured unit lambdas reject a different assignment type",
+        "captured-unit-lambda",
+        "namespace CompatibilityOracleNegative\n\nmodule Program =\n    let make () =\n        let mutable value = 1\n        fun () -> value <- true\n",
+        "FS0001"
+        "typed lambda parameters reject an incompatible operation",
+        "typed-lambda-parameter",
+        "namespace CompatibilityOracleNegative\n\nmodule Program =\n    let callback = fun (value: int) -> not value\n",
+        "FS0001"
+        "nested type extensions reject a mismatched member result",
+        "nested-type-extension",
+        "namespace CompatibilityOracleNegative\n\nmodule Outer =\n    type Builder() = class end\n\n    module Extensions =\n        type Builder with\n            member _.Read(value: int) : bool = value\n",
+        "FS0001"
+        "constrained type extensions reject an incompatible upcast result",
+        "constrained-type-extension",
+        "namespace CompatibilityOracleNegative\n\ntype Base() = class end\ntype Derived() = inherit Base()\n\nmodule Extensions =\n    type Base with\n        member inline _.Convert<'T when 'T :> Base>(value: 'T) : int = upcast value\n",
+        "FS0193"
+        "object expressions reject a mismatched abstract member result",
+        "object-expression",
+        "namespace CompatibilityOracleNegative\n\ntype IProbe =\n    abstract Read: unit -> int\n\nmodule Program =\n    let probe =\n        { new IProbe with\n            member _.Read() = true }\n",
+        "FS0001"
+        "runtime type-test matches reject different branch types",
+        "runtime-type-test",
+        "namespace CompatibilityOracleNegative\n\nmodule Program =\n    let read value =\n        match box value with\n        | :? int -> true\n        | _ -> 0\n",
+        "FS0001"
+        "current-module type augmentations reject a mismatched static result",
+        "current-module-augmentation",
+        "namespace CompatibilityOracleNegative\n\nmodule Extensions =\n    type Builder() = class end\n\n    type Builder with\n        static member Read(value: int) : bool = value\n",
+        "FS0001"
+        "non-inline static type augmentations reject a mismatched result",
+        "non-inline-static-augmentation",
+        "namespace CompatibilityOracleNegative\n\ntype Builder() = class end\n\nmodule Extensions =\n    type Builder with\n        static member Read(value: int) : bool = value\n",
+        "FS0001"
+        "qualified type augmentations reject a mismatched result",
+        "qualified-type-augmentation",
+        "namespace CompatibilityOracleNegative\n\ntype Builder() = class end\n\nmodule Extensions =\n    type CompatibilityOracleNegative.Builder with\n        member _.Read(value: int) : bool = value\n",
+        "FS0039"
+        "object constructors reject the wrong reference-call argument",
+        "object-constructor-call",
+        "namespace CompatibilityOracleNegative\n\ntype Box(value: int) =\n    member _.Value = value\n\nmodule Program =\n    let value = Box(true)\n",
+        "FS0001"
+        "explicit generic static calls reject the wrong type argument",
+        "explicit-generic-static-call",
+        "namespace CompatibilityOracleNegative\n\ntype Helper =\n    static member Identity<'T>(value: 'T) : 'T = value\n\nmodule Program =\n    let value: int = Helper.Identity<int>(true)\n",
+        "FS0001"
+        "piped generic construction rejects a different closed type",
+        "piped-generic-construction",
+        "namespace CompatibilityOracleNegative\n\ntype Box<'T>(value: 'T) =\n    member _.Value = value\n\nmodule Program =\n    let value: Box<int> = true |> Box<bool>\n",
+        "FS0001"
+        "inherited namespace fragments reject a mismatched value",
+        "inherited-namespace-fragments",
+        "namespace CompatibilityOracleNegative.First\n\ntype Base() = class end\n\nnamespace CompatibilityOracleNegative.Second\n\ntype Derived() = inherit CompatibilityOracleNegative.First.Base()\n\nmodule Values =\n    let value: int = true\n",
+        "FS0001"
+        "parameterless generic construction rejects a different closed type",
+        "parameterless-generic-construction",
+        "namespace CompatibilityOracleNegative\n\ntype Box<'T>() = class end\n\nmodule Program =\n    let value: Box<int> = Box<bool>()\n",
+        "FS0193"
+        "parameterized object-expression overrides reject a mismatched result",
+        "parameterized-object-override",
+        "namespace CompatibilityOracleNegative\n\ntype ITransform =\n    abstract Map: int -> int\n\nmodule Program =\n    let transform =\n        { new ITransform with\n            member _.Map(value: int) = true }\n",
+        "FS0001"
+        "null expressions reject a non-nullable value type",
+        "null-expression",
+        "namespace CompatibilityOracleNegative\n\nmodule Program =\n    let value: int = null\n",
+        "FS0043"
+        "object-expression receiver references reject a mismatched result",
+        "object-expression-receiver",
+        "namespace CompatibilityOracleNegative\n\ntype IProbe =\n    abstract Read: unit -> int\n\nmodule Program =\n    let probe =\n        { new IProbe with\n            member this.Read() : int = this }\n",
+        "FS0001"
+        "chained instance properties reject a mismatched result",
+        "chained-instance-property",
+        "namespace CompatibilityOracleNegative\n\ntype Inner() =\n    member _.Value = true\n\ntype Outer() =\n    member _.Inner = Inner()\n\nmodule Program =\n    let value: int = Outer().Inner.Value\n",
+        "FS0193"
+        "chained instance fields reject a mismatched result",
+        "chained-instance-field",
+        "namespace CompatibilityOracleNegative\n\n[<Struct>]\ntype Inner = { Value: bool }\n\ntype Outer = { Inner: Inner }\n\nmodule Program =\n    let value: int = { Inner = { Value = true } }.Inner.Value\n",
+        "FS0001"
+        "struct tuple expressions reject a mismatched element",
+        "struct-tuple-expression",
+        "namespace CompatibilityOracleNegative\n\nmodule Program =\n    let value: struct (int * bool) = struct (1, 2)\n",
+        "FS0001"
+        "delegate expressions reject different conditional branch results",
+        "delegate-conditional-expression",
+        "namespace CompatibilityOracleNegative\n\ntype Callback = delegate of int -> int\n\nmodule Program =\n    let flag = true\n    let callback = Callback(fun value -> if flag then value else false)\n",
+        "FS0001"
+        "try-with handlers reject a different result type",
+        "try-with-handler",
+        "namespace CompatibilityOracleNegative\n\nmodule Program =\n    let run () : int =\n        try\n            1\n        with _ ->\n            false\n",
+        "FS0001"
+        "guarded exception clauses reject a non-Boolean guard",
+        "guarded-exception-clause",
+        "namespace CompatibilityOracleNegative\n\nmodule Program =\n    let run () =\n        try\n            1\n        with\n        | _ when 1 -> 0\n",
+        "FS0001"
+        "null patterns reject a non-nullable input type",
+        "null-pattern",
+        "namespace CompatibilityOracleNegative\n\nmodule Program =\n    let read value =\n        match value with\n        | null -> 0\n        | _ -> 1\n\n    let result = read 1\n",
+        "FS0001"
+        "Boolean conjunction rejects a non-Boolean operand",
+        "boolean-conjunction",
+        "namespace CompatibilityOracleNegative\n\nmodule Program =\n    let value = true && 1\n",
+        "FS0001"
+        "isNull intrinsic applications reject a non-nullable value",
+        "is-null-application",
+        "namespace CompatibilityOracleNegative\n\nmodule Program =\n    let value = isNull 1\n",
+        "FS0001"
+        "attributed nested modules do not hide a value mismatch",
+        "attributed-nested-module",
+        "namespace CompatibilityOracleNegative\n\n[<AutoOpen>]\nmodule Nested =\n    let value: int = true\n",
+        "FS0001"
+        "tuple-argument local functions reject a mismatched tuple element",
+        "tuple-argument-function",
+        "namespace CompatibilityOracleNegative\n\nmodule Program =\n    let inline choose (left: int, right: int) = left + right\n    let value = choose (1, true)\n",
+        "FS0001"
+        "named optional arguments reject a mismatched value",
+        "named-optional-argument",
+        "namespace CompatibilityOracleNegative\n\ntype Builder() =\n    member _.Read(?value: int) = defaultArg value 0\n\nmodule Program =\n    let value = Builder().Read(?value = Some true)\n",
+        "FS0001"
+        "while expressions reject a non-Boolean guard",
+        "while-guard",
+        "namespace CompatibilityOracleNegative\n\nmodule Program =\n    let run () =\n        while 1 do\n            ()\n",
+        "FS0001"
+        "sequential for expressions reject a non-enumerable source",
+        "sequential-for-source",
+        "namespace CompatibilityOracleNegative\n\nmodule Program =\n    let run () =\n        for value in 1 do\n            ignore value\n",
+        "FS0693"
+        "computation-expression bind rejects a missing builder operation",
+        "computation-expression-bind",
+        "namespace CompatibilityOracleNegative\n\ntype Builder() =\n    member _.Return(value: int) = value\n\nmodule Program =\n    let builder = Builder()\n    let value =\n        builder {\n            let! item = 1\n            return item\n        }\n",
+        "FS0708"
+        "assembly-targeted AutoOpen attributes reject a mismatched argument",
+        "assembly-auto-open-attribute",
+        "namespace CompatibilityOracleNegative\n\n[<assembly: AutoOpen(1)>]\ndo ()\n",
+        "FS0001"
+        "generic task resumption inference rejects a continuation-domain mismatch",
+        "generic-task-resumption",
+        "namespace CompatibilityOracleNegative\n\nopen System.Runtime.CompilerServices\nopen Microsoft.FSharp.Core.CompilerServices\n\ntype Awaiter<'Awaiter, 'TResult\n    when 'Awaiter :> ICriticalNotifyCompletion\n    and 'Awaiter: (member GetResult: unit -> 'TResult)> = 'Awaiter\n\ntype Awaiter =\n    static member inline GetResult<'Awaiter, 'TResult when Awaiter<'Awaiter, 'TResult>>\n        (awaiter: 'Awaiter)\n        =\n        awaiter.GetResult()\n\n[<Struct; NoComparison; NoEquality>]\ntype State<'T> =\n    [<DefaultValue(false)>]\n    val mutable Result: 'T\n\ntype Builder =\n    static member inline Bind\n        (\n            awaiter: 'Awaiter,\n            continuation: bool -> ResumableCode<State<'TOverall>, 'TResult2>\n        ) =\n        ResumptionFunc<State<'TOverall>>(fun sm ->\n            let result: int = Awaiter.GetResult awaiter\n            (continuation result).Invoke(&sm)\n        )\n",
+        "FS0001"
+    ]
+
     [<Tests>]
     let tests =
         testList "Compiler Target Invocation" [
+            testList
+                "PR 43 negative Compatibility Oracle cases"
+                (negativeConstructCases
+                 |> List.map (fun (name, temporaryDirectoryName, sourceText, diagnosticCode) ->
+                     testCase name
+                     <| fun _ ->
+                         withNegativeConstructDifferential
+                             ("fsharp2-negative-"
+                              + temporaryDirectoryName)
+                             sourceText
+                             diagnosticCode
+                 ))
+
             testCase "emits a library with source-mapped debug output and executes it"
             <| fun _ ->
                 let root =
@@ -10996,7 +11337,6 @@ module CompilerTargetTests =
                             "--define:RELEASE"
                             $"--doc:{documentationPath}"
                             "--optimize-"
-                            "--tailcalls-"
                             "--checknulls+"
                             "--define:NULLABLE"
                             $"-r:{systemRuntime}"
@@ -11247,19 +11587,34 @@ module CompilerTargetTests =
                         )
 
                     let netstandardReferencePath =
-                        Path.Combine(
-                            dotnetRoot,
-                            "packs",
-                            "NETStandard.Library.Ref",
-                            "2.1.0",
-                            "ref",
-                            "netstandard2.1",
-                            "netstandard.dll"
-                        )
+                        let runtimePackVersion =
+                            DirectoryInfo(RuntimeEnvironment.GetRuntimeDirectory()).Name
 
-                    Expect.isTrue
-                        (File.Exists netstandardReferencePath)
-                        "the installed .NET SDK should contain the netstandard2.1 reference assembly"
+                        let referenceRoot =
+                            Path.Combine(
+                                dotnetRoot,
+                                "packs",
+                                "Microsoft.NETCore.App.Ref",
+                                runtimePackVersion,
+                                "ref"
+                            )
+
+                        let candidates =
+                            if Directory.Exists referenceRoot then
+                                Directory.GetFiles(
+                                    referenceRoot,
+                                    "netstandard.dll",
+                                    SearchOption.AllDirectories
+                                )
+                            else
+                                Array.empty
+
+                        Expect.hasLength
+                            candidates
+                            1
+                            "the active .NET reference pack should contain one netstandard facade"
+
+                        candidates[0]
 
                     File.WriteAllText(
                         targetFrameworkSourcePath,
@@ -13255,6 +13610,9 @@ module CompilerTargetTests =
                     let sourcePath = Path.Combine(projectRoot, "Tracer.fs")
                     let tracePath = Path.Combine(projectRoot, "obj", "fsharp2.trace")
                     let packageVersion = "0.0.0-integration"
+                    let packagedHostRuntimeIdentifier = RuntimeInformation.RuntimeIdentifier
+
+                    let packageId = $"FSharp2.Compiler.MSBuild.{packagedHostRuntimeIdentifier}"
 
                     let pipeName =
                         "fsharp2-msbuild-"
@@ -13324,7 +13682,8 @@ module CompilerTargetTests =
     <RestoreIgnoreFailedSources>true</RestoreIgnoreFailedSources>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="FSharp2.Compiler.MSBuild" Version="{packageVersion}" />
+    <PackageReference Include="{packageId}" Version="{packageVersion}" />
+    <Reference Include="FSharp.Core" HintPath="{typeof<Microsoft.FSharp.Core.AutoOpenAttribute>.Assembly.Location}" />
     <Compile Include="First.fs" />
     <Compile Include="Tracer.fs" />
   </ItemGroup>
@@ -13351,15 +13710,22 @@ module CompilerTargetTests =
                         (restore.StandardOutput
                          + restore.StandardError)
 
+                    let packagedHostExecutableName =
+                        if OperatingSystem.IsWindows() then "fsc2.exe" else "fsc2"
+
                     let packagedHostPath =
                         Path.Combine(
                             packageCache,
-                            "fsharp2.compiler.msbuild",
+                            packageId.ToLowerInvariant(),
                             packageVersion,
                             "tools",
-                            "win-x64",
-                            "fsc2.exe"
+                            packagedHostRuntimeIdentifier,
+                            packagedHostExecutableName
                         )
+
+                    Expect.isTrue
+                        (File.Exists(packagedHostPath))
+                        $"The package must contain the {packagedHostRuntimeIdentifier} compiler host."
 
                     use service = startPackagedCompilerService projectRoot packagedHostPath pipeName
 

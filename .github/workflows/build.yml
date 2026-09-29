@@ -21,7 +21,7 @@ jobs:
       - name: Setup necessary dotnet SDKs
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.110
+          global-json-file: global.json
       - name: Build via Bash
         if: runner.os != 'Windows'
         run: |

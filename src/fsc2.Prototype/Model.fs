@@ -1181,14 +1181,7 @@ type internal TypedExpression =
     | TypedUnitLambda of TypedUnitLambdaExpression
     | TypedFunctionLambda of TypedFunctionLambdaExpression
     | TypedDelegateLambda of TypedDelegateLambdaExpression
-    | TypedValueTaskBind of TypedValueTaskBindExpression
-    | TypedValueTaskApply of TypedValueTaskApplyExpression
-    | TypedValueTaskZip of TypedValueTaskZipExpression
-    | TypedColdTaskParallelZip of TypedColdTaskParallelZipExpression
-    | TypedTaskTryFinally of TypedTaskTryFinallyExpression
-    | TypedAsyncWhile of TypedAsyncWhileExpression
-    | TypedCancellableTaskSequential of TypedCancellableTaskSequentialExpression
-    | TypedValueTaskOfUnit of TypedValueTaskOfUnitExpression
+    | TypedComputation of TypedComputationLowering
     | TypedConditional of
         condition: TypedExpression *
         ifTrue: TypedExpression *
@@ -1253,6 +1246,18 @@ type internal TypedExpression =
         arguments: TypedCallArgument list
 
     override _.ToString() = "TypedExpression"
+
+and internal TypedComputationLowering =
+    | AwaitableBindLowering of TypedAwaitableBindLowering
+    | AwaitableApplyLowering of TypedAwaitableApplyLowering
+    | AwaitableZipLowering of TypedAwaitableZipLowering
+    | FunctionParallelZipLowering of TypedFunctionParallelZipLowering
+    | AwaitableTryFinallyLowering of TypedAwaitableTryFinallyLowering
+    | ComputationWhileLowering of TypedComputationWhileLowering
+    | SequenceAggregationLowering of TypedSequenceAggregationLowering
+    | AwaitableUnitConversionLowering of TypedAwaitableUnitConversionLowering
+
+    override _.ToString() = "TypedComputationLowering"
 
 and internal TypedPatternMatchExpression = {
     Input: TypedExpression
@@ -1330,7 +1335,30 @@ and internal TypedDelegateLambdaExpression = {
 
     override _.ToString() = "TypedDelegateLambdaExpression"
 
-and internal TypedValueTaskBindExpression = {
+and internal TypedResolvedBuilderMethod = {
+    Target: TypedStaticMethodCallTarget
+    GenericArguments: CliType list
+    ResultType: CliType
+} with
+
+    override _.ToString() = "TypedResolvedBuilderMethod"
+
+and internal TypedBuilderBindOperations = {
+    BuilderGetter: TypedStaticMethodCallTarget
+    BuilderGetterGenericArguments: CliType list
+    BuilderType: CliType
+    FSharpFunctionTypeReference: CliTypeReference
+    ConverterTypeReference: CliTypeReference
+    UnitType: CliType
+    Bind: TypedResolvedBuilderMethod
+    ReturnOperation: TypedResolvedBuilderMethod
+    Delay: TypedResolvedBuilderMethod
+    Run: TypedResolvedBuilderMethod
+} with
+
+    override _.ToString() = "TypedBuilderBindOperations"
+
+and internal TypedAwaitableBindLowering = {
     BuilderName: string
     ReturnKind: ComputationReturnKind
     BinderParameterIndex: int
@@ -1350,12 +1378,13 @@ and internal TypedValueTaskBindExpression = {
     NonGenericTaskTypeReference: CliTypeReference
     OperationCanceledExceptionType: CliType
     ExceptionType: CliType
+    BuilderOperations: TypedBuilderBindOperations
     Range: SourceRange
 } with
 
-    override _.ToString() = "TypedValueTaskBindExpression"
+    override _.ToString() = "TypedAwaitableBindLowering"
 
-and internal TypedValueTaskApplyExpression = {
+and internal TypedAwaitableApplyLowering = {
     BuilderName: string
     ApplicableParameterIndex: int
     InputParameterIndex: int
@@ -1378,9 +1407,9 @@ and internal TypedValueTaskApplyExpression = {
     Range: SourceRange
 } with
 
-    override _.ToString() = "TypedValueTaskApplyExpression"
+    override _.ToString() = "TypedAwaitableApplyLowering"
 
-and internal TypedValueTaskZipExpression = {
+and internal TypedAwaitableZipLowering = {
     BuilderName: string
     LeftParameterIndex: int
     RightParameterIndex: int
@@ -1404,16 +1433,18 @@ and internal TypedValueTaskZipExpression = {
     Range: SourceRange
 } with
 
-    override _.ToString() = "TypedValueTaskZipExpression"
+    override _.ToString() = "TypedAwaitableZipLowering"
 
-and internal TypedColdTaskParallelZipExpression = {
+and internal TypedFunctionParallelZipLowering = {
     Function: TypedFunctionLambdaExpression
-    Zip: TypedValueTaskZipExpression
+    Zip: TypedAwaitableZipLowering
+    IsCancellationTokenBased: bool
 } with
 
-    override _.ToString() = "TypedColdTaskParallelZipExpression"
+    override _.ToString() = "TypedFunctionParallelZipLowering"
 
-and internal TypedTaskTryFinallyExpression = {
+and internal TypedAwaitableTryFinallyLowering = {
+    BuilderName: string
     WaitParameterIndex: int
     WorkParameterIndex: int
     CompensationParameterIndex: int
@@ -1435,9 +1466,10 @@ and internal TypedTaskTryFinallyExpression = {
     Range: SourceRange
 } with
 
-    override _.ToString() = "TypedTaskTryFinallyExpression"
+    override _.ToString() = "TypedAwaitableTryFinallyLowering"
 
-and internal TypedAsyncWhileExpression = {
+and internal TypedComputationWhileLowering = {
+    BuilderName: string
     GuardParameterIndex: int
     ComputationParameterIndex: int
     AsyncTypeReference: CliTypeReference
@@ -1451,9 +1483,10 @@ and internal TypedAsyncWhileExpression = {
     Range: SourceRange
 } with
 
-    override _.ToString() = "TypedAsyncWhileExpression"
+    override _.ToString() = "TypedComputationWhileLowering"
 
-and internal TypedCancellableTaskSequentialExpression = {
+and internal TypedSequenceAggregationLowering = {
+    BuilderName: string
     SequenceParameterIndex: int
     ElementType: CliType
     SequenceType: CliType
@@ -1479,10 +1512,9 @@ and internal TypedCancellableTaskSequentialExpression = {
     Range: SourceRange
 } with
 
-    override _.ToString() =
-        "TypedCancellableTaskSequentialExpression"
+    override _.ToString() = "TypedSequenceAggregationLowering"
 
-and internal TypedValueTaskOfUnitExpression = {
+and internal TypedAwaitableUnitConversionLowering = {
     BuilderName: string
     SourceParameterIndex: int
     SourceValueTaskType: CliType
@@ -1501,7 +1533,7 @@ and internal TypedValueTaskOfUnitExpression = {
     Range: SourceRange
 } with
 
-    override _.ToString() = "TypedValueTaskOfUnitExpression"
+    override _.ToString() = "TypedAwaitableUnitConversionLowering"
 
 and internal TypedObjectExpressionMember = {
     IsOverride: bool

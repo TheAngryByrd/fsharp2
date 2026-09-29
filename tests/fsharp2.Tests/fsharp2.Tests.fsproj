@@ -40,6 +40,7 @@
         <Compile Include="CompilerContractTests.fs" />
         <Compile Include="DiagnosticCompatibilityTests.fs" />
         <Compile Include="CompilerTargetTests.fs" />
+        <Compile Include="CorpusNeutralBuilderTests.fs" />
         <Compile Include="Tests.fs" />
         <Compile Include="ParserProbe.fs" />
         <Compile Include="Main.fs" />
