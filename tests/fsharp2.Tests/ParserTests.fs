@@ -71,7 +71,13 @@ module ParserTests =
 
             $"({elements})"
         | SyntaxType.Parenthesized(inner, _) -> typeShape inner
-        | SyntaxType.NestedName(enclosing, name, _) -> $"{typeShape enclosing}.{name.Text}"
+        | SyntaxType.NestedName nested ->
+            let arguments =
+                nested.Enclosing.Arguments
+                |> Seq.map typeShape
+                |> String.concat ", "
+
+            $"{typeShape nested.Enclosing.TypeName}<{arguments}>.{nested.Name.Text}"
         | SyntaxType.Array(element, suffix, _) ->
             $"{typeShape element}[{System.String(',', suffix.Commas.Length)}]"
         | SyntaxType.SignatureParameter(name, parameterType, _) ->
@@ -1350,6 +1356,33 @@ val f: global.A<int>.B -> int
                         "val f: (global.A<int>.B -> int)"
                     ]
                     "Each nested type name keeps its enclosing type"
+
+                let nestedRanges name =
+                    (Seq.exactlyOne result.File.Contents).Declarations
+                    |> Seq.pick (fun declaration ->
+                        match declaration with
+                        | SignatureDeclaration.Val {
+                                                       Name = Some valueName
+                                                       Type = SyntaxType.NestedName nested
+                                                   } when valueName.Text = name ->
+                            Some(
+                                position nested.Enclosing.Less,
+                                position nested.Enclosing.Greater,
+                                position nested.Dot,
+                                position nested.Range
+                            )
+                        | _ -> None
+                    )
+
+                Expect.equal
+                    (nestedRanges "a")
+                    ((2, 12, 2, 13), (2, 16, 2, 17), (2, 17, 2, 18), (2, 8, 2, 28))
+                    "Ranges when the dot touches the closing bracket"
+
+                Expect.equal
+                    (nestedRanges "d")
+                    ((5, 9, 5, 10), (5, 13, 5, 14), (5, 15, 5, 16), (5, 8, 5, 17))
+                    "Ranges when a space separates the dot"
 
             testCase "an open declaration keeps its target kind"
             <| fun _ ->

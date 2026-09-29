@@ -1137,15 +1137,13 @@ module internal Parser =
                         "Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
                         (span openToken.Range close.Range)
 
-                parseNestedName
-                    state
-                    context
-                    (SyntaxType.Application(
-                        name,
-                        arguments.ToImmutable(),
-                        false,
-                        span name.Range close.Range
-                    ))
+                parseNestedName state context {
+                    TypeName = name
+                    Arguments = arguments.ToImmutable()
+                    Less = openToken.Range
+                    Greater = close.Range
+                    Range = span name.Range close.Range
+                }
             else
                 if not (reportedAt state cursor.Current) then
                     reportUnsupported state cursor.Current "type arguments"
@@ -1159,15 +1157,17 @@ module internal Parser =
         else
             name
 
-    and private parseNestedName state context enclosing =
+    and private parseNestedName state context (enclosing: SyntaxClosedTypeArguments) =
         let cursor = state.Cursor
+
+        let application =
+            SyntaxType.Application(enclosing.TypeName, enclosing.Arguments, false, enclosing.Range)
 
         if
             isOperator "." cursor.Current
             && not (isOffside context cursor.Current)
         then
-            cursor.Advance()
-            |> ignore
+            let dot = cursor.Advance()
 
             if
                 isIdentifier cursor.Current
@@ -1179,12 +1179,17 @@ module internal Parser =
                 parseTypeArguments
                     state
                     context
-                    (SyntaxType.NestedName(enclosing, name, span enclosing.Range name.Range))
+                    (SyntaxType.NestedName {
+                        Enclosing = enclosing
+                        Dot = dot.Range
+                        Name = name
+                        Range = span enclosing.Range name.Range
+                    })
             else
                 reportUnsupported state cursor.Current "a nested type name"
-                enclosing
+                application
         else
-            enclosing
+            application
 
     let private canStartAtom (token: LayoutToken) =
         isIdentifier token
