@@ -837,6 +837,22 @@ module internal Parser =
         && tokenText token
            |> Seq.forall ((=) '>')
 
+    let private arraySuffixLength (cursor: Cursor) context =
+        let rec closeAt offset =
+            let token = cursor.Peek offset
+
+            if isDelimiter "]" token then Some offset
+            elif isDelimiter "," token then closeAt (offset + 1)
+            else None
+
+        if
+            isDelimiter "[" cursor.Current
+            && not (isOffside context cursor.Current)
+        then
+            closeAt 1
+        else
+            None
+
     let rec private parseType state context (onGap: TypeGap -> unit option) =
         let cursor = state.Cursor
         let argument = parseTupleType state context onGap
@@ -951,20 +967,40 @@ module internal Parser =
     and private parsePostfixTypes state context first =
         let cursor = state.Cursor
         let mutable result = first
+        let mutable stop = false
 
-        while (isKeyword "global" cursor.Current
-               || (isIdentifier cursor.Current
-                   && not (isOperator ":" (cursor.Peek 1))))
-              && not (isOffside context cursor.Current) do
-            let typeConstructor = parseTypeConstructor state (unsupportedTrailingDot state)
+        while not stop do
+            match arraySuffixLength cursor context with
+            | Some closeOffset ->
+                for _ in 1..closeOffset do
+                    cursor.Advance()
+                    |> ignore
 
-            result <-
-                SyntaxType.Application(
-                    typeConstructor,
-                    ImmutableArray.Create result,
-                    true,
-                    span result.Range typeConstructor.Range
-                )
+                let close = cursor.Advance()
+                result <- SyntaxType.Array(result, closeOffset, span result.Range close.Range)
+            | None when
+                (isKeyword "global" cursor.Current
+                 || (isIdentifier cursor.Current
+                     && not (isOperator ":" (cursor.Peek 1))))
+                && not (isOffside context cursor.Current)
+                ->
+                let typeConstructor = parseTypeConstructor state (unsupportedTrailingDot state)
+
+                result <-
+                    SyntaxType.Application(
+                        typeConstructor,
+                        ImmutableArray.Create result,
+                        true,
+                        span result.Range typeConstructor.Range
+                    )
+            | None when
+                isDelimiter "[" cursor.Current
+                && cursor.Current.Range.Start.Line = cursor.LastEnd.Line
+                && not (isOffside context cursor.Current)
+                ->
+                reportUnsupported state cursor.Current "an array type"
+                stop <- true
+            | None -> stop <- true
 
         result
 

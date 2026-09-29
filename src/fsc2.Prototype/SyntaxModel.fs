@@ -35,6 +35,7 @@ type internal SyntaxType =
     | GlobalLongIdentifier of globalKeyword: SourceRange * LongIdentifier option * SourceRange
     | Variable of SyntaxIdentifier
     | Application of SyntaxType * ImmutableArray<SyntaxType> * isPostfix: bool * SourceRange
+    | Array of element: SyntaxType * rank: int * SourceRange
     | Function of SyntaxType * SyntaxType * SourceRange
     | Tuple of ImmutableArray<SyntaxType> * SourceRange
     | Parenthesized of SyntaxType * SourceRange
@@ -47,6 +48,7 @@ type internal SyntaxType =
         | Variable variable -> variable.Range
         | GlobalLongIdentifier(_, _, range)
         | Application(_, _, _, range)
+        | Array(_, _, range)
         | Function(_, _, range)
         | Tuple(_, range)
         | Parenthesized(_, range)

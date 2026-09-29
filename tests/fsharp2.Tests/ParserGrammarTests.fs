@@ -47,6 +47,8 @@ module ParserGrammarTests =
                   |> Seq.map typeShape
                   |> String.concat " * "})"""
         | SyntaxType.Parenthesized(inner, _) -> typeShape inner
+        | SyntaxType.Array(element, rank, _) ->
+            $"{typeShape element}[{System.String(',', rank - 1)}]"
         | SyntaxType.SignatureParameter(name, parameterType, _) ->
             $"{name.Text}: {typeShape parameterType}"
         | SyntaxType.Missing _ -> "<missing>"

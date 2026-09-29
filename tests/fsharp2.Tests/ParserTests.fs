@@ -71,6 +71,8 @@ module ParserTests =
 
             $"({elements})"
         | SyntaxType.Parenthesized(inner, _) -> typeShape inner
+        | SyntaxType.Array(element, rank, _) ->
+            $"{typeShape element}[{System.String(',', rank - 1)}]"
         | SyntaxType.SignatureParameter(name, parameterType, _) ->
             $"{name.Text}: {typeShape parameterType}"
         | SyntaxType.Missing _ -> "<missing>"
@@ -1257,6 +1259,41 @@ module Values =
                         "]"
                     ]
                     "Skipped tokens"
+
+            testCase "an array type keeps its element type and rank"
+            <| fun _ ->
+                let result =
+                    parseSignature
+                        "Arrays.fsi"
+                        "module Program
+val a: int[]
+val b: int[,]
+val c: int[][]
+val d: List<int>[]
+val e: int list[]
+val f: int[] list
+val g: int [ , , ]
+val h: (int * string)[] -> global.System.String[]
+"
+
+                Expect.isEmpty
+                    result.Diagnostics
+                    "The Compatibility Oracle reports no parse diagnostics"
+
+                Expect.sequenceEqual
+                    (result.File.Contents
+                     |> Seq.collect (rootShapes signatureShape))
+                    [
+                        "val a: int[]"
+                        "val b: int[,]"
+                        "val c: int[][]"
+                        "val d: List<int>[]"
+                        "val e: int list[]"
+                        "val f: int[] list"
+                        "val g: int[,,]"
+                        "val h: ((int * string)[] -> global.System.String[])"
+                    ]
+                    "Each array type keeps its element type and rank"
 
             testCase "an open declaration keeps its target kind"
             <| fun _ ->
