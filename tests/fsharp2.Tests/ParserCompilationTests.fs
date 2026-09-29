@@ -7347,6 +7347,62 @@ module M =
         "b_union_arr_next.fs",
         "module M\ntype U =\n    | A of int[]\n    | B of string[,]\nlet y = 1\n",
         []
+
+        "t_gen_dotafter.fs",
+        "module A\nopen type System.Collections.Generic.List<int>.Enumerator\nlet x = 1\n",
+        []
+
+        "m_abbrev.fs", "module M\ntype T = A<int>.B\nlet y = 1\n", []
+
+        "m_arg.fsi", "module M\nval x: List<A<int>.B>\nval y: int\n", []
+
+        "m_dot_gen2.fsi",
+        "module M\nval x: A<int>.B <string>\nval y: int\n",
+        [
+            "m_dot_gen2.fsi(2,17,2,25): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "m_global.fsi", "module M\nval x: global.A<int>.B\nval y: int\n", []
+
+        "m_nest_close.fsi", "module M\nval x: A<B<int>>.C\nval y: int\n", []
+
+        "m_open.fs", "module M\nopen type A<int>.B\nlet y = 1\n", []
+
+        "m_pattern.fs", "module M\nlet f (x: A<int>.B) = x\nlet y = 1\n", []
+
+        "m_post_dot.fsi", "module M\nval x: int list.B\nval y: int\n", []
+
+        "m_rec.fs", "module M\ntype R = { F: A<int>.B }\nlet y = 1\n", []
+
+        "m_space_dot.fsi",
+        "module M\nval x: A <int> .B\nval y: int\n",
+        [
+            "m_space_dot.fsi(2,10,2,15): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "m_tuple.fsi", "module M\nval x: A<int>.B * int\nval y: int\n", []
+
+        "m_union.fs", "module M\ntype U = C of A<int>.B\nlet y = 1\n", []
+
+        "m_val_arr.fsi", "module M\nval x: A<int>.B[]\nval y: int\n", []
+
+        "m_val_fn.fsi", "module M\nval x: A<int>.B -> int\nval y: int\n", []
+
+        "m_val_gen.fsi", "module M\nval x: A<int>.B<string>\nval y: int\n", []
+
+        "m_val_post.fsi", "module M\nval x: A<int>.B list\nval y: int\n", []
+
+        "m_val_space.fsi", "module M\nval x: A<int> .B\nval y: int\n", []
+
+        "m_val_space2.fsi", "module M\nval x: A<int>. B\nval y: int\n", []
+
+        "m_val.fsi", "module M\nval x: List<int>.Enumerator\nval y: int\n", []
+
+        "m_val2.fsi",
+        "module M\nval x: Dictionary<int, string>.KeyCollection.Enumerator\nval y: int\n",
+        []
+
+        "m_var.fsi", "module M\nval x: A<'T>.B<'U>.C\nval y: int\n", []
     ]
 
     let private unmodeledIncompleteConstructCases = [
@@ -8580,10 +8636,6 @@ module M =
             "o_gen.fs(2,37,2,38): error FS0010: Unexpected type application  in definition. Expected incomplete structured construct at or before this point or other token."
         ]
 
-        "t_gen_dotafter.fs",
-        "module A\nopen type System.Collections.Generic.List<int>.Enumerator\nlet x = 1\n",
-        []
-
         "t_gen_empty.fs",
         "module A\nopen type System.Collections.Generic.List<>\nlet x = 1\n",
         [
@@ -8783,6 +8835,76 @@ module M =
         "module M\ntype U = A of int [<System.Obsolete>]\nlet y = 1\n",
         [
             "b_union_attr_same.fs(3,1,3,4): error FS0010: Incomplete structured construct at or before this point in member definition"
+        ]
+
+        "m_arr_dot.fsi",
+        "module M\nval x: int[].B\nval y: int\n",
+        [
+            "m_arr_dot.fsi(2,13,2,14): error FS0010: Unexpected symbol '.'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "m_kw.fsi",
+        "module M\nval x: A<int>.type\nval y: int\n",
+        [
+            "m_kw.fsi(2,15,2,19): error FS0010: Unexpected keyword 'type' in value signature. Expected identifier, 'global' or other token."
+        ]
+
+        "m_next_line.fsi", "module M\nval x: A<int>\n    .B\nval y: int\n", []
+
+        "m_open_dot_eof.fs",
+        "module M\nopen type A<int>.",
+        [
+            "m_open_dot_eof.fs(2,1,2,18): error FS0010: Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global' or other token."
+        ]
+
+        "m_open_dot.fs",
+        "module M\nopen type A<int>.\nlet y = 1\n",
+        [
+            "m_open_dot.fs(2,19,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global' or other token."
+        ]
+
+        "m_space_both.fsi",
+        "module M\nval x: A <int>. B\nval y: int\n",
+        [
+            "m_space_both.fsi(2,14,2,16): error FS0010: Unexpected infix operator in type arguments. Expected ',' or other token."
+            "m_space_both.fsi(2,14,2,16): error FS1241: Expected type argument or static argument"
+        ]
+
+        "m_space_warn.fsi",
+        "module M\nval x: A <int>.B\nval y: int\n",
+        [
+            "m_space_warn.fsi(2,14,2,16): error FS0010: Unexpected infix operator in type arguments. Expected ',' or other token."
+            "m_space_warn.fsi(2,14,2,16): error FS1241: Expected type argument or static argument"
+        ]
+
+        "m_trail_eof2.fsi",
+        "module M\nval x: A<int>.B.",
+        [
+            "m_trail_eof2.fsi(2,16,2,17): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "m_trail2.fsi",
+        "module M\nval x: A<int>.B.\nval y: int\n",
+        [
+            "m_trail2.fsi(2,18,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "m_under.fsi",
+        "module M\nval x: A<int>._\nval y: int\n",
+        [
+            "m_under.fsi(2,15,2,16): error FS0010: Unexpected symbol '_' in value signature. Expected identifier, 'global' or other token."
+        ]
+
+        "m_val_dot_eof.fsi",
+        "module M\nval x: A<int>.",
+        [
+            "m_val_dot_eof.fsi(2,1,2,15): error FS0010: Incomplete structured construct at or before this point in value signature. Expected identifier, 'global' or other token."
+        ]
+
+        "m_val_dot.fsi",
+        "module M\nval x: A<int>.\nval y: int\n",
+        [
+            "m_val_dot.fsi(2,16,3,1): error FS0010: Incomplete structured construct at or before this point in value signature. Expected identifier, 'global' or other token."
         ]
     ]
 

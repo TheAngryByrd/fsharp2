@@ -71,6 +71,7 @@ module ParserTests =
 
             $"({elements})"
         | SyntaxType.Parenthesized(inner, _) -> typeShape inner
+        | SyntaxType.NestedName(enclosing, name, _) -> $"{typeShape enclosing}.{name.Text}"
         | SyntaxType.Array(element, suffix, _) ->
             $"{typeShape element}[{System.String(',', suffix.Commas.Length)}]"
         | SyntaxType.SignatureParameter(name, parameterType, _) ->
@@ -1318,6 +1319,37 @@ val h: (int * string)[] -> global.System.String[]
                     "Comma ranges"
 
                 Expect.equal (position spacedArray.Range) (8, 12, 8, 19) "Suffix range"
+
+            testCase "a nested type name keeps its enclosing generic type"
+            <| fun _ ->
+                let result =
+                    parseSignature
+                        "Nested.fsi"
+                        "module Program
+val a: List<int>.Enumerator
+val b: A<int>.B<string>.C
+val c: A<B<int>>.C
+val d: A<int> .B
+val e: A<int>.B[] list
+val f: global.A<int>.B -> int
+"
+
+                Expect.isEmpty
+                    result.Diagnostics
+                    "The Compatibility Oracle reports no parse diagnostics"
+
+                Expect.sequenceEqual
+                    (result.File.Contents
+                     |> Seq.collect (rootShapes signatureShape))
+                    [
+                        "val a: List<int>.Enumerator"
+                        "val b: A<int>.B<string>.C"
+                        "val c: A<B<int>>.C"
+                        "val d: A<int>.B"
+                        "val e: A<int>.B[] list"
+                        "val f: (global.A<int>.B -> int)"
+                    ]
+                    "Each nested type name keeps its enclosing type"
 
             testCase "an open declaration keeps its target kind"
             <| fun _ ->
