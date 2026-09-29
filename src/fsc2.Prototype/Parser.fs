@@ -118,6 +118,7 @@ module internal Parser =
         | IncompleteAtNext
         | SkippedInSignatureModule of recoveryDepth: int * reportsAtEnd: bool
         | SkippedInTypeBody of recoveryDepth: int
+        | SkippedAfterRootValue
 
     [<RequireQualifiedAccess>]
     type private Recovery =
@@ -2156,6 +2157,7 @@ module internal Parser =
         match pendingDeclaration state with
         | Some(DeclarationAfterRecovery.Discarded _)
         | Some(DeclarationAfterRecovery.SkippedInSignatureModule _)
+        | Some DeclarationAfterRecovery.SkippedAfterRootValue
         | Some(DeclarationAfterRecovery.SkippedInTypeBody _) -> true
         | _ -> false
 
@@ -3420,7 +3422,8 @@ module internal Parser =
 
     let private reportPendingAtEnd state =
         match pendingDeclaration state with
-        | Some(DeclarationAfterRecovery.SkippedInTypeBody _) when isEndOfFile state.Cursor.Current ->
+        | Some(DeclarationAfterRecovery.SkippedInTypeBody _)
+        | Some DeclarationAfterRecovery.SkippedAfterRootValue when isEndOfFile state.Cursor.Current ->
             state.ModuleHeader <- ModuleHeader.LostAtEnd(emptyAt state.Cursor.Current.Range.Start)
         | Some(DeclarationAfterRecovery.SkippedInSignatureModule(_, reportsAtEnd)) when
             isEndOfFile state.Cursor.Current
@@ -3525,6 +3528,15 @@ module internal Parser =
                         reportAfterRecovery state token
                     else
                         state.Recovery <- Recovery.Parsing
+                | Some DeclarationAfterRecovery.SkippedAfterRootValue when
+                    resumesSignatureModule (cursor.Peek(offsetAfterAttributeLists cursor 0))
+                    ->
+                    state.Recovery <- Recovery.Parsing
+                | Some DeclarationAfterRecovery.SkippedAfterRootValue when
+                    isKeyword "type" (cursor.Peek(offsetAfterAttributeLists cursor 0))
+                    ->
+                    // The Compatibility Oracle keeps the module header before a type, and the parser has no model for the type after it.
+                    reportAfterRecovery state token
                 | Some(DeclarationAfterRecovery.SkippedInTypeBody recoveryDepth) when
                     startsTypeBodyMember cursor
                     ->
@@ -3550,10 +3562,13 @@ module internal Parser =
 
                 let target = if isSuppressing state then discarded else declarations
 
+                let firstInList =
+                    declarations.Count = 0
+                    && discarded.Count = 0
+
                 let firstInNestedModule =
                     list = DeclarationList.NestedModule
-                    && declarations.Count = 0
-                    && discarded.Count = 0
+                    && firstInList
 
                 let reported = state.Diagnostics.Count
 
@@ -3581,6 +3596,7 @@ module internal Parser =
                     | Some(DeclarationAfterRecovery.ReportedAtRoot _)
                     | Some DeclarationAfterRecovery.IncompleteAtNext
                     | Some(DeclarationAfterRecovery.SkippedInSignatureModule _)
+                    | Some DeclarationAfterRecovery.SkippedAfterRootValue
                     | Some(DeclarationAfterRecovery.SkippedInTypeBody _) -> false
                     | Some(DeclarationAfterRecovery.Unmodeled _) -> true
                     | Some DeclarationAfterRecovery.DiscardedIfValueOrOpen ->
@@ -3759,6 +3775,14 @@ module internal Parser =
                                 + 1,
                                 true
                             ))
+                    | ListRecovery.DiscardsInValue, DeclarationList.AnonymousRoot when
+                        not firstInList
+                        ->
+                        // The Compatibility Oracle reports FS0222 at the end instead of the anonymous module range.
+                        suppress state (DeclarationAfterRecovery.Unmodeled true)
+                    | ListRecovery.DiscardsInValue, _ when not firstInList ->
+                        // The Compatibility Oracle loses the module header after a value error that is not the first root declaration.
+                        suppress state DeclarationAfterRecovery.SkippedAfterRootValue
                     | ListRecovery.DiscardsInValue, _
                     | ListRecovery.DiscardsInsideValueType, _ ->
                         // The Compatibility Oracle discards later values and opens, and reports FS0010 at the end for other declarations.
