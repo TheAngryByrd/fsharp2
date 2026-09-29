@@ -135,6 +135,8 @@ module ParserGrammarTests =
         | SyntaxExpression.DotLambda(body, _) -> $"_.{expressionShape body}"
         | SyntaxExpression.BracketApplication(target, index, _) ->
             $"{expressionShape target}[{expressionShape index}]"
+        | SyntaxExpression.Sequential(first, second, _) ->
+            $"seq[{expressionShape first}; {expressionShape second}]"
         | SyntaxExpression.Missing _ -> "<missing>"
 
     let private memberShape (value: SyntaxMember) =
@@ -219,8 +221,27 @@ module ParserGrammarTests =
                 |> String.concat "; "
 
             $"module {nested.Name.Text} = [{inner}]"
+        | ImplementationDeclaration.Do(_, body, _) -> $"do {expressionShape body}"
         | ImplementationDeclaration.Skipped _ -> "skipped"
         | other -> string other
+
+    let rec private sequentialRanges expression =
+        match expression with
+        | SyntaxExpression.Sequential(first, second, range) ->
+            position range
+            :: sequentialRanges first
+            @ sequentialRanges second
+        | SyntaxExpression.If(_, thenBranch, elseBranch, _) ->
+            sequentialRanges thenBranch
+            @ (elseBranch
+               |> Option.map sequentialRanges
+               |> Option.defaultValue [])
+        | SyntaxExpression.Match(_, clauses, _) ->
+            clauses
+            |> Seq.collect (fun clause -> sequentialRanges clause.Result)
+            |> Seq.toList
+        | SyntaxExpression.Lambda(_, body, _) -> sequentialRanges body
+        | _ -> []
 
     let private shapes logicalPath text =
         let result = parse logicalPath text
@@ -566,6 +587,87 @@ module ParserGrammarTests =
         "TypeString.fs", "let c = a<b, \"x\", b>a\n", []
     ]
 
+    // The Compatibility Oracle reports no parse diagnostic for each text. The ranges are the FCS 43.10.101 Sequential ranges, with 1-based columns.
+    let private sequentialCases = [
+        "SequentialTwo.fs",
+        "module A\nlet f () =\n    ignore 1\n    2\n",
+        [ "let f () = seq[[ignore 1]; 2]" ],
+        [ 3, 5, 4, 6 ]
+        "SequentialThree.fs",
+        "module A\nlet f () =\n    ignore 1\n    ignore 2\n    3\n",
+        [ "let f () = seq[[ignore 1]; seq[[ignore 2]; 3]]" ],
+        [
+            3, 5, 5, 6
+            4, 5, 5, 6
+        ]
+        "SequentialEntryPoint.fs",
+        "module A\n[<EntryPoint>]\nlet main argv =\n    printfn \"x\"\n    0\n",
+        [ "let main argv = seq[[printfn \"x\"]; 0]" ],
+        [ 4, 5, 5, 6 ]
+        "SequentialDo.fs",
+        "module A\ndo\n    ignore 1\n    ignore 2\n",
+        [ "do seq[[ignore 1]; [ignore 2]]" ],
+        [ 3, 5, 4, 13 ]
+        "SequentialThen.fs",
+        "module A\nlet f c =\n    if c then\n        ignore 1\n        2\n    else\n        3\n",
+        [ "let f c = if c then seq[[ignore 1]; 2] else 3" ],
+        [ 4, 9, 5, 10 ]
+        "SequentialElse.fs",
+        "module A\nlet f c =\n    if c then 1\n    else\n        ignore 1\n        2\n",
+        [ "let f c = if c then 1 else seq[[ignore 1]; 2]" ],
+        [ 5, 9, 6, 10 ]
+        "SequentialClause.fs",
+        "module A\nlet f x =\n    match x with\n    | 1 ->\n        ignore 1\n        2\n    | _ -> 3\n",
+        [ "let f x = match x with | 1 -> seq[[ignore 1]; 2] | _ -> 3" ],
+        [ 5, 9, 6, 10 ]
+        "SequentialLambda.fs",
+        "module A\nlet f =\n    fun () ->\n        ignore 1\n        2\n",
+        [ "let f = fun () -> seq[[ignore 1]; 2]" ],
+        [ 4, 9, 5, 10 ]
+        "SequentialBeforeLet.fs",
+        "module A\nlet f () =\n    ignore 1\n    2\nlet g = 3\n",
+        [
+            "let f () = seq[[ignore 1]; 2]"
+            "let g = 3"
+        ],
+        [ 3, 5, 4, 6 ]
+        "SequentialComment.fs",
+        "module A\nlet f () =\n    ignore 1\n\n    // c\n    2\n",
+        [ "let f () = seq[[ignore 1]; 2]" ],
+        [ 3, 5, 6, 6 ]
+        "SequentialAfterIf.fs",
+        "module A\nlet f c =\n    if c then ignore 1\n    2\n",
+        [ "let f c = seq[if c then [ignore 1]; 2]" ],
+        [ 3, 5, 4, 6 ]
+        "SequentialAfterMatch.fs",
+        "module A\nlet f x =\n    match x with\n    | _ -> ignore 1\n    2\n",
+        [ "let f x = seq[match x with | _ -> [ignore 1]; 2]" ],
+        [ 3, 5, 5, 6 ]
+        "SequentialMatchAfter.fs",
+        "module A\nlet f () =\n    ignore 1\n    match 1 with\n    | _ -> 2\n",
+        [ "let f () = seq[[ignore 1]; match 1 with | _ -> 2]" ],
+        [ 3, 5, 5, 13 ]
+        "SequentialMember.fs",
+        "module A\ntype T() =\n    member _.M() =\n        ignore 1\n        2\n",
+        [ "type T() = member _.M () = seq[[ignore 1]; 2]" ],
+        [ 4, 9, 5, 10 ]
+    ]
+
+    let private sequentialExplicitCases = [
+        "SequentialClose.fs",
+        "module A\nlet f () =\n    ignore 1\n    )\n",
+        [
+            "SequentialClose.fs(4,5): error FS0010: Unexpected symbol ')' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "SequentialCloseAfter.fs",
+        "module A\nlet f () =\n    ignore 1\n    2 )\n",
+        [
+            "SequentialCloseAfter.fs(4,7): error FS0010: Unexpected symbol ')' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "SequentialInfix.fs", "module A\nlet f () =\n    1\n    + 2\n", []
+        "SequentialLet.fs", "module A\nlet f () =\n    ignore 1\n    let x = 2\n    x\n", []
+    ]
+
     [<Tests>]
     let tests =
         testList "Issue29.ParserGrammar" [
@@ -863,6 +965,60 @@ let items = [ origin.X; 1 ]
                                     oracle
                                     line
                                     "Each FS diagnostic must be a diagnostic that the Compatibility Oracle reports"
+            ]
+
+            testList "a new line at the same column in a block is a sequential expression" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in sequentialCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with sequential expressions"
+
+                        let root = Seq.exactlyOne (parse logicalPath text).File.Contents
+
+                        let ranges =
+                            root.Declarations
+                            |> Seq.collect (fun declaration ->
+                                match declaration with
+                                | ImplementationDeclaration.Let(_, _, bindings, _) ->
+                                    bindings
+                                    |> Seq.collect (fun binding -> sequentialRanges binding.Body)
+                                | ImplementationDeclaration.Do(_, body, _) -> sequentialRanges body
+                                | ImplementationDeclaration.Type group ->
+                                    Seq.append [ group.First ] group.Rest
+                                    |> Seq.collect (fun definition ->
+                                        match definition.Representation with
+                                        | SyntaxTypeRepresentation.Class members ->
+                                            members
+                                            |> Seq.collect (fun value ->
+                                                sequentialRanges value.Body
+                                            )
+                                        | _ -> Seq.empty
+                                    )
+                                | _ -> Seq.empty
+                            )
+                            |> Seq.toList
+
+                        Expect.sequenceEqual
+                            ranges
+                            expectedRanges
+                            "The sequential expression ranges"
+            ]
+
+            testList "a sequential expression that the parser does not model stays explicit" [
+                for logicalPath, text, oracle in sequentialExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
             ]
 
             testCase "a lambda clause result ends at the next aligned clause"

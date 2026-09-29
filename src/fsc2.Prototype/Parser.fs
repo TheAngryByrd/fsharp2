@@ -1828,6 +1828,22 @@ module internal Parser =
 
             missing
 
+    and private parseSequentialAfter state context (first: SyntaxExpression) =
+        let cursor = state.Cursor
+        let items = ResizeArray [ first ]
+
+        while cursor.Current.Kind = LayoutTokenKind.Separator
+              && canStartExpression (cursor.Peek 1) do
+            cursor.Advance()
+            |> ignore
+
+            items.Add(parseExpression state context)
+
+        items
+        |> Seq.reduceBack (fun item rest ->
+            SyntaxExpression.Sequential(item, rest, span item.Range rest.Range)
+        )
+
     and private parseBranch state context point =
         let cursor = state.Cursor
 
@@ -1836,6 +1852,12 @@ module internal Parser =
             let blockContext = block.Range.Start
             let reported = state.Diagnostics.Count
             let body = parseBranchStart state blockContext point
+
+            let body =
+                if reportedSince state reported then
+                    body
+                else
+                    parseSequentialAfter state blockContext body
 
             if
                 cursor.Current.Kind
@@ -2427,6 +2449,12 @@ module internal Parser =
 
                     let body = parseBody ()
 
+                    let body =
+                        if reportedSince state reported then
+                            body
+                        else
+                            parseSequentialAfter state context body
+
                     if
                         cursor.Current.Kind
                         <> LayoutTokenKind.EndBlock
@@ -2587,6 +2615,12 @@ module internal Parser =
                     else
                         reportUnsupported state cursor.Current "a do declaration"
                         missingExpression cursor.Current
+
+                let body =
+                    if reportedSince state reported then
+                        body
+                    else
+                        parseSequentialAfter state context body
 
                 if
                     cursor.Current.Kind
