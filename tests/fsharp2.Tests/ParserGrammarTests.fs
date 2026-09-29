@@ -2155,6 +2155,47 @@ let items = [ origin.X; 1 ]
                             (oracleLines logicalPath result)
             ]
 
+            testCase
+                "an else or a clause bar left of the inner construct inside a delimiter belongs to the outer construct"
+            <| fun _ ->
+                let parenthesized logicalPath text =
+                    let result = parse logicalPath text
+
+                    Expect.isEmpty
+                        (oracleLines logicalPath result)
+                        "The Compatibility Oracle reports no diagnostic"
+
+                    match declarationBodies (Seq.exactlyOne result.File.Contents).Declarations with
+                    | [ SyntaxExpression.Parenthesized(inner, _) ] -> inner
+                    | other -> failtestf "Expected one parenthesized binding body, but got %A" other
+
+                match
+                    parenthesized
+                        "NestedIfOuterElse.fs"
+                        "module A\nlet f a b =\n    (if a then\n        if b then 1\n     else 2)\n"
+                with
+                | SyntaxExpression.If(_, SyntaxExpression.If(_, _, None, _), Some _, _) -> ()
+                | other ->
+                    failtestf "The else must belong to the outer if: %s" (expressionShape other)
+
+                match
+                    parenthesized
+                        "NestedMatchOuterClause.fs"
+                        "module A\nlet f a b =\n    (match a with\n     | 1 ->\n         match b with\n         | 2 -> 3\n         | _ -> 4\n     | _ -> 5)\n"
+                with
+                | SyntaxExpression.Match(_, outerClauses, _) when outerClauses.Length = 2 ->
+                    match outerClauses[0].Result with
+                    | SyntaxExpression.Match(_, innerClauses, _) ->
+                        Expect.equal innerClauses.Length 2 "The inner match keeps its two clauses"
+                    | other ->
+                        failtestf
+                            "The first clause result must be the inner match: %s"
+                            (expressionShape other)
+                | other ->
+                    failtestf
+                        "The last clause must belong to the outer match: %s"
+                        (expressionShape other)
+
             testCase "a lambda clause result ends at the next aligned clause"
             <| fun _ ->
                 let declarations, _ =
