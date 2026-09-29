@@ -59,6 +59,13 @@ jobs:
           if ($version -ne '10.0.110') {
             throw "Selected dotnet reported '$version'. Expected '10.0.110'."
           }
+          $sdkLine = dotnet --list-sdks | Where-Object { $_.StartsWith('10.0.110 [') } | Select-Object -First 1
+          if (-not $sdkLine) {
+            throw "dotnet --list-sdks does not list SDK 10.0.110."
+          }
+          $sdkDirectory = $sdkLine.Substring($sdkLine.IndexOf('[') + 1).TrimEnd(']')
+          $dotnetRoot = Split-Path $sdkDirectory -Parent
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "FSHARP2_DOTNET_ROOT=$dotnetRoot"
       - name: Restore conformance projects
         run: dotnet restore tests/FSharp2.Conformance.Tests/FSharp2.Conformance.Tests.fsproj --locked-mode
       - name: Test conformance harness

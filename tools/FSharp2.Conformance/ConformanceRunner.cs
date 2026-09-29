@@ -36,13 +36,8 @@ public static class ConformanceRunner
         }
 
         var materialized = CaseMaterializer.Materialize(repository, conformanceCase);
-        var sdkRoot = Environment.GetEnvironmentVariable("FSHARP2_DOTNET_ROOT");
-        if (string.IsNullOrWhiteSpace(sdkRoot))
-        {
-            sdkRoot = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                $"fsharp2-sdk-{repository.Toolchain.GetProperty("sdkVersion").GetString()}");
-        }
+        var sdkRoot = SdkSelection.DefaultRoot(
+            repository.Toolchain.GetProperty("sdkVersion").GetString()!);
         var sdk = SdkSelection.Resolve(conformanceRoot, sdkRoot, null);
         var runId = $"oracle-{SafeName(caseId)}-{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfffZ}-{Guid.NewGuid():N}";
         var runRoot = Path.Combine(outputRoot, runId);

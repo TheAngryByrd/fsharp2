@@ -19,7 +19,8 @@ public static class ReferenceClosure
         }
 
         using var closureDocument = JsonDocument.Parse(File.ReadAllBytes(closurePath));
-        var sdkRoot = DefaultSdkRoot(repository);
+        var sdkRoot = SdkSelection.DefaultRoot(
+            repository.Toolchain.GetProperty("sdkVersion").GetString()!);
         var sdk = SdkSelection.Resolve(repository.Root, sdkRoot, null);
         var references = ImmutableArray.CreateBuilder<MaterializedTargetReference>();
         foreach (var reference in closureDocument.RootElement
@@ -54,20 +55,6 @@ public static class ReferenceClosure
         }
 
         return references.ToImmutable();
-    }
-
-    private static string DefaultSdkRoot(ConformanceRepository repository)
-    {
-        var configured = Environment.GetEnvironmentVariable("FSHARP2_DOTNET_ROOT");
-        if (!string.IsNullOrWhiteSpace(configured))
-        {
-            return configured;
-        }
-
-        var version = repository.Toolchain.GetProperty("sdkVersion").GetString()!;
-        return Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            $"fsharp2-sdk-{version}");
     }
 
     private static string ResolveReferencePath(

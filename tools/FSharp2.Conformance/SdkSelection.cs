@@ -59,6 +59,17 @@ public static class SdkSelection
         return new(selectedRoot, dotnetPath, version, environment.ToImmutable());
     }
 
+    public static string DefaultRoot(string sdkVersion)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sdkVersion);
+        return FirstText(
+                Environment.GetEnvironmentVariable("FSHARP2_DOTNET_ROOT"),
+                Environment.GetEnvironmentVariable("DOTNET_ROOT"))
+            ?? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                $"fsharp2-sdk-{sdkVersion}");
+    }
+
     private static string ReadVersion(
         string dotnetPath,
         ImmutableDictionary<string, string> environment)
