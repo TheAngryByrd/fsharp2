@@ -7291,6 +7291,62 @@ module M =
         "e_val_next.fsi",
         "module M\nval x: )\nval y: List <int>\n",
         [ "e_val_next.fsi(2,8,2,9): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "t_gen_arr.fs", "module A\nopen type int[]\nlet x = 1\n", []
+
+        "a_abbrev.fs", "module M\ntype T = int[]\nlet y = 1\n", []
+
+        "a_arg.fsi", "module M\nval x: List<int[]>\nval y: int\n", []
+
+        "a_array_kw.fsi", "module M\nval x: int array\nval y: int\n", []
+
+        "a_fn.fsi", "module M\nval f: int[] -> string[]\nval y: int\n", []
+
+        "a_gen.fsi", "module M\nval x: List<int>[]\nval y: int\n", []
+
+        "a_global.fsi", "module M\nval x: global.System.String[]\nval y: int\n", []
+
+        "a_inner_space.fsi", "module M\nval x: int[ ]\nval y: int\n", []
+
+        "a_jag.fsi", "module M\nval x: int[][]\nval y: int\n", []
+
+        "a_open.fs", "module M\nopen type int[]\nlet y = 1\n", []
+
+        "a_paren.fsi", "module M\nval x: (int * int)[]\nval y: int\n", []
+
+        "a_post.fsi", "module M\nval x: int list[]\nval y: int\n", []
+
+        "a_post2.fsi", "module M\nval x: int[] list\nval y: int\n", []
+
+        "a_record.fs", "module M\ntype R = { F: int[] }\nlet y = 1\n", []
+
+        "a_space.fsi", "module M\nval x: int []\nval y: int\n", []
+
+        "a_tuple.fsi", "module M\nval x: int[] * int\nval y: int\n", []
+
+        "a_union.fs", "module M\ntype U = A of int[]\nlet y = 1\n", []
+
+        "a_val.fsi", "module M\nval x: int[]\nval y: int\n", []
+
+        "a_val2.fsi", "module M\nval x: int[,]\nval y: int\n", []
+
+        "a_val3.fsi", "module M\nval x: int[,,]\nval y: int\n", []
+
+        "a_var.fsi", "module M\nval x: 'T[]\nval y: int\n", []
+
+        "a_ws_close.fsi", "module M\nval x: int[, ]\nval y: int\n", []
+
+        "b_arr_attr.fsi", "module M\nval x: int[]\n[<System.Obsolete>]\nval y: int\n", []
+
+        "b_arr_list.fsi", "module M\nval x: int[] -> int list\nval y: int\n", []
+
+        "b_list_after.fs", "module M\nlet f (x: int list) = [x]\nlet y = 1\n", []
+
+        "b_pattern.fs", "module M\nlet f (x: int[]) = x\nlet y = 1\n", []
+
+        "b_union_arr_next.fs",
+        "module M\ntype U =\n    | A of int[]\n    | B of string[,]\nlet y = 1\n",
+        []
     ]
 
     let private unmodeledIncompleteConstructCases = [
@@ -8524,8 +8580,6 @@ module M =
             "o_gen.fs(2,37,2,38): error FS0010: Unexpected type application  in definition. Expected incomplete structured construct at or before this point or other token."
         ]
 
-        "t_gen_arr.fs", "module A\nopen type int[]\nlet x = 1\n", []
-
         "t_gen_dotafter.fs",
         "module A\nopen type System.Collections.Generic.List<int>.Enumerator\nlet x = 1\n",
         []
@@ -8644,6 +8698,91 @@ module M =
         [
             "e_use_warn.fs(3,13,3,14): error FS0010: Unexpected symbol ')' in binding"
             "e_use_warn.fs(4,20,4,25): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "a_bad.fsi",
+        "module M\nval x: int[1]\nval y: int\n",
+        [
+            "a_bad.fsi(2,12,2,13): error FS0010: Unexpected integer literal in value signature. Expected ',', ']' or other token."
+        ]
+
+        "a_bad2.fsi",
+        "module M\nval x: int[)\nval y: int\n",
+        [
+            "a_bad2.fsi(2,12,2,13): error FS0010: Unexpected symbol ')' in value signature. Expected ',', ']' or other token."
+            "a_bad2.fsi(3,1,3,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+        ]
+
+        "a_newline.fsi", "module M\nval x: int\n    []\nval y: int\n", []
+
+        "a_unclosed_eof.fsi",
+        "module M\nval x: int[",
+        [
+            "a_unclosed_eof.fsi(2,1,2,12): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "a_unclosed_eof.fsi(2,1,2,12): error FS0010: Incomplete structured construct at or before this point in value signature. Expected ',', ']' or other token."
+        ]
+
+        "a_unclosed.fsi",
+        "module M\nval x: int[\nval y: int\n",
+        [
+            "a_unclosed.fsi(3,1,3,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "a_unclosed.fsi(3,1,3,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "a_unclosed.fsi(3,1,3,4): error FS0010: Unexpected keyword 'val' in value signature. Expected ',', ']' or other token."
+        ]
+
+        "b_abbrev.fs",
+        "module M\ntype T = int[1]\nlet y = 1\n",
+        [
+            "b_abbrev.fs(2,14,2,15): error FS0010: Unexpected integer literal in type definition. Expected ',', ']' or other token."
+            "b_abbrev.fs(3,1,3,4): error FS0010: Unexpected keyword 'let' or 'use' in implementation file"
+        ]
+
+        "b_arr_lt.fsi", "module M\nval x: int[<int>]\nval y: int\n", []
+
+        "b_arr_pipe.fsi",
+        "module M\nval x: int[|]\nval y: int\n",
+        [
+            "b_arr_pipe.fsi(2,11,2,13): error FS0010: Unexpected symbol '[|'. Expected incomplete structured construct at or before this point or other token."
+            "b_arr_pipe.fsi(3,1,3,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+        ]
+
+        "b_arr_semi.fsi",
+        "module M\nval x: int[;]\nval y: int\n",
+        [
+            "b_arr_semi.fsi(2,12,2,13): error FS0010: Unexpected symbol ';' in value signature. Expected ',', ']' or other token."
+        ]
+
+        "b_attr_case.fs",
+        "module M\ntype U =\n    | A of int\n    [<System.Obsolete>]\n    | B\nlet y = 1\n",
+        [ "b_attr_case.fs(5,5,5,6): error FS0010: Unexpected symbol '|' in member definition" ]
+
+        "b_open.fs",
+        "module M\nopen type int[1]\nlet y = 1\n",
+        [
+            "b_open.fs(2,15,2,16): error FS0010: Unexpected integer literal in open declaration. Expected ',', ']' or other token."
+            "b_open.fs(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "b_pattern2.fs", "module M\nlet f (x: int) [] = x\nlet y = 1\n", []
+
+        "b_record_arr.fsi", "module M\ntype R = { F: int[] }\nval y: int\n", []
+
+        "b_record.fs",
+        "module M\ntype R = { F: int[1] }\nlet y = 1\n",
+        [
+            "b_record.fs(2,19,2,20): error FS0010: Unexpected integer literal in field declaration. Expected ',', ']' or other token."
+        ]
+
+        "b_union.fs",
+        "module M\ntype U = A of int[1]\nlet y = 1\n",
+        [
+            "b_union.fs(2,19,2,20): error FS0010: Unexpected integer literal in type definition. Expected ',', ']' or other token."
+        ]
+
+        "b_union_attr_same.fs",
+        "module M\ntype U = A of int [<System.Obsolete>]\nlet y = 1\n",
+        [
+            "b_union_attr_same.fs(3,1,3,4): error FS0010: Incomplete structured construct at or before this point in member definition"
         ]
     ]
 
