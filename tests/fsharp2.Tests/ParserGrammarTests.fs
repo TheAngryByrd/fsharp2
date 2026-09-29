@@ -304,6 +304,7 @@ module ParserGrammarTests =
                 bindings
                 |> Seq.map _.Body
             | ImplementationDeclaration.Do(_, body, _) -> Seq.singleton body
+            | ImplementationDeclaration.Expression(_, body, _, _) -> Seq.singleton body
             | ImplementationDeclaration.Type group ->
                 Seq.append [ group.First ] group.Rest
                 |> Seq.collect (fun definition ->
@@ -1264,7 +1265,7 @@ module ParserGrammarTests =
         [ "let f () = {x <- 1}" ],
         [ "set(2,12--2,18)" ]
         "AssignDo.fs", "module A\ndo x <- 1\n", [ "do {x <- 1}" ], [ "set(2,4--2,10)" ]
-        "AssignModuleExpression.fs", "module A\nx <- 1\n", [ "expr {x <- 1}" ], []
+        "AssignModuleExpression.fs", "module A\nx <- 1\n", [ "expr {x <- 1}" ], [ "set(2,1--2,7)" ]
     ]
 
     let private assignmentExplicitCases = [
