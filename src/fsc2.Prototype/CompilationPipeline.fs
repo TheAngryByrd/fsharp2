@@ -358,6 +358,7 @@ module internal CompilationPipeline =
                             language,
                             defines,
                             references,
+                            request.EmissionOptions.Target,
                             sources
                         )
                     with

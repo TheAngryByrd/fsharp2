@@ -776,7 +776,29 @@ type internal ReferenceTypeIndex
         |> List.distinctBy _.StableId
         |> List.sortBy _.StableId
 
+    let namespaces =
+        lazy
+            {
+                ReferencesFingerprint = fingerprint
+                Names =
+                    types.Values
+                    |> Seq.collect (fun resolved ->
+                        let parts = resolved.TypeName.Namespace.Split('.')
+
+                        if resolved.TypeName.Namespace.Length = 0 then
+                            Seq.empty
+                        else
+                            seq {
+                                for count in 1 .. parts.Length do
+                                    String.Join(".", parts, 0, count)
+                            }
+                    )
+                    |> ImmutableHashSet.CreateRange
+            }
+
     member _.Fingerprint = fingerprint
+
+    member _.Namespaces = namespaces.Value
 
     member _.IsFSharpDelegate(declarationId: string) =
         fsharpDelegateDeclarationIds.Contains(declarationId)

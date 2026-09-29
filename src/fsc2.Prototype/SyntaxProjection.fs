@@ -9,6 +9,17 @@ type internal SyntaxProjectionResult =
     | Projected of ParsedModule list
     | ProjectionUnsupported of SourceRange
 
+type internal ReferenceNamespaces = {
+    ReferencesFingerprint: string
+    Names: ImmutableHashSet<string>
+}
+
+/// The Compatibility Oracle accepts an implicit module only in the last file of an executable.
+[<RequireQualifiedAccess>]
+type internal ImplicitModule =
+    | Rejected
+    | Accepted of ReferenceNamespaces
+
 module internal SyntaxProjection =
     let private projectConstant (constant: SyntaxConstant) range =
         match constant with
@@ -128,60 +139,132 @@ module internal SyntaxProjection =
             projectBinding bindings[0] range
         | other -> Error other.Range
 
-    let private projectDeclarations (root: ModuleOrNamespaceSyntax<ImplementationDeclaration>) =
+    let private projectDeclarations rootRange (declarations: ImplementationDeclaration list) =
         let rec loop projected (remaining: ImplementationDeclaration list) =
             match remaining with
-            | [] -> Ok(List.rev projected)
+            | [] -> Ok(List.rev projected, false)
             | declaration :: rest ->
                 projectDeclaration declaration
                 |> Result.bind (fun (projectedDeclaration, isEntryPoint) ->
-                    if
-                        isEntryPoint
-                        && not rest.IsEmpty
-                    then
-                        Error declaration.Range
-                    else
+                    match isEntryPoint, rest with
+                    | true, [] ->
+                        Ok(
+                            List.rev (
+                                projectedDeclaration
+                                :: projected
+                            ),
+                            true
+                        )
+                    | true, _ -> Error declaration.Range
+                    | false, _ ->
                         loop
                             (projectedDeclaration
                              :: projected)
                             rest
                 )
 
-        match List.ofSeq root.Declarations with
-        | [] -> Error root.Range
+        match declarations with
+        | [] -> Error rootRange
         | declarations -> loop [] declarations
 
+    let private implicitModuleName (logicalPath: string) =
+        let stem = IO.Path.GetFileNameWithoutExtension logicalPath
+
+        if
+            stem.Length > 0
+            && Char.IsAsciiLetter stem[0]
+            && stem
+               |> Seq.forall (fun character ->
+                   Char.IsAsciiLetterOrDigit character
+                   || character = '_'
+               )
+        then
+            Some(
+                string (Char.ToUpperInvariant stem[0])
+                + stem.Substring 1
+            )
+        else
+            None
+
+    let private projectOpens (namespaces: ReferenceNamespaces) declarations =
+        let rec loop opened (remaining: ImplementationDeclaration list) =
+            match remaining with
+            | ImplementationDeclaration.Open(SyntaxOpenTarget.ModuleOrNamespace name, range) :: rest ->
+                if namespaces.Names.Contains name.Text then
+                    loop
+                        (name.Text
+                         :: opened)
+                        rest
+                else
+                    Error range
+            | ImplementationDeclaration.Open(_, range) :: _ -> Error range
+            | rest -> Ok(List.rev opened, rest)
+
+        loop [] declarations
+
+    let private parsedModule
+        contentFingerprint
+        sourceChecksum
+        (name: string)
+        openedNamespaces
+        declarations
+        =
+        {
+            StableId =
+                "module:"
+                + name
+            ContainerKind = ModuleSource
+            Namespace = String.Empty
+            Name = name
+            IsPublic = true
+            OpenedNamespaces = openedNamespaces
+            SourceChecksum = sourceChecksum
+            ContentFingerprint = contentFingerprint
+            Attributes = []
+            AssemblyAttributes = []
+            Declarations = declarations
+        }
+
     let project
+        (implicitModule: ImplicitModule)
         (contentFingerprint: string)
         (sourceChecksum: ImmutableArray<byte>)
         (file: ImplementationFileSyntax)
         =
         let projected =
             match List.ofSeq file.Contents with
+            | [ root ] when not root.DiscardedByRecovery.IsEmpty -> Error root.Range
             | [ root ] ->
-                match root.Kind with
-                | ModuleOrNamespaceKind.NamedModule name when
-                    name.Parts.Length = 1
-                    && root.DiscardedByRecovery.IsEmpty
-                    ->
-                    projectDeclarations root
-                    |> Result.map (fun declarations -> [
-                        {
-                            StableId =
-                                "module:"
-                                + name.Text
-                            ContainerKind = ModuleSource
-                            Namespace = String.Empty
-                            Name = name.Text
-                            IsPublic = true
-                            OpenedNamespaces = []
-                            SourceChecksum = sourceChecksum
-                            ContentFingerprint = contentFingerprint
-                            Attributes = []
-                            AssemblyAttributes = []
-                            Declarations = declarations
-                        }
+                match root.Kind, implicitModule with
+                | ModuleOrNamespaceKind.NamedModule name, _ when name.Parts.Length = 1 ->
+                    projectDeclarations root.Range (List.ofSeq root.Declarations)
+                    |> Result.map (fun (declarations, _) -> [
+                        parsedModule contentFingerprint sourceChecksum name.Text [] declarations
                     ])
+                | ModuleOrNamespaceKind.AnonymousModule, ImplicitModule.Accepted namespaces ->
+                    match implicitModuleName file.LogicalPath with
+                    | None -> Error root.Range
+                    | Some name ->
+                        projectOpens namespaces (List.ofSeq root.Declarations)
+                        |> Result.bind (fun (openedNamespaces, rest) ->
+                            match openedNamespaces with
+                            | [] -> Error root.Range
+                            | _ ->
+                                projectDeclarations root.Range rest
+                                |> Result.bind (fun (declarations, endsWithEntryPoint) ->
+                                    if endsWithEntryPoint then
+                                        Ok [
+                                            parsedModule
+                                                contentFingerprint
+                                                sourceChecksum
+                                                name
+                                                openedNamespaces
+                                                declarations
+                                        ]
+                                    else
+                                        Error root.Range
+                                )
+                        )
                 | _ -> Error root.Range
             | root :: _ -> Error root.Range
             | [] ->
