@@ -81,6 +81,16 @@ module TestSupport =
 
     let testAssemblyPath = typeof<TestAssemblyMarker>.Assembly.Location
 
+    let nativeExecutablePath directory stem =
+        Path.Combine(
+            directory,
+            (if OperatingSystem.IsWindows() then
+                 stem
+                 + ".exe"
+             else
+                 stem)
+        )
+
     let physicalLaneTestCase name body =
         testList "Conformance Lanes" [ testCase name body ]
 

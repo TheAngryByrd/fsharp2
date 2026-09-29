@@ -422,13 +422,16 @@ module FallbackAndCleanupTests =
 
                         let runRoot = Directory.GetParent(root).FullName
                         let outputRoot = Path.Combine(runRoot, "runs")
-                        let appHostPath = Path.ChangeExtension(testAssemblyPath, ".exe")
+
+                        let appHostPath =
+                            nativeExecutablePath
+                                (Path.GetDirectoryName(testAssemblyPath))
+                                (Path.GetFileNameWithoutExtension(testAssemblyPath))
 
                         let sentinelPath =
-                            Path.Combine(
-                                Path.GetDirectoryName(testAssemblyPath),
-                                $"fallback-sentinel-{Guid.NewGuid():N}.exe"
-                            )
+                            nativeExecutablePath
+                                (Path.GetDirectoryName(testAssemblyPath))
+                                $"fallback-sentinel-{Guid.NewGuid():N}"
 
                         let sentinelReceiptPath =
                             Path.Combine(runRoot, "sentinel-arguments.receipt")
