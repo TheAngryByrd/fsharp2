@@ -261,6 +261,8 @@ module internal Parser =
 
     let private offsideCode = "FS0058"
 
+    let private typeArgumentSpaceCode = "FS1190"
+
     let private isRecoveryCode code =
         code
         <> featureGateCode
@@ -272,6 +274,8 @@ module internal Parser =
            <> letAndCode
         && code
            <> offsideCode
+        && code
+           <> typeArgumentSpaceCode
 
     let private reportedAt state (token: LayoutToken) =
         state.ReportedStarts.Contains token.Range.Start.Offset
@@ -745,10 +749,11 @@ module internal Parser =
                         .Range
         }
 
+    let private unsupportedTrailingDot state (_: LayoutToken) =
+        reportUnsupported state state.Cursor.Current "a long identifier"
+
     let private longIdentifier state =
-        longIdentifierWith
-            state
-            (fun _ -> reportUnsupported state state.Cursor.Current "a long identifier")
+        longIdentifierWith state (unsupportedTrailingDot state)
 
     let private constant (token: LayoutToken) =
         match sourceKind token with
@@ -823,6 +828,7 @@ module internal Parser =
 
     let private canStartType (cursor: Cursor) =
         isIdentifier cursor.Current
+        || isKeyword "global" cursor.Current
         || isDelimiter "(" cursor.Current
         || isTypeVariable cursor
 
@@ -940,13 +946,17 @@ module internal Parser =
             parseApplicationType state context
 
     and private parseApplicationType state context =
-        let cursor = state.Cursor
-        let mutable result = parseAtomicType state context
+        parsePostfixTypes state context (parseAtomicType state context)
 
-        while isIdentifier cursor.Current
-              && not (isOffside context cursor.Current)
-              && not (isOperator ":" (cursor.Peek 1)) do
-            let typeConstructor = SyntaxType.LongIdentifier(longIdentifier state)
+    and private parsePostfixTypes state context first =
+        let cursor = state.Cursor
+        let mutable result = first
+
+        while (isKeyword "global" cursor.Current
+               || (isIdentifier cursor.Current
+                   && not (isOperator ":" (cursor.Peek 1))))
+              && not (isOffside context cursor.Current) do
+            let typeConstructor = parseTypeConstructor state (unsupportedTrailingDot state)
 
             result <-
                 SyntaxType.Application(
@@ -958,17 +968,17 @@ module internal Parser =
 
         result
 
+    and private parseNestedType state context =
+        parseTypeOperand
+            state
+            context
+            (fun _ -> None)
+            TypeGap.UnexpectedToken
+            (fun () -> parseType state context (fun _ -> None))
+
     and private parseAtomicType state context =
         let cursor = state.Cursor
         let token = cursor.Current
-
-        let nested () =
-            parseTypeOperand
-                state
-                context
-                (fun _ -> None)
-                TypeGap.UnexpectedToken
-                (fun () -> parseType state context (fun _ -> None))
 
         if isTypeVariable cursor then
             cursor.Advance()
@@ -986,7 +996,7 @@ module internal Parser =
             cursor.Advance()
             |> ignore
 
-            let inner = nested ()
+            let inner = parseNestedType state context
 
             if isDelimiter ")" cursor.Current then
                 let close = cursor.Advance()
@@ -997,42 +1007,93 @@ module internal Parser =
 
                 SyntaxType.Parenthesized(inner, span token.Range (emptyAt cursor.LastEnd))
         else
-            let name = SyntaxType.LongIdentifier(longIdentifier state)
+            parseTypeName state context (unsupportedTrailingDot state)
 
-            if isOperator "<" cursor.Current then
+    and private parseTypeConstructor state onTrailingDot =
+        let cursor = state.Cursor
+
+        if isKeyword "global" cursor.Current then
+            let globalToken = cursor.Advance()
+
+            if isOperator "." cursor.Current then
+                let dot = cursor.Advance()
+
+                if
+                    isIdentifier cursor.Current
+                    && tokenText cursor.Current
+                       <> "_"
+                then
+                    let name = longIdentifierWith state onTrailingDot
+
+                    SyntaxType.GlobalLongIdentifier(
+                        globalToken.Range,
+                        Some name,
+                        span globalToken.Range name.Range
+                    )
+                else
+                    onTrailingDot dot
+
+                    SyntaxType.GlobalLongIdentifier(
+                        globalToken.Range,
+                        None,
+                        span globalToken.Range dot.Range
+                    )
+            else
+                SyntaxType.GlobalLongIdentifier(globalToken.Range, None, globalToken.Range)
+        else
+            SyntaxType.LongIdentifier(longIdentifierWith state onTrailingDot)
+
+    and private parseTypeName state context onTrailingDot =
+        match parseTypeConstructor state onTrailingDot with
+        | SyntaxType.GlobalLongIdentifier(_, None, _) as globalKeyword -> globalKeyword
+        | name -> parseTypeArguments state context name
+
+    and private parseTypeArguments state context name =
+        let cursor = state.Cursor
+
+        if isOperator "<" cursor.Current then
+            let openToken = cursor.Advance()
+
+            let arguments = ImmutableArray.CreateBuilder<SyntaxType>()
+            arguments.Add(parseNestedType state context)
+
+            while isDelimiter "," cursor.Current do
                 cursor.Advance()
                 |> ignore
 
-                let arguments = ImmutableArray.CreateBuilder<SyntaxType>()
-                arguments.Add(nested ())
+                arguments.Add(parseNestedType state context)
 
-                while isDelimiter "," cursor.Current do
-                    cursor.Advance()
-                    |> ignore
+            if closesTypeArguments cursor.Current then
+                let close = cursor.AdvanceFirstCharacter()
 
-                    arguments.Add(nested ())
+                if
+                    openToken.Range.Start.Offset
+                    <> name.Range.End.Offset
+                then
+                    reportWarning
+                        state
+                        typeArgumentSpaceCode
+                        "Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+                        (span openToken.Range close.Range)
 
-                if closesTypeArguments cursor.Current then
-                    let close = cursor.AdvanceFirstCharacter()
-
-                    SyntaxType.Application(
-                        name,
-                        arguments.ToImmutable(),
-                        false,
-                        span name.Range close.Range
-                    )
-                else
-                    if not (reportedAt state cursor.Current) then
-                        reportUnsupported state cursor.Current "type arguments"
-
-                    SyntaxType.Application(
-                        name,
-                        arguments.ToImmutable(),
-                        false,
-                        span name.Range (emptyAt cursor.LastEnd)
-                    )
+                SyntaxType.Application(
+                    name,
+                    arguments.ToImmutable(),
+                    false,
+                    span name.Range close.Range
+                )
             else
-                name
+                if not (reportedAt state cursor.Current) then
+                    reportUnsupported state cursor.Current "type arguments"
+
+                SyntaxType.Application(
+                    name,
+                    arguments.ToImmutable(),
+                    false,
+                    span name.Range (emptyAt cursor.LastEnd)
+                )
+        else
+            name
 
     let private canStartAtom (token: LayoutToken) =
         isIdentifier token
@@ -2784,12 +2845,25 @@ module internal Parser =
                 else
                     Some(SyntaxOpenTarget.GlobalModuleOrNamespace(globalToken.Range, None))
             elif startsKeyword "type" then
-                cursor.Advance()
-                |> ignore
+                let typeContext = cursor.Advance().Range.Start
 
-                if startsName () then
-                    let name = longIdentifierWith state onTrailingDot
-                    Some(SyntaxOpenTarget.Type(SyntaxType.LongIdentifier name))
+                if
+                    startsName ()
+                    || startsKeyword "global"
+                then
+                    Some(
+                        SyntaxOpenTarget.Type(
+                            parsePostfixTypes
+                                state
+                                typeContext
+                                (parseTypeName state typeContext onTrailingDot)
+                        )
+                    )
+                elif
+                    canStartType cursor
+                    && not (isOffside context cursor.Current)
+                then
+                    Some(SyntaxOpenTarget.Type(parseApplicationType state typeContext))
                 elif endsLine context cursor.Current then
                     reportIncomplete state "open declaration"
                     None

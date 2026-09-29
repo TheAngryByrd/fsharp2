@@ -41,13 +41,46 @@ module ParserTests =
         )
         |> Seq.toList
 
+    let rec private typeShape syntaxType =
+        match syntaxType with
+        | SyntaxType.LongIdentifier name -> name.Text
+        | SyntaxType.GlobalLongIdentifier(_, None, _) -> "global"
+        | SyntaxType.GlobalLongIdentifier(_, Some name, _) -> $"global.{name.Text}"
+        | SyntaxType.Variable variable -> variable.Text
+        | SyntaxType.Application(typeConstructor, arguments, true, _) ->
+            let arguments =
+                arguments
+                |> Seq.map typeShape
+                |> String.concat ", "
+
+            $"{arguments} {typeShape typeConstructor}"
+        | SyntaxType.Application(typeConstructor, arguments, false, _) ->
+            let arguments =
+                arguments
+                |> Seq.map typeShape
+                |> String.concat ", "
+
+            $"{typeShape typeConstructor}<{arguments}>"
+        | SyntaxType.Function(argument, result, _) ->
+            $"({typeShape argument} -> {typeShape result})"
+        | SyntaxType.Tuple(elements, _) ->
+            let elements =
+                elements
+                |> Seq.map typeShape
+                |> String.concat " * "
+
+            $"({elements})"
+        | SyntaxType.Parenthesized(inner, _) -> typeShape inner
+        | SyntaxType.SignatureParameter(name, parameterType, _) ->
+            $"{name.Text}: {typeShape parameterType}"
+        | SyntaxType.Missing _ -> "<missing>"
+
     let private openTargetShape target =
         match target with
         | SyntaxOpenTarget.ModuleOrNamespace name -> name.Text
         | SyntaxOpenTarget.GlobalModuleOrNamespace(_, None) -> "global"
         | SyntaxOpenTarget.GlobalModuleOrNamespace(_, Some name) -> $"global.{name.Text}"
-        | SyntaxOpenTarget.Type(SyntaxType.LongIdentifier name) -> $"type {name.Text}"
-        | SyntaxOpenTarget.Type other -> $"type {other}"
+        | SyntaxOpenTarget.Type syntaxType -> $"type {typeShape syntaxType}"
 
     let rec private declarationShape declaration =
         match declaration with
@@ -91,41 +124,46 @@ module ParserTests =
             $"expr [{attributes.Length} attribute lists]"
         | ImplementationDeclaration.Skipped _ -> "skipped"
 
+    let private trailingDotOpenCase logicalPath (declaration: string) expectedShape =
+        testCase logicalPath
+        <| fun _ ->
+            let result =
+                parse
+                    logicalPath
+                    $"module Program
+{declaration}
+"
+
+            Expect.sequenceEqual
+                (oracleLines logicalPath result.Diagnostics)
+                [
+                    $"{logicalPath}(2,12): error FS3117: Unexpected end of type. Expected a name after this point."
+                ]
+                "Compatibility Oracle diagnostics"
+
+            Expect.sequenceEqual
+                (result.Diagnostics
+                 |> Seq.map (fun diagnostic -> position diagnostic.Range))
+                [ 2, 12, 2, 13 ]
+                "Diagnostic range"
+
+            let declarations = (Seq.exactlyOne result.File.Contents).Declarations
+
+            Expect.sequenceEqual
+                (declarations
+                 |> Seq.map declarationShape)
+                [ expectedShape ]
+                "Open target"
+
+            Expect.sequenceEqual
+                (declarations
+                 |> Seq.map (fun declaration -> position declaration.Range))
+                [ 2, 1, 2, 13 ]
+                "Open declaration range"
+
     let private parseSignature logicalPath text =
         prepare logicalPath text
         |> Parser.parseSignatureFile
-
-    let rec private typeShape syntaxType =
-        match syntaxType with
-        | SyntaxType.LongIdentifier name -> name.Text
-        | SyntaxType.Variable variable -> variable.Text
-        | SyntaxType.Application(typeConstructor, arguments, true, _) ->
-            let arguments =
-                arguments
-                |> Seq.map typeShape
-                |> String.concat ", "
-
-            $"{arguments} {typeShape typeConstructor}"
-        | SyntaxType.Application(typeConstructor, arguments, false, _) ->
-            let arguments =
-                arguments
-                |> Seq.map typeShape
-                |> String.concat ", "
-
-            $"{typeShape typeConstructor}<{arguments}>"
-        | SyntaxType.Function(argument, result, _) ->
-            $"({typeShape argument} -> {typeShape result})"
-        | SyntaxType.Tuple(elements, _) ->
-            let elements =
-                elements
-                |> Seq.map typeShape
-                |> String.concat " * "
-
-            $"({elements})"
-        | SyntaxType.Parenthesized(inner, _) -> typeShape inner
-        | SyntaxType.SignatureParameter(name, parameterType, _) ->
-            $"{name.Text}: {typeShape parameterType}"
-        | SyntaxType.Missing _ -> "<missing>"
 
     let rec private signatureShape declaration =
         match declaration with
@@ -1230,6 +1268,9 @@ open System.IO
 open global
 open global.System
 open type System.Math
+open type System.Collections.Generic.List<int>
+open type int list
+open type global.System.Math
 "
 
                 Expect.isEmpty
@@ -1244,8 +1285,16 @@ open type System.Math
                         "open global"
                         "open global.System"
                         "open type System.Math"
+                        "open type System.Collections.Generic.List<int>"
+                        "open type int list"
+                        "open type global.System.Math"
                     ]
                     "Each open declaration keeps its target"
+
+            testList "an open declaration with a trailing dot ends after the dot" [
+                trailingDotOpenCase "OpenDot.fs" "open System." "open System"
+                trailingDotOpenCase "GlobalDot.fs" "open global." "open global"
+            ]
 
             testCase "a type group keeps each definition in order"
             <| fun _ ->

@@ -7021,17 +7021,236 @@ module M =
             "IncompleteAfterRecovery.fs(3,1,3,2): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
             "IncompleteAfterRecovery.fs(5,1,5,1): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (4:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
         ]
-    ]
 
-    let private unmodeledIncompleteConstructCases = [
         "t_generic.fs",
         "module M\nopen type System.Collections.Generic.List<int>\nlet x = )\n",
         [ "t_generic.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding" ]
+
+        "s_t_gen.fsi", "module A\nopen type System.Collections.Generic.List<int>\nval x: int\n", []
+
+        "t_gen_eof.fs", "module A\nopen type System.Collections.Generic.List<int>\n", []
+
+        "t_gen_nest2.fs",
+        "module A\nopen type System.Collections.Generic.List<List<int>>\nlet x = 1\n",
+        []
+
+        "t_gen_nested.fs",
+        "module A\nmodule B =\n    open type System.Collections.Generic.List<int>\n    let x = 1\n",
+        []
+
+        "t_gen_post.fs", "module A\nopen type int list\nlet x = 1\n", []
+
+        "t_gen_space.fs",
+        "module A\nopen type System.Collections.Generic.List <int>\nlet x = 1\n",
+        [
+            "t_gen_space.fs(2,43,2,48): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "t_gen_tuple.fs", "module A\nopen type (int * int)\nlet x = 1\n", []
+
+        "t_gen_var.fs", "module A\nopen type System.Collections.Generic.List<'T>\nlet x = 1\n", []
+
+        "t_gen_wild.fs", "module A\nopen type System.Collections.Generic.List<_>\nlet x = 1\n", []
+
+        "t_gen.fs", "module A\nopen type System.Collections.Generic.List<int>\nlet x = 1\n", []
+
+        "t_gen2.fs",
+        "module A\nopen type System.Collections.Generic.Dictionary<int, string>\nlet x = 1\n",
+        []
+
+        "t_eof_gen.fs", "module A\nopen type List<int>", []
+
+        "t_genpost.fs", "module A\nopen type List<int> list\nlet x = 1\n", []
+
+        "t_paren.fs", "module A\nopen type (int)\nlet x = 1\n", []
+
+        "t_post2.fs", "module A\nopen type int list option\nlet x = 1\n", []
+
+        "t_space2.fs",
+        "module A\nopen type List <int>\nlet x = 1\n",
+        [
+            "t_space2.fs(2,16,2,21): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "t_var.fs", "module A\nopen type 'T\nlet x = 1\n", []
+
+        "t_wild.fs", "module A\nopen type _\nlet x = 1\n", []
+
+        "v_space.fsi",
+        "module A\nval x: System.Collections.Generic.List <int>\nval y: int\n",
+        [
+            "v_space.fsi(2,40,2,45): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
 
         "t_global.fs",
         "module M\nopen type global.System.Math\nlet x = )\n",
         [ "t_global.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding" ]
 
+        "s_t_global.fsi", "module A\nopen type global.System.Math\nval x: int\n", []
+
+        "t_global_alone.fs", "module A\nopen type global\nlet x = 1\n", []
+
+        "t_global_dot.fs",
+        "module A\nopen type global.\nlet x = 1\n",
+        [
+            "t_global_dot.fs(2,19,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "t_global_gen.fs",
+        "module A\nopen type global.System.Collections.Generic.List<int>\nlet x = 1\n",
+        []
+
+        "v_global.fsi", "module A\nval x: global.System.String\nval y: int\n", []
+
+        "a_g_alone.fs", "module A\ntype T = global\nlet x = 1\n", []
+
+        "a_g_gen.fs",
+        "module A\ntype T = global.System.Collections.Generic.List<int>\nlet x = 1\n",
+        []
+
+        "a_g.fs", "module A\ntype T = global.System.String\nlet x = 1\n", []
+
+        "r_g_alone.fs", "module A\ntype R = { F: global }\nlet x = 1\n", []
+
+        "r_g.fs", "module A\ntype R = { F: global.System.String }\nlet x = 1\n", []
+
+        "t_g_dot_eof.fs",
+        "module A\nopen type global.",
+        [
+            "t_g_dot_eof.fs(2,17,2,18): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "t_g_dot2_eof.fs",
+        "module A\nopen type global.System.",
+        [
+            "t_g_dot2_eof.fs(2,24,2,25): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "t_g_dot2.fs",
+        "module A\nopen type global.System.\nlet x = 1\n",
+        [
+            "t_g_dot2.fs(2,26,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "t_g.fs", "module A\nopen type global.System.Math\nlet x = 1\n", []
+
+        "u_g_named.fs", "module A\ntype U = C of n: global.System.String\nlet x = 1\n", []
+
+        "u_g.fs", "module A\ntype U = C of global.System.String\nlet x = 1\n", []
+
+        "v_g_alone.fsi", "module A\nval x: global\nval y: int\n", []
+
+        "v_g_arg.fsi", "module A\nval x: List<global.System.String>\nval y: int\n", []
+
+        "v_g_fn.fsi", "module A\nval f: global.System.String -> int\nval y: int\n", []
+
+        "v_g_gen.fsi",
+        "module A\nval x: global.System.Collections.Generic.List<int>\nval y: int\n",
+        []
+
+        "v_g_paren.fsi", "module A\nval x: (global.System.String)\nval y: int\n", []
+
+        "v_g_post.fsi",
+        "module A\nval x: int global.Microsoft.FSharp.Collections.list\nval y: int\n",
+        []
+
+        "v_g_space.fsi", "module A\nval x: global .System.String\nval y: int\n", []
+
+        "v_g_tuple.fsi", "module A\nval x: global.System.String * int\nval y: int\n", []
+
+        "w_abbrev_open.fs",
+        "module M\ntype T = List <int>\nopen System\n",
+        [
+            "w_abbrev_open.fs(2,15,2,20): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "w_bind_err.fs",
+        "module M\nlet f (x: List <int>) = )\n",
+        [
+            "w_bind_err.fs(2,16,2,21): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+            "w_bind_err.fs(2,25,2,26): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "w_bind_ok.fs",
+        "module M\nlet f (x: List <int>) = x\nlet y = 1\n",
+        [
+            "w_bind_ok.fs(2,16,2,21): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "w_group.fs",
+        "module M\ntype T = List <int>\nand U = int\n",
+        [
+            "w_group.fs(2,15,2,20): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "w_nested.fs",
+        "module M\nmodule N =\n    type U = A of List <int>\n    open System\nlet x = 1\n",
+        [
+            "w_nested.fs(3,24,3,29): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "w_open_type.fs",
+        "module M\nopen type List <int>\nopen System\nlet x = )\n",
+        [
+            "w_open_type.fs(2,16,2,21): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+            "w_open_type.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "w_record.fs",
+        "module M\ntype R = { F: List <int> }\nopen System\n",
+        [
+            "w_record.fs(2,20,2,25): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "w_two.fs",
+        "module M\ntype U = A of List <int> * Map <int, int>\nopen System\n",
+        [
+            "w_two.fs(2,20,2,25): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+            "w_two.fs(2,32,2,42): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "w_union_err.fs",
+        "module M\ntype U = A of List <int>\nlet x = )\n",
+        [
+            "w_union_err.fs(2,20,2,25): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+            "w_union_err.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "w_union_let.fs",
+        "module M\ntype U = A of List <int>\nlet x = 1\n",
+        [
+            "w_union_let.fs(2,20,2,25): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "w_union_open.fs",
+        "module M\ntype U = A of List <int>\nopen System\n",
+        [
+            "w_union_open.fs(2,20,2,25): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "w_val_err.fsi",
+        "module M\nval x: List <int> -> )\n",
+        [
+            "w_val_err.fsi(2,13,2,18): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+            "w_val_err.fsi(2,22,2,23): error FS0010: Unexpected symbol ')' in value signature"
+        ]
+
+        "w_val_next.fsi",
+        "module M\nval x: List <int>\nval y: )\n",
+        [
+            "w_val_next.fsi(2,13,2,18): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+            "w_val_next.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature"
+            "w_val_next.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "w_val_open.fsi",
+        "module M\nval x: List <int>\nopen System\nval y: int\n",
+        [
+            "w_val_open.fsi(2,13,2,18): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+    ]
+
+    let private unmodeledIncompleteConstructCases = [
         "ns_after_ok.fsi",
         "module M\nval y: int\nval x: )\nnamespace Q\nval z: int\n",
         [
@@ -8255,6 +8474,120 @@ module M =
             "b_and_indented.fs(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
         ]
 
+
+        "o_gen.fs",
+        "module A\nopen System.Collections.Generic.List<int>\nlet x = 1\n",
+        [
+            "o_gen.fs(2,37,2,38): error FS0010: Unexpected type application  in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "t_gen_arr.fs", "module A\nopen type int[]\nlet x = 1\n", []
+
+        "t_gen_dotafter.fs",
+        "module A\nopen type System.Collections.Generic.List<int>.Enumerator\nlet x = 1\n",
+        []
+
+        "t_gen_empty.fs",
+        "module A\nopen type System.Collections.Generic.List<>\nlet x = 1\n",
+        [
+            "t_gen_empty.fs(3,1,3,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:6). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "t_gen_empty.fs(2,42,2,44): error FS0010: Unexpected infix operator in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "t_gen_fn.fs",
+        "module A\nopen type int -> int\nlet x = 1\n",
+        [
+            "t_gen_fn.fs(2,15,2,17): error FS0010: Unexpected symbol '->' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "t_gen_open.fs",
+        "module A\nopen type System.Collections.Generic.List<\nlet x = 1\n",
+        [
+            "t_gen_open.fs(2,44,3,1): error FS1241: Expected type argument or static argument"
+            "t_gen_open.fs(2,44,3,1): error FS0010: Incomplete structured construct at or before this point in type arguments. Expected ',' or other token."
+            "t_gen_open.fs(2,44,3,1): error FS1241: Expected type argument or static argument"
+        ]
+
+        "t_same.fs", "module A\nopen type System.Math let x = 1\n", []
+
+        "t_colon.fs",
+        "module A\nopen type a: int\nlet x = 1\n",
+        [
+            "t_colon.fs(2,12,2,13): error FS0010: Unexpected symbol ':' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "t_gen_offs2.fs",
+        "module A\nmodule B =\n    open type List<int>\n  let y = 2\nlet x = 1\n",
+        [
+            "t_gen_offs2.fs(5,1,5,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (4:3). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+        ]
+
+        "t_gen_offside.fs",
+        "module A\nopen type List\n<int>\nlet x = 1\n",
+        [
+            "t_gen_offside.fs(3,1,3,2): error FS0010: Unexpected symbol '<' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "t_gen_same.fs", "module A\nopen type List<int> let x = 1\n", []
+
+        "t_gennext.fs",
+        "module A\nopen type List<\n    int>\nlet x = 1\n",
+        [
+            "t_gennext.fs(3,5,3,8): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:6). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+        ]
+
+        "t_postnext.fs", "module A\nopen type int\n    list\nlet x = 1\n", []
+
+        "t_prefix.fs",
+        "module A\nopen type (int, string) Dictionary\nlet x = 1\n",
+        [
+            "t_prefix.fs(2,11,2,35): error FS0062: This construct is deprecated. The use of multiple parenthesized type parameters before a generic type name such as '(int, int) Map' was deprecated in F# 2.0 and is no longer supported. You can enable this feature by using '--langversion:5.0' and '--mlcompatibility'."
+        ]
+
+        "t_star.fs",
+        "module A\nopen type int * int\nlet x = 1\n",
+        [
+            "t_star.fs(2,15,2,16): error FS0010: Unexpected symbol '*' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "v_space.fs",
+        "module A\nlet x: System.Collections.Generic.List <int> = null\n",
+        [
+            "v_space.fs(2,40,2,45): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "a_g_dot.fs",
+        "module A\ntype T = global.\nlet x = 1\n",
+        [
+            "a_g_dot.fs(2,16,2,17): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "v_g_dot_eof.fsi",
+        "module A\nval x: global.",
+        [
+            "v_g_dot_eof.fsi(2,14,2,15): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "v_g_dot.fsi",
+        "module A\nval x: global.\nval y: int\n",
+        [
+            "v_g_dot.fsi(2,16,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "v_g_dotnext.fsi", "module A\nval x: global.\n    System.String\nval y: int\n", []
+
+        "v_g_kw.fsi",
+        "module A\nval x: global.type\nval y: int\n",
+        [
+            "v_g_kw.fsi(2,14,2,15): error FS3117: Unexpected end of type. Expected a name after this point."
+            "v_g_kw.fsi(2,20,3,1): error FS0010: Incomplete structured construct at or before this point in type name"
+        ]
+
+        "v_g_next.fsi", "module A\nval x: global\n    .System.String\nval y: int\n", []
+
+        "v_g_under.fsi",
+        "module A\nval x: global._\nval y: int\n",
+        [ "v_g_under.fsi(2,15,2,16): error FS0010: Unexpected symbol '_' in value signature" ]
     ]
 
     let private strictIndentationCases = [
