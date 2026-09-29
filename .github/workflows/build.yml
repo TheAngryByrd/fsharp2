@@ -125,6 +125,13 @@ jobs:
         shell: pwsh
         run: |
           dotnet run --project tools/FSharp2.Conformance/FSharp2.Conformance.csproj -c Release --no-restore -- run --root tests/conformance --case language.bindings.value-function-positive --dotnet-root $env:FSHARP2_DOTNET_ROOT --fsharp2-host $env:FSharp2CompilerHostPath --output-root artifacts/conformance
+      - name: Upload conformance run evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-focused-case-evidence
+          path: artifacts/conformance
+          if-no-files-found: warn
 
   # Builds the project in a dev container
   build-devcontainer:

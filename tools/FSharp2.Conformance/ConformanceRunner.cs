@@ -231,12 +231,54 @@ public static class ConformanceRunner
             artifacts.ToImmutable(),
             cancellationToken).ConfigureAwait(false);
         Console.WriteLine($"{VerdictName(verdict.Verdict)} {caseId} at {runRoot}");
+        if (verdict.Verdict is not (ConformanceVerdict.Pass or ConformanceVerdict.Unsupported))
+        {
+            WriteVerdictDetails(verdict, comparisons, probes, oracle, fsharp2);
+        }
         return verdict.Verdict switch
         {
             ConformanceVerdict.Pass or ConformanceVerdict.Unsupported => 0,
             ConformanceVerdict.Fail => 1,
             _ => 3,
         };
+    }
+
+    private static void WriteVerdictDetails(
+        VerdictResult verdict,
+        ImmutableArray<ComparisonResult>.Builder comparisons,
+        ImmutableArray<ProbeEvidence>.Builder probes,
+        CoreCompileLaneResult? oracle,
+        CoreCompileLaneResult? fsharp2)
+    {
+        foreach (var reason in verdict.Reasons)
+        {
+            Console.WriteLine($"  reason: {reason}");
+        }
+        foreach (var missing in verdict.MissingEvidence)
+        {
+            Console.WriteLine($"  missing evidence: {missing}");
+        }
+        foreach (var comparison in comparisons.Where(static item => !item.Passed))
+        {
+            Console.WriteLine($"  comparison {comparison.ComparatorId} ({comparison.Rule}): {comparison.Difference}");
+        }
+        foreach (var probe in probes.Where(static item => !item.Passed))
+        {
+            Console.WriteLine($"  probe {probe.Kind}: {probe.Difference}");
+        }
+        foreach (var (name, lane) in new[] { ("oracle", oracle), ("fsharp2", fsharp2) })
+        {
+            if (lane is null)
+            {
+                Console.WriteLine($"  lane {name}: not executed");
+                continue;
+            }
+            Console.WriteLine($"  lane {name}: exit {lane.Process.ExitCode}, timed out {lane.Process.TimedOut}, processes {lane.Process.Processes.Length}");
+            foreach (var process in lane.Process.Processes)
+            {
+                Console.WriteLine($"    process {process.ProcessId} parent {process.ParentProcessId}: {process.ExecutablePath} {string.Join(' ', process.Arguments)}");
+            }
+        }
     }
 
     public static async Task<int> ReplayAsync(
