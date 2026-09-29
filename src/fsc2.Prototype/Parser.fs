@@ -2732,48 +2732,84 @@ module internal Parser =
         let openToken = cursor.Advance()
         let context = openToken.Range.Start
 
-        if
+        let onTrailingDot (dot: LayoutToken) =
+            let offset, closesBlock = nextSource cursor
+
+            // The Compatibility Oracle reports the missing name at the dot when the declaration list ends after it.
+            if
+                closesBlock
+                || isEndOfFile (cursor.Peek offset)
+            then
+                report
+                    state
+                    "FS3117"
+                    "Unexpected end of type. Expected a name after this point."
+                    dot.Range
+            elif
+                cursor.Current.Kind = LayoutTokenKind.Separator
+                || (cursor.Current.Kind = LayoutTokenKind.SourceToken
+                    && isOffside context cursor.Current)
+            then
+                reportIncomplete state "open declaration"
+            else
+                reportUnsupported state cursor.Current "an open declaration"
+
+        let startsName () =
             isIdentifier cursor.Current
             && not (isOffside context cursor.Current)
-        then
-            let name =
-                longIdentifierWith
+
+        let startsKeyword keyword =
+            isKeyword keyword cursor.Current
+            && not (isOffside context cursor.Current)
+
+        let target =
+            if startsName () then
+                Some(SyntaxOpenTarget.ModuleOrNamespace(longIdentifierWith state onTrailingDot))
+            elif startsKeyword "global" then
+                let globalToken = cursor.Advance()
+
+                if isOperator "." cursor.Current then
+                    let dot = cursor.Advance()
+
+                    if startsName () then
+                        Some(
+                            SyntaxOpenTarget.GlobalModuleOrNamespace(
+                                globalToken.Range,
+                                Some(longIdentifierWith state onTrailingDot)
+                            )
+                        )
+                    else
+                        onTrailingDot dot
+                        Some(SyntaxOpenTarget.GlobalModuleOrNamespace(globalToken.Range, None))
+                else
+                    Some(SyntaxOpenTarget.GlobalModuleOrNamespace(globalToken.Range, None))
+            elif startsKeyword "type" then
+                cursor.Advance()
+                |> ignore
+
+                if startsName () then
+                    let name = longIdentifierWith state onTrailingDot
+                    Some(SyntaxOpenTarget.Type(SyntaxType.LongIdentifier name))
+                elif endsLine context cursor.Current then
+                    reportIncomplete state "open declaration"
+                    None
+                else
+                    reportUnsupported state cursor.Current "an open declaration"
+                    None
+            elif endsLine context cursor.Current then
+                report
                     state
-                    (fun dot ->
-                        let offset, closesBlock = nextSource cursor
+                    "FS0010"
+                    "Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global', 'type' or other token."
+                    (afterLastToken cursor)
 
-                        // The Compatibility Oracle reports the missing name at the dot when the declaration list ends after it.
-                        if
-                            closesBlock
-                            || isEndOfFile (cursor.Peek offset)
-                        then
-                            report
-                                state
-                                "FS3117"
-                                "Unexpected end of type. Expected a name after this point."
-                                dot.Range
-                        elif
-                            cursor.Current.Kind = LayoutTokenKind.Separator
-                            || (cursor.Current.Kind = LayoutTokenKind.SourceToken
-                                && isOffside context cursor.Current)
-                        then
-                            reportIncomplete state "open declaration"
-                        else
-                            reportUnsupported state cursor.Current "an open declaration"
-                    )
+                None
+            else
+                reportUnsupported state cursor.Current "an open declaration"
+                None
 
-            Some(name, span openToken.Range name.Range)
-        elif endsLine context cursor.Current then
-            report
-                state
-                "FS0010"
-                "Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global', 'type' or other token."
-                (afterLastToken cursor)
-
-            None
-        else
-            reportUnsupported state cursor.Current "an open declaration"
-            None
+        target
+        |> Option.map (fun target -> target, span openToken.Range (emptyAt cursor.LastEnd))
 
     let private missingRepresentation (token: LayoutToken) =
         SyntaxTypeRepresentation.Missing {
@@ -3297,7 +3333,7 @@ module internal Parser =
         StartPoint: DeclarationList -> RecoveryPoint
         Discarded: 'Declaration -> DiscardedDeclaration
         FirstNestedPoint: RecoveryPoint
-        Open: LongIdentifier * SourceRange -> 'Declaration
+        Open: SyntaxOpenTarget * SourceRange -> 'Declaration
         NestedModule: SyntaxNestedModule<'Declaration> -> 'Declaration
         Skipped: SkippedSyntax -> 'Declaration
     }
