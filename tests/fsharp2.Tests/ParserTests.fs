@@ -41,9 +41,17 @@ module ParserTests =
         )
         |> Seq.toList
 
+    let private openTargetShape target =
+        match target with
+        | SyntaxOpenTarget.ModuleOrNamespace name -> name.Text
+        | SyntaxOpenTarget.GlobalModuleOrNamespace(_, None) -> "global"
+        | SyntaxOpenTarget.GlobalModuleOrNamespace(_, Some name) -> $"global.{name.Text}"
+        | SyntaxOpenTarget.Type(SyntaxType.LongIdentifier name) -> $"type {name.Text}"
+        | SyntaxOpenTarget.Type other -> $"type {other}"
+
     let rec private declarationShape declaration =
         match declaration with
-        | ImplementationDeclaration.Open(name, _) -> $"open {name.Text}"
+        | ImplementationDeclaration.Open(target, _) -> $"open {openTargetShape target}"
         | ImplementationDeclaration.Let(_, _, bindings, _) ->
             bindings
             |> Seq.map (fun binding ->
@@ -121,7 +129,7 @@ module ParserTests =
 
     let rec private signatureShape declaration =
         match declaration with
-        | SignatureDeclaration.Open(name, _) -> $"open {name.Text}"
+        | SignatureDeclaration.Open(target, _) -> $"open {openTargetShape target}"
         | SignatureDeclaration.Val value ->
             let name =
                 value.Name
@@ -1211,6 +1219,33 @@ module Values =
                         "]"
                     ]
                     "Skipped tokens"
+
+            testCase "an open declaration keeps its target kind"
+            <| fun _ ->
+                let result =
+                    parse
+                        "Opens.fs"
+                        "module Program
+open System.IO
+open global
+open global.System
+open type System.Math
+"
+
+                Expect.isEmpty
+                    result.Diagnostics
+                    "The Compatibility Oracle reports no parse diagnostics"
+
+                Expect.sequenceEqual
+                    (result.File.Contents
+                     |> Seq.collect (rootShapes declarationShape))
+                    [
+                        "open System.IO"
+                        "open global"
+                        "open global.System"
+                        "open type System.Math"
+                    ]
+                    "Each open declaration keeps its target"
 
             testCase "a type group keeps each definition in order"
             <| fun _ ->

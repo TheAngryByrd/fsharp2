@@ -115,6 +115,20 @@ module ParserLanguageVersionTests =
                                 "Each shorthand is a dot lambda node"
             ]
 
+            testCase "an open type declaration has no parse diagnostic in F# 4.6"
+            <| fun _ ->
+                let result =
+                    parse
+                        "4.6"
+                        "OpenType.fs"
+                        "module M
+open type System.Math
+"
+
+                Expect.isEmpty
+                    (oracleLines "OpenType.fs" result)
+                    "The Compatibility Oracle reports no parse diagnostics"
+
             testList "feature diagnostics keep their order with recovery diagnostics" [
                 for logicalPath, text, expected in
                     [

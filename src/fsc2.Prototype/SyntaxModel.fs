@@ -196,6 +196,12 @@ type internal SyntaxTypeRepresentation =
     | Class of ImmutableArray<SyntaxMember>
     | Missing of MissingSyntax
 
+[<RequireQualifiedAccess>]
+type internal SyntaxOpenTarget =
+    | ModuleOrNamespace of LongIdentifier
+    | GlobalModuleOrNamespace of globalKeyword: SourceRange * LongIdentifier option
+    | Type of SyntaxType
+
 type internal SyntaxTypeDefinition = {
     Attributes: ImmutableArray<SyntaxAttributeList>
     Accessibility: SyntaxAccess option
@@ -228,7 +234,7 @@ type internal SyntaxLetKeyword =
 
 [<RequireQualifiedAccess>]
 type internal ImplementationDeclaration =
-    | Open of LongIdentifier * SourceRange
+    | Open of SyntaxOpenTarget * SourceRange
     | Let of
         keyword: SyntaxLetKeyword *
         isRecursive: bool *
@@ -265,7 +271,7 @@ type internal SyntaxValueSignature = {
 
 [<RequireQualifiedAccess>]
 type internal SignatureDeclaration =
-    | Open of LongIdentifier * SourceRange
+    | Open of SyntaxOpenTarget * SourceRange
     | Val of SyntaxValueSignature
     | NestedModule of SyntaxNestedModule<SignatureDeclaration>
     | Skipped of SkippedSyntax

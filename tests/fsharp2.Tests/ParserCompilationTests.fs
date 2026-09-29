@@ -6559,6 +6559,115 @@ module M =
             "ns_module.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
         ]
 
+        "ns_ns_after.fsi",
+        "namespace P\nval y: int\nval x: )\nnamespace Q\nval z: int\n",
+        [ "ns_ns_after.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "g_alone_eof.fs", "module M\nopen global\n", []
+
+        "g_alone_next.fs",
+        "module M\nopen global\nlet x = )\n",
+        [ "g_alone_next.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding" ]
+
+        "g_dot_eof.fs",
+        "module M\nopen global.\n",
+        [
+            "g_dot_eof.fs(2,12,2,13): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "g_dot_next.fs",
+        "module M\nopen global.\nlet x = )\n",
+        [
+            "g_dot_next.fs(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+            "g_dot_next.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "g_nested_eof.fs",
+        "module M\nmodule N =\n    open global.\n",
+        [
+            "g_nested_eof.fs(3,16,3,17): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "g_nested_root.fs",
+        "module M\nmodule N =\n    open global.\nlet x = )\n",
+        [
+            "g_nested_root.fs(3,16,3,17): error FS3117: Unexpected end of type. Expected a name after this point."
+            "g_nested_root.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "g_ok.fs", "module M\nopen global.System\nlet x = 1\n", []
+
+        "g_ok_two.fs",
+        "module M\nopen global.System.IO\nlet x = )\n",
+        [ "g_ok_two.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding" ]
+
+        "t_alone_eof.fs",
+        "module M\nopen type\n",
+        [
+            "t_alone_eof.fs(3,1,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "t_alone_next.fs",
+        "module M\nopen type\nlet x = )\n",
+        [
+            "t_alone_next.fs(2,11,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+            "t_alone_next.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "t_dot_eof.fs",
+        "module M\nopen type System.\n",
+        [
+            "t_dot_eof.fs(2,17,2,18): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "t_dot_next.fs",
+        "module M\nopen type System.\nlet x = )\n",
+        [
+            "t_dot_next.fs(2,19,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+            "t_dot_next.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "t_nested_eof.fs",
+        "module M\nmodule N =\n    open type System.\n",
+        [
+            "t_nested_eof.fs(3,21,3,22): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "t_ok.fs", "module M\nopen type System.Math\nlet x = 1\n", []
+
+        "t_ok_one.fs",
+        "module M\nopen type Math\nlet x = )\n",
+        [ "t_ok_one.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding" ]
+
+        "t_v46.fs", "module M\nopen type System.Math\n", []
+
+        "s_g_ok.fsi",
+        "module M\nopen global.System\nval x: )\n",
+        [
+            "s_g_ok.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature"
+            "s_g_ok.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "s_t_ok.fsi", "module M\nopen type System.Math\nval x: int\n", []
+
+        "o_global.fs",
+        "module M\nopen global.\n",
+        [
+            "o_global.fs(2,12,2,13): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "o_type.fs",
+        "module M\nopen type System.\n",
+        [
+            "o_type.fs(2,17,2,18): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "s_t_dot.fsi",
+        "module M\nopen type System.\n",
+        [
+            "s_t_dot.fsi(2,17,2,18): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
         "b_and.fs",
         "module M\nlet rec a = 1\nand b =\nlet c = 1\n",
         [
@@ -6915,6 +7024,53 @@ module M =
     ]
 
     let private unmodeledIncompleteConstructCases = [
+        "t_generic.fs",
+        "module M\nopen type System.Collections.Generic.List<int>\nlet x = )\n",
+        [ "t_generic.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding" ]
+
+        "t_global.fs",
+        "module M\nopen type global.System.Math\nlet x = )\n",
+        [ "t_global.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding" ]
+
+        "ns_after_ok.fsi",
+        "module M\nval y: int\nval x: )\nnamespace Q\nval z: int\n",
+        [
+            "ns_after_ok.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature"
+            "ns_after_ok.fsi(6,1,6,1): error FS0010: Incomplete structured construct at or before this point in signature file"
+        ]
+
+        "ns_after_resume.fsi",
+        "module M\nval y: int\nval x: )\nval w: int\nnamespace Q\nval z: int\n",
+        [
+            "ns_after_resume.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature"
+            "ns_after_resume.fsi(5,1,5,10): error FS0010: Unexpected keyword 'namespace'. Expected incomplete structured construct at or before this point or other token."
+            "ns_after_resume.fsi(1,1,4,11): error FS0530: Only '#' compiler directives may occur prior to the first 'namespace' declaration"
+            "ns_after_resume.fsi(7,1,7,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "ns_after.fsi",
+        "module M\nval y: int\nval x: )\nnamespace Q\nval z: )\n",
+        [
+            "ns_after.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature"
+            "ns_after.fsi(5,8,5,9): error FS0010: Unexpected symbol ')' in value signature"
+            "ns_after.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "ns_first_err.fsi",
+        "module M\nval x: )\nnamespace Q\nval z: int\n",
+        [
+            "ns_first_err.fsi(2,8,2,9): error FS0010: Unexpected symbol ')' in value signature"
+            "ns_first_err.fsi(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in signature file"
+        ]
+
+        "ns_plain.fsi",
+        "module M\nval y: int\nnamespace Q\nval z: int\n",
+        [
+            "ns_plain.fsi(3,1,3,10): error FS0010: Unexpected keyword 'namespace'. Expected incomplete structured construct at or before this point or other token."
+            "ns_plain.fsi(1,1,2,11): error FS0530: Only '#' compiler directives may occur prior to the first 'namespace' declaration"
+            "ns_plain.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
         "v114.fsi",
         "module M\nval x: )\ntype T2 = int\n",
         [
@@ -7205,18 +7361,6 @@ module M =
         [
             "o_dot_close.fs(2,12,2,13): error FS3117: Unexpected end of type. Expected a name after this point."
             "o_dot_close.fs(2,13,2,14): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
-        ]
-
-        "o_global.fs",
-        "module M\nopen global.\n",
-        [
-            "o_global.fs(2,12,2,13): error FS3117: Unexpected end of type. Expected a name after this point."
-        ]
-
-        "o_type.fs",
-        "module M\nopen type System.\n",
-        [
-            "o_type.fs(2,17,2,18): error FS3117: Unexpected end of type. Expected a name after this point."
         ]
 
         "i_expr.fs",
