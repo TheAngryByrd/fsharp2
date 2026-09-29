@@ -139,14 +139,35 @@ type TargetReferenceSnapshot = {
     LogicalPath: string
     PeImage: ImmutableArray<byte>
     ContentFingerprint: string
+    /// Supplies only the definitions of forwarded types and never becomes an emitted assembly reference.
+    ForwardingImplementations: ImmutableArray<TargetReferenceSnapshot>
 } with
 
-    static member Create(stableId, logicalPath, peImage, contentFingerprint) = {
-        StableId = stableId
-        LogicalPath = ContractValidation.text "logicalPath" logicalPath
-        PeImage = ContractValidation.array "peImage" peImage
-        ContentFingerprint = ContractValidation.text "contentFingerprint" contentFingerprint
-    }
+    static member Create(stableId, logicalPath, peImage, contentFingerprint) =
+        TargetReferenceSnapshot.Create(
+            stableId,
+            logicalPath,
+            peImage,
+            contentFingerprint,
+            Array.empty<TargetReferenceSnapshot>
+        )
+
+    static member Create
+        (
+            stableId,
+            logicalPath,
+            peImage,
+            contentFingerprint,
+            forwardingImplementations: TargetReferenceSnapshot array
+        ) =
+        {
+            StableId = stableId
+            LogicalPath = ContractValidation.text "logicalPath" logicalPath
+            PeImage = ContractValidation.array "peImage" peImage
+            ContentFingerprint = ContractValidation.text "contentFingerprint" contentFingerprint
+            ForwardingImplementations =
+                ContractValidation.references "forwardingImplementations" forwardingImplementations
+        }
 
     override _.ToString() = "TargetReferenceSnapshot"
 
@@ -830,19 +851,25 @@ type CompilationRequest = {
             ContractValidation.text "sources.ContentFingerprint" source.ContentFingerprint
             |> ignore
 
+        let rec validateTargetReference name (reference: TargetReferenceSnapshot) =
+            validateIdentity $"{name}.StableId" reference.StableId
+
+            ContractValidation.text $"{name}.LogicalPath" reference.LogicalPath
+            |> ignore
+
+            ContractValidation.immutableArray $"{name}.PeImage" reference.PeImage
+            |> ignore
+
+            ContractValidation.text $"{name}.ContentFingerprint" reference.ContentFingerprint
+            |> ignore
+
+            ContractValidation.immutableArray
+                $"{name}.ForwardingImplementations"
+                reference.ForwardingImplementations
+            |> Seq.iter (validateTargetReference $"{name}.ForwardingImplementations")
+
         for reference in copiedTargetReferences do
-            validateIdentity "targetReferences.StableId" reference.StableId
-
-            ContractValidation.text "targetReferences.LogicalPath" reference.LogicalPath
-            |> ignore
-
-            ContractValidation.immutableArray "targetReferences.PeImage" reference.PeImage
-            |> ignore
-
-            ContractValidation.text
-                "targetReferences.ContentFingerprint"
-                reference.ContentFingerprint
-            |> ignore
+            validateTargetReference "targetReferences" reference
 
         ContractValidation.immutableArray "semanticOptions.Defines" semanticOptions.Defines
         |> Seq.iter (

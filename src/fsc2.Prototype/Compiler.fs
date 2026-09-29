@@ -55,6 +55,9 @@ type Compiler() =
 
                 yield!
                     request.TargetReferences
+                    |> Seq.collect (fun reference ->
+                        Seq.append [ reference ] reference.ForwardingImplementations
+                    )
                     |> Seq.collect (fun reference -> [
                         reference.StableId.Value
                         reference.ContentFingerprint

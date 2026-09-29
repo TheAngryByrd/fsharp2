@@ -140,16 +140,55 @@ module internal CompilationPipeline =
             )
             |> List.toArray
 
-        let targetReferences =
+        let referenceImages =
             invocation.ReferencePaths
-            |> List.mapi (fun index path ->
-                let image = File.ReadAllBytes(path)
+            |> List.map (fun path -> path, File.ReadAllBytes(path))
+
+        let referencedAssemblyNames =
+            referenceImages
+            |> List.choose (fun (_, image) -> TypeForwarding.tryAssemblyName image)
+            |> fun names ->
+                Collections.Generic.HashSet<string>(names, StringComparer.OrdinalIgnoreCase)
+
+        let targetReferences =
+            referenceImages
+            |> List.mapi (fun index (path, image) ->
+                let forwardingImplementations =
+                    TypeForwarding.implementationAssemblyNames image
+                    |> List.filter (fun assemblyName ->
+                        not (referencedAssemblyNames.Contains(assemblyName))
+                    )
+                    |> List.choose (fun assemblyName ->
+                        let implementationPath =
+                            Path.Combine(
+                                Path.GetDirectoryName(path),
+                                assemblyName
+                                + ".dll"
+                            )
+
+                        if File.Exists(implementationPath) then
+                            let implementationImage = File.ReadAllBytes(implementationPath)
+
+                            Some(
+                                TargetReferenceSnapshot.Create(
+                                    StableIdentity.create
+                                        $"reference:{index}:{Path.GetFileName(path)}/forwarding:{assemblyName}.dll",
+                                    Path.GetFileName(implementationPath),
+                                    implementationImage,
+                                    fingerprint implementationImage
+                                )
+                            )
+                        else
+                            None
+                    )
+                    |> List.toArray
 
                 TargetReferenceSnapshot.Create(
                     StableIdentity.create $"reference:{index}:{Path.GetFileName(path)}",
                     Path.GetFileName(path),
                     image,
-                    fingerprint image
+                    fingerprint image,
+                    forwardingImplementations
                 )
             )
             |> List.toArray

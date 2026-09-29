@@ -18,6 +18,52 @@ module private ReferenceFingerprint =
         |> Convert.ToHexString
         |> fun hash -> hash.ToLowerInvariant()
 
+module internal TypeForwarding =
+    let private tryReadMetadata (image: byte array) reader =
+        try
+            use pe = new PEReader(ImmutableArray.Create<byte>(image))
+
+            if pe.HasMetadata then
+                Some(reader (pe.GetMetadataReader()))
+            else
+                None
+        with :? BadImageFormatException ->
+            None
+
+    let tryAssemblyName (image: byte array) =
+        tryReadMetadata
+            image
+            (fun metadata ->
+                if metadata.IsAssembly then
+                    Some(metadata.GetString(metadata.GetAssemblyDefinition().Name))
+                else
+                    None
+            )
+        |> Option.flatten
+
+    let implementationAssemblyNames (image: byte array) =
+        tryReadMetadata
+            image
+            (fun metadata ->
+                metadata.ExportedTypes
+                |> Seq.choose (fun handle ->
+                    let exportedType = metadata.GetExportedType(handle)
+
+                    if exportedType.Implementation.Kind = HandleKind.AssemblyReference then
+                        exportedType.Implementation
+                        |> AssemblyReferenceHandle.op_Explicit
+                        |> metadata.GetAssemblyReference
+                        |> _.Name
+                        |> metadata.GetString
+                        |> Some
+                    else
+                        None
+                )
+                |> Seq.distinct
+                |> List.ofSeq
+            )
+        |> Option.defaultValue []
+
 module internal ReferenceTypeName =
     let fullName (typeName: QualifiedTypeName) =
         if String.IsNullOrEmpty(typeName.Namespace) then
@@ -1039,7 +1085,7 @@ type internal ReferenceTypeIndex
             let result =
                 Dictionary<string, TargetReferenceSnapshot>(StringComparer.OrdinalIgnoreCase)
 
-            for reference in normalizedReferences do
+            let register (reference: TargetReferenceSnapshot) =
                 use pe = new PEReader(reference.PeImage)
 
                 if pe.HasMetadata then
@@ -1050,6 +1096,13 @@ type internal ReferenceTypeIndex
 
                         result.TryAdd(metadata.GetString(definition.Name), reference)
                         |> ignore
+
+            for reference in normalizedReferences do
+                register reference
+
+            for reference in normalizedReferences do
+                for implementation in reference.ForwardingImplementations do
+                    register implementation
 
             result
 

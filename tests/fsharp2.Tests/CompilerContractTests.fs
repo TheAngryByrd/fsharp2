@@ -471,6 +471,84 @@ module CompilerContractTests =
     let private compileSources sources =
         compileSourcesWithReferences sources [||]
 
+    let private snapshotOfFile stableId (path: string) forwardingImplementations =
+        let image = File.ReadAllBytes(path)
+
+        TargetReferenceSnapshot.Create(
+            StableIdentity.create stableId,
+            Path.GetFileName(path),
+            image,
+            fingerprint image,
+            forwardingImplementations
+        )
+
+    let private systemRuntimeSnapshot forwardingImplementations =
+        snapshotOfFile
+            "reference:System.Runtime"
+            (Assembly.Load("System.Runtime").Location)
+            forwardingImplementations
+
+    let private coreLibrarySnapshot () =
+        snapshotOfFile
+            "reference:System.Runtime/forwarding:System.Private.CoreLib.dll"
+            typeof<obj>.Assembly.Location
+            [||]
+
+    let private fsharpCoreSnapshot () =
+        snapshotOfFile
+            "reference:FSharp.Core"
+            typeof<Microsoft.FSharp.Core.EntryPointAttribute>.Assembly.Location
+            [||]
+
+    let private compileWithReferences (references: TargetReferenceSnapshot array) sourceText =
+        let baseline =
+            createRequest
+                (defaultSemanticOptions ())
+                (defaultDiagnosticOptions ())
+                (defaultEmissionOptions ())
+                (defaultSigningOptions ())
+                (emptyResources ())
+                defaultRequestedArtifacts
+                sourceText
+
+        CompilationRequest.Create(
+            baseline.ContractVersion,
+            baseline.RequestIdentity,
+            baseline.AssemblyIdentity,
+            baseline.Sources
+            |> Seq.toArray,
+            references,
+            baseline.SemanticOptions,
+            baseline.DiagnosticOptions,
+            baseline.EmissionOptions,
+            baseline.SigningOptions,
+            baseline.Resources,
+            baseline.RequestedArtifacts
+            |> Seq.toArray
+        )
+        |> compileRequest
+
+    let private emittedAssemblyReferences (result: CompilationResult) =
+        let implementation =
+            result.Artifacts
+            |> Seq.find (fun artifact -> artifact.Kind = RequestedArtifact.ImplementationAssembly)
+
+        use pe = new PEReader(implementation.Bytes)
+        let metadata = pe.GetMetadataReader()
+
+        metadata.AssemblyReferences
+        |> Seq.map (fun handle -> metadata.GetString(metadata.GetAssemblyReference(handle).Name))
+        |> Seq.sort
+        |> List.ofSeq
+
+    let private phaseOutputFingerprint phase (result: CompilationResult) =
+        result.PhaseResults
+        |> Seq.find (fun phaseResult -> phaseResult.Phase = phase)
+        |> _.OutputFingerprint
+
+    let private forwardedMemberSource =
+        "module Tracer\nlet completed (source: System.Threading.Tasks.ValueTask) = source.IsCompletedSuccessfully\n"
+
     [<Tests>]
     let tests =
         testList "CompilerContract" [
@@ -3305,4 +3383,153 @@ let first = 42
                     packageProject
                     "PackagePath=\"tools/$(FSharp2CompilerHostRuntimeIdentifier)\""
                     "The package must place fsc2 at the MSBuild target path."
+
+            testCase "forwarded types resolve through a reference's forwarding implementation"
+            <| fun _ ->
+                let result =
+                    compileWithReferences
+                        [|
+                            systemRuntimeSnapshot [| coreLibrarySnapshot () |]
+                            fsharpCoreSnapshot ()
+                        |]
+                        forwardedMemberSource
+
+                let diagnostics =
+                    result.Diagnostics
+                    |> Seq.map _.Message
+                    |> String.concat Environment.NewLine
+
+                Expect.equal
+                    result.Outcome
+                    CompilationOutcome.Succeeded
+                    $"The forwarded member must resolve. Diagnostics:{Environment.NewLine}{diagnostics}"
+
+                Expect.equal
+                    (emittedAssemblyReferences result)
+                    [
+                        "FSharp.Core"
+                        "System.Runtime"
+                    ]
+                    "The forwarding implementation must not become an emitted assembly reference."
+
+            testCase
+                "a facade without its forwarding implementation keeps the resolution diagnostic"
+            <| fun _ ->
+                let result =
+                    compileWithReferences
+                        [|
+                            systemRuntimeSnapshot [||]
+                            fsharpCoreSnapshot ()
+                        |]
+                        forwardedMemberSource
+
+                Expect.equal result.Outcome CompilationOutcome.Failed "Compilation must fail."
+
+                let diagnostic =
+                    result.Diagnostics
+                    |> Seq.exactlyOne
+
+                Expect.stringContains
+                    diagnostic.Message
+                    "has no readable field or property 'IsCompletedSuccessfully'"
+                    "The forwarded member must stay unresolved without the implementation image."
+
+                Expect.isEmpty result.Artifacts "A failed compilation must not contain an artifact."
+
+            testCase "a changed forwarding implementation changes the resolved-symbols fingerprint"
+            <| fun _ ->
+                let compileWithImplementationFingerprint contentFingerprint =
+                    let implementation = coreLibrarySnapshot ()
+
+                    compileWithReferences
+                        [|
+                            systemRuntimeSnapshot [|
+                                TargetReferenceSnapshot.Create(
+                                    implementation.StableId,
+                                    implementation.LogicalPath,
+                                    bytes implementation.PeImage,
+                                    contentFingerprint
+                                )
+                            |]
+                            fsharpCoreSnapshot ()
+                        |]
+                        forwardedMemberSource
+
+                let first = compileWithImplementationFingerprint "implementation:first"
+                let again = compileWithImplementationFingerprint "implementation:first"
+                let changed = compileWithImplementationFingerprint "implementation:second"
+
+                for result in
+                    [
+                        first
+                        again
+                        changed
+                    ] do
+                    Expect.equal
+                        result.Outcome
+                        CompilationOutcome.Succeeded
+                        "Compilation must succeed."
+
+                let resolved = phaseOutputFingerprint CompilationPhase.ResolvedSymbols
+
+                Expect.equal
+                    (resolved again)
+                    (resolved first)
+                    "The same forwarding implementation must give the same fingerprint."
+
+                Expect.notEqual
+                    (resolved changed)
+                    (resolved first)
+                    "A changed forwarding implementation must change the fingerprint."
+
+            testCase "a forwarding implementation without a logical path fails request validation"
+            <| fun _ ->
+                let broken = {
+                    coreLibrarySnapshot () with
+                        LogicalPath = String.Empty
+                }
+
+                let request =
+                    createRequest
+                        (defaultSemanticOptions ())
+                        (defaultDiagnosticOptions ())
+                        (defaultEmissionOptions ())
+                        (defaultSigningOptions ())
+                        (emptyResources ())
+                        defaultRequestedArtifacts
+                        "module Tracer\nlet answer () = 42\n"
+
+                let error =
+                    try
+                        CompilationRequest.Create(
+                            request.ContractVersion,
+                            request.RequestIdentity,
+                            request.AssemblyIdentity,
+                            request.Sources
+                            |> Seq.toArray,
+                            [|
+                                systemRuntimeSnapshot [| broken |]
+                                fsharpCoreSnapshot ()
+                            |],
+                            request.SemanticOptions,
+                            request.DiagnosticOptions,
+                            request.EmissionOptions,
+                            request.SigningOptions,
+                            request.Resources,
+                            request.RequestedArtifacts
+                            |> Seq.toArray
+                        )
+                        |> ignore
+
+                        None
+                    with :? ArgumentException as error ->
+                        Some error.Message
+
+                match error with
+                | None -> failtest "A nested snapshot without a logical path is invalid."
+                | Some message ->
+                    Expect.stringContains
+                        message
+                        "targetReferences.ForwardingImplementations.LogicalPath"
+                        "The validation error must name the nested snapshot field."
         ]
