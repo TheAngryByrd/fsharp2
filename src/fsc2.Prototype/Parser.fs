@@ -2134,7 +2134,7 @@ module internal Parser =
                       - 1]
             .Range.End.Line = context.Line
 
-    let private reportWithoutBody state context construct code message =
+    let private reportWithoutBody state context construct code message marksNextToken =
         let cursor = state.Cursor
         let range = nextTokenOrEndRange cursor
         let _, closesBlock = nextSource cursor
@@ -2151,7 +2151,10 @@ module internal Parser =
         reportUnmarked state offsideCode (offsideMessage context) range
 
         // The Compatibility Oracle reports a token after a closed block again in the outer declaration list.
-        if not closesBlock then
+        if
+            marksNextToken
+            && not closesBlock
+        then
             report state code message range
         else
             reportUnmarked state code message range
@@ -2243,6 +2246,7 @@ module internal Parser =
                         "a binding"
                         "FS0010"
                         "Incomplete structured construct at or before this point in binding"
+                        true
 
                     missing
                 elif endsBinding context cursor.Current then
@@ -2395,6 +2399,23 @@ module internal Parser =
                 && not (isOffside context cursor.Current)
             then
                 parseExpression state context
+            elif
+                endsLine context cursor.Current
+                && not state.InAnonymousRoot
+                && not (endsOnLine attributes context)
+                && LanguageBehavior.isActive state.Language LanguageBehavior.StrictIndentation
+            then
+                let missing = missingExpression cursor.Current
+                // The Compatibility Oracle reports the next token again in the declaration list after a 'do' without a body.
+                reportWithoutBody
+                    state
+                    context
+                    "a do declaration"
+                    "FS3524"
+                    "Expecting expression"
+                    false
+
+                missing
             else
                 reportUnsupported state cursor.Current "a do declaration"
                 missingExpression cursor.Current
