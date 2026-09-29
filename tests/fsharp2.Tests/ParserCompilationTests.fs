@@ -4290,6 +4290,75 @@ module M =
             "os_root_next.fsi(2,6,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration. Expected identifier, 'global', 'type' or other token."
         ]
 
+        "b_bracket.fs",
+        "module M\nlet a =\n[<A>]\nlet b = 1\n",
+        [
+            "b_bracket.fs(3,1,3,3): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "b_bracket.fs(3,1,3,3): error FS0010: Incomplete structured construct at or before this point in binding"
+        ]
+
+        "b_close.fs",
+        "module M\nlet a =\n)\n",
+        [
+            "b_close.fs(3,1,3,2): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "b_close.fs(3,1,3,2): error FS0010: Incomplete structured construct at or before this point in binding"
+        ]
+
+        "b_deep_close.fs",
+        "module M\nmodule N =\n    module O =\n        let a =\n    )\n",
+        [
+            "b_deep_close.fs(5,5,5,6): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (4:9). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "b_deep_close.fs(5,5,5,6): error FS0010: Incomplete structured construct at or before this point in binding"
+            "b_deep_close.fs(5,5,5,6): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "b_deep_close.fs(6,1,6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "b_deep_root_close.fs",
+        "module M\nmodule N =\n    module O =\n        let a =\n)\n",
+        [
+            "b_deep_root_close.fs(5,1,5,2): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (4:9). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "b_deep_root_close.fs(5,1,5,2): error FS0010: Incomplete structured construct at or before this point in binding"
+            "b_deep_root_close.fs(5,1,5,2): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "b_nested_bracket.fs",
+        "module M\nmodule N =\n    let a =\n[<A>]\nlet b = 1\n",
+        [
+            "b_nested_bracket.fs(4,1,4,3): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "b_nested_bracket.fs(4,1,4,3): error FS0010: Incomplete structured construct at or before this point in binding"
+        ]
+
+        "b_nested_close.fs",
+        "module M\nmodule N =\n    let a =\n)\n",
+        [
+            "b_nested_close.fs(4,1,4,2): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "b_nested_close.fs(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in binding"
+            "b_nested_close.fs(4,1,4,2): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "b_nested_close_next.fs",
+        "module M\nmodule N =\n    let a =\n)\nlet b = 1\n",
+        [
+            "b_nested_close_next.fs(4,1,4,2): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "b_nested_close_next.fs(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in binding"
+            "b_nested_close_next.fs(4,1,4,2): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "b_nested_inner_close.fs",
+        "module M\nmodule N =\n    let a =\n    )\n",
+        [
+            "b_nested_inner_close.fs(4,5,4,6): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "b_nested_inner_close.fs(4,5,4,6): error FS0010: Incomplete structured construct at or before this point in binding"
+        ]
+
+        "b_nested_rbrace.fs",
+        "module M\nmodule N =\n    let a =\n}\n",
+        [
+            "b_nested_rbrace.fs(4,1,4,2): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "b_nested_rbrace.fs(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in binding"
+            "b_nested_rbrace.fs(4,1,4,2): error FS0010: Unexpected symbol '}' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
         "b_and.fs",
         "module M\nlet rec a = 1\nand b =\nlet c = 1\n",
         [
@@ -4646,6 +4715,32 @@ module M =
     ]
 
     let private unmodeledIncompleteConstructCases = [
+        "b_attr_same.fs",
+        "module M\n[<A>] let a =\nlet b = 1\n",
+        [
+            "b_attr_same.fs(3,1,3,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:7). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "b_attr_same.fs(3,1,3,4): error FS0010: Incomplete structured construct at or before this point in binding"
+            "b_attr_same.fs(3,1,3,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:7). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "b_attr_same.fs(3,1,3,4): error FS0010: Unexpected keyword 'let' or 'use' in implementation file"
+        ]
+
+        "b_attr_same_eof.fs",
+        "module M\n[<A>] let a =\n",
+        [
+            "b_attr_same_eof.fs(3,1,3,1): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:7). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "b_attr_same_eof.fs(3,1,3,1): error FS0010: Incomplete structured construct at or before this point in binding"
+            "b_attr_same_eof.fs(3,1,3,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "b_attr_same_nested.fs",
+        "module M\nmodule N =\n    [<A>] let a =\n    let b = 1\n",
+        [
+            "b_attr_same_nested.fs(4,5,4,8): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:11). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "b_attr_same_nested.fs(4,5,4,8): error FS0010: Incomplete structured construct at or before this point in binding"
+            "b_attr_same_nested.fs(4,5,4,8): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:11). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "b_attr_same_nested.fs(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
         "b_and_same_line.fs",
         "module M\nlet rec a = and b = 1\n",
         [

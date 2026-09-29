@@ -186,16 +186,19 @@ module internal Parser =
 
     let private emptyAt position = { Start = position; End = position }
 
-    let private report state code message (range: SourceRange) =
-        state.ReportedStarts.Add range.Start.Offset
-        |> ignore
-
+    let private reportUnmarked state code message (range: SourceRange) =
         state.Diagnostics.Add {
             Severity = DiagnosticSeverity.Error
             Code = code
             Message = message
             Range = range
         }
+
+    let private report state code message (range: SourceRange) =
+        state.ReportedStarts.Add range.Start.Offset
+        |> ignore
+
+        reportUnmarked state code message range
 
     let private reportWarning state code message (range: SourceRange) =
         state.Diagnostics.Add {
@@ -604,17 +607,21 @@ module internal Parser =
             End = eof
         }
 
-    let private afterLastToken (cursor: Cursor) =
-        let rec nextSourceToken offset closesBlock =
-            let token = cursor.Peek offset
-
-            match token.Kind with
-            | LayoutTokenKind.SourceToken -> token, closesBlock
-            | LayoutTokenKind.EndBlock -> nextSourceToken (offset + 1) true
+    let private nextSource (cursor: Cursor) =
+        let rec next offset closesBlock =
+            match (cursor.Peek offset).Kind with
+            | LayoutTokenKind.SourceToken -> offset, closesBlock
+            | LayoutTokenKind.EndBlock -> next (offset + 1) true
             | LayoutTokenKind.BeginBlock
-            | LayoutTokenKind.Separator -> nextSourceToken (offset + 1) closesBlock
+            | LayoutTokenKind.Separator -> next (offset + 1) closesBlock
 
-        let next, closesBlock = nextSourceToken 0 false
+        next 0 false
+
+    let private nextSourceToken (cursor: Cursor) = cursor.Peek(fst (nextSource cursor))
+
+    let private afterLastToken (cursor: Cursor) =
+        let offset, closesBlock = nextSource cursor
+        let next = cursor.Peek offset
 
         if isEndOfFile next then
             lastLineToEnd next
@@ -635,32 +642,25 @@ module internal Parser =
                 End = next.Range.Start
             }
 
-    let private nextSourceToken (cursor: Cursor) =
-        let rec next offset =
-            let token = cursor.Peek offset
-
-            match token.Kind with
-            | LayoutTokenKind.SourceToken -> token
-            | LayoutTokenKind.EndBlock
-            | LayoutTokenKind.BeginBlock
-            | LayoutTokenKind.Separator -> next (offset + 1)
-
-        next 0
-
     let private nextTokenOrEndRange (cursor: Cursor) =
-        let token = nextSourceToken cursor
+        let offset, _ = nextSource cursor
+        let token = cursor.Peek offset
+        let following = cursor.Peek(offset + 1)
 
         if isEndOfFile token then
             lastLineToEnd token
+        // The Compatibility Oracle reads '[<' as one token.
+        elif
+            isDelimiter "[" token
+            && isOperator "<" following
+            && following.Range.Start.Offset = token.Range.End.Offset
+        then
+            span token.Range following.Range
         else
             token.Range
 
-    let private reportOffside state (context: SourcePosition) range =
-        report
-            state
-            offsideCode
-            $"Unexpected syntax or possible incorrect indentation: this token is offside of context started at position ({context.Line}:{context.Column}). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
-            range
+    let private offsideMessage (context: SourcePosition) =
+        $"Unexpected syntax or possible incorrect indentation: this token is offside of context started at position ({context.Line}:{context.Column}). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
 
     let private reportIncomplete state context =
         report
@@ -1972,7 +1972,8 @@ module internal Parser =
         endsBinding context cursor.Current
         && (not (isKeyword "and" next)
             || (next.Range.Start.Line > cursor.LastEnd.Line
-                && next.Range.Start.Column = context.Column))
+                && next.Range.Start.Column
+                   <= context.Column))
 
     let private parseAccessibility (cursor: Cursor) =
         let token = cursor.Current
@@ -2124,6 +2125,37 @@ module internal Parser =
         | Some(DeclarationAfterRecovery.SkippedInSignatureModule _) -> true
         | _ -> false
 
+    let private endsOnLine
+        (attributes: ImmutableArray<SyntaxAttributeList>)
+        (context: SourcePosition)
+        =
+        not attributes.IsEmpty
+        && attributes[attributes.Length
+                      - 1]
+            .Range.End.Line = context.Line
+
+    let private reportWithoutBody state context construct code message =
+        let cursor = state.Cursor
+        let range = nextTokenOrEndRange cursor
+        let _, closesBlock = nextSource cursor
+
+        if
+            isSuppressing state
+            && not (discardsSilently state)
+        then
+            reportUnsupported
+                state
+                cursor.Current
+                $"{construct} without a body after syntax recovery"
+
+        reportUnmarked state offsideCode (offsideMessage context) range
+
+        // The Compatibility Oracle reports a token after a closed block again in the outer declaration list.
+        if not closesBlock then
+            report state code message range
+        else
+            reportUnmarked state code message range
+
     let private parseBinding state context attributes =
         let cursor = state.Cursor
         let reported = state.Diagnostics.Count
@@ -2200,27 +2232,17 @@ module internal Parser =
                     body
                 elif
                     endsWithoutBody context cursor
+                    && not (endsOnLine attributes context)
                     && LanguageBehavior.isActive state.Language LanguageBehavior.StrictIndentation
                 then
                     let missing = missingExpression cursor.Current
-                    let range = nextTokenOrEndRange cursor
 
-                    if
-                        isSuppressing state
-                        && not (discardsSilently state)
-                    then
-                        reportUnsupported
-                            state
-                            cursor.Current
-                            "a binding without a body after syntax recovery"
-
-                    reportOffside state context range
-
-                    report
+                    reportWithoutBody
                         state
+                        context
+                        "a binding"
                         "FS0010"
                         "Incomplete structured construct at or before this point in binding"
-                        range
 
                     missing
                 elif endsBinding context cursor.Current then
