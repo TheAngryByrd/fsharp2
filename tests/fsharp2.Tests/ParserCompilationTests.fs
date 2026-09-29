@@ -5879,6 +5879,686 @@ module M =
             "t_case_err_and.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
         ]
 
+        "l_do_let.fs",
+        "module M\ntype U = A of )\ndo ()\nlet y = )\n",
+        [
+            "l_do_let.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "l_do_let.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "n_expr.fs",
+        "module M\ntype U = A of )\nmodule N =\n    let x = 1\nf )\n",
+        [
+            "n_expr.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "n_expr.fs(5,3,5,4): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "n_inner_first_open.fs",
+        "module M\ntype U = A of )\nmodule N =\n    open System\n",
+        [
+            "n_inner_first_open.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "n_inner_first_open.fs(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "n_inner_open.fs",
+        "module M\ntype U = A of )\nmodule N =\n    open System\n    let x = )\n",
+        [
+            "n_inner_open.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "n_inner_open.fs(5,13,5,14): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "n_inner_type.fs",
+        "module M\ntype U = A of )\nmodule N =\n    type V = int\n    let x = )\n",
+        [
+            "n_inner_type.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "n_inner_type.fs(5,13,5,14): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "n_let.fs",
+        "module M\ntype U = A of )\nmodule N =\n    let x = 1\nlet y = )\n",
+        [
+            "n_let.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "n_let.fs(5,9,5,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "n_open_let.fs",
+        "module M\ntype U = A of )\nmodule N =\n    let x = 1\nopen System\nlet y = )\n",
+        [
+            "n_open_let.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "n_open_let.fs(6,9,6,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "n_open.fs",
+        "module M\ntype U = A of )\nmodule N =\n    let x = 1\nopen System\n",
+        [ "n_open.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition" ]
+
+        "o_anon.fs",
+        "open System.\nlet x = 1\n",
+        [
+            "o_anon.fs(1,14,2,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+            "o_anon.fs(1,1,2,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "o_comment.fs",
+        "module M\nopen System. // c\nlet x = 1\n",
+        [
+            "o_comment.fs(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "o_dot_ident_same.fs", "module M\nopen System. IO\n", []
+
+        "o_eof_nonl.fs",
+        "module M\nopen System.",
+        [
+            "o_eof_nonl.fs(2,12,2,13): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "o_eof.fs",
+        "module M\nopen System.\n",
+        [
+            "o_eof.fs(2,12,2,13): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "o_nested_root_err.fs",
+        "module M\nmodule N =\n    open System.\nlet b = )\n",
+        [
+            "o_nested_root_err.fs(3,16,3,17): error FS3117: Unexpected end of type. Expected a name after this point."
+            "o_nested_root_err.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "o_next_let_err.fs",
+        "module M\nopen System.\nlet x = )\n",
+        [
+            "o_next_let_err.fs(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+            "o_next_let_err.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "o_next_let.fs",
+        "module M\nopen System.\nlet x = 1\n",
+        [
+            "o_next_let.fs(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "o_next_open.fs",
+        "module M\nopen System.\nopen System\n",
+        [
+            "o_next_open.fs(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "o_next_type.fs",
+        "module M\nopen System.\ntype T = int\n",
+        [
+            "o_next_type.fs(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "o_ns_next.fs",
+        "namespace Q\nopen System.\nmodule N =\n    let x = )\n",
+        [
+            "o_ns_next.fs(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+            "o_ns_next.fs(4,13,4,14): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "o_ns.fs",
+        "namespace Q\nopen System.\n",
+        [
+            "o_ns.fs(2,12,2,13): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "o_space.fs",
+        "module M\nopen System. \n",
+        [
+            "o_space.fs(2,12,2,13): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "o_two_dots.fs",
+        "module M\nopen System.IO.\n",
+        [
+            "o_two_dots.fs(2,15,2,16): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "s_nested.fsi",
+        "module M\nmodule N =\n    open System.\nval x: int\n",
+        [
+            "s_nested.fsi(3,16,3,17): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "i_attr.fs",
+        "module M\nopen System.\n[<A>]\nlet x = )\n",
+        [
+            "i_attr.fs(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+            "i_attr.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "i_do.fs",
+        "module M\nopen System.\ndo ()\n",
+        [
+            "i_do.fs(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "i_space_next.fs",
+        "module M\nopen System. \nlet x = )\n",
+        [
+            "i_space_next.fs(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+            "i_space_next.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "s_module_ok.fsi",
+        "module M\nopen System.\nmodule N =\n    val x: int\n",
+        [
+            "s_module_ok.fsi(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "s_nested_next.fsi",
+        "module M\nmodule N =\n    open System.\n    val x: int\n",
+        [
+            "s_nested_next.fsi(3,18,4,5): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "s_ns_val.fsi",
+        "namespace Q\nopen System.\nmodule N =\n    val x: )\n",
+        [
+            "s_ns_val.fsi(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+            "s_ns_val.fsi(4,12,4,13): error FS0010: Unexpected symbol ')' in value signature"
+            "s_ns_val.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "s_val_ok.fsi",
+        "module M\nopen System.\nval x: int\n",
+        [
+            "s_val_ok.fsi(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "s_next_val.fsi",
+        "module M\nopen System.\nval x: )\n",
+        [
+            "s_next_val.fsi(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+            "s_next_val.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature"
+            "s_next_val.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v_after_inc_open_ok.fsi",
+        "module M\nopen System.\nval y: int\nval x: )\n",
+        [
+            "v_after_inc_open_ok.fsi(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+            "v_after_inc_open_ok.fsi(4,8,4,9): error FS0010: Unexpected symbol ')' in value signature"
+            "v_after_inc_open_ok.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v_after_inc_open_two.fsi",
+        "module M\nopen System.\nval x: )\nval y: int\n",
+        [
+            "v_after_inc_open_two.fsi(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+            "v_after_inc_open_two.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature"
+        ]
+
+        "v_after_open.fsi",
+        "module M\nopen System\nval x: )\n",
+        [
+            "v_after_open.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature"
+            "v_after_open.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v_after_val.fsi",
+        "module M\nval y: int\nval x: )\n",
+        [
+            "v_after_val.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature"
+            "v_after_val.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v_plain.fsi",
+        "module M\nval x: )\n",
+        [ "v_plain.fsi(2,8,2,9): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v112.fsi",
+        "module M\nval x: )\nval y2: int\n",
+        [ "v112.fsi(2,8,2,9): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v113.fsi",
+        "module M\nval x: )\nopen System\n",
+        [ "v113.fsi(2,8,2,9): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v115.fsi",
+        "module M\nval x: )\nval y2: )\n",
+        [ "v115.fsi(2,8,2,9): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v121.fsi",
+        "module M\nval x: int -> )\n",
+        [ "v121.fsi(2,15,2,16): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v122.fsi",
+        "module M\nval x: int -> )\nval y2: int\n",
+        [ "v122.fsi(2,15,2,16): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v123.fsi",
+        "module M\nval x: int -> )\nopen System\n",
+        [ "v123.fsi(2,15,2,16): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v125.fsi",
+        "module M\nval x: int -> )\nval y2: )\n",
+        [ "v125.fsi(2,15,2,16): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v131.fsi",
+        "module M\nval x: int * )\n",
+        [ "v131.fsi(2,14,2,15): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v132.fsi",
+        "module M\nval x: int * )\nval y2: int\n",
+        [ "v132.fsi(2,14,2,15): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v133.fsi",
+        "module M\nval x: int * )\nopen System\n",
+        [ "v133.fsi(2,14,2,15): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v135.fsi",
+        "module M\nval x: int * )\nval y2: )\n",
+        [ "v135.fsi(2,14,2,15): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v141.fsi",
+        "module M\nval )\n",
+        [
+            "v141.fsi(2,5,2,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+        ]
+
+        "v142.fsi",
+        "module M\nval )\nval y2: int\n",
+        [
+            "v142.fsi(2,5,2,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+        ]
+
+        "v143.fsi",
+        "module M\nval )\nopen System\n",
+        [
+            "v143.fsi(2,5,2,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+        ]
+
+        "v145.fsi",
+        "module M\nval )\nval y2: )\n",
+        [
+            "v145.fsi(2,5,2,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+        ]
+
+        "v151.fsi",
+        "module M\nval x )\n",
+        [
+            "v151.fsi(2,7,2,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+        ]
+
+        "v152.fsi",
+        "module M\nval x )\nval y2: int\n",
+        [
+            "v152.fsi(2,7,2,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+        ]
+
+        "v153.fsi",
+        "module M\nval x )\nopen System\n",
+        [
+            "v153.fsi(2,7,2,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+        ]
+
+        "v155.fsi",
+        "module M\nval x )\nval y2: )\n",
+        [
+            "v155.fsi(2,7,2,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+        ]
+
+        "v212.fsi",
+        "module M\nval y: int\nval x: )\nval y2: int\n",
+        [ "v212.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v213.fsi",
+        "module M\nval y: int\nval x: )\nopen System\n",
+        [ "v213.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v215.fsi",
+        "module M\nval y: int\nval x: )\nval y2: )\n",
+        [
+            "v215.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature"
+            "v215.fsi(4,9,4,10): error FS0010: Unexpected symbol ')' in value signature"
+            "v215.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v221.fsi",
+        "module M\nval y: int\nval x: int -> )\n",
+        [ "v221.fsi(3,15,3,16): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v222.fsi",
+        "module M\nval y: int\nval x: int -> )\nval y2: int\n",
+        [ "v222.fsi(3,15,3,16): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v223.fsi",
+        "module M\nval y: int\nval x: int -> )\nopen System\n",
+        [ "v223.fsi(3,15,3,16): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v225.fsi",
+        "module M\nval y: int\nval x: int -> )\nval y2: )\n",
+        [ "v225.fsi(3,15,3,16): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v231.fsi",
+        "module M\nval y: int\nval x: int * )\n",
+        [ "v231.fsi(3,14,3,15): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v232.fsi",
+        "module M\nval y: int\nval x: int * )\nval y2: int\n",
+        [ "v232.fsi(3,14,3,15): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v233.fsi",
+        "module M\nval y: int\nval x: int * )\nopen System\n",
+        [ "v233.fsi(3,14,3,15): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v235.fsi",
+        "module M\nval y: int\nval x: int * )\nval y2: )\n",
+        [ "v235.fsi(3,14,3,15): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v241.fsi",
+        "module M\nval y: int\nval )\n",
+        [
+            "v241.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+            "v241.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v242.fsi",
+        "module M\nval y: int\nval )\nval y2: int\n",
+        [
+            "v242.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+        ]
+
+        "v243.fsi",
+        "module M\nval y: int\nval )\nopen System\n",
+        [
+            "v243.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+        ]
+
+        "v245.fsi",
+        "module M\nval y: int\nval )\nval y2: )\n",
+        [
+            "v245.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+            "v245.fsi(4,9,4,10): error FS0010: Unexpected symbol ')' in value signature"
+            "v245.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v251.fsi",
+        "module M\nval y: int\nval x )\n",
+        [
+            "v251.fsi(3,7,3,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+            "v251.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v252.fsi",
+        "module M\nval y: int\nval x )\nval y2: int\n",
+        [
+            "v252.fsi(3,7,3,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+        ]
+
+        "v253.fsi",
+        "module M\nval y: int\nval x )\nopen System\n",
+        [
+            "v253.fsi(3,7,3,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+        ]
+
+        "v255.fsi",
+        "module M\nval y: int\nval x )\nval y2: )\n",
+        [
+            "v255.fsi(3,7,3,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+            "v255.fsi(4,9,4,10): error FS0010: Unexpected symbol ')' in value signature"
+            "v255.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v312.fsi",
+        "module M\nopen System\nval x: )\nval y2: int\n",
+        [ "v312.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v313.fsi",
+        "module M\nopen System\nval x: )\nopen System\n",
+        [ "v313.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v315.fsi",
+        "module M\nopen System\nval x: )\nval y2: )\n",
+        [
+            "v315.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature"
+            "v315.fsi(4,9,4,10): error FS0010: Unexpected symbol ')' in value signature"
+            "v315.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v321.fsi",
+        "module M\nopen System\nval x: int -> )\n",
+        [ "v321.fsi(3,15,3,16): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v322.fsi",
+        "module M\nopen System\nval x: int -> )\nval y2: int\n",
+        [ "v322.fsi(3,15,3,16): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v323.fsi",
+        "module M\nopen System\nval x: int -> )\nopen System\n",
+        [ "v323.fsi(3,15,3,16): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v325.fsi",
+        "module M\nopen System\nval x: int -> )\nval y2: )\n",
+        [ "v325.fsi(3,15,3,16): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v331.fsi",
+        "module M\nopen System\nval x: int * )\n",
+        [ "v331.fsi(3,14,3,15): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v332.fsi",
+        "module M\nopen System\nval x: int * )\nval y2: int\n",
+        [ "v332.fsi(3,14,3,15): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v333.fsi",
+        "module M\nopen System\nval x: int * )\nopen System\n",
+        [ "v333.fsi(3,14,3,15): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v335.fsi",
+        "module M\nopen System\nval x: int * )\nval y2: )\n",
+        [ "v335.fsi(3,14,3,15): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v341.fsi",
+        "module M\nopen System\nval )\n",
+        [
+            "v341.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+            "v341.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v342.fsi",
+        "module M\nopen System\nval )\nval y2: int\n",
+        [
+            "v342.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+        ]
+
+        "v343.fsi",
+        "module M\nopen System\nval )\nopen System\n",
+        [
+            "v343.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+        ]
+
+        "v345.fsi",
+        "module M\nopen System\nval )\nval y2: )\n",
+        [
+            "v345.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+            "v345.fsi(4,9,4,10): error FS0010: Unexpected symbol ')' in value signature"
+            "v345.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v351.fsi",
+        "module M\nopen System\nval x )\n",
+        [
+            "v351.fsi(3,7,3,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+            "v351.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v352.fsi",
+        "module M\nopen System\nval x )\nval y2: int\n",
+        [
+            "v352.fsi(3,7,3,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+        ]
+
+        "v353.fsi",
+        "module M\nopen System\nval x )\nopen System\n",
+        [
+            "v353.fsi(3,7,3,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+        ]
+
+        "v355.fsi",
+        "module M\nopen System\nval x )\nval y2: )\n",
+        [
+            "v355.fsi(3,7,3,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+            "v355.fsi(4,9,4,10): error FS0010: Unexpected symbol ')' in value signature"
+            "v355.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v511.fsi",
+        "module M\nval y: int\nval w: int\nval x: )\n",
+        [
+            "v511.fsi(4,8,4,9): error FS0010: Unexpected symbol ')' in value signature"
+            "v511.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v512.fsi",
+        "module M\nval y: int\nval w: int\nval x: )\nval y2: int\n",
+        [ "v512.fsi(4,8,4,9): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v513.fsi",
+        "module M\nval y: int\nval w: int\nval x: )\nopen System\n",
+        [ "v513.fsi(4,8,4,9): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v515.fsi",
+        "module M\nval y: int\nval w: int\nval x: )\nval y2: )\n",
+        [
+            "v515.fsi(4,8,4,9): error FS0010: Unexpected symbol ')' in value signature"
+            "v515.fsi(5,9,5,10): error FS0010: Unexpected symbol ')' in value signature"
+            "v515.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v521.fsi",
+        "module M\nval y: int\nval w: int\nval x: int -> )\n",
+        [ "v521.fsi(4,15,4,16): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v522.fsi",
+        "module M\nval y: int\nval w: int\nval x: int -> )\nval y2: int\n",
+        [ "v522.fsi(4,15,4,16): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v523.fsi",
+        "module M\nval y: int\nval w: int\nval x: int -> )\nopen System\n",
+        [ "v523.fsi(4,15,4,16): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v525.fsi",
+        "module M\nval y: int\nval w: int\nval x: int -> )\nval y2: )\n",
+        [ "v525.fsi(4,15,4,16): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v531.fsi",
+        "module M\nval y: int\nval w: int\nval x: int * )\n",
+        [ "v531.fsi(4,14,4,15): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v532.fsi",
+        "module M\nval y: int\nval w: int\nval x: int * )\nval y2: int\n",
+        [ "v532.fsi(4,14,4,15): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v533.fsi",
+        "module M\nval y: int\nval w: int\nval x: int * )\nopen System\n",
+        [ "v533.fsi(4,14,4,15): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v535.fsi",
+        "module M\nval y: int\nval w: int\nval x: int * )\nval y2: )\n",
+        [ "v535.fsi(4,14,4,15): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v541.fsi",
+        "module M\nval y: int\nval w: int\nval )\n",
+        [
+            "v541.fsi(4,5,4,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+            "v541.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v542.fsi",
+        "module M\nval y: int\nval w: int\nval )\nval y2: int\n",
+        [
+            "v542.fsi(4,5,4,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+        ]
+
+        "v543.fsi",
+        "module M\nval y: int\nval w: int\nval )\nopen System\n",
+        [
+            "v543.fsi(4,5,4,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+        ]
+
+        "v545.fsi",
+        "module M\nval y: int\nval w: int\nval )\nval y2: )\n",
+        [
+            "v545.fsi(4,5,4,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+            "v545.fsi(5,9,5,10): error FS0010: Unexpected symbol ')' in value signature"
+            "v545.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v551.fsi",
+        "module M\nval y: int\nval w: int\nval x )\n",
+        [
+            "v551.fsi(4,7,4,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+            "v551.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v552.fsi",
+        "module M\nval y: int\nval w: int\nval x )\nval y2: int\n",
+        [
+            "v552.fsi(4,7,4,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+        ]
+
+        "v553.fsi",
+        "module M\nval y: int\nval w: int\nval x )\nopen System\n",
+        [
+            "v553.fsi(4,7,4,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+        ]
+
+        "v555.fsi",
+        "module M\nval y: int\nval w: int\nval x )\nval y2: )\n",
+        [
+            "v555.fsi(4,7,4,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+            "v555.fsi(5,9,5,10): error FS0010: Unexpected symbol ')' in value signature"
+            "v555.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "m_attr_val.fsi",
+        "module M\nval y: int\nval x: )\n[<A>]\nval z: )\n",
+        [
+            "m_attr_val.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature"
+            "m_attr_val.fsi(5,8,5,9): error FS0010: Unexpected symbol ')' in value signature"
+            "m_attr_val.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "m_expr.fsi",
+        "module M\nval y: int\nval x: )\nx\n",
+        [
+            "m_expr.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature"
+            "m_expr.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "m_module.fsi",
+        "module M\nval y: int\nval x: )\nmodule N =\n    val z: )\n",
+        [
+            "m_module.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature"
+            "m_module.fsi(5,12,5,13): error FS0010: Unexpected symbol ')' in value signature"
+            "m_module.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "m_nested_after.fsi",
+        "module M\nmodule N =\n    val y: int\nval z: int\nval x: )\n",
+        [
+            "m_nested_after.fsi(5,8,5,9): error FS0010: Unexpected symbol ')' in value signature"
+            "m_nested_after.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "ns_eof.fsi",
+        "namespace Q\nopen System\nval x: )\n",
+        [
+            "ns_eof.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature"
+            "ns_eof.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "ns_module.fsi",
+        "namespace Q\nopen System\nval x: )\nmodule N =\n    val y: )\n",
+        [
+            "ns_module.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature"
+            "ns_module.fsi(5,12,5,13): error FS0010: Unexpected symbol ')' in value signature"
+            "ns_module.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
         "b_and.fs",
         "module M\nlet rec a = 1\nand b =\nlet c = 1\n",
         [
@@ -6235,6 +6915,332 @@ module M =
     ]
 
     let private unmodeledIncompleteConstructCases = [
+        "v114.fsi",
+        "module M\nval x: )\ntype T2 = int\n",
+        [
+            "v114.fsi(2,8,2,9): error FS0010: Unexpected symbol ')' in value signature"
+            "v114.fsi(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in signature file"
+        ]
+
+        "v124.fsi",
+        "module M\nval x: int -> )\ntype T2 = int\n",
+        [
+            "v124.fsi(2,15,2,16): error FS0010: Unexpected symbol ')' in value signature"
+            "v124.fsi(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in signature file"
+        ]
+
+        "v134.fsi",
+        "module M\nval x: int * )\ntype T2 = int\n",
+        [
+            "v134.fsi(2,14,2,15): error FS0010: Unexpected symbol ')' in value signature"
+            "v134.fsi(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in signature file"
+        ]
+
+        "v144.fsi",
+        "module M\nval )\ntype T2 = int\n",
+        [
+            "v144.fsi(2,5,2,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+            "v144.fsi(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in signature file"
+        ]
+
+        "v154.fsi",
+        "module M\nval x )\ntype T2 = int\n",
+        [
+            "v154.fsi(2,7,2,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+            "v154.fsi(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in signature file"
+        ]
+
+        "v214.fsi",
+        "module M\nval y: int\nval x: )\ntype T2 = int\n",
+        [ "v214.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v224.fsi",
+        "module M\nval y: int\nval x: int -> )\ntype T2 = int\n",
+        [
+            "v224.fsi(3,15,3,16): error FS0010: Unexpected symbol ')' in value signature"
+            "v224.fsi(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in signature file"
+        ]
+
+        "v234.fsi",
+        "module M\nval y: int\nval x: int * )\ntype T2 = int\n",
+        [
+            "v234.fsi(3,14,3,15): error FS0010: Unexpected symbol ')' in value signature"
+            "v234.fsi(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in signature file"
+        ]
+
+        "v244.fsi",
+        "module M\nval y: int\nval )\ntype T2 = int\n",
+        [
+            "v244.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+        ]
+
+        "v254.fsi",
+        "module M\nval y: int\nval x )\ntype T2 = int\n",
+        [
+            "v254.fsi(3,7,3,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+        ]
+
+        "v314.fsi",
+        "module M\nopen System\nval x: )\ntype T2 = int\n",
+        [ "v314.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v324.fsi",
+        "module M\nopen System\nval x: int -> )\ntype T2 = int\n",
+        [
+            "v324.fsi(3,15,3,16): error FS0010: Unexpected symbol ')' in value signature"
+            "v324.fsi(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in signature file"
+        ]
+
+        "v334.fsi",
+        "module M\nopen System\nval x: int * )\ntype T2 = int\n",
+        [
+            "v334.fsi(3,14,3,15): error FS0010: Unexpected symbol ')' in value signature"
+            "v334.fsi(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in signature file"
+        ]
+
+        "v344.fsi",
+        "module M\nopen System\nval )\ntype T2 = int\n",
+        [
+            "v344.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+        ]
+
+        "v354.fsi",
+        "module M\nopen System\nval x )\ntype T2 = int\n",
+        [
+            "v354.fsi(3,7,3,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+        ]
+
+        "v411.fsi",
+        "module M\ntype T = int\nval x: )\n",
+        [
+            "v411.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature"
+            "v411.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v412.fsi",
+        "module M\ntype T = int\nval x: )\nval y2: int\n",
+        [ "v412.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v413.fsi",
+        "module M\ntype T = int\nval x: )\nopen System\n",
+        [ "v413.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v414.fsi",
+        "module M\ntype T = int\nval x: )\ntype T2 = int\n",
+        [ "v414.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v415.fsi",
+        "module M\ntype T = int\nval x: )\nval y2: )\n",
+        [
+            "v415.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature"
+            "v415.fsi(4,9,4,10): error FS0010: Unexpected symbol ')' in value signature"
+            "v415.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v421.fsi",
+        "module M\ntype T = int\nval x: int -> )\n",
+        [ "v421.fsi(3,15,3,16): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v422.fsi",
+        "module M\ntype T = int\nval x: int -> )\nval y2: int\n",
+        [ "v422.fsi(3,15,3,16): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v423.fsi",
+        "module M\ntype T = int\nval x: int -> )\nopen System\n",
+        [ "v423.fsi(3,15,3,16): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v424.fsi",
+        "module M\ntype T = int\nval x: int -> )\ntype T2 = int\n",
+        [
+            "v424.fsi(3,15,3,16): error FS0010: Unexpected symbol ')' in value signature"
+            "v424.fsi(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in signature file"
+        ]
+
+        "v425.fsi",
+        "module M\ntype T = int\nval x: int -> )\nval y2: )\n",
+        [ "v425.fsi(3,15,3,16): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v431.fsi",
+        "module M\ntype T = int\nval x: int * )\n",
+        [ "v431.fsi(3,14,3,15): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v432.fsi",
+        "module M\ntype T = int\nval x: int * )\nval y2: int\n",
+        [ "v432.fsi(3,14,3,15): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v433.fsi",
+        "module M\ntype T = int\nval x: int * )\nopen System\n",
+        [ "v433.fsi(3,14,3,15): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v434.fsi",
+        "module M\ntype T = int\nval x: int * )\ntype T2 = int\n",
+        [
+            "v434.fsi(3,14,3,15): error FS0010: Unexpected symbol ')' in value signature"
+            "v434.fsi(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in signature file"
+        ]
+
+        "v435.fsi",
+        "module M\ntype T = int\nval x: int * )\nval y2: )\n",
+        [ "v435.fsi(3,14,3,15): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v441.fsi",
+        "module M\ntype T = int\nval )\n",
+        [
+            "v441.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+            "v441.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v442.fsi",
+        "module M\ntype T = int\nval )\nval y2: int\n",
+        [
+            "v442.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+        ]
+
+        "v443.fsi",
+        "module M\ntype T = int\nval )\nopen System\n",
+        [
+            "v443.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+        ]
+
+        "v444.fsi",
+        "module M\ntype T = int\nval )\ntype T2 = int\n",
+        [
+            "v444.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+        ]
+
+        "v445.fsi",
+        "module M\ntype T = int\nval )\nval y2: )\n",
+        [
+            "v445.fsi(3,5,3,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+            "v445.fsi(4,9,4,10): error FS0010: Unexpected symbol ')' in value signature"
+            "v445.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v451.fsi",
+        "module M\ntype T = int\nval x )\n",
+        [
+            "v451.fsi(3,7,3,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+            "v451.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v452.fsi",
+        "module M\ntype T = int\nval x )\nval y2: int\n",
+        [
+            "v452.fsi(3,7,3,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+        ]
+
+        "v453.fsi",
+        "module M\ntype T = int\nval x )\nopen System\n",
+        [
+            "v453.fsi(3,7,3,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+        ]
+
+        "v454.fsi",
+        "module M\ntype T = int\nval x )\ntype T2 = int\n",
+        [
+            "v454.fsi(3,7,3,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+        ]
+
+        "v455.fsi",
+        "module M\ntype T = int\nval x )\nval y2: )\n",
+        [
+            "v455.fsi(3,7,3,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+            "v455.fsi(4,9,4,10): error FS0010: Unexpected symbol ')' in value signature"
+            "v455.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "v514.fsi",
+        "module M\nval y: int\nval w: int\nval x: )\ntype T2 = int\n",
+        [ "v514.fsi(4,8,4,9): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "v524.fsi",
+        "module M\nval y: int\nval w: int\nval x: int -> )\ntype T2 = int\n",
+        [
+            "v524.fsi(4,15,4,16): error FS0010: Unexpected symbol ')' in value signature"
+            "v524.fsi(6,1,6,1): error FS0010: Incomplete structured construct at or before this point in signature file"
+        ]
+
+        "v534.fsi",
+        "module M\nval y: int\nval w: int\nval x: int * )\ntype T2 = int\n",
+        [
+            "v534.fsi(4,14,4,15): error FS0010: Unexpected symbol ')' in value signature"
+            "v534.fsi(6,1,6,1): error FS0010: Incomplete structured construct at or before this point in signature file"
+        ]
+
+        "v544.fsi",
+        "module M\nval y: int\nval w: int\nval )\ntype T2 = int\n",
+        [
+            "v544.fsi(4,5,4,6): error FS0010: Unexpected symbol ')' in value signature. Expected identifier, '(', '(*)' or other token."
+        ]
+
+        "v554.fsi",
+        "module M\nval y: int\nval w: int\nval x )\ntype T2 = int\n",
+        [
+            "v554.fsi(4,7,4,8): error FS0010: Unexpected symbol ')' in value signature. Expected ':' or other token."
+        ]
+
+        "anon_eof.fsi",
+        "val y: int\nval x: )\n",
+        [
+            "anon_eof.fsi(2,8,2,9): error FS0010: Unexpected symbol ')' in value signature"
+            "anon_eof.fsi(3,1,3,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "anon_val.fsi",
+        "val y: int\nval x: )\nval z: int\n",
+        [
+            "anon_val.fsi(2,8,2,9): error FS0010: Unexpected symbol ')' in value signature"
+            "anon_val.fsi(1,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "m_noname_val.fsi",
+        "module M\nval y: int\nval x: )\nval : int\n",
+        [
+            "m_noname_val.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature"
+            "m_noname_val.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "o_dot_close.fs",
+        "module M\nopen System.)\n",
+        [
+            "o_dot_close.fs(2,12,2,13): error FS3117: Unexpected end of type. Expected a name after this point."
+            "o_dot_close.fs(2,13,2,14): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "o_global.fs",
+        "module M\nopen global.\n",
+        [
+            "o_global.fs(2,12,2,13): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "o_type.fs",
+        "module M\nopen type System.\n",
+        [
+            "o_type.fs(2,17,2,18): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "i_expr.fs",
+        "module M\nopen System.\nf 1\n",
+        [
+            "i_expr.fs(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "i_nested_close.fs",
+        "module M\nmodule N =\n    open System.)\n",
+        [
+            "i_nested_close.fs(3,16,3,17): error FS3117: Unexpected end of type. Expected a name after this point."
+            "i_nested_close.fs(3,17,3,18): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "i_nested_close.fs(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "l_open_let.fs",
+        "module M\ntype U = A of )\nlet x = 1\nopen System\nlet y = )\n",
+        [
+            "l_open_let.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "l_open_let.fs(4,1,4,5): error FS0010: Unexpected keyword 'open' in member definition"
+            "l_open_let.fs(5,9,5,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
         "m_field_let.fs",
         "module M\ntype T = int\nand U = { A: ) }\nlet x = )\n",
         [
@@ -7105,23 +8111,6 @@ module M =
             "b_and_indented.fs(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
         ]
 
-        "od_nested_root.fs",
-        "module M\nmodule N =\n    open System.\nlet b = 1\n",
-        [
-            "od_nested_root.fs(3,16,3,17): error FS3117: Unexpected end of type. Expected a name after this point."
-        ]
-
-        "od_root_eof_nonl.fs",
-        "module M\nopen System.",
-        [
-            "od_root_eof_nonl.fs(2,12,2,13): error FS3117: Unexpected end of type. Expected a name after this point."
-        ]
-
-        "od_root_eof.fs",
-        "module M\nopen System.\n",
-        [
-            "od_root_eof.fs(2,12,2,13): error FS3117: Unexpected end of type. Expected a name after this point."
-        ]
     ]
 
     let private strictIndentationCases = [

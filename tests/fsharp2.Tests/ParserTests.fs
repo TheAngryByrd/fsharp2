@@ -444,19 +444,9 @@ module ParserTests =
             "ParenthesisClosedByBracket.fs(2,10): error FS0010: Unexpected symbol ']' in binding"
             "ParenthesisClosedByBracket.fs(2,9): error FS0583: Unmatched '('"
         ]
-        "OpenDotAtEnd.fs",
-        "module Program\nopen System.\n",
-        [
-            "OpenDotAtEnd.fs(2,12): error FS3117: Unexpected end of type. Expected a name after this point."
-        ]
     ]
 
     let private unsupportedAfterOracleCases = [
-        "NestedOpenDot.fs",
-        "module M\nmodule N =\n    open A.\nlet y = 1\n",
-        [
-            "NestedOpenDot.fs(3,11): error FS3117: Unexpected end of type. Expected a name after this point."
-        ]
         "ParenthesizedDot.fs",
         "module M\nlet x = (A.",
         [
