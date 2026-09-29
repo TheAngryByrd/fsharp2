@@ -7157,6 +7157,97 @@ module M =
         "v_g_space.fsi", "module A\nval x: global .System.String\nval y: int\n", []
 
         "v_g_tuple.fsi", "module A\nval x: global.System.String * int\nval y: int\n", []
+
+        "w_abbrev_open.fs",
+        "module M\ntype T = List <int>\nopen System\n",
+        [
+            "w_abbrev_open.fs(2,15,2,20): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "w_bind_err.fs",
+        "module M\nlet f (x: List <int>) = )\n",
+        [
+            "w_bind_err.fs(2,16,2,21): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+            "w_bind_err.fs(2,25,2,26): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "w_bind_ok.fs",
+        "module M\nlet f (x: List <int>) = x\nlet y = 1\n",
+        [
+            "w_bind_ok.fs(2,16,2,21): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "w_group.fs",
+        "module M\ntype T = List <int>\nand U = int\n",
+        [
+            "w_group.fs(2,15,2,20): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "w_nested.fs",
+        "module M\nmodule N =\n    type U = A of List <int>\n    open System\nlet x = 1\n",
+        [
+            "w_nested.fs(3,24,3,29): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "w_open_type.fs",
+        "module M\nopen type List <int>\nopen System\nlet x = )\n",
+        [
+            "w_open_type.fs(2,16,2,21): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+            "w_open_type.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "w_record.fs",
+        "module M\ntype R = { F: List <int> }\nopen System\n",
+        [
+            "w_record.fs(2,20,2,25): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "w_two.fs",
+        "module M\ntype U = A of List <int> * Map <int, int>\nopen System\n",
+        [
+            "w_two.fs(2,20,2,25): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+            "w_two.fs(2,32,2,42): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "w_union_err.fs",
+        "module M\ntype U = A of List <int>\nlet x = )\n",
+        [
+            "w_union_err.fs(2,20,2,25): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+            "w_union_err.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "w_union_let.fs",
+        "module M\ntype U = A of List <int>\nlet x = 1\n",
+        [
+            "w_union_let.fs(2,20,2,25): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "w_union_open.fs",
+        "module M\ntype U = A of List <int>\nopen System\n",
+        [
+            "w_union_open.fs(2,20,2,25): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "w_val_err.fsi",
+        "module M\nval x: List <int> -> )\n",
+        [
+            "w_val_err.fsi(2,13,2,18): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+            "w_val_err.fsi(2,22,2,23): error FS0010: Unexpected symbol ')' in value signature"
+        ]
+
+        "w_val_next.fsi",
+        "module M\nval x: List <int>\nval y: )\n",
+        [
+            "w_val_next.fsi(2,13,2,18): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+            "w_val_next.fsi(3,8,3,9): error FS0010: Unexpected symbol ')' in value signature"
+            "w_val_next.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "w_val_open.fsi",
+        "module M\nval x: List <int>\nopen System\nval y: int\n",
+        [
+            "w_val_open.fsi(2,13,2,18): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
     ]
 
     let private unmodeledIncompleteConstructCases = [

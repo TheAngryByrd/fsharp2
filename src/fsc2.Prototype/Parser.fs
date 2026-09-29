@@ -261,6 +261,8 @@ module internal Parser =
 
     let private offsideCode = "FS0058"
 
+    let private typeArgumentSpaceCode = "FS1190"
+
     let private isRecoveryCode code =
         code
         <> featureGateCode
@@ -272,6 +274,8 @@ module internal Parser =
            <> letAndCode
         && code
            <> offsideCode
+        && code
+           <> typeArgumentSpaceCode
 
     let private reportedAt state (token: LayoutToken) =
         state.ReportedStarts.Contains token.Range.Start.Offset
@@ -1068,7 +1072,7 @@ module internal Parser =
                 then
                     reportWarning
                         state
-                        "FS1190"
+                        typeArgumentSpaceCode
                         "Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
                         (span openToken.Range close.Range)
 
