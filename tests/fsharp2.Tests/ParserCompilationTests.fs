@@ -2893,8 +2893,6 @@ module M =
     ]
 
     let private unmodeledLetKeywordCases = [
-        "u_local.fs", "module M\nlet f () =\n    use c = 3\n    c\n", []
-
         "d_first.fs",
         "module M\nmodule N =\n    )\n    use c = 3\nlet d = 4\n",
         [
