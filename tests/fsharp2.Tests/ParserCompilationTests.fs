@@ -4580,6 +4580,114 @@ module M =
             "d_two.fs(4,1,4,1): error FS3524: Expecting expression"
         ]
 
+        "d_and.fs",
+        "module M\ndo\nand b = 1\n",
+        [
+            "d_and.fs(3,1,3,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "d_and.fs(3,1,3,4): error FS3524: Expecting expression"
+            "d_and.fs(3,1,3,4): error FS0010: Unexpected keyword 'and' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "d_bar.fs",
+        "module M\ndo\n| B\n",
+        [
+            "d_bar.fs(3,1,3,2): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "d_bar.fs(3,1,3,2): error FS3524: Expecting expression"
+            "d_bar.fs(3,1,3,2): error FS0010: Unexpected symbol '|' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "r_and_after_do.fs",
+        "module M\ndo ()\nand b = 1\n",
+        [
+            "r_and_after_do.fs(3,1,3,4): error FS0010: Unexpected keyword 'and' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "r_and_after_nested.fs",
+        "module M\nmodule N =\n    let x = 1\nand b = 1\n",
+        [
+            "r_and_after_nested.fs(4,1,4,4): error FS0010: Unexpected keyword 'and' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "r_and_after_open.fs",
+        "module M\nopen System\nand b = 1\n",
+        [
+            "r_and_after_open.fs(3,1,3,4): error FS0010: Unexpected keyword 'and' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "r_and_first.fs",
+        "module M\nand b = 1\n",
+        [
+            "r_and_first.fs(2,1,2,4): error FS0010: Unexpected keyword 'and' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "r_and_nested.fs",
+        "module M\nmodule N =\n    open System\n    and b = 1\n",
+        [
+            "r_and_nested.fs(4,5,4,8): error FS0010: Unexpected keyword 'and' in definition. Expected incomplete structured construct at or before this point or other token."
+            "r_and_nested.fs(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "r_and_then_let.fs",
+        "module M\nopen System\nand b = 1\nlet y = 2\n",
+        [
+            "r_and_then_let.fs(3,1,3,4): error FS0010: Unexpected keyword 'and' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "r_bar_after_do.fs",
+        "module M\ndo ()\n| B\n",
+        [
+            "r_bar_after_do.fs(3,1,3,2): error FS0010: Unexpected symbol '|' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "r_bar_after_let.fs",
+        "module M\nlet x = 1\n| B\n",
+        [
+            "r_bar_after_let.fs(3,1,3,2): error FS0010: Unexpected symbol '|' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "r_bar_after_nested.fs",
+        "module M\nmodule N =\n    let x = 1\n| B\n",
+        [
+            "r_bar_after_nested.fs(4,1,4,2): error FS0010: Unexpected symbol '|' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "r_bar_first.fs",
+        "module M\n| B\n",
+        [
+            "r_bar_first.fs(2,1,2,2): error FS0010: Unexpected symbol '|' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "r_bar_nested.fs",
+        "module M\nmodule N =\n    let x = 1\n    | B\n",
+        [
+            "r_bar_nested.fs(4,5,4,6): error FS0010: Unexpected symbol '|' in definition. Expected incomplete structured construct at or before this point or other token."
+            "r_bar_nested.fs(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "r_bar_ns.fs",
+        "namespace Q\n| B\n",
+        [
+            "r_bar_ns.fs(2,1,2,2): error FS0010: Unexpected symbol '|' in implementation file. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "r_bar_then_let.fs",
+        "module M\nlet x = 1\n| B\nlet y = 2\n",
+        [
+            "r_bar_then_let.fs(3,1,3,2): error FS0010: Unexpected symbol '|' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "r_match_bar.fs", "module M\nlet f x =\n    match x with\n    | 1 -> 2\n    | _ -> 3\n", []
+
+        "r_ns_nested_bar.fs",
+        "namespace Q\nmodule N =\n    let x = 1\n| B\n",
+        [
+            "r_ns_nested_bar.fs(4,1,4,2): error FS0010: Unexpected symbol '|' in implementation file. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "r_rec_and.fs", "module M\nlet rec f x = 1\nand g y = 2\n", []
+
+        "r_type_bar.fs", "module M\ntype T =\n| A\n| B\n", []
+
         "b_and.fs",
         "module M\nlet rec a = 1\nand b =\nlet c = 1\n",
         [
@@ -4936,6 +5044,45 @@ module M =
     ]
 
     let private unmodeledIncompleteConstructCases = [
+        "d_anon_nested.fs",
+        "module N =\n    do\nlet b = 1\n",
+        [
+            "d_anon_nested.fs(3,1,3,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "d_anon_nested.fs(3,1,3,4): error FS3524: Expecting expression"
+            "d_anon_nested.fs(1,1,2,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration. When using a module declaration at the start of a file the '=' sign is not allowed. If this is a top-level module, consider removing the = to resolve this error."
+        ]
+
+        "r_anon_bar.fs",
+        "let x = 1\n| B\n",
+        [
+            "r_anon_bar.fs(2,1,2,2): error FS0010: Unexpected symbol '|' in implementation file"
+            "r_anon_bar.fs(1,1,2,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "r_first_nested_bar.fs",
+        "module M\nmodule N =\n    | B\n",
+        [ "r_first_nested_bar.fs(3,5,3,6): error FS0010: Unexpected symbol '|' in definition" ]
+
+        "r_nested_type_and.fs", "module M\nmodule N =\n    type T = int\n    and U = string\n", []
+
+        "r_ns_and.fs",
+        "namespace Q\nand b = 1\n",
+        [
+            "r_ns_and.fs(2,1,2,4): error FS0010: Unexpected keyword 'and' in implementation file. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "r_type_and_then_err.fs",
+        "module M\ntype T = int\nand U = string\n| B\n",
+        [
+            "r_type_and_then_err.fs(4,1,4,2): error FS0010: Unexpected symbol '|' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "r_type_and_three.fs",
+        "module M\ntype T = int\nand U = string\nand V = bool\nlet x = )\n",
+        [ "r_type_and_three.fs(5,9,5,10): error FS0010: Unexpected symbol ')' in binding" ]
+
+        "r_type_and.fs", "module M\ntype T = int\nand U = string\n", []
+
         "d_attr_same.fs",
         "module M\n[<A>] do\nlet b = 1\n",
         [

@@ -427,8 +427,11 @@ module internal Parser =
                 isOperator "=" token
                 || isOperator ":" token
                 || isOperator "." token
+                || isOperator "|" token
                 ->
                 symbol text token.Range
+            | RecoveryPoint.DefinitionStart when isKeyword "and" token -> keyword ()
+            | RecoveryPoint.NamespaceFile when isOperator "|" token -> symbol text token.Range
             | RecoveryPoint.ValueColon when isIdentifier token -> Some("identifier", token.Range)
             | RecoveryPoint.LambdaStart when isOperator "->" token -> symbol text token.Range
             | RecoveryPoint.NestedFirstDefinition when isOperator "=" token ->
@@ -2279,6 +2282,11 @@ module internal Parser =
                     (emptyAt cursor.LastEnd)
         }
 
+    let private continuesWithAnd (cursor: Cursor) =
+        isKeyword "and" cursor.Current
+        || (cursor.Current.Kind = LayoutTokenKind.Separator
+            && isKeyword "and" (cursor.Peek 1))
+
     let private useInModuleMessage =
         "'use' bindings are not permitted in modules and are treated as 'let' bindings"
 
@@ -2310,12 +2318,7 @@ module internal Parser =
         bindings.Add(parseBinding state context attributes)
         let firstBindingRecovered = reportedSince state reported
 
-        let continuesWithAnd () =
-            isKeyword "and" cursor.Current
-            || (cursor.Current.Kind = LayoutTokenKind.Separator
-                && isKeyword "and" (cursor.Peek 1))
-
-        while continuesWithAnd () do
+        while continuesWithAnd cursor do
             if cursor.Current.Kind = LayoutTokenKind.Separator then
                 cursor.Advance()
                 |> ignore
@@ -2969,6 +2972,23 @@ module internal Parser =
 
                     skipUntil state context
 
+            let mutable groupSkipped = None
+
+            while continuesWithAnd cursor do
+                if cursor.Current.Kind = LayoutTokenKind.Separator then
+                    cursor.Advance()
+                    |> ignore
+
+                if not (reportedSince state reported) then
+                    reportUnsupported state cursor.Current "a type group"
+
+                cursor.Advance()
+                |> ignore
+
+                groupSkipped <-
+                    groupSkipped
+                    |> Option.orElse (skipUntil state context)
+
             keepFirstDiagnosticSince state reported
 
             let definition = {
@@ -2977,7 +2997,7 @@ module internal Parser =
                 Name = name
                 PrimaryConstructor = primaryConstructor
                 Representation = representation
-                Skipped = skipped
+                Skipped = Option.orElse groupSkipped skipped
                 Range = span (declarationStart attributes typeToken) (emptyAt cursor.LastEnd)
             }
 
