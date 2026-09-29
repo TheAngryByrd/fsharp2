@@ -4648,6 +4648,30 @@ module M =
             "iar_next.fs(5,1,5,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (4:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
         ]
 
+        "iar_nested.fs",
+        "module M\nmodule N =\n    let x = )\nlet y =\n",
+        [
+            "iar_nested.fs(3,13,3,14): error FS0010: Unexpected symbol ')' in binding"
+            "iar_nested.fs(5,1,5,1): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (4:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "iar_nested.fs(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in binding"
+        ]
+
+        "iar_nested_inner.fs",
+        "module M\nmodule N =\n    let x = )\n    let y =\nlet z = 1\n",
+        [
+            "iar_nested_inner.fs(3,13,3,14): error FS0010: Unexpected symbol ')' in binding"
+            "iar_nested_inner.fs(5,1,5,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (4:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "iar_nested_inner.fs(5,1,5,4): error FS0010: Incomplete structured construct at or before this point in binding"
+        ]
+
+        "iar_nested_next.fs",
+        "module M\nmodule N =\n    let x = )\nlet y =\nlet z = 1\n",
+        [
+            "iar_nested_next.fs(3,13,3,14): error FS0010: Unexpected symbol ')' in binding"
+            "iar_nested_next.fs(5,1,5,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (4:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "iar_nested_next.fs(5,1,5,4): error FS0010: Incomplete structured construct at or before this point in binding"
+        ]
+
         "iar_ok.fs",
         "module M\nlet x = 1\n)\nlet y = 1\n",
         [
