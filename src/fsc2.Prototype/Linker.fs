@@ -240,10 +240,8 @@ module internal Linker =
             |> Seq.tryPick (tryReadTargetReference expectedName)
         with
         | Some reference -> reference
-        | None when
-            request.TargetReferences.IsEmpty
-            && expectedName = "FSharp.Core"
-            ->
+        | None when expectedName = "FSharp.Core" ->
+            // The Compatibility Oracle references FSharp.Core implicitly even under --noframework.
             defaultFSharpCoreReference
         | None ->
             invalidOp (

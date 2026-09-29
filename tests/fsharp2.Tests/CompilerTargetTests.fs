@@ -11469,6 +11469,113 @@ module CompilerTargetTests =
                 finally
                     Directory.Delete(root, true)
 
+            testCase "implicit FSharp.Core reference matches the Compatibility Oracle identity"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-implicit-fsharp-core",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "Tracer.fs")
+                    File.WriteAllText(sourcePath, "module Tracer\nlet answer () = 42\n")
+
+                    let referencePackDirectory =
+                        let runtimeDirectory =
+                            DirectoryInfo(RuntimeEnvironment.GetRuntimeDirectory())
+
+                        Path.Combine(
+                            runtimeDirectory.Parent.Parent.Parent.FullName,
+                            "packs",
+                            "Microsoft.NETCore.App.Ref",
+                            runtimeDirectory.Name,
+                            "ref",
+                            "net10.0"
+                        )
+
+                    Expect.isTrue
+                        (Directory.Exists referencePackDirectory)
+                        $"the active .NET reference pack should exist at {referencePackDirectory}"
+
+                    let referenceArguments =
+                        Directory.GetFiles(referencePackDirectory, "*.dll")
+                        |> Array.sort
+                        |> Array.map (fun path -> $"-r:{path}")
+                        |> List.ofArray
+
+                    let commonArguments = [
+                        "--target:library"
+                        "--deterministic+"
+                        "--debug:portable"
+                        "--optimize-"
+                        yield! referenceArguments
+                        sourcePath
+                    ]
+
+                    let oracleOutputPath = Path.Combine(root, "Tracer-oracle.dll")
+
+                    let oracleResult =
+                        invokeCompatibilityOracle root (Path.Combine(root, "oracle.rsp")) [
+                            "--nologo"
+                            "--targetprofile:netcore"
+                            "--noframework"
+                            $"--out:{oracleOutputPath}"
+                            yield! commonArguments
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let outputPath = Path.Combine(root, "Tracer-fsharp2.dll")
+                    let responsePath = Path.Combine(root, "fsharp2.rsp")
+
+                    File.WriteAllLines(
+                        responsePath,
+                        [|
+                            $"--out:{outputPath}"
+                            yield! commonArguments
+                        |]
+                    )
+
+                    let result = invokeFsc2 root responsePath
+                    Expect.equal result.ExitCode 0 result.StandardError
+
+                    let fsharpCoreReference assemblyPath =
+                        use stream = File.OpenRead(assemblyPath)
+                        use pe = new PEReader(stream)
+                        let metadata = pe.GetMetadataReader()
+
+                        metadata.AssemblyReferences
+                        |> Seq.map metadata.GetAssemblyReference
+                        |> Seq.filter (fun reference ->
+                            metadata.GetString(reference.Name) = "FSharp.Core"
+                        )
+                        |> Seq.map (fun reference ->
+                            reference.Version,
+                            Convert.ToHexString(metadata.GetBlobBytes(reference.PublicKeyOrToken)),
+                            (if reference.Culture.IsNil then
+                                 String.Empty
+                             else
+                                 metadata.GetString(reference.Culture)),
+                            reference.Flags
+                        )
+                        |> Seq.exactlyOne
+
+                    Expect.equal
+                        (fsharpCoreReference outputPath)
+                        (fsharpCoreReference oracleOutputPath)
+                        "the implicit FSharp.Core reference should match the Compatibility Oracle identity"
+                finally
+                    Directory.Delete(root, true)
+
             testCase "emits assembly-targeted AutoOpen attributes from a module"
             <| fun _ ->
                 let root =

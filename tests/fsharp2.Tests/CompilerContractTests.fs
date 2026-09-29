@@ -3482,6 +3482,31 @@ let first = 42
                     (resolved first)
                     "A changed forwarding implementation must change the fingerprint."
 
+            testCase "a request without an FSharp.Core reference links to FSharp.Core"
+            <| fun _ ->
+                let result =
+                    compileWithReferences
+                        [| systemRuntimeSnapshot [| coreLibrarySnapshot () |] |]
+                        "module Tracer\nlet answer () = 42\n"
+
+                let diagnostics =
+                    result.Diagnostics
+                    |> Seq.map _.Message
+                    |> String.concat Environment.NewLine
+
+                Expect.equal
+                    result.Outcome
+                    CompilationOutcome.Succeeded
+                    $"The module must compile without an explicit FSharp.Core reference. Diagnostics:{Environment.NewLine}{diagnostics}"
+
+                Expect.equal
+                    (emittedAssemblyReferences result)
+                    [
+                        "FSharp.Core"
+                        "System.Runtime"
+                    ]
+                    "The compilation mapping attributes must reference FSharp.Core."
+
             testCase "a forwarding implementation without a logical path fails request validation"
             <| fun _ ->
                 let broken = {
