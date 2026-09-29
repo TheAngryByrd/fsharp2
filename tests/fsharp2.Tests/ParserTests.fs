@@ -91,6 +91,43 @@ module ParserTests =
             $"expr [{attributes.Length} attribute lists]"
         | ImplementationDeclaration.Skipped _ -> "skipped"
 
+    let private trailingDotOpenCase logicalPath (declaration: string) expectedShape =
+        testCase logicalPath
+        <| fun _ ->
+            let result =
+                parse
+                    logicalPath
+                    $"module Program
+{declaration}
+"
+
+            Expect.sequenceEqual
+                (oracleLines logicalPath result.Diagnostics)
+                [
+                    $"{logicalPath}(2,12): error FS3117: Unexpected end of type. Expected a name after this point."
+                ]
+                "Compatibility Oracle diagnostics"
+
+            Expect.sequenceEqual
+                (result.Diagnostics
+                 |> Seq.map (fun diagnostic -> position diagnostic.Range))
+                [ 2, 12, 2, 13 ]
+                "Diagnostic range"
+
+            let declarations = (Seq.exactlyOne result.File.Contents).Declarations
+
+            Expect.sequenceEqual
+                (declarations
+                 |> Seq.map declarationShape)
+                [ expectedShape ]
+                "Open target"
+
+            Expect.sequenceEqual
+                (declarations
+                 |> Seq.map (fun declaration -> position declaration.Range))
+                [ 2, 1, 2, 13 ]
+                "Open declaration range"
+
     let private parseSignature logicalPath text =
         prepare logicalPath text
         |> Parser.parseSignatureFile
@@ -1246,6 +1283,11 @@ open type System.Math
                         "open type System.Math"
                     ]
                     "Each open declaration keeps its target"
+
+            testList "an open declaration with a trailing dot ends after the dot" [
+                trailingDotOpenCase "OpenDot.fs" "open System." "open System"
+                trailingDotOpenCase "GlobalDot.fs" "open global." "open global"
+            ]
 
             testCase "a type group keeps each definition in order"
             <| fun _ ->
