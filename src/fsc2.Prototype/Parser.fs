@@ -272,7 +272,10 @@ module internal Parser =
             let later =
                 state.Diagnostics
                 |> Seq.skip (first + 1)
-                |> Seq.filter (fun diagnostic -> diagnostic.Code = unsupportedCode)
+                |> Seq.filter (fun diagnostic ->
+                    diagnostic.Code = unsupportedCode
+                    || diagnostic.Code = offsideCode
+                )
                 |> Seq.toArray
 
             state.Diagnostics.RemoveRange(
@@ -628,7 +631,7 @@ module internal Parser =
                 End = next.Range.Start
             }
 
-    let private nextTokenOrEndRange (cursor: Cursor) =
+    let private nextSourceToken (cursor: Cursor) =
         let rec next offset =
             let token = cursor.Peek offset
 
@@ -638,7 +641,10 @@ module internal Parser =
             | LayoutTokenKind.BeginBlock
             | LayoutTokenKind.Separator -> next (offset + 1)
 
-        let token = next 0
+        next 0
+
+    let private nextTokenOrEndRange (cursor: Cursor) =
+        let token = nextSourceToken cursor
 
         if isEndOfFile token then
             let eof = token.Range.Start
@@ -1968,6 +1974,14 @@ module internal Parser =
         || isKeyword "and" token
         || isOffside context token
 
+    let private endsWithoutBody context (cursor: Cursor) =
+        let next = nextSourceToken cursor
+
+        endsBinding context cursor.Current
+        && (not (isKeyword "and" next)
+            || (next.Range.Start.Line > cursor.LastEnd.Line
+                && next.Range.Start.Column = context.Column))
+
     let private parseAccessibility (cursor: Cursor) =
         let token = cursor.Current
 
@@ -2193,8 +2207,7 @@ module internal Parser =
 
                     body
                 elif
-                    endsBinding context cursor.Current
-                    && not (isKeyword "and" cursor.Current)
+                    endsWithoutBody context cursor
                     && LanguageBehavior.isActive state.Language LanguageBehavior.StrictIndentation
                 then
                     let missing = missingExpression cursor.Current
@@ -2299,6 +2312,8 @@ module internal Parser =
                 reportUnsupported state andToken "a non-recursive 'and' on the same line"
 
             bindings.Add(parseBinding state context ImmutableArray.Empty)
+
+        keepFirstDiagnosticSince state reported
 
         if keyword = SyntaxLetKeyword.Use then
             let finish =
