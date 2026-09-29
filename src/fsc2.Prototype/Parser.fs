@@ -589,35 +589,68 @@ module internal Parser =
             reportUnsupported state state.Cursor.Current context
             false
 
-    let private isOffside (context: SourcePosition) (token: LayoutToken) =
+    [<RequireQualifiedAccess>]
+    type private FrameKind =
+        | SeqBlock
+        | Let
+        | Do
+        | Then
+        | Else
+        | MatchClause
+        | Paren
+        | Bracket
+        | Brace
+        | AttributeList
+        | ModuleExpression
+        | Declaration
+        | Open
+        | Val
+        | Type
+        | RecordField
+        | UnionCase
+        | Member
+
+    type private Frame = {
+        Kind: FrameKind
+        StartToken: SourceRange
+    } with
+
+        member frame.Offside = frame.StartToken.Start
+
+    let private frameAt kind (token: LayoutToken) = {
+        Kind = kind
+        StartToken = token.Range
+    }
+
+    let private isOffside (context: Frame) (token: LayoutToken) =
         token.Kind = LayoutTokenKind.SourceToken
-        && token.Range.Start.Line > context.Line
+        && token.Range.Start.Line > context.Offside.Line
         && token.Range.Start.Column
-           <= context.Column
+           <= context.Offside.Column
 
     // 15.1.9: an infix token can be left of the block column by its length plus one.
-    let private isOffsideInfix state (context: SourcePosition) (token: LayoutToken) =
+    let private isOffsideInfix state (context: Frame) (token: LayoutToken) =
         if state.InDelimiters then
             token.Kind = LayoutTokenKind.SourceToken
-            && token.Range.Start.Line > context.Line
+            && token.Range.Start.Line > context.Offside.Line
             && token.Range.Start.Column
                + (tokenText token).Length
-               + 1 < context.Column
+               + 1 < context.Offside.Column
         else
             isOffside context token
 
-    let private isLeftOfBlock state (context: SourcePosition) (token: LayoutToken) =
+    let private isLeftOfBlock state (context: Frame) (token: LayoutToken) =
         state.InDelimiters
         && token.Kind = LayoutTokenKind.SourceToken
-        && token.Range.Start.Line > context.Line
-        && token.Range.Start.Column < context.Column
+        && token.Range.Start.Line > context.Offside.Line
+        && token.Range.Start.Column < context.Offside.Column
 
-    let private withinDelimiters state (outside: SourcePosition) parse =
+    let private withinDelimiters state (outside: Frame) parse =
         let wasInDelimiters = state.InDelimiters
         let limit = state.UndentationLimit
 
         if not wasInDelimiters then
-            state.UndentationLimit <- outside.Column
+            state.UndentationLimit <- outside.Offside.Column
 
         state.InDelimiters <- true
         let result = parse ()
@@ -625,14 +658,14 @@ module internal Parser =
         state.UndentationLimit <- limit
         result
 
-    let private withUndentationLimit state (anchor: SourcePosition) parse =
+    let private withUndentationLimit state (anchor: Frame) parse =
         let limit = state.UndentationLimit
-        state.UndentationLimit <- max limit anchor.Column
+        state.UndentationLimit <- max limit anchor.Offside.Column
         let result = parse ()
         state.UndentationLimit <- limit
         result
 
-    let private skipUntil state (context: SourcePosition) =
+    let private skipUntil state (context: Frame) =
         let cursor = state.Cursor
         let start = cursor.Current.Range
         let skipped = ImmutableArray.CreateBuilder<LexicalToken>()
@@ -746,8 +779,8 @@ module internal Parser =
         else
             sourceTokenRange token (cursor.Peek(offset + 1))
 
-    let private offsideMessage (context: SourcePosition) =
-        $"Unexpected syntax or possible incorrect indentation: this token is offside of context started at position ({context.Line}:{context.Column}). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+    let private offsideMessage (context: Frame) =
+        $"Unexpected syntax or possible incorrect indentation: this token is offside of context started at position ({context.StartToken.Start.Line}:{context.StartToken.Start.Column}). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
 
     let private reportIncomplete state context =
         report
@@ -1298,11 +1331,11 @@ module internal Parser =
         || (constant token).IsSome
         || isDelimiter "(" token
 
-    let private continuesOnNewLine (context: SourcePosition) (token: LayoutToken) =
+    let private continuesOnNewLine (context: Frame) (token: LayoutToken) =
         isOffside context token
-        && token.Range.Start.Column = context.Column
+        && token.Range.Start.Column = context.Offside.Column
 
-    let private skipBlock state (context: SourcePosition) =
+    let private skipBlock state (context: Frame) =
         let cursor = state.Cursor
 
         while cursor.Current.Kind
@@ -1777,7 +1810,7 @@ module internal Parser =
                         withinDelimiters
                             state
                             context
-                            (fun () -> parseExpression state openToken.Range.Start)
+                            (fun () -> parseExpression state (frameAt FrameKind.Bracket openToken))
                     else
                         missingExpression cursor.Current
 
@@ -1838,7 +1871,7 @@ module internal Parser =
                 let close = cursor.Advance()
                 SyntaxExpression.Constant(SyntaxConstant.Unit, span token.Range close.Range)
             else
-                let contentContext = cursor.Current.Range.Start
+                let contentContext = frameAt FrameKind.Paren cursor.Current
 
                 let inner =
                     withinDelimiters
@@ -1982,7 +2015,7 @@ module internal Parser =
         let cursor = state.Cursor
         let reported = state.Diagnostics.Count
         let keywordToken = cursor.Advance()
-        let bindingContext = keywordToken.Range.Start
+        let bindingContext = frameAt FrameKind.Let keywordToken
 
         let keyword =
             if isKeyword "use" keywordToken then
@@ -2098,7 +2131,7 @@ module internal Parser =
 
         if cursor.Current.Kind = LayoutTokenKind.BeginBlock then
             let block = cursor.Advance()
-            let blockContext = block.Range.Start
+            let blockContext = frameAt FrameKind.SeqBlock block
             let reported = state.Diagnostics.Count
             let body = parseBlockItems state blockContext point
 
@@ -2121,7 +2154,7 @@ module internal Parser =
             && startsBlockItem cursor.Current
             && not (isOffside context cursor.Current)
         then
-            parseBlockItems state cursor.Current.Range.Start point
+            parseBlockItems state (frameAt FrameKind.SeqBlock cursor.Current) point
         else
             parseBranchStart state context point
 
@@ -2146,7 +2179,7 @@ module internal Parser =
             let thenBranch =
                 withUndentationLimit
                     state
-                    thenToken.Range.Start
+                    (frameAt FrameKind.Then thenToken)
                     (fun () -> parseBranch state context None)
 
             if
@@ -2166,7 +2199,7 @@ module internal Parser =
 
                     withUndentationLimit
                         state
-                        elseToken.Range.Start
+                        (frameAt FrameKind.Else elseToken)
                         (fun () -> parseBranch state context None)
                     |> Some
                 elif isKeyword "elif" cursor.Current then
@@ -2218,8 +2251,8 @@ module internal Parser =
 
                 let clauseContext =
                     bar
-                    |> Option.map _.Range.Start
-                    |> Option.defaultValue start.Range.Start
+                    |> Option.defaultValue start
+                    |> frameAt FrameKind.MatchClause
 
                 if
                     not (
@@ -2329,7 +2362,7 @@ module internal Parser =
                     && (cursor.Current.Range.Start.Line = cursor.LastEnd.Line
                         || cursor.Current.Range.Start.Column > state.UndentationLimit)
                 then
-                    parseBlockItems state cursor.Current.Range.Start None
+                    parseBlockItems state (frameAt FrameKind.SeqBlock cursor.Current) None
                 else
                     parseBranch state context None
             else
@@ -2365,7 +2398,7 @@ module internal Parser =
         let cursor = state.Cursor
         let openToken = cursor.Advance()
         let items = ImmutableArray.CreateBuilder<SyntaxExpression>()
-        let elementContext = cursor.Current.Range.Start
+        let elementContext = frameAt FrameKind.Bracket cursor.Current
         let mutable closed = isDelimiter "]" cursor.Current
         let mutable failed = false
 
@@ -2424,7 +2457,7 @@ module internal Parser =
                 while not closed
                       && not failed do
                     let start = cursor.Current
-                    let fieldContext = start.Range.Start
+                    let fieldContext = frameAt FrameKind.Brace start
 
                     if not (isIdentifier start) then
                         failed <- true
@@ -2450,7 +2483,9 @@ module internal Parser =
                                     if cursor.Current.Range.Start.Line > cursor.LastEnd.Line then
                                         parseBranch state fieldContext None
                                     else
-                                        parseExpression state cursor.Current.Range.Start
+                                        parseExpression
+                                            state
+                                            (frameAt FrameKind.SeqBlock cursor.Current)
 
                                 fields.Add {
                                     Name = name
@@ -2499,7 +2534,7 @@ module internal Parser =
         && (not (isKeyword "and" next)
             || (next.Range.Start.Line > cursor.LastEnd.Line
                 && next.Range.Start.Column
-                   <= context.Column))
+                   <= context.Offside.Column))
 
     let private parseAccessibility (cursor: Cursor) =
         let token = cursor.Current
@@ -2540,7 +2575,7 @@ module internal Parser =
         cursor.Advance()
         |> ignore
 
-        let context = openBracket.Range.Start
+        let context = frameAt FrameKind.AttributeList openBracket
         let attributes = ImmutableArray.CreateBuilder<SyntaxAttribute>()
         let mutable stop = false
 
@@ -2650,14 +2685,11 @@ module internal Parser =
         | Some(DeclarationAfterRecovery.SkippedInTypeBody _) -> true
         | _ -> false
 
-    let private endsOnLine
-        (attributes: ImmutableArray<SyntaxAttributeList>)
-        (context: SourcePosition)
-        =
+    let private endsOnLine (attributes: ImmutableArray<SyntaxAttributeList>) (context: Frame) =
         not attributes.IsEmpty
         && attributes[attributes.Length
                       - 1]
-            .Range.End.Line = context.Line
+            .Range.End.Line = context.Offside.Line
 
     [<RequireQualifiedAccess>]
     type private NextToken =
@@ -2744,7 +2776,7 @@ module internal Parser =
                 |> ignore
 
                 if cursor.Current.Kind = LayoutTokenKind.BeginBlock then
-                    let blockContext = cursor.Advance().Range.Start
+                    let blockContext = frameAt FrameKind.SeqBlock (cursor.Advance())
 
                     let body =
                         if startsLocalBinding cursor.Current then
@@ -2834,7 +2866,7 @@ module internal Parser =
     let private parseLet state attributes =
         let cursor = state.Cursor
         let letToken = cursor.Advance()
-        let context = letToken.Range.Start
+        let context = frameAt FrameKind.Let letToken
 
         let keyword =
             if isKeyword "use" letToken then
@@ -2905,12 +2937,12 @@ module internal Parser =
     let private parseDo state attributes =
         let cursor = state.Cursor
         let doToken = cursor.Advance()
-        let context = doToken.Range.Start
+        let context = frameAt FrameKind.Do doToken
         let reported = state.Diagnostics.Count
 
         let body =
             if cursor.Current.Kind = LayoutTokenKind.BeginBlock then
-                let blockContext = cursor.Advance().Range.Start
+                let blockContext = frameAt FrameKind.SeqBlock (cursor.Advance())
 
                 let body =
                     if startsLocalBinding cursor.Current then
@@ -2987,7 +3019,7 @@ module internal Parser =
     let private parseExpressionDeclaration state point attributes =
         let cursor = state.Cursor
         let start = cursor.Current
-        let context = start.Range.Start
+        let context = frameAt FrameKind.ModuleExpression start
         let reported = state.Diagnostics.Count
         let body = parseExpression state context
         let range = span (declarationStart attributes start) (emptyAt cursor.LastEnd)
@@ -3065,7 +3097,7 @@ module internal Parser =
     let private parseVal state nested attributes =
         let cursor = state.Cursor
         let valToken = cursor.Advance()
-        let context = valToken.Range.Start
+        let context = frameAt FrameKind.Val valToken
         let reported = state.Diagnostics.Count
         let mutable recovered = None
         let mutable typeStart = -1
@@ -3237,7 +3269,7 @@ module internal Parser =
     let private parseOpen state =
         let cursor = state.Cursor
         let openToken = cursor.Advance()
-        let context = openToken.Range.Start
+        let context = frameAt FrameKind.Open openToken
 
         let onTrailingDot (dot: LayoutToken) =
             let offset, closesBlock = nextSource cursor
@@ -3291,7 +3323,7 @@ module internal Parser =
                 else
                     Some(SyntaxOpenTarget.GlobalModuleOrNamespace(globalToken.Range, None))
             elif startsKeyword "type" then
-                let typeContext = cursor.Advance().Range.Start
+                let typeContext = frameAt FrameKind.Open (cursor.Advance())
 
                 if
                     startsName ()
@@ -3350,7 +3382,7 @@ module internal Parser =
         while not closed
               && not failed do
             let start = cursor.Current
-            let fieldContext = start.Range.Start
+            let fieldContext = frameAt FrameKind.RecordField start
 
             let isMutable =
                 if isKeyword "mutable" start then
@@ -3415,12 +3447,12 @@ module internal Parser =
         SyntaxTypeRepresentation.Record(fields.ToImmutable())
 
     // The Compatibility Oracle ends a union that starts on the definition line at an offside '|'.
-    let private unionContinuesAt (definition: SourcePosition option) firstLine (bar: LayoutToken) =
+    let private unionContinuesAt (definition: Frame option) firstLine (bar: LayoutToken) =
         match definition with
-        | Some context when firstLine = context.Line -> not (isOffside context bar)
+        | Some context when firstLine = context.Offside.Line -> not (isOffside context bar)
         | _ -> true
 
-    let private parseUnionCases state (definition: SourcePosition option) =
+    let private parseUnionCases state (definition: Frame option) =
         let cursor = state.Cursor
         let cases = ImmutableArray.CreateBuilder<SyntaxUnionCase>()
         let mutable more = true
@@ -3444,7 +3476,7 @@ module internal Parser =
                 else
                     RecoveryPoint.FirstUnionCaseField
 
-            let context = start.Range.Start
+            let context = frameAt FrameKind.UnionCase start
 
             if not (isIdentifier cursor.Current) then
                 reportUnexpected state RecoveryPoint.UnionCaseName "a union case"
@@ -3532,7 +3564,7 @@ module internal Parser =
 
         while more do
             let start = cursor.Current
-            let context = start.Range.Start
+            let context = frameAt FrameKind.Member start
             let attributes = parseAttributeLists state
 
             let isStatic =
@@ -3617,7 +3649,7 @@ module internal Parser =
 
         SyntaxTypeRepresentation.Class(members.ToImmutable())
 
-    let private startsUnion (cursor: Cursor) (definition: SourcePosition option) =
+    let private startsUnion (cursor: Cursor) (definition: Frame option) =
         let bar = cursor.Peek 1
 
         isOperator "|" cursor.Current
@@ -3651,7 +3683,7 @@ module internal Parser =
 
     let private parseTypeDefinitionAfter state attributes (keyword: LayoutToken) =
         let cursor = state.Cursor
-        let context = keyword.Range.Start
+        let context = frameAt FrameKind.Type keyword
         let reported = state.Diagnostics.Count
         let accessibility = parseAccessibility cursor
 
@@ -3675,7 +3707,9 @@ module internal Parser =
                     if cursor.Current.Kind = LayoutTokenKind.BeginBlock then
                         let block = cursor.Advance()
                         let blockReported = state.Diagnostics.Count
-                        let representation = parseRepresentation state block.Range.Start None
+
+                        let representation =
+                            parseRepresentation state (frameAt FrameKind.SeqBlock block) None
 
                         if
                             cursor.Current.Kind
@@ -3684,7 +3718,7 @@ module internal Parser =
                             if not (reportedSince state blockReported) then
                                 reportUnsupported state cursor.Current "a type definition"
 
-                            skipBlock state block.Range.Start
+                            skipBlock state (frameAt FrameKind.SeqBlock block)
 
                         if cursor.Current.Kind = LayoutTokenKind.EndBlock then
                             cursor.Advance()
@@ -3820,7 +3854,7 @@ module internal Parser =
                             Range = andToken.Range
                         }
 
-                        skipUntil state andToken.Range.Start
+                        skipUntil state (frameAt FrameKind.Type andToken)
                         |> Option.fold mergeSkipped keyword
 
                     if rest.Count = 0 then
@@ -4174,7 +4208,7 @@ module internal Parser =
                                     .Range.End.Line = token.Range.Start.Line))
                     then
                         if discardsSilently state then
-                            skipUntil state token.Range.Start
+                            skipUntil state (frameAt FrameKind.Declaration token)
                             |> Option.iter (
                                 rules.Skipped
                                 >> target.Add
@@ -4197,7 +4231,7 @@ module internal Parser =
                             && discardsSilently state
                             ->
                             // The Compatibility Oracle discards any declaration after a signature file recovery and reports no diagnostic for it.
-                            skipUntil state token.Range.Start
+                            skipUntil state (frameAt FrameKind.Declaration token)
                             |> Option.iter (
                                 rules.Skipped
                                 >> target.Add
@@ -4257,7 +4291,7 @@ module internal Parser =
                     not (isDeclarationListEnd next)
                     && next.Kind
                        <> LayoutTokenKind.Separator
-                    && not (isOffside token.Range.Start next)
+                    && not (isOffside (frameAt FrameKind.Declaration token) next)
                 then
                     if
                         not (reportedSince state reported)
@@ -4265,7 +4299,7 @@ module internal Parser =
                     then
                         reportUnsupported state next "a module or namespace declaration"
 
-                    skipUntil state token.Range.Start
+                    skipUntil state (frameAt FrameKind.Declaration token)
                     |> Option.iter (
                         rules.Skipped
                         >> target.Add
