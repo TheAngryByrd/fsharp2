@@ -746,6 +746,43 @@ module ParserGrammarTests =
         "SequentialInfix.fs", "module A\nlet f () =\n    1\n    + 2\n", []
     ]
 
+    let private blockOffsideExplicitCases = [
+        "BlockOffsideBinding.fs",
+        "module A\nlet f =\n    g\n  1\n",
+        [
+            "BlockOffsideBinding.fs(4,3): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BlockOffsideBinding.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ],
+        "BlockOffsideBinding.fs(4,3)"
+        "BlockOffsideBeforeRoot.fs",
+        "module A\nlet f =\n    g\n  1\nlet h = 2\n",
+        [
+            "BlockOffsideBeforeRoot.fs(4,3): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BlockOffsideBeforeRoot.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+            "BlockOffsideBeforeRoot.fs(6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ],
+        "BlockOffsideBeforeRoot.fs(4,3)"
+        "BlockOffsideNestedBinding.fs",
+        "module A\nmodule M =\n    let f =\n        g\n      1\n",
+        [
+            "BlockOffsideNestedBinding.fs(5,7): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BlockOffsideNestedBinding.fs(3,5): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ],
+        "BlockOffsideNestedBinding.fs(5,7)"
+        "BlockOffsideDo.fs",
+        "module A\ndo\n    ignore\n  1\n",
+        [
+            "BlockOffsideDo.fs(4,3): error FS0010: Unexpected integer literal in definition. Expected incomplete structured construct at or before this point or other token."
+        ],
+        "BlockOffsideDo.fs(4,3)"
+        "BlockOffsideNestedDo.fs",
+        "module A\nmodule M =\n    do\n        ignore\n      1\n",
+        [
+            "BlockOffsideNestedDo.fs(5,7): error FS0010: Unexpected integer literal in definition. Expected incomplete structured construct at or before this point or other token."
+        ],
+        "BlockOffsideNestedDo.fs(5,7)"
+    ]
+
     // The Compatibility Oracle reports no parse diagnostic for each text. The ranges are the FCS 43.10.101 LetOrUse and Sequential ranges, with 1-based columns.
     let private localLetCases = [
         "LocalLet.fs",
@@ -1297,6 +1334,30 @@ let items = [ origin.X; 1 ]
                             result.Diagnostics
                             (oracleLines logicalPath result)
             ]
+
+            testList
+                "a line between the binding column and the block column stays explicit at the Oracle position"
+                [
+                    for logicalPath, text, oracle, position in blockOffsideExplicitCases ->
+                        testCase logicalPath
+                        <| fun _ ->
+                            let result = parse logicalPath text
+                            let lines = oracleLines logicalPath result
+
+                            SyntaxDiagnosticText.expectExplicitlyUnsupported
+                                oracle
+                                result.Diagnostics
+                                lines
+
+                            Expect.sequenceEqual
+                                (lines
+                                 |> List.filter (fun line -> line.Contains ": error FSC2P1001: ")
+                                 |> List.map (fun line ->
+                                     line.Substring(0, line.IndexOf ": error ")
+                                 ))
+                                [ position ]
+                                "The explicit diagnostic is at the first Compatibility Oracle diagnostic"
+                ]
 
             testList "a let or use at the start of a block line binds the rest of the block" [
                 for logicalPath, text, expectedDeclarations, expectedRanges in localLetCases ->
