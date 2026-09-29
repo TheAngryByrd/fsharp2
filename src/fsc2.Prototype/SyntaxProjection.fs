@@ -247,23 +247,20 @@ module internal SyntaxProjection =
                     | Some name ->
                         projectOpens namespaces (List.ofSeq root.Declarations)
                         |> Result.bind (fun (openedNamespaces, rest) ->
-                            match openedNamespaces with
-                            | [] -> Error root.Range
-                            | _ ->
-                                projectDeclarations root.Range rest
-                                |> Result.bind (fun (declarations, endsWithEntryPoint) ->
-                                    if endsWithEntryPoint then
-                                        Ok [
-                                            parsedModule
-                                                contentFingerprint
-                                                sourceChecksum
-                                                name
-                                                openedNamespaces
-                                                declarations
-                                        ]
-                                    else
-                                        Error root.Range
-                                )
+                            projectDeclarations root.Range rest
+                            |> Result.bind (fun (declarations, endsWithEntryPoint) ->
+                                if endsWithEntryPoint then
+                                    Ok [
+                                        parsedModule
+                                            contentFingerprint
+                                            sourceChecksum
+                                            name
+                                            openedNamespaces
+                                            declarations
+                                    ]
+                                else
+                                    Error root.Range
+                            )
                         )
                 | _ -> Error root.Range
             | root :: _ -> Error root.Range

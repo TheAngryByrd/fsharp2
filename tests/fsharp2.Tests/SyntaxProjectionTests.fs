@@ -211,7 +211,10 @@ module SyntaxProjectionTests =
     let private projectImplicit logicalPath text =
         SyntaxRouting.tryProject (implicitModule ()) (document logicalPath text)
 
+    let private noOpenLine = "// no open line"
+
     let private implicitOpens = [
+        []
         [ "System.Text" ]
         [ "System.Collections" ]
         [
@@ -227,8 +230,11 @@ module SyntaxProjectionTests =
     let private implicitCorpus = [
         for opens in implicitOpens do
             let openLines =
-                opens
-                |> List.map (fun name -> $"open {name}")
+                match opens with
+                | [] -> [ noOpenLine ]
+                | opens ->
+                    opens
+                    |> List.map (fun name -> $"open {name}")
 
             for layout in layouts do
                 for body in bodies do
@@ -254,7 +260,7 @@ module SyntaxProjectionTests =
     let private withNamedHeader (text: string) =
         let openLine =
             Text.RegularExpressions.Regex(
-                "^open [A-Za-z.]+",
+                $"^(open [A-Za-z.]+|{noOpenLine})",
                 Text.RegularExpressions.RegexOptions.Multiline
             )
 
@@ -475,6 +481,10 @@ module SyntaxProjectionTests =
                                     ImplicitModule.Rejected
                                     source)
                                 $"The token shape check must accept a projectable source:\n{text}"
+
+                            Expect.isFalse
+                                (SyntaxRouting.isImplicitModuleCandidate (implicitModule ()) source)
+                                $"The parse key of a named module must not depend on the references:\n{text}"
                         | SyntaxProjectionResult.ProjectionUnsupported _ -> ()
 
                 Expect.isGreaterThan projectable 0 "The corpus contains projectable sources"
@@ -497,27 +507,38 @@ module SyntaxProjectionTests =
                             $"Expected a projection, but the projection stopped at line {range.Start.Line}, column {range.Start.Column}:\n{text}"
 
             testCase
-                "the compiler service parses an implicit module with an open declaration in the last file of an executable"
+                "the compiler service parses an implicit module in the last file of an executable"
             <| fun _ ->
-                let result, projections =
-                    compileWithService "open System\n\n[<EntryPoint>]\nlet main argv = 0\n"
+                // The Compatibility Oracle accepts each text. It also accepts a namespace that has only internal types.
+                for text in
+                    [
+                        "open System\n\n[<EntryPoint>]\nlet main argv = 0\n"
+                        "open Microsoft.FSharp.Primitives.Basics\n\n[<EntryPoint>]\nlet main argv = 0\n"
+                        "[<EntryPoint>]\nlet main argv = 0\n"
+                        "let before = 1\n[<EntryPoint>]\nlet main argv = 0\n"
+                        "// For more information see https://aka.ms/fsharp-console-apps\r\n[<EntryPoint>]\r\nlet main argv = 0\r\n"
+                    ] do
+                    let result, projections = compileWithService text
 
-                Expect.isOk result "The implicit module compiles"
-                Expect.equal projections 1 "The syntax parser produced the parsed module"
+                    Expect.isOk result $"The implicit module compiles:\n{text}"
+
+                    Expect.equal
+                        projections
+                        1
+                        $"The syntax parser produced the parsed module:\n{text}"
 
             testCase
                 "an implicit module compiles to the public module that the Compatibility Oracle names"
             <| fun _ ->
-                // The Compatibility Oracle emits the public type `Program` for both file names.
-                for logicalPath in
+                // The Compatibility Oracle emits the public type `Program` for each file name and text.
+                for logicalPath, text in
                     [
-                        "Program.fs"
-                        "src/program.fs"
+                        "Program.fs", "open System\n\n[<EntryPoint>]\nlet main argv = 0\n"
+                        "src/program.fs", "open System\n\n[<EntryPoint>]\nlet main argv = 0\n"
+                        "Program.fs", "[<EntryPoint>]\nlet main argv = 0\n"
+                        "src/program.fs", "[<EntryPoint>]\nlet main argv = 0\n"
                     ] do
-                    let result =
-                        compileRequest
-                            logicalPath
-                            "open System\n\n[<EntryPoint>]\nlet main argv = 0\n"
+                    let result = compileRequest logicalPath text
 
                     Expect.equal
                         result.Outcome
@@ -550,13 +571,22 @@ module SyntaxProjectionTests =
                         "Program.fs", $"open System{entryPoint}"
                         "Last.fs", "module Last\nlet y = 1\n"
                     ]
-                    "no open declaration",
-                    CompilationTarget.Executable,
+                    "a library without an open declaration (Oracle FS0222)",
+                    CompilationTarget.Library,
                     [ "Program.fs", entryPoint ]
-                    "an unknown namespace (FS0039)",
+                    "no open declaration and no entry point (Oracle FS0988)",
+                    CompilationTarget.Executable,
+                    [ "Program.fs", "let x = 1\n" ]
+                    "the dotnet new console program",
+                    CompilationTarget.Executable,
+                    [
+                        "Program.fs",
+                        "// For more information see https://aka.ms/fsharp-console-apps\r\nprintfn \"Hello from F#\"\r\n"
+                    ]
+                    "an unknown namespace (Oracle FS0039)",
                     CompilationTarget.Executable,
                     [ "Program.fs", $"open Nonexistent{entryPoint}" ]
-                    "an unknown nested namespace (FS0039)",
+                    "an unknown nested namespace (Oracle FS0039)",
                     CompilationTarget.Executable,
                     [ "Program.fs", $"open System.Nope{entryPoint}" ]
                     "no entry point (FS0988)",
@@ -669,6 +699,10 @@ module SyntaxProjectionTests =
                             Expect.isFalse
                                 (SyntaxRouting.isEligible ImplicitModule.Rejected source)
                                 $"The syntax parser must not run on an implicit module that the Compatibility Oracle rejects:\n{text}"
+
+                            Expect.isTrue
+                                (SyntaxRouting.isImplicitModuleCandidate (implicitModule ()) source)
+                                $"The parse key of a projectable implicit module must depend on the references:\n{text}"
                         | SyntaxProjectionResult.ProjectionUnsupported _ -> ()
 
                 Expect.isGreaterThan
