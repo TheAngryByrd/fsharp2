@@ -296,6 +296,65 @@ module ParserGrammarTests =
         | SyntaxExpression.Lambda(_, body, _) -> blockRanges body
         | _ -> []
 
+    let rec private infixRanges expression =
+        let text name range =
+            let startLine, startColumn, endLine, endColumn = position range
+            $"{name}({startLine},{startColumn}--{endLine},{endColumn})"
+
+        let all expressions =
+            expressions
+            |> Seq.collect infixRanges
+            |> Seq.toList
+
+        match expression with
+        | SyntaxExpression.Infix(operator, left, right, range) ->
+            text operator.Text range
+            :: all [
+                left
+                right
+            ]
+        | SyntaxExpression.Tuple(items, range) ->
+            text "tuple" range
+            :: all items
+        | SyntaxExpression.LongIdentifierSet(_, value, range) ->
+            text "set" range
+            :: infixRanges value
+        | SyntaxExpression.Sequential(first, second, range) ->
+            text "seq" range
+            :: all [
+                first
+                second
+            ]
+        | SyntaxExpression.LetOrUse(_, _, binding, body, range) ->
+            text "let" range
+            :: all [
+                binding.Body
+                body
+            ]
+        | SyntaxExpression.Application(func, argument, _) ->
+            all [
+                func
+                argument
+            ]
+        | SyntaxExpression.Parenthesized(inner, _) -> infixRanges inner
+        | SyntaxExpression.If(condition, thenBranch, elseBranch, _) ->
+            all (
+                [
+                    condition
+                    thenBranch
+                ]
+                @ Option.toList elseBranch
+            )
+        | SyntaxExpression.Match(input, clauses, _) ->
+            infixRanges input
+            @ all (
+                clauses
+                |> Seq.map _.Result
+            )
+        | SyntaxExpression.Lambda(_, body, _) -> infixRanges body
+        | SyntaxExpression.List(items, _) -> all items
+        | _ -> []
+
     let private declarationBodies (declarations: ImplementationDeclaration seq) =
         declarations
         |> Seq.collect (fun declaration ->
@@ -805,7 +864,6 @@ module ParserGrammarTests =
         [
             "SequentialCloseAfter.fs(4,7): error FS0010: Unexpected symbol ')' in binding. Expected incomplete structured construct at or before this point or other token."
         ]
-        "SequentialInfix.fs", "module A\nlet f () =\n    1\n    + 2\n", []
     ]
 
     let private blockOffsideExplicitCases = [
@@ -1570,6 +1628,58 @@ module ParserGrammarTests =
         "module A\nlet f c =\n    if c then\n        ignore (\n            1)\n    ignore 2\n",
         [ "let f c = seq[if c then [ignore (1)]; [ignore 2]]" ],
         [ "seq(3,5--6,13)" ]
+        "AssignValueLines.fs",
+        "module A\nlet mutable x = 0\nlet f () =\n    (x <-\n        1\n        2)\n",
+        [
+            "let mutable x = 0"
+            "let f () = ({x <- seq[1; 2]})"
+        ],
+        [
+            "set(4,6--6,10)"
+            "seq(5,9--6,10)"
+        ]
+        "AssignValueLinesInList.fs",
+        "module A\nlet mutable x = 0\nlet f () =\n    [ x <-\n        1\n        2 ]\n",
+        [
+            "let mutable x = 0"
+            "let f () = [{x <- seq[1; 2]}]"
+        ],
+        []
+        "AssignValueLinesThenItem.fs",
+        "module A\nlet mutable x = 0\nlet f () =\n    (x <-\n        1\n        2\n     ignore 3)\n",
+        [
+            "let mutable x = 0"
+            "let f () = (seq[{x <- seq[1; 2]}; [ignore 3]])"
+        ],
+        [
+            "seq(4,6--7,14)"
+            "set(4,6--6,10)"
+            "seq(5,9--6,10)"
+        ]
+        "AssignValueLocalLet.fs",
+        "module A\nlet mutable x = 0\nlet f () =\n    (x <-\n        let y = 1\n        y)\n",
+        [
+            "let mutable x = 0"
+            "let f () = ({x <- let y = 1 in y})"
+        ],
+        [
+            "set(4,6--6,10)"
+            "let(5,9--6,10)"
+        ]
+        "AssignValueLinePipe.fs",
+        "module A\nlet mutable x = 0\nlet f () =\n    (x <-\n        1\n        |> id)\n",
+        [
+            "let mutable x = 0"
+            "let f () = ({x <- {1 |> id}})"
+        ],
+        [ "set(4,6--6,14)" ]
+        "AssignValueSameLineThenAligned.fs",
+        "module A\nlet mutable x = 0\nlet f () =\n    (x <- 1\n          2)\n",
+        [
+            "let mutable x = 0"
+            "let f () = ({x <- [1 2]})"
+        ],
+        [ "set(4,6--5,12)" ]
     ]
 
     let private delimitedLineExplicitCases = [
@@ -1632,6 +1742,482 @@ module ParserGrammarTests =
         "LocalLetLineOpensLambda.fs",
         "module A\nlet f xs =\n    let g = List.map (fun x ->\n        x)\n    g xs\n",
         []
+        "AssignValueAtTarget.fs",
+        "module A\nlet mutable x = 0\nlet f () =\n    (x <-\n     1\n     2)\n",
+        []
+        "AssignValueLeftOfTarget.fs",
+        "module A\nlet mutable x = 0\nlet f () =\n    (x <-\n    1)\n",
+        []
+        "LambdaBodyAtLaterBlockLine.fs",
+        "module A\nlet f () =\n    ignore 0\n    List.iter (fun x ->\n    ignore x) [ 1 ]\n",
+        []
+    ]
+
+    let private delimitedLineInventedCases = [
+        "LambdaBodyAtBindingColumn.fs",
+        "module A\nlet f () =\n    g (fun x ->\nx)\n",
+        [
+            "LambdaBodyAtBindingColumn.fs(4,1): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "LambdaBodyAtBindingColumn.fs(3,8): error FS0611: Missing function body"
+            "LambdaBodyAtBindingColumn.fs(4,1): error FS0010: Unexpected identifier in expression"
+        ],
+        [
+            "LambdaBodyAtBindingColumn.fs(4,2): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "LambdaBodyAtModuleExpressionColumn.fs",
+        "List.iter (fun x ->\nignore x) [ 1 ]\n",
+        [],
+        [
+            "LambdaBodyAtModuleExpressionColumn.fs(2,9): error FS0010: Unexpected symbol ')' in implementation file"
+        ]
+    ]
+
+    let private infixLineCases = [
+        "InfixAtColumnPipe.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map id\n",
+        [ "let f xs = {xs |> [List.map id]}" ],
+        [ "|>(3,5--4,19)" ]
+        "InfixAtColumnPlus.fs",
+        "module A\nlet f () =\n    1\n    + 2\n",
+        [ "let f () = {1 + 2}" ],
+        [ "+(3,5--4,8)" ]
+        "InfixAtColumnComma.fs",
+        "module A\nlet f a b =\n    a\n    , b\n",
+        [ "let f a b = a, b" ],
+        [ "tuple(3,5--4,8)" ]
+        "InfixAtColumnMinusSpaced.fs",
+        "module A\nlet f a =\n    a\n    - 1\n",
+        [ "let f a = {a - 1}" ],
+        [ "-(3,5--4,8)" ]
+        "InfixAtColumnAmpamp.fs",
+        "module A\nlet f a b =\n    a\n    && b\n",
+        [ "let f a b = {a && b}" ],
+        [ "&&(3,5--4,9)" ]
+        "InfixAtColumnCons.fs",
+        "module A\nlet f a b =\n    a\n    :: b\n",
+        [ "let f a b = {a :: b}" ],
+        [ "::(3,5--4,9)" ]
+        "InfixAtColumnAfterIf.fs",
+        "module A\nlet f c =\n    if c then 1 else 2\n    + 3\n",
+        [ "let f c = {if c then 1 else 2 + 3}" ],
+        [ "+(3,5--4,8)" ]
+        "InfixAtColumnTwoPipes.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map id\n    |> List.rev\n",
+        [ "let f xs = {{xs |> [List.map id]} |> List.rev}" ],
+        [
+            "|>(3,5--5,16)"
+            "|>(3,5--4,19)"
+        ]
+        "InfixAtColumnAfterLocalLet.fs",
+        "module A\nlet f () =\n    let x = 1\n    x\n    + 1\n",
+        [ "let f () = let x = 1 in {x + 1}" ],
+        [
+            "let(3,5--5,8)"
+            "+(4,5--5,8)"
+        ]
+        "InfixAtColumnAfterItem.fs",
+        "module A\nlet f a b =\n    ignore 1\n    a\n    + b\n",
+        [ "let f a b = seq[[ignore 1]; {a + b}]" ],
+        [
+            "seq(3,5--5,8)"
+            "+(4,5--5,8)"
+        ]
+        "InfixAtColumnThenItem.fs",
+        "module A\nlet f a b =\n    a\n    + b\n    ignore 2\n",
+        [ "let f a b = seq[{a + b}; [ignore 2]]" ],
+        [
+            "seq(3,5--5,13)"
+            "+(3,5--4,8)"
+        ]
+        "InfixAtColumnStar.fs",
+        "module A\nlet f a b =\n    a\n    * b\n",
+        [ "let f a b = {a * b}" ],
+        [ "*(3,5--4,8)" ]
+        "InfixAtColumnGreaterEqual.fs",
+        "module A\nlet f a b =\n    a\n    >= b\n",
+        [ "let f a b = {a >= b}" ],
+        [ ">=(3,5--4,9)" ]
+        "InfixAtColumnBackpipe.fs",
+        "module A\nlet f g b =\n    g\n    <| b\n",
+        [ "let f g b = {g <| b}" ],
+        [ "<|(3,5--4,9)" ]
+        "InfixAtColumnAssignValue.fs",
+        "module A\nlet mutable x = 0\nlet f () =\n    x <- 1\n    + 2\n",
+        [
+            "let mutable x = 0"
+            "let f () = {x <- {1 + 2}}"
+        ],
+        [
+            "set(4,5--5,8)"
+            "+(4,10--5,8)"
+        ]
+        "InfixAtColumnLambdaBody.fs",
+        "module A\nlet f () =\n    List.map (fun x ->\n        x\n        + 1)\n",
+        [ "let f () = [List.map (fun x -> {x + 1})]" ],
+        [ "+(4,9--5,12)" ]
+        "InfixAtColumnLocalValue.fs",
+        "module A\nlet f a b =\n    let y =\n        a\n        + b\n    y\n",
+        [ "let f a b = let y = {a + b} in y" ],
+        [
+            "let(3,5--6,6)"
+            "+(4,9--5,12)"
+        ]
+        "InfixAtColumnBarbar.fs",
+        "module A\nlet f a b =\n    a\n    || b\n",
+        [ "let f a b = {a || b}" ],
+        [ "||(3,5--4,9)" ]
+        "InfixAtColumnAt.fs",
+        "module A\nlet f a b =\n    a\n    @ b\n",
+        [ "let f a b = {a @ b}" ],
+        [ "@(3,5--4,8)" ]
+        "InfixAtColumnCompose.fs",
+        "module A\nlet f a b =\n    a\n    >> b\n",
+        [ "let f a b = {a >> b}" ],
+        [ ">>(3,5--4,9)" ]
+        "InfixAtColumnAppThenPipe.fs",
+        "module A\nlet f g x =\n    g x\n    |> ignore\n",
+        [ "let f g x = {[g x] |> ignore}" ],
+        [ "|>(3,5--4,14)" ]
+        "InfixAtColumnAfterElseBlock.fs",
+        "module A\nlet f c =\n    if c then\n        1\n    else\n        2\n    + 3\n",
+        [ "let f c = {if c then 1 else 2 + 3}" ],
+        [ "+(3,5--7,8)" ]
+        "InfixAtColumnClauseResult.fs",
+        "module A\nlet f x =\n    match x with\n    | _ -> 1\n    + 2\n",
+        [ "let f x = {match x with | _ -> 1 + 2}" ],
+        [ "+(3,5--5,8)" ]
+        "InfixAtColumnThenSameLine.fs",
+        "module A\nlet f c =\n    if c then 1\n    |> ignore\n",
+        [ "let f c = {if c then 1 |> ignore}" ],
+        [ "|>(3,5--4,14)" ]
+        "InfixAtColumnDiv.fs",
+        "module A\nlet f a b =\n    a\n    / b\n",
+        [ "let f a b = {a / b}" ],
+        [ "/(3,5--4,8)" ]
+        "InfixAtColumnPow.fs",
+        "module A\nlet f a b =\n    a\n    ** b\n",
+        [ "let f a b = {a ** b}" ],
+        [ "**(3,5--4,9)" ]
+        "InfixAtColumnNotequal.fs",
+        "module A\nlet f a b =\n    a\n    <> b\n",
+        [ "let f a b = {a <> b}" ],
+        [ "<>(3,5--4,9)" ]
+        "InfixUndentedPlusUndent2.fs",
+        "module A\nlet f a b =\n      a\n    + b\n",
+        [ "let f a b = {a + b}" ],
+        [ "+(3,7--4,8)" ]
+        "InfixUndentedPipeUndent3.fs",
+        "module A\nlet f a c =\n      a\n   |> c\n",
+        [ "let f a c = {a |> c}" ],
+        [ "|>(3,7--4,8)" ]
+        "InfixUndentedCommaUndent2.fs",
+        "module A\nlet f a b =\n      a\n    , b\n",
+        [ "let f a b = a, b" ],
+        [ "tuple(3,7--4,8)" ]
+        "InfixUndentedAmpampUndent3.fs",
+        "module A\nlet f a b =\n      a\n   && b\n",
+        [ "let f a b = {a && b}" ],
+        [ "&&(3,7--4,8)" ]
+        "InfixUndentedConsUndent3.fs",
+        "module A\nlet f a b =\n      a\n   :: b\n",
+        [ "let f a b = {a :: b}" ],
+        [ "::(3,7--4,8)" ]
+        "InfixUndentedLocalValue.fs",
+        "module A\nlet f a b =\n    let y =\n          a\n        + b\n    y\n",
+        [ "let f a b = let y = {a + b} in y" ],
+        [
+            "let(3,5--6,6)"
+            "+(4,11--5,12)"
+        ]
+        "InfixUndentedBlockCol5PlusCol3.fs",
+        "module A\nlet f a b =\n    a\n  + b\n",
+        [ "let f a b = {a + b}" ],
+        [ "+(3,5--4,6)" ]
+        "InfixUndentedMinusUndent2.fs",
+        "module A\nlet f a b =\n      a\n    - b\n",
+        [ "let f a b = {a - b}" ],
+        [ "-(3,7--4,8)" ]
+        "InfixUndentedTwoPipesUndent.fs",
+        "module A\nlet f a g h =\n      a\n    |> g\n    |> h\n",
+        [ "let f a g h = {{a |> g} |> h}" ],
+        [
+            "|>(3,7--5,9)"
+            "|>(3,7--4,9)"
+        ]
+        "InfixUndentedModuleLetCol1.fs",
+        "module A\nlet x =\n  1\n+ 2\n",
+        [ "let x = {1 + 2}" ],
+        [ "+(3,3--4,4)" ]
+        "InfixUndentedPipeUndent3NestedIf.fs",
+        "module A\nlet f c a g =\n    if c then\n          a\n        |> g\n    else a\n",
+        [ "let f c a g = if c then {a |> g} else a" ],
+        [ "|>(4,11--5,13)" ]
+        "InfixUndentedStarUndent2.fs",
+        "module A\nlet f a b =\n      a\n    * b\n",
+        [ "let f a b = {a * b}" ],
+        [ "*(3,7--4,8)" ]
+        "InfixUndentedPlusUndent1.fs",
+        "module A\nlet f a b =\n      a\n     + b\n",
+        [ "let f a b = {a + b}" ],
+        [ "+(3,7--4,9)" ]
+        "InfixUndentedSecondLineUndent.fs",
+        "module A\nlet f a b c =\n      a\n      + b\n    + c\n",
+        [ "let f a b c = {{a + b} + c}" ],
+        [
+            "+(3,7--5,8)"
+            "+(3,7--4,10)"
+        ]
+        "InfixUndentedGreaterEqualUndent2.fs",
+        "module A\nlet f a b =\n      a\n    >= b\n",
+        [ "let f a b = {a >= b}" ],
+        [ ">=(3,7--4,9)" ]
+        "InfixLineParenIfElsePlus.fs",
+        "module A\nlet f c =\n    (if c then 1 else 2\n     + 3)\n",
+        [ "let f c = ({if c then 1 else 2 + 3})" ],
+        [ "+(3,6--4,9)" ]
+        "InfixLineParenIfPipe.fs",
+        "module A\nlet f c =\n    (if c then 1\n     |> ignore)\n",
+        [ "let f c = ({if c then 1 |> ignore})" ],
+        [ "|>(3,6--4,15)" ]
+        "InfixLineParenMatchPlus.fs",
+        "module A\nlet f x =\n    (match x with\n     | _ -> 1\n     + 2)\n",
+        [ "let f x = ({match x with | _ -> 1 + 2})" ],
+        [ "+(3,6--5,9)" ]
+        "InfixLineParenAssignPlus.fs",
+        "module A\nlet mutable x = 0\nlet f () =\n    (x <- 1\n     + 2)\n",
+        [
+            "let mutable x = 0"
+            "let f () = ({x <- {1 + 2}})"
+        ],
+        [
+            "set(4,6--5,9)"
+            "+(4,11--5,9)"
+        ]
+        "InfixLineParenFunPlus.fs",
+        "module A\nlet f () =\n    (fun x -> x\n     + 1)\n",
+        [ "let f () = ({fun x -> x + 1})" ],
+        [ "+(3,6--4,9)" ]
+        "InfixLineParenElseMid.fs",
+        "module A\nlet f c =\n    (if c then 1 else 2\n        + 3)\n",
+        [ "let f c = ({if c then 1 else 2 + 3})" ],
+        [ "+(3,6--4,12)" ]
+        "InfixLineParenTuplePlus.fs",
+        "module A\nlet f a b c =\n    (a, b\n     + c)\n",
+        [ "let f a b c = (a, {b + c})" ],
+        [
+            "tuple(3,6--4,9)"
+            "+(3,9--4,9)"
+        ]
+        "InfixLineParenTimesAfterPlus.fs",
+        "module A\nlet f a b c =\n    (a + b\n     * c)\n",
+        [ "let f a b c = ({a + {b * c}})" ],
+        [
+            "+(3,6--4,9)"
+            "*(3,10--4,9)"
+        ]
+        "InfixLineFunPlusBlock.fs",
+        "module A\nlet f () =\n    fun x -> x\n    + 1\n",
+        [ "let f () = {fun x -> x + 1}" ],
+        [ "+(3,5--4,8)" ]
+        "InfixLineTimesAfterPlus.fs",
+        "module A\nlet f a b c =\n    a + b\n    * c\n",
+        [ "let f a b c = {a + {b * c}}" ],
+        [
+            "+(3,5--4,8)"
+            "*(3,9--4,8)"
+        ]
+        "InfixLineTupleThenPlus.fs",
+        "module A\nlet f a b c =\n    a, b\n    + c\n",
+        [ "let f a b c = a, {b + c}" ],
+        [
+            "tuple(3,5--4,8)"
+            "+(3,8--4,8)"
+        ]
+        "InfixLineConsChain.fs",
+        "module A\nlet f a b c =\n    a :: b\n    :: c\n",
+        [ "let f a b c = {a :: {b :: c}}" ],
+        [
+            "::(3,5--4,9)"
+            "::(3,10--4,9)"
+        ]
+        "InfixLinePlusThenSameLinePipe.fs",
+        "module A\nlet f a b =\n    a\n    + b |> id\n",
+        [ "let f a b = {{a + b} |> id}" ],
+        [
+            "|>(3,5--4,14)"
+            "+(3,5--4,8)"
+        ]
+        "InfixLineThenBlockPipe.fs",
+        "module A\nlet f c =\n    if c then\n        1\n    else 2\n    |> ignore\n",
+        [ "let f c = {if c then 1 else 2 |> ignore}" ],
+        [ "|>(3,5--6,14)" ]
+        "InfixLineParenLetBodyPlus.fs",
+        "module A\nlet f () =\n    (let y = 1\n     y\n     + 2)\n",
+        [ "let f () = (let y = 1 in {y + 2})" ],
+        [
+            "let(3,6--5,9)"
+            "+(4,6--5,9)"
+        ]
+        "InfixLineAssignNextLinePlus.fs",
+        "module A\nlet mutable x = 0\nlet f () =\n    x <-\n        1\n    + 2\n",
+        [
+            "let mutable x = 0"
+            "let f () = {{x <- 1} + 2}"
+        ],
+        [
+            "+(4,5--6,8)"
+            "set(4,5--5,10)"
+        ]
+        "InfixLinePipeLambdaArg.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map (fun x ->\n        x)\n",
+        [ "let f xs = {xs |> [List.map (fun x -> x)]}" ],
+        [ "|>(3,5--5,11)" ]
+        "InfixLineSeqItemAfterPipeBlock.fs",
+        "module A\nlet f xs =\n    xs\n    |> ignore\n    ignore 2\n",
+        [ "let f xs = seq[{xs |> ignore}; [ignore 2]]" ],
+        [
+            "seq(3,5--5,13)"
+            "|>(3,5--4,14)"
+        ]
+        "InfixLineParenEqualsUndent.fs",
+        "module A\nlet f a b =\n    (  a\n     = b)\n",
+        [ "let f a b = ({a = b})" ],
+        [ "=(3,8--4,9)" ]
+        "InfixLineSetComma.fs",
+        "module A\nlet mutable x = (0, 0)\nlet f () =\n    x <- 1\n    , 2\n",
+        [
+            "let mutable x = (0, 0)"
+            "let f () = {x <- 1, 2}"
+        ],
+        [
+            "tuple(2,18--2,22)"
+            "set(4,5--5,8)"
+            "tuple(4,10--5,8)"
+        ]
+        "InfixLineCommaThenPlus.fs",
+        "module A\nlet f a b c =\n    a + b\n    , c\n",
+        [ "let f a b c = {a + b}, c" ],
+        [
+            "tuple(3,5--4,8)"
+            "+(3,5--3,10)"
+        ]
+        "InfixLinePipeAfterMatchBlock.fs",
+        "module A\nlet f x =\n    match x with\n    | _ ->\n        1\n    |> ignore\n",
+        [ "let f x = {match x with | _ -> 1 |> ignore}" ],
+        [ "|>(3,5--6,14)" ]
+        "InfixLinePlusAfterLambdaBlock.fs",
+        "module A\nlet f () =\n    fun x ->\n        x\n    + 1\n",
+        [ "let f () = {fun x -> x + 1}" ],
+        [ "+(3,5--5,8)" ]
+        "InfixLineUndentAfterItem.fs",
+        "module A\nlet f a b =\n      ignore 1\n      a\n    + b\n",
+        [ "let f a b = seq[[ignore 1]; {a + b}]" ],
+        [
+            "seq(3,7--5,8)"
+            "+(4,7--5,8)"
+        ]
+        "InfixLineDoBlock.fs",
+        "module A\ndo\n    1\n    |> ignore\n",
+        [ "do {1 |> ignore}" ],
+        [ "|>(3,5--4,14)" ]
+        "InfixLineParenLessUndent.fs",
+        "module A\nlet f a b =\n    (  a\n     < b)\n",
+        [ "let f a b = ({a < b})" ],
+        [ "<(3,8--4,9)" ]
+    ]
+
+    let private infixLineExplicitCases = [
+        "InfixAtColumnEquals.fs",
+        "module A\nlet f a b =\n    a\n    = b\n",
+        [
+            "InfixAtColumnEquals.fs(4,5): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "InfixAtColumnLess.fs",
+        "module A\nlet f a b =\n    a\n    < b\n",
+        [
+            "InfixAtColumnLess.fs(4,5): error FS0010: Unexpected symbol '<' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "InfixAtColumnMinusAdjacent.fs", "module A\nlet f a =\n    a\n    -1\n", []
+        "InfixAtColumnModuleExpr.fs", "module A\n1\n|> ignore\n", []
+        "InfixAtColumnColonEquals.fs", "module A\nlet f a b =\n    a\n    := b\n", []
+        "InfixAtColumnAtLetColumn.fs", "module A\nlet x =\n    1\n+ 2\n", []
+        "InfixAtColumnGreater.fs",
+        "module A\nlet f a b =\n    a\n    > b\n",
+        [
+            "InfixAtColumnGreater.fs(4,5): error FS0010: Unexpected symbol '>' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "InfixAtColumnNestedBindingBlock.fs",
+        "module A\nlet f a b =\n    let y =\n        a\n    + b\n    y\n",
+        []
+        "InfixUndentedPlusUndent4.fs",
+        "module A\nlet f a b =\n      a\n  + b\n",
+        [
+            "InfixUndentedPlusUndent4.fs(4,3): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+            "InfixUndentedPlusUndent4.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "InfixUndentedPipeUndent4.fs",
+        "module A\nlet f a c =\n      a\n  |> c\n",
+        [
+            "InfixUndentedPipeUndent4.fs(4,3): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+            "InfixUndentedPipeUndent4.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "InfixUndentedEqualsUndent1.fs",
+        "module A\nlet f a b =\n      a\n     = b\n",
+        [
+            "InfixUndentedEqualsUndent1.fs(4,6): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+            "InfixUndentedEqualsUndent1.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+            "InfixUndentedEqualsUndent1.fs(5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+        "InfixUndentedBlockCol5PlusCol2.fs",
+        "module A\nlet f a b =\n    a\n + b\n",
+        [
+            "InfixUndentedBlockCol5PlusCol2.fs(4,2): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+            "InfixUndentedBlockCol5PlusCol2.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "InfixUndentedUndentThenItem.fs",
+        "module A\nlet f a b =\n      a\n    + b\n      ignore 2\n",
+        []
+        "InfixUndentedUndentThenBlockItem.fs",
+        "module A\nlet f a b =\n    ignore 1\n    a\n  + b\n    ignore 2\n",
+        []
+        "InfixUndentedLessUndent1.fs",
+        "module A\nlet f a b =\n      a\n     < b\n",
+        [
+            "InfixUndentedLessUndent1.fs(4,6): error FS0010: Unexpected symbol '<' in binding. Expected incomplete structured construct at or before this point or other token."
+            "InfixUndentedLessUndent1.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "InfixUndentedAmpampUndent4.fs",
+        "module A\nlet f a b =\n      a\n  && b\n",
+        [
+            "InfixUndentedAmpampUndent4.fs(4,3): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+            "InfixUndentedAmpampUndent4.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "InfixLineMinusIdent.fs", "module A\nlet f a x =\n    a\n    -x\n", []
+        "InfixLineLocalLetSameLineValue.fs",
+        "module A\nlet f a b =\n    let y = a\n    + b\n    y\n",
+        []
+        "InfixLineParenEqualsAt.fs",
+        "module A\nlet f a b =\n    (a\n     = b)\n",
+        [ "InfixLineParenEqualsAt.fs(4,6): error FS0010: Unexpected symbol '=' in expression" ]
+        "InfixLineParenLessAt.fs",
+        "module A\nlet f a b =\n    (a\n     < b)\n",
+        [ "InfixLineParenLessAt.fs(4,6): error FS0010: Unexpected symbol '<' in expression" ]
+        "InfixLineParenMinusAdjacentIdent.fs", "module A\nlet f a x =\n    (a\n     -x)\n", []
+        "InfixLineParenMinusAdjacentLit.fs", "module A\nlet f a =\n    (a\n     -1)\n", []
+        "InfixLineParenGreaterAt.fs",
+        "module A\nlet f a b =\n    (a\n     > b)\n",
+        [ "InfixLineParenGreaterAt.fs(4,6): error FS0010: Unexpected symbol '>' in expression" ]
+        "InfixLineParenAmpAdjacent.fs", "module A\nlet f a b =\n    (a\n     &&b)\n", []
+        "InfixLinePlusAdjacentIdent.fs", "module A\nlet f a x =\n    a\n    +x\n", []
+        "InfixLineUndentThenMoreIndented.fs",
+        "module A\nlet f a b c =\n      a\n    + b\n        c\n",
+        []
+        "InfixLineListEqualsAt.fs",
+        "module A\nlet f a b =\n    [ a\n      = b ]\n",
+        [
+            "InfixLineListEqualsAt.fs(4,7): error FS0010: Unexpected symbol '=' in expression. Expected ']' or other token."
+            "InfixLineListEqualsAt.fs(3,5): error FS0598: Unmatched '['"
+        ]
     ]
 
     [<Tests>]
@@ -2145,6 +2731,60 @@ let items = [ origin.X; 1 ]
 
             testList "lines inside delimiters that the parser does not model stay explicit" [
                 for logicalPath, text, oracle in delimitedLineExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testList
+                "a lambda body offside inside a delimiter reports FSC2P1001 first and a known extra FS0010"
+                [
+                    for logicalPath, text, oracle, invented in delimitedLineInventedCases ->
+                        testCase logicalPath
+                        <| fun _ ->
+                            let result = parse logicalPath text
+
+                            Expect.equal
+                                (Seq.head result.Diagnostics).Code
+                                "FSC2P1001"
+                                "The first diagnostic is the explicit unsupported diagnostic"
+
+                            Expect.sequenceEqual
+                                (oracleLines logicalPath result
+                                 |> List.filter (fun line ->
+                                     not (line.Contains ": error FSC2P1001: ")
+                                     && not (List.contains line oracle)
+                                 ))
+                                invented
+                                "The FS diagnostics that the Compatibility Oracle does not report"
+                ]
+
+            testList "an infix line continues the block item" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in infixLineCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with an infix line"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect infixRanges)
+                            expectedRanges
+                            "The infix, tuple, assignment, local binding, and sequential expression ranges"
+            ]
+
+            testList "an infix line that the parser does not model stays explicit" [
+                for logicalPath, text, oracle in infixLineExplicitCases ->
                     testCase logicalPath
                     <| fun _ ->
                         let result = parse logicalPath text
