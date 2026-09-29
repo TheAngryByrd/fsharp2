@@ -112,7 +112,10 @@ jobs:
             throw "Published host not found: $fsharp2Host"
           }
           $fsharp2Host = (Resolve-Path -LiteralPath $fsharp2Host).Path
-          $dotnetRoot = Split-Path (Get-Command dotnet -CommandType Application).Source -Parent
+          $dotnetRoot = $env:DOTNET_ROOT
+          if (-not (Test-Path -LiteralPath (Join-Path $dotnetRoot 'dotnet.exe') -PathType Leaf)) {
+            throw "DOTNET_ROOT does not contain dotnet.exe: $dotnetRoot"
+          }
           Add-Content -LiteralPath $env:GITHUB_ENV -Value "FSharp2CompilerHostPath=$fsharp2Host"
           Add-Content -LiteralPath $env:GITHUB_ENV -Value "FSHARP2_DOTNET_ROOT=$dotnetRoot"
       - name: Test strict physical lanes
