@@ -2149,7 +2149,12 @@ module internal Parser =
                       - 1]
             .Range.End.Line = context.Line
 
-    let private reportWithoutBody state context construct code message marksNextToken =
+    [<RequireQualifiedAccess>]
+    type private NextToken =
+        | Marked
+        | ReportedAgain
+
+    let private reportWithoutBody state context construct code message nextToken =
         let cursor = state.Cursor
         let range = nextTokenOrEndRange cursor
         let _, closesBlock = nextSource cursor
@@ -2167,7 +2172,7 @@ module internal Parser =
 
         // The Compatibility Oracle reports a token after a closed block again in the outer declaration list.
         if
-            marksNextToken
+            nextToken = NextToken.Marked
             && not closesBlock
         then
             report state code message range
@@ -2261,7 +2266,7 @@ module internal Parser =
                         "a binding"
                         "FS0010"
                         "Incomplete structured construct at or before this point in binding"
-                        true
+                        NextToken.Marked
 
                     missing
                 elif endsBinding context cursor.Current then
@@ -2421,14 +2426,14 @@ module internal Parser =
                 && LanguageBehavior.isActive state.Language LanguageBehavior.StrictIndentation
             then
                 let missing = missingExpression cursor.Current
-                // The Compatibility Oracle reports the next token again in the declaration list after a 'do' without a body.
+
                 reportWithoutBody
                     state
                     context
                     "a do declaration"
                     "FS3524"
                     "Expecting expression"
-                    false
+                    NextToken.ReportedAgain
 
                 missing
             else
