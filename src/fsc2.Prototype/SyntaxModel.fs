@@ -207,6 +207,7 @@ and internal SyntaxAttributeList = {
 
 and internal SyntaxBinding = {
     Attributes: ImmutableArray<SyntaxAttributeList>
+    // The Compatibility Oracle parses a mutable binding with parameters and rejects it later with FS0831.
     IsMutable: bool
     Accessibility: SyntaxAccess option
     Head: SyntaxPattern

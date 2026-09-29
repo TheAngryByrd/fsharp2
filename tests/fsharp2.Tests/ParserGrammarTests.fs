@@ -304,6 +304,7 @@ module ParserGrammarTests =
                 bindings
                 |> Seq.map _.Body
             | ImplementationDeclaration.Do(_, body, _) -> Seq.singleton body
+            | ImplementationDeclaration.Expression(_, body, _, _) -> Seq.singleton body
             | ImplementationDeclaration.Type group ->
                 Seq.append [ group.First ] group.Rest
                 |> Seq.collect (fun definition ->
@@ -1264,7 +1265,7 @@ module ParserGrammarTests =
         [ "let f () = {x <- 1}" ],
         [ "set(2,12--2,18)" ]
         "AssignDo.fs", "module A\ndo x <- 1\n", [ "do {x <- 1}" ], [ "set(2,4--2,10)" ]
-        "AssignModuleExpression.fs", "module A\nx <- 1\n", [ "expr {x <- 1}" ], []
+        "AssignModuleExpression.fs", "module A\nx <- 1\n", [ "expr {x <- 1}" ], [ "set(2,1--2,7)" ]
     ]
 
     let private assignmentExplicitCases = [
@@ -1315,6 +1316,322 @@ module ParserGrammarTests =
             "MutableInPattern.fs(2,6): error FS0010: Unexpected keyword 'mutable' in pattern. Expected ')' or other token."
             "MutableInPattern.fs(2,5): error FS0583: Unmatched '('"
         ]
+    ]
+
+    let private delimitedLineCases = [
+        "ParenLines.fs",
+        "module A\nlet f () =\n    (\n        ignore 1\n        2\n    )\n",
+        [ "let f () = (seq[[ignore 1]; 2])" ],
+        [ "seq(4,9--5,10)" ]
+        "ListLines.fs",
+        "module A\nlet xs =\n    [\n        1\n        2\n    ]\n",
+        [ "let xs = [1; 2]" ],
+        []
+        "RecordLines.fs",
+        "module A\nlet r =\n    { A = 1\n      B = 2 }\n",
+        [ "let r = {A = 1; B = 2}" ],
+        []
+        "ParenInfixLines.fs",
+        "module A\nlet f a =\n    (a\n     |> id\n     |> id)\n",
+        [ "let f a = ({{a |> id} |> id})" ],
+        []
+        "ParenCloseLine.fs",
+        "module A\nlet f () =\n    g (\n        1\n    )\n",
+        [ "let f () = [g (1)]" ],
+        []
+        "ListArgumentCloseLine.fs",
+        "module A\nlet f () =\n    g [\n        1\n    ]\n",
+        [ "let f () = [g [1]]" ],
+        []
+        "ParenTupleUndent.fs",
+        "module A\nlet f () =\n    g (1,\n  2)\n",
+        [ "let f () = [g (1, 2)]" ],
+        []
+        "LambdaBodyLines.fs",
+        "module A\nlet f xs =\n    xs |> List.iter (fun x ->\n        ignore x\n        ignore 2)\n",
+        [ "let f xs = {xs |> [List.iter (fun x -> seq[[ignore x]; [ignore 2]])]}" ],
+        [ "seq(4,9--5,17)" ]
+        "LambdaBodySameLineAligned.fs",
+        "module A\nlet f xs =\n    xs |> List.iter (fun x -> ignore x\n                              ignore 2)\n",
+        [ "let f xs = {xs |> [List.iter (fun x -> seq[[ignore x]; [ignore 2]])]}" ],
+        [ "seq(3,31--4,39)" ]
+        "ConditionalThenInfix.fs",
+        "module A\nlet f c =\n    (if c then 1 else 2\n     |> id)\n",
+        [ "let f c = ({if c then 1 else 2 |> id})" ],
+        []
+        "ParenLocalBinding.fs",
+        "module A\nlet f () =\n    (let x = 1\n     x)\n",
+        [ "let f () = (let x = 1 in x)" ],
+        [ "let(3,6--4,7)" ]
+        "ListApplicationLines.fs",
+        "module A\nlet xs =\n    [ ignore 1\n      2 ]\n",
+        [ "let xs = [[ignore 1]; 2]" ],
+        []
+        "ClauseResultLines.fs",
+        "module A\nlet f x =\n    (match x with\n     | 1 ->\n         ignore 1\n         2\n     | _ -> 3)\n",
+        [ "let f x = (match x with | 1 -> seq[[ignore 1]; 2] | _ -> 3)" ],
+        [ "seq(5,10--6,11)" ]
+        "ParenArgumentIndented.fs",
+        "module A\nlet f () =\n    (g 1\n        2)\n",
+        [ "let f () = ([[g 1] 2])" ],
+        []
+        "RecordValueLines.fs",
+        "module A\nlet r =\n    { A =\n        ignore 1\n        2 }\n",
+        [ "let r = {A = seq[[ignore 1]; 2]}" ],
+        []
+        "ParenTupleInfix.fs",
+        "module A\nlet f a b =\n    (a, b\n     |> id)\n",
+        [ "let f a b = (a, {b |> id})" ],
+        []
+        "ThenBranchLines.fs",
+        "module A\nlet f c =\n    (if c then\n        ignore 1\n        2\n     else 3)\n",
+        [ "let f c = (if c then seq[[ignore 1]; 2] else 3)" ],
+        [ "seq(4,9--5,10)" ]
+        "ParenInfixUndent.fs",
+        "module A\nlet f a =\n    (a\n   |> id)\n",
+        [ "let f a = ({a |> id})" ],
+        []
+        "LambdaBodyArgument.fs",
+        "module A\nlet f () =\n    (fun x -> g x\n                1)\n",
+        [ "let f () = (fun x -> [[g x] 1])" ],
+        []
+        "ParenFirstLineItems.fs",
+        "module A\nlet f () =\n    (ignore 1\n     2)\n",
+        [ "let f () = (seq[[ignore 1]; 2])" ],
+        [ "seq(3,6--4,7)" ]
+        "ListSeparatorAndLine.fs",
+        "module A\nlet xs =\n    [ 1; 2\n      3 ]\n",
+        [ "let xs = [1; 2; 3]" ],
+        []
+        "ParenInfixPrecedence.fs",
+        "module A\nlet f a b c =\n    (a + b\n     * c)\n",
+        [ "let f a b c = ({a + {b * c}})" ],
+        []
+        "ParenAssignmentInfix.fs",
+        "module A\nlet f () =\n    (x <- 1\n     |> id)\n",
+        [ "let f () = ({x <- {1 |> id}})" ],
+        [ "set(3,6--4,11)" ]
+        "LambdaThenInfix.fs",
+        "module A\nlet f () =\n    (fun x -> x\n     |> id)\n",
+        [ "let f () = ({fun x -> x |> id})" ],
+        []
+        "ListArgumentIndented.fs",
+        "module A\nlet xs =\n    [ g 1\n        2 ]\n",
+        [ "let xs = [[[g 1] 2]]" ],
+        []
+        "LambdaBodyArgumentLine.fs",
+        "module A\nlet f xs =\n    xs |> List.iter (fun x ->\n        g x\n          1)\n",
+        [ "let f xs = {xs |> [List.iter (fun x -> [[g x] 1])]}" ],
+        []
+        "LambdaBodyThreeLines.fs",
+        "module A\nlet f xs =\n    List.iter (fun x ->\n        ignore x\n        ignore 2\n        ignore 3) xs\n",
+        [ "let f xs = [[List.iter (fun x -> seq[[ignore x]; seq[[ignore 2]; [ignore 3]]])] xs]" ],
+        [
+            "seq(4,9--6,17)"
+            "seq(5,9--6,17)"
+        ]
+        "ParenLocalBindingValueLine.fs",
+        "module A\nlet f () =\n    (let x =\n        1\n     x)\n",
+        [ "let f () = (let x = 1 in x)" ],
+        [ "let(3,6--5,7)" ]
+        "ParenAssignmentValueLine.fs",
+        "module A\nlet f () =\n    (x <-\n        1)\n",
+        [ "let f () = ({x <- 1})" ],
+        [ "set(3,6--4,10)" ]
+        "ParenThenElseAligned.fs",
+        "module A\nlet f c =\n    (if c\n     then 1\n     else 2)\n",
+        [ "let f c = (if c then 1 else 2)" ],
+        []
+        "LambdaArgumentThenItem.fs",
+        "module A\nlet f xs =\n    (List.iter (fun x ->\n        ignore x) xs\n     ignore 2)\n",
+        [ "let f xs = (seq[[[List.iter (fun x -> [ignore x])] xs]; [ignore 2]])" ],
+        [ "seq(3,6--5,14)" ]
+        "RecordValueLineThenField.fs",
+        "module A\nlet r =\n    { A =\n        1\n      B = 2 }\n",
+        [ "let r = {A = 1; B = 2}" ],
+        []
+        "ClauseResultSameLineAligned.fs",
+        "module A\nlet f x =\n    (match x with\n     | 1 -> ignore 1\n            2\n     | _ -> 3)\n",
+        [ "let f x = (match x with | 1 -> seq[[ignore 1]; 2] | _ -> 3)" ],
+        [ "seq(4,13--5,14)" ]
+        "ThenBranchSameLineAligned.fs",
+        "module A\nlet f c =\n    (if c then ignore 1\n               2\n     else 3)\n",
+        [ "let f c = (if c then seq[[ignore 1]; 2] else 3)" ],
+        [ "seq(3,16--4,17)" ]
+        "ParenLocalBindingValueAligned.fs",
+        "module A\nlet f () =\n    (let x = ignore 1\n             2\n     x)\n",
+        [ "let f () = (let x = seq[[ignore 1]; 2] in x)" ],
+        [
+            "let(3,6--5,7)"
+            "seq(3,14--4,15)"
+        ]
+        "ParenInfixUndentTwo.fs",
+        "module A\nlet f a =\n    (a\n   |> id)\n",
+        [ "let f a = ({a |> id})" ],
+        []
+        "ParenInfixUndentThree.fs",
+        "module A\nlet f a =\n    (a\n  |> id)\n",
+        [ "let f a = ({a |> id})" ],
+        []
+        "ParenPlusUndentTwo.fs",
+        "module A\nlet f a b =\n    (a\n   + b)\n",
+        [ "let f a b = ({a + b})" ],
+        []
+        "LambdaBodyInfixAligned.fs",
+        "module A\nlet f () =\n    (fun x -> x\n              |> id)\n",
+        [ "let f () = (fun x -> {x |> id})" ],
+        []
+        "IndexLines.fs",
+        "module A\nlet f (a: int list) =\n    a[\n        0\n    ]\n",
+        [ "let f (a: int list) = a[0]" ],
+        []
+        "ParenLocalBindingBodyLines.fs",
+        "module A\nlet f () =\n    (let x = 1\n     x\n     x)\n",
+        [ "let f () = (let x = 1 in seq[x; x])" ],
+        [
+            "let(3,6--5,7)"
+            "seq(4,6--5,7)"
+        ]
+        "RecordValueInfix.fs",
+        "module A\nlet r =\n    { A = 1\n          + 2 }\n",
+        [ "let r = {A = {1 + 2}}" ],
+        []
+        "ParenCommaLine.fs",
+        "module A\nlet f a b =\n    (a\n     , b)\n",
+        [ "let f a b = (a, b)" ],
+        []
+        "ParenMatchThenItem.fs",
+        "module A\nlet f x =\n    (match x with\n     | 1 ->\n         ignore 1\n     2)\n",
+        [ "let f x = (seq[match x with | 1 -> [ignore 1]; 2])" ],
+        [ "seq(3,6--6,7)" ]
+        "NestedIfOuterElse.fs",
+        "module A\nlet f a b =\n    (if a then\n        if b then 1\n     else 2)\n",
+        [ "let f a b = (if a then if b then 1 else 2)" ],
+        []
+        "NestedMatchOuterClause.fs",
+        "module A\nlet f a b =\n    (match a with\n     | 1 ->\n         match b with\n         | 2 -> 3\n         | _ -> 4\n     | _ -> 5)\n",
+        [ "let f a b = (match a with | 1 -> match b with | 2 -> 3 | _ -> 4 | _ -> 5)" ],
+        []
+        "ClauseLambdaThenClause.fs",
+        "module A\nlet f x =\n    (match x with\n     | 1 -> fun y -> y\n     | _ -> id)\n",
+        [ "let f x = (match x with | 1 -> fun y -> y | _ -> id)" ],
+        []
+        "ParenElifAligned.fs",
+        "module A\nlet f a b =\n    (if a then 1\n     elif b then 2\n     else 3)\n",
+        [ "let f a b = (if a then 1 else if b then 2 else 3)" ],
+        []
+        "ParenItemThenInfix.fs",
+        "module A\nlet f () =\n    (ignore 1\n     2\n     |> id)\n",
+        [ "let f () = (seq[[ignore 1]; {2 |> id}])" ],
+        [ "seq(3,6--5,11)" ]
+        "ListLambdaThenItem.fs",
+        "module A\nlet xs =\n    [ fun x ->\n        x\n      id ]\n",
+        [ "let xs = [fun x -> x; id]" ],
+        []
+        "NestedIfInnerElse.fs",
+        "module A\nlet f a b =\n    (if a then\n        if b then 1\n        else 3\n     else 2)\n",
+        [ "let f a b = (if a then if b then 1 else 3 else 2)" ],
+        []
+        "LambdaBodyLocalBinding.fs",
+        "module A\nlet f xs =\n    List.iter (fun x ->\n        let y = x\n        ignore y) xs\n",
+        [ "let f xs = [[List.iter (fun x -> let y = x in [ignore y])] xs]" ],
+        [ "let(4,9--5,17)" ]
+        "LambdaBodyLeftOfBlock.fs",
+        "module A\nlet f () =\n    g (fun x ->\n  x)\n",
+        [ "let f () = [g (fun x -> x)]" ],
+        []
+        "LambdaBodyAtBlockColumn.fs",
+        "module A\nlet f () =\n    g (fun x ->\n    x)\n",
+        [ "let f () = [g (fun x -> x)]" ],
+        []
+        "NestedLambdaBodies.fs",
+        "module A\nlet f () =\n    g (fun x ->\n        h (fun y ->\n        y))\n",
+        [ "let f () = [g (fun x -> [h (fun y -> y)])]" ],
+        []
+        "BlockLineOpensDelimiter.fs",
+        "module A\nlet f xs =\n    ignore 1\n    List.iter (fun x ->\n        ignore x) xs\n",
+        [ "let f xs = seq[[ignore 1]; [[List.iter (fun x -> [ignore x])] xs]]" ],
+        [ "seq(3,5--5,21)" ]
+        "BlockLineOpensDelimiterThenItem.fs",
+        "module A\nlet f xs =\n    ignore 1\n    List.iter (fun x ->\n        ignore x) xs\n    ignore 2\n",
+        [ "let f xs = seq[[ignore 1]; seq[[[List.iter (fun x -> [ignore x])] xs]; [ignore 2]]]" ],
+        [
+            "seq(3,5--6,13)"
+            "seq(4,5--6,13)"
+        ]
+        "RootLineOpensDelimiter.fs",
+        "module A\nlet xs = [\n    1\n    2\n]\nlet y = 1\n",
+        [
+            "let xs = [1; 2]"
+            "let y = 1"
+        ],
+        []
+        "NestedBlockLineOpensDelimiter.fs",
+        "module A\nlet f c =\n    if c then\n        ignore (\n            1)\n    ignore 2\n",
+        [ "let f c = seq[if c then [ignore (1)]; [ignore 2]]" ],
+        [ "seq(3,5--6,13)" ]
+    ]
+
+    let private delimitedLineExplicitCases = [
+        "ParenItemAtParen.fs", "module A\nlet f () =\n    (ignore 1\n    2)\n", []
+        "ParenItemLeftOfContent.fs", "module A\nlet f () =\n    (   ignore 1\n      2)\n", []
+        "ListItemLeftOfContent.fs", "module A\nlet xs =\n    [ 1\n     2 ]\n", []
+        "RecordValueAligned.fs",
+        "module A\nlet r =\n    { A = ignore 1\n          2 }\n",
+        [
+            "RecordValueAligned.fs(4,11): error FS0010: Unexpected integer literal in expression. Expected '}' or other token."
+            "RecordValueAligned.fs(3,5): error FS0604: Unmatched '{'"
+        ]
+        "ParenLinesThenItem.fs", "module A\nlet f () =\n    g (\n        1\n    )\n    h ()\n", []
+        "LambdaLinesThenItem.fs",
+        "module A\nlet f xs =\n    xs |> List.iter (fun x ->\n        ignore x\n        ignore 2)\n    ignore 3\n",
+        []
+        "ListItemAtBracket.fs", "module A\nlet xs =\n    [ 1\n    2 ]\n", []
+        "ParenItemsLeftOfContent.fs", "module A\nlet f () =\n    (ignore 1\n    2\n    3)\n", []
+        "LambdaBodyOffsideArgument.fs",
+        "module A\nlet f xs =\n    List.iter (fun x ->\n        ignore x\n      2) xs\n",
+        [
+            "LambdaBodyOffsideArgument.fs(5,7): error FS0010: Unexpected integer literal in expression"
+        ]
+        "NestedMatchAtClauseColumn.fs",
+        "module A\nlet f a b =\n    (match a with\n     | 1 ->\n     match b with\n     | 2 -> 3\n     | _ -> 4)\n",
+        []
+        "ElseLeftOfParenContent.fs", "module A\nlet f a =\n    g (if a then 1\n  else 2)\n", []
+        "ThenBranchLeftOfIf.fs",
+        "module A\nlet f c =\n    (if c then\n  1\n     else 2)\n",
+        [
+            "ThenBranchLeftOfIf.fs(4,3): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:6). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "ThenBranchLeftOfIf.fs(4,3): error FS3524: Expecting expression"
+            "ThenBranchLeftOfIf.fs(4,3): error FS0010: Unexpected integer literal in expression"
+            "ThenBranchLeftOfIf.fs(5,12): error FS0010: Unexpected symbol ')' in binding. Expected incomplete structured construct at or before this point or other token."
+            "ThenBranchLeftOfIf.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+            "ThenBranchLeftOfIf.fs(6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+        "ClauseResultLeftOfBar.fs",
+        "module A\nlet f x =\n    (match x with\n     | _ ->\n   1)\n",
+        [
+            "ClauseResultLeftOfBar.fs(5,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "ClauseResultLeftOfBar.fs(5,4): error FS0010: Incomplete structured construct at or before this point in pattern matching"
+        ]
+        "LocalValueLeftOfLet.fs",
+        "module A\nlet f () =\n    (let x =\n   1\n     x)\n",
+        [
+            "LocalValueLeftOfLet.fs(4,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:6). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "LocalValueLeftOfLet.fs(4,4): error FS0010: Incomplete structured construct at or before this point in binding"
+        ]
+        "LocalLetLineOpensDelimiter.fs",
+        "module A\nlet f () =\n    let a = g (fun x ->\n      x)\n    a\n",
+        []
+        "LambdaBodyAtLocalLetColumn.fs",
+        "module A\nlet f () =\n    let a = g (fun x ->\n    x)\n    a\n",
+        [
+            "LambdaBodyAtLocalLetColumn.fs(4,5): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "LambdaBodyAtLocalLetColumn.fs(3,16): error FS0611: Missing function body"
+            "LambdaBodyAtLocalLetColumn.fs(4,5): error FS0010: Unexpected identifier in expression"
+        ]
+        "LocalLetLineOpensLambda.fs",
+        "module A\nlet f xs =\n    let g = List.map (fun x ->\n        x)\n    g xs\n",
+        []
     ]
 
     [<Tests>]
@@ -1806,6 +2123,78 @@ let items = [ origin.X; 1 ]
                             result.Diagnostics
                             (oracleLines logicalPath result)
             ]
+
+            testList "lines inside delimiters build the Oracle tree" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in delimitedLineCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with lines inside delimiters"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect blockRanges)
+                            expectedRanges
+                            "The sequential expression ranges"
+            ]
+
+            testList "lines inside delimiters that the parser does not model stay explicit" [
+                for logicalPath, text, oracle in delimitedLineExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testCase
+                "an else or a clause bar left of the inner construct inside a delimiter belongs to the outer construct"
+            <| fun _ ->
+                let parenthesized logicalPath text =
+                    let result = parse logicalPath text
+
+                    Expect.isEmpty
+                        (oracleLines logicalPath result)
+                        "The Compatibility Oracle reports no diagnostic"
+
+                    match declarationBodies (Seq.exactlyOne result.File.Contents).Declarations with
+                    | [ SyntaxExpression.Parenthesized(inner, _) ] -> inner
+                    | other -> failtestf "Expected one parenthesized binding body, but got %A" other
+
+                match
+                    parenthesized
+                        "NestedIfOuterElse.fs"
+                        "module A\nlet f a b =\n    (if a then\n        if b then 1\n     else 2)\n"
+                with
+                | SyntaxExpression.If(_, SyntaxExpression.If(_, _, None, _), Some _, _) -> ()
+                | other ->
+                    failtestf "The else must belong to the outer if: %s" (expressionShape other)
+
+                match
+                    parenthesized
+                        "NestedMatchOuterClause.fs"
+                        "module A\nlet f a b =\n    (match a with\n     | 1 ->\n         match b with\n         | 2 -> 3\n         | _ -> 4\n     | _ -> 5)\n"
+                with
+                | SyntaxExpression.Match(_, outerClauses, _) when outerClauses.Length = 2 ->
+                    match outerClauses[0].Result with
+                    | SyntaxExpression.Match(_, innerClauses, _) ->
+                        Expect.equal innerClauses.Length 2 "The inner match keeps its two clauses"
+                    | other ->
+                        failtestf
+                            "The first clause result must be the inner match: %s"
+                            (expressionShape other)
+                | other ->
+                    failtestf
+                        "The last clause must belong to the outer match: %s"
+                        (expressionShape other)
 
             testCase "a lambda clause result ends at the next aligned clause"
             <| fun _ ->
