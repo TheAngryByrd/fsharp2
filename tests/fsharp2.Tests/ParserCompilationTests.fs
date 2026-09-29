@@ -4744,6 +4744,565 @@ module M =
             "t_bracket_root.fsi(2,1,2,2): error FS0010: Unexpected symbol '['. Expected incomplete structured construct at or before this point or other token."
         ]
 
+        "s_arr_closed.fsi",
+        "module M\nmodule N =\n    val a: int ->\n[| 1 |]\n",
+        [
+            "s_arr_closed.fsi(4,1,4,3): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "s_arr_closed.fsi(4,1,4,3): error FS0010: Unexpected symbol '[|'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "t_anon_closed.fsi",
+        "module M\nmodule N =\n    val a: int ->\n{| A = 1 |}\n",
+        [
+            "t_anon_closed.fsi(4,1,4,3): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "t_anon_closed.fsi(4,1,4,3): error FS0010: Unexpected symbol '{|'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "t_arr_closed_colon.fsi",
+        "module M\nmodule N =\n    val a:\n[| 1 |]\n",
+        [
+            "t_arr_closed_colon.fsi(4,1,4,3): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "t_arr_closed_colon.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "t_close_closed.fsi",
+        "module M\nmodule N =\n    val a: int ->\n)\n",
+        [
+            "t_close_closed.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "t_close_closed.fsi(4,1,4,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "t_eq_closed.fsi",
+        "module M\nmodule N =\n    val a: int ->\n= 1\n",
+        [
+            "t_eq_closed.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "t_eq_closed.fsi(4,1,4,2): error FS0010: Unexpected symbol '='. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "c_arrow_10.fsi",
+        "module M\nmodule N =\n    val a: int ->\nopen System\n",
+        [
+            "c_arrow_10.fsi(4,1,4,5): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "c_arrow_12.fsi",
+        "module M\nmodule N =\n    val a: int ->\n]\n",
+        [
+            "c_arrow_12.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_arrow_12.fsi(4,1,4,2): error FS0010: Unexpected symbol ']'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "c_arrow_13.fsi",
+        "module M\nmodule N =\n    val a: int ->\nend\n",
+        [
+            "c_arrow_13.fsi(4,1,4,4): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_arrow_13.fsi(4,1,4,4): error FS0010: Unexpected keyword 'end'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "c_arrow_7.fsi",
+        "module M\nmodule N =\n    val a: int ->\nx\n",
+        [
+            "c_arrow_7.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_arrow_7.fsi(4,1,4,2): error FS0010: Unexpected identifier. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "c_arrow_8.fsi",
+        "module M\nmodule N =\n    val a: int ->\n| B\n",
+        [
+            "c_arrow_8.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_arrow_8.fsi(4,1,4,2): error FS0010: Unexpected symbol '|'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "c_arrow_9.fsi",
+        "module M\nmodule N =\n    val a: int ->\nand b\n",
+        [
+            "c_arrow_9.fsi(4,1,4,4): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_arrow_9.fsi(4,1,4,4): error FS0010: Unexpected keyword 'and'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "c_colon_1.fsi",
+        "module M\nmodule N =\n    val a:\n)\n",
+        [
+            "c_colon_1.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_colon_1.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "c_colon_10.fsi",
+        "module M\nmodule N =\n    val a:\nopen System\n",
+        [
+            "c_colon_10.fsi(4,1,4,5): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "c_colon_11.fsi",
+        "module M\nmodule N =\n    val a:\n[<A>]\nval b: int\n",
+        [
+            "c_colon_11.fsi(4,1,4,3): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "c_colon_12.fsi",
+        "module M\nmodule N =\n    val a:\n]\n",
+        [
+            "c_colon_12.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_colon_12.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "c_colon_13.fsi",
+        "module M\nmodule N =\n    val a:\nend\n",
+        [
+            "c_colon_13.fsi(4,1,4,4): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_colon_13.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "c_colon_2.fsi",
+        "module M\nmodule N =\n    val a:\n= 1\n",
+        [
+            "c_colon_2.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_colon_2.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "c_colon_4.fsi",
+        "module M\nmodule N =\n    val a:\n{| A = 1 |}\n",
+        [
+            "c_colon_4.fsi(4,1,4,3): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_colon_4.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "c_colon_7.fsi",
+        "module M\nmodule N =\n    val a:\nx\n",
+        [
+            "c_colon_7.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_colon_7.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "c_colon_8.fsi",
+        "module M\nmodule N =\n    val a:\n| B\n",
+        [
+            "c_colon_8.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_colon_8.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "c_colon_9.fsi",
+        "module M\nmodule N =\n    val a:\nand b\n",
+        [
+            "c_colon_9.fsi(4,1,4,4): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_colon_9.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "a_deep_root.fsi",
+        "module M\nmodule N =\n    module O =\n        val a: int ->\n)\n",
+        [
+            "a_deep_root.fsi(5,1,5,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "a_deep_root.fsi(5,1,5,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "a_deep.fsi",
+        "module M\nmodule N =\n    module O =\n        val a: int ->\n    )\n",
+        [
+            "a_deep.fsi(5,5,5,6): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "a_deep.fsi(5,5,5,6): error FS0010: Unexpected symbol ')' in signature file. Expected incomplete structured construct at or before this point or other token."
+            "a_deep.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "a_fun.fsi",
+        "module M\nmodule N =\n    val a: (int -> int) ->\n)\n",
+        [
+            "a_fun.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "a_fun.fsi(4,1,4,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "a_inner_close.fsi",
+        "module M\nmodule N =\n    val a: int ->\n    )\n",
+        [ "a_inner_close.fsi(4,5,4,6): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "a_ns.fsi",
+        "namespace Q\nmodule N =\n    val a: int ->\n)\n",
+        [
+            "a_ns.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "a_ns.fsi(4,1,4,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "a_same_line.fsi",
+        "module M\nmodule N =\n    val a: int ->\n) val b: int\n",
+        [
+            "a_same_line.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "a_same_line.fsi(4,1,4,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "a_then_close.fsi",
+        "module M\nmodule N =\n    val a: int ->\n)\n)\n",
+        [
+            "a_then_close.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "a_then_close.fsi(4,1,4,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "a_then_err.fsi",
+        "module M\nmodule N =\n    val a: int ->\n)\nval b: )\n",
+        [
+            "a_then_err.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "a_then_err.fsi(4,1,4,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "a_then_type.fsi",
+        "module M\nmodule N =\n    val a: int ->\n)\ntype T = int\n",
+        [
+            "a_then_type.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "a_then_type.fsi(4,1,4,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "a_then_val.fsi",
+        "module M\nmodule N =\n    val a: int ->\n)\nval b: int\n",
+        [
+            "a_then_val.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "a_then_val.fsi(4,1,4,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "a_two.fsi",
+        "module M\nmodule N =\n    val a: int -> int ->\n)\n",
+        [
+            "a_two.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "a_two.fsi(4,1,4,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "c_deep.fsi",
+        "module M\nmodule N =\n    module O =\n        val a:\n    )\n",
+        [
+            "c_deep.fsi(5,5,5,6): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_deep.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "c_eof.fsi",
+        "module M\nmodule N =\n    val a:\n",
+        [
+            "c_eof.fsi(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_eof.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "c_first_ok.fsi",
+        "module M\nval z: int\nmodule N =\n    val a:\n)\n",
+        [
+            "c_first_ok.fsi(5,1,5,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_first_ok.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "c_inner_close.fsi",
+        "module M\nmodule N =\n    val a:\n    )\n",
+        [
+            "c_inner_close.fsi(4,5,4,6): error FS0010: Unexpected symbol ')' in value signature"
+            "c_inner_close.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "c_named.fsi",
+        "module M\nmodule N =\n    val a: int\n    val b:\n)\n",
+        [
+            "c_named.fsi(5,1,5,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_named.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "c_ns.fsi",
+        "namespace Q\nmodule N =\n    val a:\n)\n",
+        [
+            "c_ns.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_ns.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "c_then_attr.fsi",
+        "module M\nmodule N =\n    val a:\n[<A>]\nval b: )\n",
+        [
+            "c_then_attr.fsi(4,1,4,3): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_then_attr.fsi(5,8,5,9): error FS0010: Unexpected symbol ')' in value signature"
+            "c_then_attr.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "c_then_close_val.fsi",
+        "module M\nmodule N =\n    val a:\n)\nval b: int\nval c: )\n",
+        [
+            "c_then_close_val.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_then_close_val.fsi(6,8,6,9): error FS0010: Unexpected symbol ')' in value signature"
+            "c_then_close_val.fsi(7,1,7,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "c_then_close.fsi",
+        "module M\nmodule N =\n    val a:\n)\n)\n",
+        [
+            "c_then_close.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_then_close.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "c_then_err.fsi",
+        "module M\nmodule N =\n    val a:\n)\nval b: )\n",
+        [
+            "c_then_err.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_then_err.fsi(5,8,5,9): error FS0010: Unexpected symbol ')' in value signature"
+            "c_then_err.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "c_then_module.fsi",
+        "module M\nmodule N =\n    val a:\nmodule O =\n    val b: )\n",
+        [
+            "c_then_module.fsi(4,1,4,7): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_then_module.fsi(5,12,5,13): error FS0010: Unexpected symbol ')' in value signature"
+            "c_then_module.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "c_then_open.fsi",
+        "module M\nmodule N =\n    val a:\nopen System\nval b: )\n",
+        [
+            "c_then_open.fsi(4,1,4,5): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_then_open.fsi(5,8,5,9): error FS0010: Unexpected symbol ')' in value signature"
+            "c_then_open.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "c_then_val_err.fsi",
+        "module M\nmodule N =\n    val a:\nval b: )\n",
+        [
+            "c_then_val_err.fsi(4,1,4,4): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_then_val_err.fsi(4,8,4,9): error FS0010: Unexpected symbol ')' in value signature"
+            "c_then_val_err.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "c_then_val.fsi",
+        "module M\nmodule N =\n    val a:\n)\nval b: int\n",
+        [
+            "c_then_val.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "i_arrow_10.fsi",
+        "module M\nmodule N =\n    val a: int ->\n    ) val b: int\n",
+        [ "i_arrow_10.fsi(4,5,4,6): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "i_arrow_2.fsi",
+        "module M\nmodule N =\n    val a: int ->\n    ]\n",
+        [ "i_arrow_2.fsi(4,5,4,6): error FS0010: Unexpected symbol ']' in value signature" ]
+
+        "i_arrow_3.fsi",
+        "module M\nmodule N =\n    val a: int ->\n    }\n",
+        [ "i_arrow_3.fsi(4,5,4,6): error FS0010: Unexpected symbol '}' in value signature" ]
+
+        "i_arrow_4.fsi",
+        "module M\nmodule N =\n    val a: int ->\n    end\n",
+        [ "i_arrow_4.fsi(4,5,4,8): error FS0010: Unexpected keyword 'end' in value signature" ]
+
+        "i_arrow_5.fsi",
+        "module M\nmodule N =\n    val a: int ->\n    |\n",
+        [
+            "i_arrow_5.fsi(3,19,4,5): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "i_arrow_6.fsi",
+        "module M\nmodule N =\n    val a: int ->\n    = 1\n",
+        [
+            "i_arrow_6.fsi(3,19,4,5): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "i_arrow_7.fsi",
+        "module M\nmodule N =\n    val a: int ->\n    x\n",
+        [
+            "i_arrow_7.fsi(3,19,4,5): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "i_arrow_8.fsi",
+        "module M\nmodule N =\n    val a: int ->\n    [| 1 |]\n",
+        [
+            "i_arrow_8.fsi(3,19,4,5): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "i_arrow_9.fsi",
+        "module M\nmodule N =\n    val a: int ->\n    and b\n",
+        [ "i_arrow_9.fsi(4,5,4,8): error FS0010: Unexpected keyword 'and' in value signature" ]
+
+        "i_arrow_then_root.fsi",
+        "module M\nmodule N =\n    val a: int ->\n    )\nval b: int\n",
+        [ "i_arrow_then_root.fsi(4,5,4,6): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "i_colon_12.fsi",
+        "module M\nmodule N =\n    val a:\n    ]\n",
+        [
+            "i_colon_12.fsi(4,5,4,6): error FS0010: Unexpected symbol ']' in value signature"
+            "i_colon_12.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "i_colon_13.fsi",
+        "module M\nmodule N =\n    val a:\n    }\n",
+        [
+            "i_colon_13.fsi(4,5,4,6): error FS0010: Unexpected symbol '}' in value signature"
+            "i_colon_13.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "i_colon_14.fsi",
+        "module M\nmodule N =\n    val a:\n    end\n",
+        [
+            "i_colon_14.fsi(4,5,4,8): error FS0010: Unexpected keyword 'end' in value signature"
+            "i_colon_14.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "i_colon_15.fsi",
+        "module M\nmodule N =\n    val a:\n    |\n",
+        [
+            "i_colon_15.fsi(3,12,4,5): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "i_colon_15.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "i_colon_16.fsi",
+        "module M\nmodule N =\n    val a:\n    = 1\n",
+        [
+            "i_colon_16.fsi(3,12,4,5): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "i_colon_16.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "i_colon_17.fsi",
+        "module M\nmodule N =\n    val a:\n    x\n",
+        [
+            "i_colon_17.fsi(3,12,4,5): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "i_colon_17.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "i_colon_18.fsi",
+        "module M\nmodule N =\n    val a:\n    [| 1 |]\n",
+        [
+            "i_colon_18.fsi(3,12,4,5): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "i_colon_18.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "i_colon_19.fsi",
+        "module M\nmodule N =\n    val a:\n    and b\n",
+        [
+            "i_colon_19.fsi(4,5,4,8): error FS0010: Unexpected keyword 'and' in value signature"
+            "i_colon_19.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "i_colon_20.fsi",
+        "module M\nmodule N =\n    val a:\n    ) val b: int\n",
+        [
+            "i_colon_20.fsi(4,5,4,6): error FS0010: Unexpected symbol ')' in value signature"
+            "i_colon_20.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "i_colon_then_val.fsi",
+        "module M\nmodule N =\n    val a:\n    )\n    val b: int\n",
+        [ "i_colon_then_val.fsi(4,5,4,6): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "i_root_arrow.fsi",
+        "module M\nval a: int ->\n)\n",
+        [ "i_root_arrow.fsi(3,1,3,2): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "i_root_colon.fsi",
+        "module M\nval a:\n)\n",
+        [ "i_root_colon.fsi(3,1,3,2): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "deep_arrow.fsi",
+        "module M\nmodule N =\n    module O =\n        val a: int ->\n        )\n",
+        [ "deep_arrow.fsi(5,9,5,10): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "deep_colon.fsi",
+        "module M\nmodule N =\n    module O =\n        val a:\n        )\n",
+        [
+            "deep_colon.fsi(5,9,5,10): error FS0010: Unexpected symbol ')' in value signature"
+            "deep_colon.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "g_arrow_1.fsi",
+        "module M\nval a: int ->\n]\n",
+        [ "g_arrow_1.fsi(3,1,3,2): error FS0010: Unexpected symbol ']' in value signature" ]
+
+        "g_arrow_2.fsi",
+        "module M\nval a: int ->\n}\n",
+        [ "g_arrow_2.fsi(3,1,3,2): error FS0010: Unexpected symbol '}' in value signature" ]
+
+        "g_arrow_3.fsi",
+        "module M\nval a: int ->\nend\n",
+        [ "g_arrow_3.fsi(3,1,3,4): error FS0010: Unexpected keyword 'end' in value signature" ]
+
+        "g_arrow_4.fsi",
+        "module M\nval a: int ->\nand b\n",
+        [ "g_arrow_4.fsi(3,1,3,4): error FS0010: Unexpected keyword 'and' in value signature" ]
+
+        "g_arrow_5.fsi",
+        "module M\nval a: int ->\n|\n",
+        [
+            "g_arrow_5.fsi(2,15,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "g_arrow_6.fsi",
+        "module M\nval a: int ->\n= 1\n",
+        [
+            "g_arrow_6.fsi(2,15,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "g_arrow_7.fsi",
+        "module M\nval a: int ->\nx\n",
+        [
+            "g_arrow_7.fsi(2,15,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "g_arrow_8.fsi",
+        "module M\nval a: int ->\n[| 1 |]\n",
+        [
+            "g_arrow_8.fsi(2,15,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "g_arrow_9.fsi",
+        "module M\nval a: int ->\n)\nval b: )\n",
+        [ "g_arrow_9.fsi(3,1,3,2): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "g_colon_16.fsi",
+        "module M\nval a:\n]\n",
+        [ "g_colon_16.fsi(3,1,3,2): error FS0010: Unexpected symbol ']' in value signature" ]
+
+        "g_colon_17.fsi",
+        "module M\nval a:\n}\n",
+        [ "g_colon_17.fsi(3,1,3,2): error FS0010: Unexpected symbol '}' in value signature" ]
+
+        "g_colon_18.fsi",
+        "module M\nval a:\nend\n",
+        [ "g_colon_18.fsi(3,1,3,4): error FS0010: Unexpected keyword 'end' in value signature" ]
+
+        "g_colon_19.fsi",
+        "module M\nval a:\nand b\n",
+        [ "g_colon_19.fsi(3,1,3,4): error FS0010: Unexpected keyword 'and' in value signature" ]
+
+        "g_colon_24.fsi",
+        "module M\nval a:\n)\nval b: )\n",
+        [ "g_colon_24.fsi(3,1,3,2): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "ns_arrow.fsi",
+        "namespace Q\nmodule N =\n    val a: int ->\n    )\n",
+        [ "ns_arrow.fsi(4,5,4,6): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "ns_colon.fsi",
+        "namespace Q\nmodule N =\n    val a:\n    )\n",
+        [
+            "ns_colon.fsi(4,5,4,6): error FS0010: Unexpected symbol ')' in value signature"
+            "ns_colon.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "then_root_err_arrow.fsi",
+        "module M\nmodule N =\n    val a: int ->\n    )\nval b: )\n",
+        [
+            "then_root_err_arrow.fsi(4,5,4,6): error FS0010: Unexpected symbol ')' in value signature"
+            "then_root_err_arrow.fsi(5,8,5,9): error FS0010: Unexpected symbol ')' in value signature"
+            "then_root_err_arrow.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "then_root_err_colon.fsi",
+        "module M\nmodule N =\n    val a:\n    )\nval b: )\n",
+        [
+            "then_root_err_colon.fsi(4,5,4,6): error FS0010: Unexpected symbol ')' in value signature"
+            "then_root_err_colon.fsi(5,8,5,9): error FS0010: Unexpected symbol ')' in value signature"
+            "then_root_err_colon.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "h_arrow_x_close.fsi",
+        "module M\nval a: int ->\nx\n)\n",
+        [
+            "h_arrow_x_close.fsi(2,15,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "h_arrow_x_val_err.fsi",
+        "module M\nval a: int ->\nx\nval b: )\n",
+        [
+            "h_arrow_x_val_err.fsi(2,15,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
         "b_and.fs",
         "module M\nlet rec a = 1\nand b =\nlet c = 1\n",
         [
@@ -5100,6 +5659,282 @@ module M =
     ]
 
     let private unmodeledIncompleteConstructCases = [
+        "c_arrow_6.fsi",
+        "module M\nmodule N =\n    val a: int ->\ntype T = int\n",
+        [
+            "c_arrow_6.fsi(4,1,4,5): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "c_colon_6.fsi",
+        "module M\nmodule N =\n    val a:\ntype T = int\n",
+        [
+            "c_colon_6.fsi(4,1,4,5): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "c_star_1.fsi",
+        "module M\nmodule N =\n    val a: int *\n)\n",
+        [
+            "c_star_1.fsi(4,1,4,2): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "c_star_1.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_star_1.fsi(4,1,4,2): error FS0010: Unexpected symbol ')'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "c_star_10.fsi",
+        "module M\nmodule N =\n    val a: int *\nopen System\n",
+        [
+            "c_star_10.fsi(4,1,4,5): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "c_star_10.fsi(4,1,4,5): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "c_star_11.fsi",
+        "module M\nmodule N =\n    val a: int *\n[<A>]\nval b: int\n",
+        [
+            "c_star_11.fsi(4,1,4,3): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "c_star_11.fsi(4,1,4,3): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "c_star_12.fsi",
+        "module M\nmodule N =\n    val a: int *\n]\n",
+        [
+            "c_star_12.fsi(4,1,4,2): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "c_star_12.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_star_12.fsi(4,1,4,2): error FS0010: Unexpected symbol ']'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "c_star_13.fsi",
+        "module M\nmodule N =\n    val a: int *\nend\n",
+        [
+            "c_star_13.fsi(4,1,4,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "c_star_13.fsi(4,1,4,4): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_star_13.fsi(4,1,4,4): error FS0010: Unexpected keyword 'end'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "c_star_2.fsi",
+        "module M\nmodule N =\n    val a: int *\n= 1\n",
+        [
+            "c_star_2.fsi(4,1,4,2): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "c_star_2.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_star_2.fsi(4,1,4,2): error FS0010: Unexpected symbol '='. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "c_star_3.fsi",
+        "module M\nmodule N =\n    val a: int *\n[| 1 |]\n",
+        [
+            "c_star_3.fsi(4,1,4,3): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "c_star_3.fsi(4,1,4,3): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_star_3.fsi(4,1,4,3): error FS0010: Unexpected symbol '[|'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "c_star_4.fsi",
+        "module M\nmodule N =\n    val a: int *\n{| A = 1 |}\n",
+        [
+            "c_star_4.fsi(4,1,4,3): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "c_star_4.fsi(4,1,4,3): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_star_4.fsi(4,1,4,3): error FS0010: Unexpected symbol '{|'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "c_star_5.fsi",
+        "module M\nmodule N =\n    val a: int *\nval b: int\n",
+        [
+            "c_star_5.fsi(4,1,4,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "c_star_5.fsi(4,1,4,4): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "c_star_6.fsi",
+        "module M\nmodule N =\n    val a: int *\ntype T = int\n",
+        [
+            "c_star_6.fsi(4,1,4,5): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "c_star_6.fsi(4,1,4,5): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "c_star_7.fsi",
+        "module M\nmodule N =\n    val a: int *\nx\n",
+        [
+            "c_star_7.fsi(4,1,4,2): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "c_star_7.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_star_7.fsi(4,1,4,2): error FS0010: Unexpected identifier. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "c_star_8.fsi",
+        "module M\nmodule N =\n    val a: int *\n| B\n",
+        [
+            "c_star_8.fsi(4,1,4,2): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "c_star_8.fsi(4,1,4,2): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_star_8.fsi(4,1,4,2): error FS0010: Unexpected symbol '|'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "c_star_9.fsi",
+        "module M\nmodule N =\n    val a: int *\nand b\n",
+        [
+            "c_star_9.fsi(4,1,4,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "c_star_9.fsi(4,1,4,4): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_star_9.fsi(4,1,4,4): error FS0010: Unexpected keyword 'and'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "c_then_type_err.fsi",
+        "module M\nmodule N =\n    val a:\ntype T = int\nval b: )\n",
+        [
+            "c_then_type_err.fsi(4,1,4,5): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "c_then_type_err.fsi(5,8,5,9): error FS0010: Unexpected symbol ')' in value signature"
+            "c_then_type_err.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "g_arrow_10.fsi",
+        "module M\nval a: int ->\n)\ntype T = int\n",
+        [
+            "g_arrow_10.fsi(3,1,3,2): error FS0010: Unexpected symbol ')' in value signature"
+            "g_arrow_10.fsi(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in signature file"
+        ]
+
+        "g_arrow_11.fsi",
+        "module M\nval a: int ->\ndone\n",
+        [
+            "g_arrow_11.fsi(2,15,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "g_arrow_12.fsi",
+        "module M\nval a: int ->\n|]\n",
+        [ "g_arrow_12.fsi(3,1,3,3): error FS0010: Unexpected symbol '|]' in value signature" ]
+
+        "g_colon_20.fsi",
+        "module M\nval a:\n|\n",
+        [
+            "g_colon_20.fsi(2,8,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "g_colon_20.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "g_colon_21.fsi",
+        "module M\nval a:\n= 1\n",
+        [
+            "g_colon_21.fsi(2,8,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "g_colon_21.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "g_colon_22.fsi",
+        "module M\nval a:\nx\n",
+        [
+            "g_colon_22.fsi(2,8,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "g_colon_22.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "g_colon_23.fsi",
+        "module M\nval a:\n[| 1 |]\n",
+        [
+            "g_colon_23.fsi(2,8,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "g_colon_23.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "g_colon_25.fsi",
+        "module M\nval a:\n)\ntype T = int\n",
+        [
+            "g_colon_25.fsi(3,1,3,2): error FS0010: Unexpected symbol ')' in value signature"
+            "g_colon_25.fsi(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in signature file"
+        ]
+
+        "g_colon_26.fsi",
+        "module M\nval a:\ndone\n",
+        [
+            "g_colon_26.fsi(2,8,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "g_colon_26.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "g_colon_27.fsi",
+        "module M\nval a:\n|]\n",
+        [ "g_colon_27.fsi(3,1,3,3): error FS0010: Unexpected symbol '|]' in value signature" ]
+
+        "n_arrow_13.fsi",
+        "module M\nmodule N =\n    val a: int ->\n    done\n",
+        [
+            "n_arrow_13.fsi(3,19,4,5): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "n_arrow_14.fsi",
+        "module M\nmodule N =\n    val a: int ->\n    |]\n",
+        [ "n_arrow_14.fsi(4,5,4,7): error FS0010: Unexpected symbol '|]' in value signature" ]
+
+        "n_arrow_15.fsi",
+        "module M\nmodule N =\n    val a: int ->\n    of\n",
+        [
+            "n_arrow_15.fsi(3,19,4,5): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "n_colon_28.fsi",
+        "module M\nmodule N =\n    val a:\n    done\n",
+        [
+            "n_colon_28.fsi(3,12,4,5): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "n_colon_28.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "n_colon_29.fsi",
+        "module M\nmodule N =\n    val a:\n    |]\n",
+        [
+            "n_colon_29.fsi(4,5,4,7): error FS0010: Unexpected symbol '|]' in value signature"
+            "n_colon_29.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "n_colon_30.fsi",
+        "module M\nmodule N =\n    val a:\n    of\n",
+        [
+            "n_colon_30.fsi(3,12,4,5): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "n_colon_30.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "h_ns_x.fsi",
+        "namespace Q\nval a:\nx\n",
+        [
+            "h_ns_x.fsi(2,8,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "h_ns_x.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "h_x_close.fsi",
+        "module M\nval a:\nx\n)\n",
+        [
+            "h_x_close.fsi(2,8,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "h_x_close.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "h_x_module.fsi",
+        "module M\nval a:\nx\nmodule N =\n    val b: )\n",
+        [
+            "h_x_module.fsi(2,8,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "h_x_module.fsi(5,12,5,13): error FS0010: Unexpected symbol ')' in value signature"
+            "h_x_module.fsi(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "h_x_open.fsi",
+        "module M\nval a:\nx\nopen System\n",
+        [
+            "h_x_open.fsi(2,8,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "h_x_open.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "h_x_same.fsi",
+        "module M\nval a:\nx y z\n",
+        [
+            "h_x_same.fsi(2,8,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "h_x_same.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "h_x_type.fsi",
+        "module M\nval a:\nx\ntype T = int\n",
+        [
+            "h_x_type.fsi(2,8,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "h_x_val_err.fsi",
+        "module M\nval a:\nx\nval b: )\n",
+        [
+            "h_x_val_err.fsi(2,8,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+            "h_x_val_err.fsi(4,8,4,9): error FS0010: Unexpected symbol ')' in value signature"
+            "h_x_val_err.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "h_x_val.fsi",
+        "module M\nval a:\nx\nval b: int\n",
+        [
+            "h_x_val.fsi(2,8,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
         "k_anon_bind.fs",
         "module M\nlet a =\n{| A = 1 |}\n",
         [

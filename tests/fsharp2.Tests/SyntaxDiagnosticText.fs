@@ -31,17 +31,19 @@ module internal SyntaxDiagnosticText =
                     "Each FS diagnostic must be a diagnostic that the Compatibility Oracle reports"
 
         // The Compatibility Oracle reports FS0058 at the position of the diagnostic that follows it.
-        let recoveryDiagnostics =
+        let recoveryGroups =
             diagnostics
             |> List.filter (fun diagnostic ->
                 diagnostic.Code
                 <> "FS0058"
             )
+            |> List.groupBy (fun diagnostic -> diagnostic.Code = "FSC2P1001")
 
-        Expect.equal
-            (recoveryDiagnostics
-             |> Seq.map _.Range.Start
-             |> Seq.distinct
-             |> Seq.length)
-            recoveryDiagnostics.Length
-            "One recovery group reports one diagnostic at each position"
+        for _, group in recoveryGroups do
+            Expect.equal
+                (group
+                 |> Seq.map _.Range.Start
+                 |> Seq.distinct
+                 |> Seq.length)
+                group.Length
+                "One recovery group reports one diagnostic at each position"
