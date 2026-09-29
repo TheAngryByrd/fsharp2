@@ -1249,4 +1249,191 @@ type TailcallsCase() =
                         "the compiler should emit an output assembly without tail calls"
                 finally
                     Directory.Delete(root, true)
+
+            testCase "unresolved local annotations keep the inferred binding type"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-contract-local-annotations",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourceLibraryPath = Path.Combine(root, "Source.fs")
+                    let sourceLibraryOutputPath = Path.Combine(root, "Source.dll")
+
+                    File.WriteAllText(
+                        sourceLibraryPath,
+                        """namespace ContractSources
+
+type Source() =
+    static member Answer() : int = 42
+    static member Text() : string = "forty-two"
+    static member Items() : int list = [ 40; 2 ]
+    static member Describe(value: obj) : int = 42
+    static member Measure(value: string) : int = value.Length
+    static member Sum(values: int list) : int = List.sum values
+"""
+                    )
+
+                    let libraryResult =
+                        compileWithOracle
+                            root
+                            "source.rsp"
+                            sourceLibraryOutputPath
+                            sourceLibraryPath
+
+                    Expect.equal
+                        libraryResult.ExitCode
+                        0
+                        (libraryResult.StandardOutput
+                         + libraryResult.StandardError)
+
+                    let casePath = Path.Combine(root, "Case.fs")
+                    let floatCasePath = Path.Combine(root, "FloatCase.fs")
+
+                    File.WriteAllText(
+                        casePath,
+                        """namespace ContractCases
+
+open ContractSources
+
+type Aliases() =
+    static member StringAlias() : int =
+        let text: string = Source.Text()
+        Source.Measure(text)
+
+    static member ObjectAlias() : int =
+        let boxed: obj = Source.Text()
+        Source.Describe(boxed)
+
+    static member ListAlias() : int =
+        let items: int list = Source.Items()
+        Source.Sum(items)
+
+    static member Undeclared() : int =
+        let value: 'T = Source.Answer()
+        value
+"""
+                    )
+
+                    File.WriteAllText(
+                        floatCasePath,
+                        """module FloatCase
+
+let floatAlias input =
+    let number: float = input
+    number
+"""
+                    )
+
+                    let oracleOutputPath = Path.Combine(root, "OracleCase.dll")
+                    let oracleResponsePath = Path.Combine(root, "oracle-case.rsp")
+
+                    File.WriteAllLines(
+                        oracleResponsePath,
+                        [|
+                            "--target:library"
+                            "--targetprofile:netcore"
+                            "--deterministic+"
+                            "--debug:portable"
+                            "--optimize-"
+                            $"--reference:{sourceLibraryOutputPath}"
+                            $"--out:{oracleOutputPath}"
+                            casePath
+                            floatCasePath
+                        |]
+                    )
+
+                    let oracleResult =
+                        invokeProcess root 30_000 "dotnet" [
+                            compatibilityOraclePath ()
+                            "@"
+                            + oracleResponsePath
+                        ]
+
+                    Expect.equal
+                        oracleResult.ExitCode
+                        0
+                        (oracleResult.StandardOutput
+                         + oracleResult.StandardError)
+
+                    let fsharp2OutputPath = Path.Combine(root, "FSharp2Case.dll")
+
+                    let fsharp2Result =
+                        compileWithFSharp2 root fsharp2OutputPath casePath [
+                            sourceLibraryOutputPath
+                        ] [ floatCasePath ]
+
+                    Expect.equal
+                        fsharp2Result.ExitCode
+                        0
+                        (fsharp2Result.StandardOutput
+                         + fsharp2Result.StandardError)
+
+                    let methodFlags =
+                        BindingFlags.Public
+                        ||| BindingFlags.NonPublic
+                        ||| BindingFlags.Static
+
+                    let execute outputPath =
+                        let loadContext =
+                            new System.Runtime.Loader.AssemblyLoadContext(
+                                $"fsharp2-local-annotations-{Guid.NewGuid():N}",
+                                isCollectible = true
+                            )
+
+                        let loadAssembly path =
+                            use stream = new MemoryStream(File.ReadAllBytes(path), writable = false)
+                            loadContext.LoadFromStream(stream)
+
+                        try
+                            loadAssembly sourceLibraryOutputPath
+                            |> ignore
+
+                            let assembly = loadAssembly outputPath
+                            let aliases = assembly.GetType("ContractCases.Aliases", true)
+
+                            let invokeInt name =
+                                aliases.GetMethod(name, methodFlags).Invoke(null, Array.empty<obj>)
+                                |> unbox<int>
+
+                            let floatAlias =
+                                assembly
+                                    .GetType("FloatCase", true)
+                                    .GetMethod("floatAlias", methodFlags)
+
+                            let floatAlias =
+                                if floatAlias.IsGenericMethodDefinition then
+                                    floatAlias.MakeGenericMethod([| typeof<float> |])
+                                else
+                                    floatAlias
+
+                            invokeInt "StringAlias",
+                            invokeInt "ObjectAlias",
+                            invokeInt "ListAlias",
+                            invokeInt "Undeclared",
+                            (floatAlias.Invoke(null, [| box 42.0 |])
+                             |> unbox<float>)
+                        finally
+                            loadContext.Unload()
+
+                    let oracleValues = execute oracleOutputPath
+                    let fsharp2Values = execute fsharp2OutputPath
+
+                    Expect.equal
+                        oracleValues
+                        (9, 42, 42, 42, 42.0)
+                        "The Compatibility Oracle output must execute every annotated binding."
+
+                    Expect.equal
+                        fsharp2Values
+                        oracleValues
+                        "FSharp2 must keep the inferred binding type for each unresolved annotation."
+                finally
+                    Directory.Delete(root, true)
         ]

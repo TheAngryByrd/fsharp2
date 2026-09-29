@@ -10904,7 +10904,7 @@ type internal CompilerService() =
                                             match bindingType with
                                             | None
                                             | Some(ParsedWildcardType _)
-                                            | Some(ParsedFlexibleType _) -> Ok None
+                                            | Some(ParsedFlexibleType _) -> None
                                             | Some annotation ->
                                                 annotation
                                                 |> expandTypeAbbreviations Set.empty
@@ -10915,9 +10915,10 @@ type internal CompilerService() =
                                                         annotation.Range
                                                         resolvedAnnotation
                                                     |> Result.map (fun annotatedType ->
-                                                        Some(resolvedAnnotation, annotatedType)
+                                                        resolvedAnnotation, annotatedType
                                                     )
                                                 )
+                                                |> Result.toOption
 
                                         let rec isReferenceConvertible
                                             (visited: Set<string>)
@@ -10982,31 +10983,35 @@ type internal CompilerService() =
                                                     value
 
                                         let typedValue =
-                                            annotatedBindingType
-                                            |> Result.bind (fun annotatedBindingType ->
-                                                let usageBindingType () =
-                                                    typeValueWithExpectedType (
-                                                        tryExpectedBindingType body
+                                            let usageBindingType () =
+                                                typeValueWithExpectedType (
+                                                    tryExpectedBindingType body
+                                                )
+
+                                            match annotatedBindingType, value with
+                                            | Some(_, annotatedType), MemberCall _ ->
+                                                let witnessCount = constraintWitnesses.Count
+
+                                                match
+                                                    typeValueWithExpectedType (Some annotatedType)
+                                                with
+                                                | Ok typed -> Ok typed
+                                                | Error _ ->
+                                                    constraintWitnesses.RemoveRange(
+                                                        witnessCount,
+                                                        constraintWitnesses.Count
+                                                        - witnessCount
                                                     )
 
-                                                match annotatedBindingType with
-                                                | None -> usageBindingType ()
-                                                | Some(_, annotatedType) ->
-                                                    match
-                                                        typeValueWithExpectedType (
-                                                            Some annotatedType
-                                                        )
-                                                    with
-                                                    | Ok typed -> Ok typed
-                                                    | Error _ -> usageBindingType ()
-                                            )
+                                                    usageBindingType ()
+                                            | _ -> usageBindingType ()
                                             |> Result.map (fun
                                                                (typedValue,
                                                                 valueType,
                                                                 nextValueLocalIndex) ->
                                                 match annotatedBindingType with
-                                                | Ok(Some(TypedNamedType annotatedResolvedType,
-                                                          annotatedType)) when
+                                                | Some(TypedNamedType annotatedResolvedType,
+                                                       annotatedType) when
                                                     annotatedType
                                                     <> valueType
                                                     && isReferenceConvertible
