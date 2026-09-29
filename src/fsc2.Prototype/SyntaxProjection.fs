@@ -93,7 +93,8 @@ module internal SyntaxProjection =
         let name =
             match binding.Head with
             | SyntaxPattern.Named name when
-                binding.Accessibility.IsNone
+                not binding.IsMutable
+                && binding.Accessibility.IsNone
                 && binding.Skipped.IsNone
                 ->
                 Ok name.Text

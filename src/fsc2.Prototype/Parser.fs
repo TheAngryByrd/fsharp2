@@ -382,6 +382,7 @@ module internal Parser =
             "as"
             "finally"
             "internal"
+            "mutable"
             "private"
             "public"
             "to"
@@ -1223,6 +1224,15 @@ module internal Parser =
         isKeyword "let" token
         || isKeyword "use" token
 
+    let private parseMutable (cursor: Cursor) =
+        if isKeyword "mutable" cursor.Current then
+            cursor.Advance()
+            |> ignore
+
+            true
+        else
+            false
+
     let private startsBlockItem (token: LayoutToken) =
         canStartExpression token
         || startsLocalBinding token
@@ -1900,6 +1910,8 @@ module internal Parser =
             else
                 false
 
+        let isMutable = parseMutable cursor
+
         let head =
             if canStartPattern cursor.Current then
                 parsePattern state bindingContext
@@ -1928,6 +1940,7 @@ module internal Parser =
 
         let binding = {
             Attributes = ImmutableArray.Empty
+            IsMutable = isMutable
             Accessibility = None
             Head = head
             Parameters = parameters.ToImmutable()
@@ -2549,6 +2562,7 @@ module internal Parser =
                 recover (Some RecoveryPoint.BindingStart)
                 missing
 
+        let isMutable = parseMutable cursor
         let accessibility = parseAccessibility cursor
 
         let head =
@@ -2640,6 +2654,7 @@ module internal Parser =
 
         {
             Attributes = attributes
+            IsMutable = isMutable
             Accessibility = accessibility
             Head = head
             Parameters = parameters.ToImmutable()

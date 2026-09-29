@@ -205,6 +205,7 @@ and internal SyntaxAttributeList = {
 
 and internal SyntaxBinding = {
     Attributes: ImmutableArray<SyntaxAttributeList>
+    IsMutable: bool
     Accessibility: SyntaxAccess option
     Head: SyntaxPattern
     Parameters: ImmutableArray<SyntaxPattern>

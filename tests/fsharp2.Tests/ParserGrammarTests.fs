@@ -83,9 +83,12 @@ module ParserGrammarTests =
         | SyntaxPattern.Missing _ -> "<missing>"
 
     let private bindingHead (binding: SyntaxBinding) =
+        let mutability = if binding.IsMutable then "mutable " else ""
+
         Seq.append [ binding.Head ] binding.Parameters
         |> Seq.map patternShape
         |> String.concat " "
+        |> sprintf "%s%s" mutability
 
     let rec private expressionShape expression =
         match expression with
@@ -297,6 +300,48 @@ module ParserGrammarTests =
             | _ -> Seq.empty
         )
         |> Seq.toList
+
+    let rec private localBindings expression =
+        match expression with
+        | SyntaxExpression.LetOrUse(_, _, binding, body, _) ->
+            binding
+            :: localBindings binding.Body
+            @ localBindings body
+        | SyntaxExpression.Sequential(first, second, _) ->
+            localBindings first
+            @ localBindings second
+        | _ -> []
+
+    let rec private bindings (declarations: ImplementationDeclaration seq) =
+        declarations
+        |> Seq.toList
+        |> List.collect (fun declaration ->
+            match declaration with
+            | ImplementationDeclaration.Let(_, _, bindings, _) ->
+                bindings
+                |> Seq.toList
+                |> List.collect (fun binding ->
+                    binding
+                    :: localBindings binding.Body
+                )
+            | ImplementationDeclaration.NestedModule nested -> bindings nested.Declarations
+            | _ -> []
+        )
+
+    let private bindingText (binding: SyntaxBinding) =
+        let startLine, startColumn, _, _ =
+            binding.Accessibility
+            |> Option.map _.Range
+            |> Option.defaultValue binding.Head.Range
+            |> position
+
+        let _, _, endLine, endColumn =
+            Seq.append [ binding.Head ] binding.Parameters
+            |> Seq.last
+            |> _.Range
+            |> position
+
+        $"{bindingHead binding} = {expressionShape binding.Body} ({startLine},{startColumn}--{endLine},{endColumn})"
 
     let private shapes logicalPath text =
         let result = parse logicalPath text
@@ -993,11 +1038,119 @@ module ParserGrammarTests =
         [
             "LocalLetAnd.fs(3,5): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
         ]
-        "LocalLetMutable.fs", "module A\nlet f () =\n    let mutable x = 1\n    x\n", []
         "LocalLetNoEquals.fs",
         "module A\nlet f () =\n    let x 1\n    x\n",
         [
             "LocalLetNoEquals.fs(4,5): error FS0010: Incomplete structured construct at or before this point in binding. Expected '=' or other token."
+        ]
+    ]
+
+    // Compatibility Oracle reports no parse diagnostic. Ranges are the FCS 43.10.101 binding head pattern ranges, 1-based columns.
+    let private mutableBindingCases = [
+        "MutableRoot.fs", "module A\nlet mutable x = 1\n", [ "mutable x = 1 (2,13--2,14)" ]
+        "MutablePrivate.fs",
+        "module A\nlet mutable private x = 1\n",
+        [ "mutable x = 1 (2,13--2,22)" ]
+        "MutableRec.fs", "module A\nlet rec mutable x = 1\n", [ "mutable x = 1 (2,17--2,18)" ]
+        "MutableAnd.fs",
+        "module A\nlet rec f () = x\nand mutable x = 2\n",
+        [
+            "f () = x (2,9--2,13)"
+            "mutable x = 2 (3,13--3,14)"
+        ]
+        "MutableParameters.fs",
+        "module A\nlet mutable f x = x\n",
+        [ "mutable f x = x (2,13--2,16)" ]
+        "MutableTuple.fs",
+        "module A\nlet mutable a, b = 1, 2\n",
+        [ "mutable a, b = 1, 2 (2,13--2,17)" ]
+        "MutableParenthesized.fs",
+        "module A\nlet mutable (x) = 1\n",
+        [ "mutable (x) = 1 (2,13--2,16)" ]
+        "MutableWildcard.fs", "module A\nlet mutable _ = 1\n", [ "mutable _ = 1 (2,13--2,14)" ]
+        "MutableBlock.fs", "module A\nlet mutable x =\n    1\n", [ "mutable x = 1 (2,13--2,14)" ]
+        "MutableAttribute.fs",
+        "module A\n[<DefaultValue>]\nlet mutable x = 1\n",
+        [ "mutable x = 1 (3,13--3,14)" ]
+        "MutableTwo.fs",
+        "module A\nlet mutable x = 1\nlet mutable y = x\n",
+        [
+            "mutable x = 1 (2,13--2,14)"
+            "mutable y = x (3,13--3,14)"
+        ]
+        "MutableNested.fs",
+        "module A\nmodule M =\n    let mutable x = 1\n",
+        [ "mutable x = 1 (3,17--3,18)" ]
+        "LocalMutable.fs",
+        "module A\nlet f () =\n    let mutable x = 1\n    x\n",
+        [
+            "f () = let mutable x = 1 in x (2,5--2,9)"
+            "mutable x = 1 (3,17--3,18)"
+        ]
+        "LocalMutableRec.fs",
+        "module A\nlet f () =\n    let rec mutable x = 1\n    x\n",
+        [
+            "f () = let rec mutable x = 1 in x (2,5--2,9)"
+            "mutable x = 1 (3,21--3,22)"
+        ]
+        "LocalMutableEntryPoint.fs",
+        "module A\n[<EntryPoint>]\nlet main _ =\n    let mutable count = 0\n    count\n",
+        [
+            "main _ = let mutable count = 0 in count (3,5--3,11)"
+            "mutable count = 0 (4,17--4,22)"
+        ]
+    ]
+
+    let private mutableBindingErrorCases = [
+        "MutableTwice.fs",
+        "module A\nlet mutable mutable x = 1\n",
+        [ "MutableTwice.fs(2,13): error FS0010: Unexpected keyword 'mutable' in binding" ]
+        "MutableAfterAccessibility.fs",
+        "module A\nlet private mutable x = 1\n",
+        [
+            "MutableAfterAccessibility.fs(2,13): error FS0010: Unexpected keyword 'mutable' in binding"
+        ]
+        "MutableAfterAccessibilityBeforeRoot.fs",
+        "module A\nlet mutable x = 1\nlet private mutable y = 2\nlet z = 3\n",
+        [
+            "MutableAfterAccessibilityBeforeRoot.fs(3,13): error FS0010: Unexpected keyword 'mutable' in binding"
+        ]
+        "MutableNoName.fs",
+        "module A\nlet mutable = 1\n",
+        [ "MutableNoName.fs(2,13): error FS0010: Unexpected symbol '=' in binding" ]
+        "MutableValue.fs",
+        "module A\nlet mutable x = )\n",
+        [ "MutableValue.fs(2,17): error FS0010: Unexpected symbol ')' in binding" ]
+        "MutableInBody.fs",
+        "module A\nlet x = mutable\n",
+        [ "MutableInBody.fs(2,9): error FS0010: Unexpected keyword 'mutable' in binding" ]
+        "MutableInBodyBlock.fs",
+        "module A\nlet x =\n    mutable\n",
+        [ "MutableInBodyBlock.fs(3,5): error FS0010: Unexpected keyword 'mutable' in binding" ]
+        "LocalMutableLast.fs",
+        "module A\nlet f () =\n    let mutable x = 1\n",
+        [
+            "LocalMutableLast.fs(3,5): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+        ]
+    ]
+
+    let private mutableBindingExplicitCases = [
+        "MutableTyped.fs", "module A\nlet mutable x: int = 1\n", []
+        "MutableNextLine.fs", "module A\nlet mutable\n    x = 1\n", []
+        "LocalMutableTwice.fs",
+        "module A\nlet f () =\n    let mutable mutable x = 1\n    x\n",
+        [ "LocalMutableTwice.fs(3,17): error FS0010: Unexpected keyword 'mutable' in binding" ]
+        "LocalMutableAccessibility.fs",
+        "module A\nlet f () =\n    let mutable private x = 1\n    x\n",
+        []
+        "LocalMutableNextLine.fs",
+        "module A\nlet f () =\n    let mutable\n        x = 1\n    x\n",
+        []
+        "MutableInPattern.fs",
+        "module A\nlet (mutable x) = 1\n",
+        [
+            "MutableInPattern.fs(2,6): error FS0010: Unexpected keyword 'mutable' in pattern. Expected ')' or other token."
+            "MutableInPattern.fs(2,5): error FS0583: Unmatched '('"
         ]
     ]
 
@@ -1409,6 +1562,47 @@ let items = [ origin.X; 1 ]
 
             testList "a local binding that the parser does not model stays explicit" [
                 for logicalPath, text, oracle in localLetExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testList "a mutable keyword before the head pattern marks the binding mutable" [
+                for logicalPath, text, expected in mutableBindingCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        Expect.isEmpty
+                            (oracleLines logicalPath result)
+                            "The Compatibility Oracle reports no diagnostic"
+
+                        Expect.sequenceEqual
+                            (bindings (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.map bindingText)
+                            expected
+                            "The bindings with their head pattern ranges"
+            ]
+
+            testList "a mutable keyword that a binding cannot take reports the Oracle diagnostic" [
+                for logicalPath, text, oracle in mutableBindingErrorCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        Expect.sequenceEqual
+                            (oracleLines logicalPath result)
+                            oracle
+                            "The Compatibility Oracle diagnostics"
+            ]
+
+            testList "a mutable binding that the parser does not model stays explicit" [
+                for logicalPath, text, oracle in mutableBindingExplicitCases ->
                     testCase logicalPath
                     <| fun _ ->
                         let result = parse logicalPath text
