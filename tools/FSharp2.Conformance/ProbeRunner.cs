@@ -117,6 +117,22 @@ public static class ProbeRunner
 
     private static ProbeEvidence VerifyManagedLoad(string kind, string artifactPath)
     {
+        var (evidence, loadContext) = LoadManagedArtifact(kind, artifactPath);
+        // A collectible context releases the mapped artifact file only after the GC collects it. The
+        // deterministic repeat rebuilds the same artifact next, so the probe waits for the release.
+        for (var attempt = 0; loadContext.IsAlive && attempt < 10; attempt++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
+        return loadContext.IsAlive
+            ? Failed(kind, "The managed load context did not unload, so the artifact file stays locked.")
+            : evidence;
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static (ProbeEvidence Evidence, WeakReference LoadContext) LoadManagedArtifact(string kind, string artifactPath)
+    {
         var loadContext = new ProbeLoadContext(artifactPath);
         try
         {
@@ -125,18 +141,18 @@ public static class ProbeRunner
                 .Select(static type => type.FullName ?? type.Name)
                 .OrderBy(static name => name, StringComparer.Ordinal)
                 .ToArray();
-            return Passed(kind, new
+            return (Passed(kind, new
             {
                 assembly = assembly.GetName().Name,
                 exportedTypes,
-            });
+            }), new WeakReference(loadContext));
         }
         catch (Exception exception) when (
             exception is BadImageFormatException
             or FileLoadException
             or ReflectionTypeLoadException)
         {
-            return Failed(kind, $"The managed assembly could not be loaded: {exception.Message}");
+            return (Failed(kind, $"The managed assembly could not be loaded: {exception.Message}"), new WeakReference(loadContext));
         }
         finally
         {

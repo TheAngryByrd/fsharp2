@@ -1352,6 +1352,53 @@ module ComparatorTests =
                                 $"The {lane} repeat forces a physical compilation"
                     )
 
+            testCase "Conformance Probes release the managed-load artifact before the repeat"
+            <| fun _ ->
+                withRoot
+                    "probe-managed-load-release"
+                    (fun root ->
+                        let artifactPath = Path.Combine(root, "Artifact.dll")
+
+                        File.Copy(
+                            Path.Combine(sdkRoot, "sdk", "10.0.110", "FSharp", "FSharp.Core.dll"),
+                            artifactPath
+                        )
+
+                        let evidence =
+                            ProbeRunner
+                                .VerifyAsync(
+                                    ProbeRequest(
+                                        "managed-load",
+                                        artifactPath,
+                                        json "{}",
+                                        TimeSpan.FromSeconds(30.0)
+                                    ),
+                                    CancellationToken.None
+                                )
+                                .GetAwaiter()
+                                .GetResult()
+
+                        Expect.isTrue evidence.Passed $"managed-load failed: {evidence.Difference}"
+
+                        let rewrite () =
+                            use stream =
+                                new FileStream(
+                                    artifactPath,
+                                    FileMode.Create,
+                                    FileAccess.Write,
+                                    FileShare.None
+                                )
+
+                            stream.WriteByte(0uy)
+
+                        rewrite ()
+
+                        Expect.equal
+                            (FileInfo(artifactPath).Length)
+                            1L
+                            "The probed artifact can be rewritten as a deterministic repeat rewrites it"
+                    )
+
             testCase "Conformance Probes verify IL load API metadata PDB and runtime behavior"
             <| fun _ ->
                 let pdbPath = Path.ChangeExtension(testAssemblyPath, ".pdb")

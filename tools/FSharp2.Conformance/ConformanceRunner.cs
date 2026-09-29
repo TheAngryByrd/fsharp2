@@ -399,6 +399,14 @@ public static class ConformanceRunner
         {
             missingEvidence.Add("a deterministic repeat lane timed out");
         }
+        foreach (var (name, lane) in new[] { ("oracle", oracleRepeat), ("fsharp2", fsharp2Repeat) })
+        {
+            if (lane.Process.ExitCode != 0)
+            {
+                missingEvidence.Add(
+                    $"the {name} deterministic repeat exited with code {lane.Process.ExitCode}: {LastErrorLine(lane.Process)}");
+            }
+        }
         if (DetectFallback(repeatPlan.FSharp2, fsharp2Repeat))
         {
             missingEvidence.Add("the FSharp2 deterministic repeat selected a forbidden compiler fallback");
@@ -1243,4 +1251,13 @@ public static class ConformanceRunner
     private static string SafeName(string value) =>
         string.Concat(value.Select(static character =>
             char.IsAsciiLetterOrDigit(character) || character is '-' or '_' ? character : '-'));
+
+    private static string LastErrorLine(ProcessResult process)
+    {
+        var lines = System.Text.Encoding.UTF8.GetString([.. process.StandardOutput, .. process.StandardError])
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return lines.LastOrDefault(static line => line.Contains(" error ", StringComparison.Ordinal))
+               ?? lines.LastOrDefault()
+               ?? string.Empty;
+    }
 }
