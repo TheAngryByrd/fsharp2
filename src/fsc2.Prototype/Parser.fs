@@ -653,17 +653,21 @@ module internal Parser =
             state.UndentationLimit <- outside.Offside.Column
 
         state.InDelimiters <- true
-        let result = parse ()
-        state.InDelimiters <- wasInDelimiters
-        state.UndentationLimit <- limit
-        result
+
+        try
+            parse ()
+        finally
+            state.InDelimiters <- wasInDelimiters
+            state.UndentationLimit <- limit
 
     let private withUndentationLimit state (anchor: Frame) parse =
         let limit = state.UndentationLimit
         state.UndentationLimit <- max limit anchor.Offside.Column
-        let result = parse ()
-        state.UndentationLimit <- limit
-        result
+
+        try
+            parse ()
+        finally
+            state.UndentationLimit <- limit
 
     let private skipUntil state (context: Frame) =
         let cursor = state.Cursor
