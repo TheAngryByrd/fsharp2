@@ -103,8 +103,12 @@ module TestSupport =
     let private safeName (value: string) =
         value.Replace(' ', '-').Replace('/', '-').Replace('\\', '-').ToLowerInvariant()
 
+    // The Windows process working-directory limit leaves about 130 characters for the run tree under the temp root.
+    let private uniqueSuffix () =
+        Guid.NewGuid().ToString("N").Substring(0, 12)
+
     let createRunRoot name =
-        let runId = $"test-{safeName name}-{Guid.NewGuid():N}"
+        let runId = $"test-{safeName name}-{uniqueSuffix ()}"
 
         let runRoot =
             Path.Combine(Path.GetTempPath(), "fsharp2-conformance-tests", runId)
@@ -128,7 +132,7 @@ module TestSupport =
             Path.Combine(
                 Path.GetTempPath(),
                 "fsharp2-conformance-tests",
-                $"unmarked-{safeName name}-{Guid.NewGuid():N}"
+                $"unmarked-{safeName name}-{uniqueSuffix ()}"
             )
             |> Path.GetFullPath
 

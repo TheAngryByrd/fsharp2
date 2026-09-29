@@ -5,6 +5,9 @@ namespace FSharp2.Conformance;
 
 public static class ProcessRunner
 {
+    // Windows CreateProcess rejects a longer lpCurrentDirectory with ERROR_DIRECTORY, independent of the long-path policy.
+    private const int WindowsWorkingDirectoryLimit = 258;
+
     public static async Task<ProcessResult> RunAsync(
         ProcessSpec specification,
         CancellationToken cancellationToken)
@@ -13,6 +16,14 @@ public static class ProcessRunner
         if (specification.Timeout <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(specification), "The process timeout must be positive.");
+        }
+        if (OperatingSystem.IsWindows() && specification.WorkingDirectory.Length > WindowsWorkingDirectoryLimit)
+        {
+            throw new ConformanceContractException(
+                [new(
+                    "process-working-directory",
+                    specification.WorkingDirectory,
+                    $"The process working directory has {specification.WorkingDirectory.Length} characters. Windows accepts at most {WindowsWorkingDirectoryLimit}. Select a shorter output root.")]);
         }
 
         Directory.CreateDirectory(specification.WorkingDirectory);
