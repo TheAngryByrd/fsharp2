@@ -19,7 +19,8 @@ public static class ReferenceClosure
         }
 
         using var closureDocument = JsonDocument.Parse(File.ReadAllBytes(closurePath));
-        var sdkRoot = DefaultSdkRoot(repository);
+        var sdkRoot = SdkSelection.DefaultRoot(
+            repository.Toolchain.GetProperty("sdkVersion").GetString()!);
         var sdk = SdkSelection.Resolve(repository.Root, sdkRoot, null);
         var references = ImmutableArray.CreateBuilder<MaterializedTargetReference>();
         foreach (var reference in closureDocument.RootElement
@@ -27,8 +28,15 @@ public static class ReferenceClosure
                      .EnumerateArray()
                      .OrderBy(static item => item.GetProperty("order").GetInt32()))
         {
-            var expectedHash = reference.GetProperty("sha256").GetString()!;
             var assemblyName = reference.GetProperty("assemblyName").GetString()!;
+            if (!reference.GetProperty("sha256BySdkRid").TryGetProperty(sdk.Rid, out var hashProperty))
+            {
+                throw Invalid(
+                    "reference-hash-rid",
+                    reference.GetProperty("logicalPath").GetString()!,
+                    $"The closure does not record a '{assemblyName}' hash for SDK runtime identifier '{sdk.Rid}'.");
+            }
+            var expectedHash = hashProperty.GetString()!;
             var physicalPath = ResolveReferencePath(sdk, assemblyName, expectedHash);
             var bytes = File.ReadAllBytes(physicalPath);
             var actualHash = Hashing.Sha256(bytes);
@@ -56,20 +64,6 @@ public static class ReferenceClosure
         return references.ToImmutable();
     }
 
-    private static string DefaultSdkRoot(ConformanceRepository repository)
-    {
-        var configured = Environment.GetEnvironmentVariable("FSHARP2_DOTNET_ROOT");
-        if (!string.IsNullOrWhiteSpace(configured))
-        {
-            return configured;
-        }
-
-        var version = repository.Toolchain.GetProperty("sdkVersion").GetString()!;
-        return Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            $"fsharp2-sdk-{version}");
-    }
-
     private static string ResolveReferencePath(
         SdkSelectionResult sdk,
         string assemblyName,
@@ -89,19 +83,25 @@ public static class ReferenceClosure
         }
 
         var fileName = $"{assemblyName}.dll";
-        var matches = Directory
+        var candidates = Directory
             .EnumerateFiles(packRoot, fileName, SearchOption.AllDirectories)
-            .Where(path => string.Equals(Hashing.Sha256File(path), expectedHash, StringComparison.Ordinal))
             .OrderBy(static path => path, StringComparer.Ordinal)
+            .Select(path => (Path: path, Hash: Hashing.Sha256File(path)))
             .ToArray();
-        return matches.Length switch
+        var match = candidates.FirstOrDefault(candidate =>
+            string.Equals(candidate.Hash, expectedHash, StringComparison.Ordinal));
+        if (match.Path is not null)
         {
-            0 => throw Invalid(
-                "reference-hash",
-                fileName,
-                $"The selected SDK does not contain a '{fileName}' file with hash '{expectedHash}'."),
-            _ => matches[0],
-        };
+            return match.Path;
+        }
+
+        var found = candidates.Length == 0
+            ? "No candidate file exists."
+            : "Found: " + string.Join("; ", candidates.Select(candidate => $"{candidate.Path} = {candidate.Hash}")) + ".";
+        throw Invalid(
+            "reference-hash",
+            fileName,
+            $"The selected SDK ({sdk.Rid}) does not contain a '{fileName}' file with hash '{expectedHash}'. {found}");
     }
 
     private static string RequireHashMatch(string path, string expectedHash)

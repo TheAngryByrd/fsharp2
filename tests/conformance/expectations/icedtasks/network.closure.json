@@ -9,7 +9,13 @@
       "order": 0,
       "stableId": "reference.netstandard",
       "logicalPath": "/references/netstandard.dll",
-      "sha256": "sha256:f9078068add6f69455772c526a69a134ae520199eb1c5513f7d80a871fc09851",
+      "sha256BySdkRid": {
+        "win-x64": "sha256:f9078068add6f69455772c526a69a134ae520199eb1c5513f7d80a871fc09851",
+        "linux-x64": "sha256:07b0374d025d7904b8b2c38d39fa06291612dca8d5defb91de1048c1ea2bd8b4",
+        "linux-arm64": "sha256:4d35e8253ff1cc638438a624ec2f7881739cfbd1bb48947ba36f2db2f514a174",
+        "osx-x64": "sha256:3cba4937f2a9750e1704b20093d5e636b34967add974dbdf8b70fb28f750b439",
+        "osx-arm64": "sha256:7152c3528563abe00289a55d4a194586cfb0dd5a32b2c9797f5a8d9468990b1f"
+      },
       "assemblyName": "netstandard",
       "version": "2.1.0.0",
       "culture": "",
@@ -20,7 +26,13 @@
       "order": 1,
       "stableId": "reference.system-runtime",
       "logicalPath": "/references/System.Runtime.dll",
-      "sha256": "sha256:11e8fdc3cc3833689890cb3b1147b255dba12f53a88736bc0c9bf45afdb8ba11",
+      "sha256BySdkRid": {
+        "win-x64": "sha256:11e8fdc3cc3833689890cb3b1147b255dba12f53a88736bc0c9bf45afdb8ba11",
+        "linux-x64": "sha256:367c51a9df4ed39d48dd75f90b9fb73d62eeb6e140f0dfa9f0588caaee7f6834",
+        "linux-arm64": "sha256:64393545c12d7c078556cedfa19f0829d281dfee4e12e9a5e3da11106dd496c8",
+        "osx-x64": "sha256:78d45c735f726dcf59d4d9beccd862d64e1fed3a1e212e2691b17bd41489d5ba",
+        "osx-arm64": "sha256:5bcb256162c6be709d892fb514ef001f81eae6822a878a6883c35c3c7d5fae12"
+      },
       "assemblyName": "System.Runtime",
       "version": "10.0.0.0",
       "culture": "",
@@ -31,7 +43,13 @@
       "order": 2,
       "stableId": "reference.fsharp-core",
       "logicalPath": "/references/FSharp.Core.dll",
-      "sha256": "sha256:ff83cead5566c9111b69e920c2703e6d8d125305d6ac1ac08692cafee3890968",
+      "sha256BySdkRid": {
+        "win-x64": "sha256:ff83cead5566c9111b69e920c2703e6d8d125305d6ac1ac08692cafee3890968",
+        "linux-x64": "sha256:280b4812aee84a6c3bf369832c2f6b171bc0a5247ce0d7ce0b01769c6389577a",
+        "linux-arm64": "sha256:c16153fef5844056e193448f562b11aacbe0011a8b90817df9db4c5f6150e493",
+        "osx-x64": "sha256:8ec59eb5d553f9731a69983411bb3f46f7f8af7eca9afb372b9fb03501c4bfcf",
+        "osx-arm64": "sha256:a8b6159845145590510281edae2e77c24431384f4a20fda656ebfe00d7f1f9f7"
+      },
       "assemblyName": "FSharp.Core",
       "version": "10.0.0.0",
       "culture": "",

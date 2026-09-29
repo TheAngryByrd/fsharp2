@@ -36,13 +36,8 @@ public static class ConformanceRunner
         }
 
         var materialized = CaseMaterializer.Materialize(repository, conformanceCase);
-        var sdkRoot = Environment.GetEnvironmentVariable("FSHARP2_DOTNET_ROOT");
-        if (string.IsNullOrWhiteSpace(sdkRoot))
-        {
-            sdkRoot = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                $"fsharp2-sdk-{repository.Toolchain.GetProperty("sdkVersion").GetString()}");
-        }
+        var sdkRoot = SdkSelection.DefaultRoot(
+            repository.Toolchain.GetProperty("sdkVersion").GetString()!);
         var sdk = SdkSelection.Resolve(conformanceRoot, sdkRoot, null);
         var runId = $"oracle-{SafeName(caseId)}-{DateTimeOffset.UtcNow:yyyyMMddTHHmmssfffZ}-{Guid.NewGuid():N}";
         var runRoot = Path.Combine(outputRoot, runId);
@@ -236,12 +231,54 @@ public static class ConformanceRunner
             artifacts.ToImmutable(),
             cancellationToken).ConfigureAwait(false);
         Console.WriteLine($"{VerdictName(verdict.Verdict)} {caseId} at {runRoot}");
+        if (verdict.Verdict is not (ConformanceVerdict.Pass or ConformanceVerdict.Unsupported))
+        {
+            WriteVerdictDetails(verdict, comparisons, probes, oracle, fsharp2);
+        }
         return verdict.Verdict switch
         {
             ConformanceVerdict.Pass or ConformanceVerdict.Unsupported => 0,
             ConformanceVerdict.Fail => 1,
             _ => 3,
         };
+    }
+
+    private static void WriteVerdictDetails(
+        VerdictResult verdict,
+        ImmutableArray<ComparisonResult>.Builder comparisons,
+        ImmutableArray<ProbeEvidence>.Builder probes,
+        CoreCompileLaneResult? oracle,
+        CoreCompileLaneResult? fsharp2)
+    {
+        foreach (var reason in verdict.Reasons)
+        {
+            Console.WriteLine($"  reason: {reason}");
+        }
+        foreach (var missing in verdict.MissingEvidence)
+        {
+            Console.WriteLine($"  missing evidence: {missing}");
+        }
+        foreach (var comparison in comparisons.Where(static item => !item.Passed))
+        {
+            Console.WriteLine($"  comparison {comparison.ComparatorId} ({comparison.Rule}): {comparison.Difference}");
+        }
+        foreach (var probe in probes.Where(static item => !item.Passed))
+        {
+            Console.WriteLine($"  probe {probe.Kind}: {probe.Difference}");
+        }
+        foreach (var (name, lane) in new[] { ("oracle", oracle), ("fsharp2", fsharp2) })
+        {
+            if (lane is null)
+            {
+                Console.WriteLine($"  lane {name}: not executed");
+                continue;
+            }
+            Console.WriteLine($"  lane {name}: exit {lane.Process.ExitCode}, timed out {lane.Process.TimedOut}, processes {lane.Process.Processes.Length}");
+            foreach (var process in lane.Process.Processes)
+            {
+                Console.WriteLine($"    process {process.ProcessId} parent {process.ParentProcessId}: {process.ExecutablePath} {string.Join(' ', process.Arguments)}");
+            }
+        }
     }
 
     public static async Task<int> ReplayAsync(
@@ -361,6 +398,14 @@ public static class ConformanceRunner
         if (oracleRepeat.Process.TimedOut || fsharp2Repeat.Process.TimedOut)
         {
             missingEvidence.Add("a deterministic repeat lane timed out");
+        }
+        foreach (var (name, lane) in new[] { ("oracle", oracleRepeat), ("fsharp2", fsharp2Repeat) })
+        {
+            if (lane.Process.ExitCode != 0)
+            {
+                missingEvidence.Add(
+                    $"the {name} deterministic repeat exited with code {lane.Process.ExitCode}: {LastErrorLine(lane.Process)}");
+            }
         }
         if (DetectFallback(repeatPlan.FSharp2, fsharp2Repeat))
         {
@@ -1130,6 +1175,7 @@ public static class ConformanceRunner
                 sdk.Root,
                 sdk.DotnetPath,
                 sdk.Version,
+                sdk.Rid,
                 sdk.Environment,
             },
             cancellationToken).ConfigureAwait(false);
@@ -1205,4 +1251,13 @@ public static class ConformanceRunner
     private static string SafeName(string value) =>
         string.Concat(value.Select(static character =>
             char.IsAsciiLetterOrDigit(character) || character is '-' or '_' ? character : '-'));
+
+    private static string LastErrorLine(ProcessResult process)
+    {
+        var lines = System.Text.Encoding.UTF8.GetString([.. process.StandardOutput, .. process.StandardError])
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return lines.LastOrDefault(static line => line.Contains(" error ", StringComparison.Ordinal))
+               ?? lines.LastOrDefault()
+               ?? string.Empty;
+    }
 }

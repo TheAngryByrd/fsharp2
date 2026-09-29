@@ -46,6 +46,7 @@ public sealed record SdkSelectionResult(
     string Root,
     string DotnetPath,
     string Version,
+    string Rid,
     ImmutableDictionary<string, string> Environment);
 
 public sealed record MaterializedSource(
