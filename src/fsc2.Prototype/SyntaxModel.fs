@@ -312,6 +312,7 @@ type internal SyntaxDiagnostic = {
 type internal ImplementationFileParseResult = {
     File: ImplementationFileSyntax
     Diagnostics: ImmutableArray<SyntaxDiagnostic>
+    UnresumedRecoveryAtEnd: SourceRange option
 }
 
 type internal SignatureFileParseResult = {

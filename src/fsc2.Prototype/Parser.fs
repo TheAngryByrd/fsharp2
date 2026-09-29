@@ -117,6 +117,7 @@ module internal Parser =
         | ReportedAtRoot of recoveryDepth: int
         | IncompleteAtNext
         | SkippedInSignatureModule of recoveryDepth: int * reportsAtEnd: bool
+        | SkippedInTypeBody
 
     [<RequireQualifiedAccess>]
     type private Recovery =
@@ -130,9 +131,9 @@ module internal Parser =
         | MakesNextIncomplete
         | Unmodeled
 
-    // The Compatibility Oracle loses the signature module header for the rest of the file after a nested recovery.
+    // The Compatibility Oracle loses the module header for the rest of the file after some recoveries.
     [<RequireQualifiedAccess>]
-    type private SignatureHeader =
+    type private ModuleHeader =
         | Kept
         | Lost
         | LostAtEnd of SourceRange
@@ -145,7 +146,8 @@ module internal Parser =
         mutable Recovery: Recovery
         mutable InAnonymousRoot: bool
         mutable Depth: int
-        mutable SignatureHeader: SignatureHeader
+        mutable ModuleHeader: ModuleHeader
+        mutable InTypeBody: bool
     }
 
     [<RequireQualifiedAccess>]
@@ -271,6 +273,13 @@ module internal Parser =
 
     let private reportedAt state (token: LayoutToken) =
         state.ReportedStarts.Contains token.Range.Start.Offset
+
+    let private reportedUnsupportedSince state count =
+        seq {
+            count .. state.Diagnostics.Count
+                     - 1
+        }
+        |> Seq.exists (fun index -> state.Diagnostics[index].Code = unsupportedCode)
 
     let private reportedSince state count =
         seq {
@@ -617,11 +626,6 @@ module internal Parser =
 
     let private identifier (token: LayoutToken) = {
         Text = tokenText token
-        Range = token.Range
-    }
-
-    let private skippedToken (token: LexicalToken) = {
-        Tokens = ImmutableArray.Create token
         Range = token.Range
     }
 
@@ -2148,7 +2152,8 @@ module internal Parser =
     let private discardsSilently state =
         match pendingDeclaration state with
         | Some(DeclarationAfterRecovery.Discarded _)
-        | Some(DeclarationAfterRecovery.SkippedInSignatureModule _) -> true
+        | Some(DeclarationAfterRecovery.SkippedInSignatureModule _)
+        | Some DeclarationAfterRecovery.SkippedInTypeBody -> true
         | _ -> false
 
     let private endsOnLine
@@ -2464,6 +2469,7 @@ module internal Parser =
         | DiscardsAfterDeclaration
         | DiscardsInValue
         | DiscardsInsideValueType
+        | ContinuesInTypeBody
         | Unmodeled
 
     let private parseExpressionDeclaration state point attributes =
@@ -2519,6 +2525,18 @@ module internal Parser =
                 offset
 
         after start
+
+    let private startsTypeBodyMember (cursor: Cursor) =
+        let offset = offsetAfterAttributeLists cursor 0
+        let token = cursor.Peek offset
+        let next = cursor.Peek(offset + 1)
+
+        isKeyword "do" token
+        || (isKeyword "let" token
+            && not (
+                isOperator "!" next
+                && next.Range.Start.Offset = token.Range.End.Offset
+            ))
 
     let private resumesSignatureModule (token: LayoutToken) =
         isKeyword "val" token
@@ -2824,17 +2842,17 @@ module internal Parser =
 
         SyntaxTypeRepresentation.Record(fields.ToImmutable())
 
+    // The Compatibility Oracle ends a union that starts on the definition line at an offside '|'.
+    let private unionContinuesAt (definition: SourcePosition option) firstLine (bar: LayoutToken) =
+        match definition with
+        | Some context when firstLine = context.Line -> not (isOffside context bar)
+        | _ -> true
+
     let private parseUnionCases state (definition: SourcePosition option) =
         let cursor = state.Cursor
         let cases = ImmutableArray.CreateBuilder<SyntaxUnionCase>()
         let mutable more = true
-        let firstLine = cursor.Current.Range.Start.Line
-
-        // The Compatibility Oracle ends a union that starts on the definition line at an offside '|'.
-        let continuesAt (bar: LayoutToken) =
-            match definition with
-            | Some context when firstLine = context.Line -> not (isOffside context bar)
-            | _ -> true
+        let continuesAt = unionContinuesAt definition cursor.Current.Range.Start.Line
 
         while more do
             let start = cursor.Current
@@ -3030,18 +3048,11 @@ module internal Parser =
     let private startsUnion (cursor: Cursor) (definition: SourcePosition option) =
         let bar = cursor.Peek 1
 
-        let continuesAtBar =
-            isOperator "|" bar
-            && (
-                match definition with
-                | Some context -> not (isOffside context bar)
-                | None -> true
-            )
-
         isOperator "|" cursor.Current
         || (isIdentifier cursor.Current
             && (isKeyword "of" bar
-                || continuesAtBar))
+                || (isOperator "|" bar
+                    && unionContinuesAt definition cursor.Current.Range.Start.Line bar)))
 
     let private startsMember (token: LayoutToken) =
         isKeyword "member" token
@@ -3139,6 +3150,24 @@ module internal Parser =
 
                     skipUntil state context
 
+            let recovery =
+                match representation, recovery with
+                | SyntaxTypeRepresentation.Union _, ListRecovery.Continues when
+                    reportedSince state reported
+                    && not (reportedUnsupportedSince state reported)
+                    ->
+                    if state.InAnonymousRoot then
+                        if isEndOfFile (nextSourceToken cursor) then
+                            reportUnsupported
+                                state
+                                (nextSourceToken cursor)
+                                "the end of an anonymous module after a union case error"
+
+                        ListRecovery.Unmodeled
+                    else
+                        ListRecovery.ContinuesInTypeBody
+                | _ -> recovery
+
             keepFirstDiagnosticSince state reported
 
             let definition = {
@@ -3190,6 +3219,9 @@ module internal Parser =
                     | Some(definition, definitionRecovery) when not (reportedSince state reported) ->
                         rest.Add definition
                         recovery <- definitionRecovery
+                    | Some(definition, ListRecovery.ContinuesInTypeBody) ->
+                        rest.Add definition
+                        recovery <- ListRecovery.ContinuesInTypeBody
                     | Some(definition, _) ->
                         // The Compatibility Oracle reports the next root declaration after an error inside a type group.
                         rest.Add definition
@@ -3200,6 +3232,8 @@ module internal Parser =
                     if
                         recovery
                         <> ListRecovery.Unmodeled
+                        && recovery
+                           <> ListRecovery.ContinuesInTypeBody
                     then
                         if not (reportedAt state cursor.Current) then
                             reportUnsupported state cursor.Current "a type group"
@@ -3209,12 +3243,13 @@ module internal Parser =
                     let andToken = cursor.Advance()
 
                     let skipped =
-                        [
-                            Option.map skippedToken andToken.Token
-                            skipUntil state andToken.Range.Start
-                        ]
-                        |> List.choose id
-                        |> List.reduce mergeSkipped
+                        let keyword = {
+                            Tokens = ImmutableArray.CreateRange(Option.toList andToken.Token)
+                            Range = andToken.Range
+                        }
+
+                        skipUntil state andToken.Range.Start
+                        |> Option.fold mergeSkipped keyword
 
                     if rest.Count = 0 then
                         first <- withSkipped first skipped
@@ -3370,12 +3405,14 @@ module internal Parser =
 
     let private reportPendingAtEnd state =
         match pendingDeclaration state with
+        | Some DeclarationAfterRecovery.SkippedInTypeBody when isEndOfFile state.Cursor.Current ->
+            state.ModuleHeader <- ModuleHeader.LostAtEnd(emptyAt state.Cursor.Current.Range.Start)
         | Some(DeclarationAfterRecovery.SkippedInSignatureModule(_, reportsAtEnd)) when
             isEndOfFile state.Cursor.Current
             ->
             if reportsAtEnd then
-                state.SignatureHeader <-
-                    SignatureHeader.LostAtEnd(emptyAt state.Cursor.Current.Range.Start)
+                state.ModuleHeader <-
+                    ModuleHeader.LostAtEnd(emptyAt state.Cursor.Current.Range.Start)
         | Some(DeclarationAfterRecovery.ReportedAtRoot _)
         | Some DeclarationAfterRecovery.IncompleteAtNext ->
             let token = state.Cursor.Current
@@ -3472,7 +3509,23 @@ module internal Parser =
                         reportAfterRecovery state token
                     else
                         state.Recovery <- Recovery.Parsing
+                | Some DeclarationAfterRecovery.SkippedInTypeBody when startsTypeBodyMember cursor ->
+                    state.Recovery <- Recovery.Parsing
+                    state.InTypeBody <- true
+                | Some DeclarationAfterRecovery.SkippedInTypeBody when
+                    isKeyword "use" (cursor.Peek(offsetAfterAttributeLists cursor 0))
+                    ->
+                    // The Compatibility Oracle reports FS0523 for a 'use' binding in the recovered type body.
+                    reportAfterRecovery state token
                 | _ -> ()
+
+                if
+                    state.InTypeBody
+                    && not (isSuppressing state)
+                    && not (startsTypeBodyMember cursor)
+                then
+                    // The Compatibility Oracle reports the other declarations inside the recovered type body with more diagnostics.
+                    reportAfterRecovery state token
 
                 let target = if isSuppressing state then discarded else declarations
 
@@ -3506,7 +3559,8 @@ module internal Parser =
                     | Some(DeclarationAfterRecovery.Discarded _)
                     | Some(DeclarationAfterRecovery.ReportedAtRoot _)
                     | Some DeclarationAfterRecovery.IncompleteAtNext
-                    | Some(DeclarationAfterRecovery.SkippedInSignatureModule _) -> false
+                    | Some(DeclarationAfterRecovery.SkippedInSignatureModule _)
+                    | Some DeclarationAfterRecovery.SkippedInTypeBody -> false
                     | Some(DeclarationAfterRecovery.Unmodeled _) -> true
                     | Some DeclarationAfterRecovery.DiscardedIfValueOrOpen ->
                         not (
@@ -3564,8 +3618,8 @@ module internal Parser =
                                 else
                                     match rules.StartPoint list with
                                     | RecoveryPoint.SignatureFile when
-                                        (state.SignatureHeader
-                                         <> SignatureHeader.Kept)
+                                        (state.ModuleHeader
+                                         <> ModuleHeader.Kept)
                                         ->
                                         RecoveryPoint.NestedSignature
                                     | point -> point
@@ -3646,20 +3700,20 @@ module internal Parser =
                     | ListRecovery.Discards, DeclarationList.NestedModule
                     | ListRecovery.DiscardsInValue, DeclarationList.NestedModule ->
                         // The Compatibility Oracle skips the next tokens silently until a value, open, module, or namespace.
-                        state.SignatureHeader <- SignatureHeader.Lost
+                        state.ModuleHeader <- ModuleHeader.Lost
 
                         suppress
                             state
                             (DeclarationAfterRecovery.SkippedInSignatureModule(state.Depth, true))
                     | ListRecovery.DiscardsInsideValueType, DeclarationList.NestedModule ->
-                        state.SignatureHeader <- SignatureHeader.Lost
+                        state.ModuleHeader <- ModuleHeader.Lost
 
                         suppress
                             state
                             (DeclarationAfterRecovery.SkippedInSignatureModule(state.Depth, false))
                     | ListRecovery.Discards, _ when
-                        (state.SignatureHeader
-                         <> SignatureHeader.Kept)
+                        (state.ModuleHeader
+                         <> ModuleHeader.Kept)
                         ->
                         suppress
                             state
@@ -3673,8 +3727,8 @@ module internal Parser =
                         // The Compatibility Oracle discards the rest of the file after this recovery and reports no diagnostic for it.
                         suppress state (DeclarationAfterRecovery.Discarded None)
                     | ListRecovery.DiscardsInValue, _ when
-                        (state.SignatureHeader
-                         <> SignatureHeader.Kept)
+                        (state.ModuleHeader
+                         <> ModuleHeader.Kept)
                         ->
                         // The Compatibility Oracle keeps the lost module header, so this recovery also reports FS0222 at the end.
                         suppress
@@ -3688,6 +3742,9 @@ module internal Parser =
                     | ListRecovery.DiscardsInsideValueType, _ ->
                         // The Compatibility Oracle discards later values and opens, and reports FS0010 at the end for other declarations.
                         suppress state DeclarationAfterRecovery.DiscardedIfValueOrOpen
+                    | ListRecovery.ContinuesInTypeBody, _ ->
+                        // The Compatibility Oracle continues the broken type body, skips other declarations silently, and loses the module header at the end.
+                        suppress state DeclarationAfterRecovery.SkippedInTypeBody
                     | ListRecovery.Unmodeled, _ ->
                         suppress state (DeclarationAfterRecovery.Unmodeled false)
                     | ListRecovery.Continues, _ -> ()
@@ -3908,8 +3965,8 @@ module internal Parser =
                         parseVal
                             state
                             (list = DeclarationList.NestedModule
-                             || (state.SignatureHeader
-                                 <> SignatureHeader.Kept))
+                             || (state.ModuleHeader
+                                 <> ModuleHeader.Kept))
                             attributes
                     )
                 else
@@ -3938,8 +3995,15 @@ module internal Parser =
         Recovery = Recovery.Parsing
         InAnonymousRoot = false
         Depth = 0
-        SignatureHeader = SignatureHeader.Kept
+        ModuleHeader = ModuleHeader.Kept
+        InTypeBody = false
     }
+
+    let private unresumedRecoveryAtEnd state =
+        match state.ModuleHeader with
+        | ModuleHeader.LostAtEnd range -> Some range
+        | ModuleHeader.Kept
+        | ModuleHeader.Lost -> None
 
     let parseImplementationFile (document: LexicalDocument) : ImplementationFileParseResult =
         let state = start document
@@ -3952,6 +4016,7 @@ module internal Parser =
                 Contents = contents
             }
             Diagnostics = ImmutableArray.CreateRange state.Diagnostics
+            UnresumedRecoveryAtEnd = unresumedRecoveryAtEnd state
         }
 
     let parseSignatureFile (document: LexicalDocument) : SignatureFileParseResult =
@@ -3965,11 +4030,7 @@ module internal Parser =
                 Contents = contents
             }
             Diagnostics = ImmutableArray.CreateRange state.Diagnostics
-            UnresumedRecoveryAtEnd =
-                match state.SignatureHeader with
-                | SignatureHeader.LostAtEnd range -> Some range
-                | SignatureHeader.Kept
-                | SignatureHeader.Lost -> None
+            UnresumedRecoveryAtEnd = unresumedRecoveryAtEnd state
         }
 
     let private missingDeclarationMessage =
@@ -4141,7 +4202,7 @@ module internal Parser =
                     result.Diagnostics,
                     anonymousRoot result.File.Contents
                     |> Option.map (anonymousImplementation document),
-                    None
+                    result.UnresumedRecoveryAtEnd
 
             let add diagnostic =
                 diagnostics.Add {
@@ -4169,7 +4230,7 @@ module internal Parser =
                 requiresDeclaration
                 && not unmodeled
                 ->
-                // The Compatibility Oracle loses the module header when a nested signature recovery reaches the end of input.
+                // The Compatibility Oracle loses the module header when a recovery that skips declarations reaches the end of input.
                 add {
                     Severity = DiagnosticSeverity.Error
                     Code = "FS0222"
