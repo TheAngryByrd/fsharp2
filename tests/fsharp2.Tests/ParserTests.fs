@@ -71,8 +71,8 @@ module ParserTests =
 
             $"({elements})"
         | SyntaxType.Parenthesized(inner, _) -> typeShape inner
-        | SyntaxType.Array(element, rank, _) ->
-            $"{typeShape element}[{System.String(',', rank - 1)}]"
+        | SyntaxType.Array(element, suffix, _) ->
+            $"{typeShape element}[{System.String(',', suffix.Commas.Length)}]"
         | SyntaxType.SignatureParameter(name, parameterType, _) ->
             $"{name.Text}: {typeShape parameterType}"
         | SyntaxType.Missing _ -> "<missing>"
@@ -1294,6 +1294,30 @@ val h: (int * string)[] -> global.System.String[]
                         "val h: ((int * string)[] -> global.System.String[])"
                     ]
                     "Each array type keeps its element type and rank"
+
+                let spacedArray =
+                    (Seq.exactlyOne result.File.Contents).Declarations
+                    |> Seq.pick (fun declaration ->
+                        match declaration with
+                        | SignatureDeclaration.Val {
+                                                       Name = Some name
+                                                       Type = SyntaxType.Array(_, suffix, _)
+                                                   } when name.Text = "g" -> Some suffix
+                        | _ -> None
+                    )
+
+                Expect.equal spacedArray.Rank 3 "Rank"
+
+                Expect.sequenceEqual
+                    (spacedArray.Commas
+                     |> Seq.map position)
+                    [
+                        8, 14, 8, 15
+                        8, 16, 8, 17
+                    ]
+                    "Comma ranges"
+
+                Expect.equal (position spacedArray.Range) (8, 12, 8, 19) "Suffix range"
 
             testCase "an open declaration keeps its target kind"
             <| fun _ ->

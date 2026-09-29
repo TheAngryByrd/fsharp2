@@ -972,12 +972,20 @@ module internal Parser =
         while not stop do
             match arraySuffixLength cursor context with
             | Some closeOffset ->
-                for _ in 1..closeOffset do
-                    cursor.Advance()
-                    |> ignore
+                let openToken = cursor.Advance()
+                let commas = ImmutableArray.CreateBuilder<SourceRange>()
+
+                for _ in 2..closeOffset do
+                    commas.Add(cursor.Advance().Range)
 
                 let close = cursor.Advance()
-                result <- SyntaxType.Array(result, closeOffset, span result.Range close.Range)
+
+                let suffix = {
+                    Commas = commas.ToImmutable()
+                    Range = span openToken.Range close.Range
+                }
+
+                result <- SyntaxType.Array(result, suffix, span result.Range close.Range)
             | None when
                 (isKeyword "global" cursor.Current
                  || (isIdentifier cursor.Current

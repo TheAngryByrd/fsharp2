@@ -29,13 +29,22 @@ type internal SyntaxConstant =
     | Boolean of bool
     | Unit
 
+type internal SyntaxArraySuffix = {
+    Commas: ImmutableArray<SourceRange>
+    Range: SourceRange
+} with
+
+    member this.Rank =
+        this.Commas.Length
+        + 1
+
 [<RequireQualifiedAccess>]
 type internal SyntaxType =
     | LongIdentifier of LongIdentifier
     | GlobalLongIdentifier of globalKeyword: SourceRange * LongIdentifier option * SourceRange
     | Variable of SyntaxIdentifier
     | Application of SyntaxType * ImmutableArray<SyntaxType> * isPostfix: bool * SourceRange
-    | Array of element: SyntaxType * rank: int * SourceRange
+    | Array of element: SyntaxType * SyntaxArraySuffix * SourceRange
     | Function of SyntaxType * SyntaxType * SourceRange
     | Tuple of ImmutableArray<SyntaxType> * SourceRange
     | Parenthesized of SyntaxType * SourceRange
