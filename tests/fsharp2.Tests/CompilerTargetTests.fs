@@ -7085,6 +7085,90 @@ module CompilerTargetTests =
 
                     Expect.equal fsharp2Behavior 42 "Run should continue after the pipeline"
 
+            testCase "keeps a wildcard local annotation as inference"
+            <| fun _ ->
+                let sourceText =
+                    "namespace Contract.Annotations\n\nopen System\nopen System.IO\n\ntype Source() =\n    static member Answer() : int = 42\n    static member Stream() : MemoryStream = new MemoryStream()\n    static member Text() : String = \"forty-two\"\n    static member Describe(value: Object) : int = 42\n\ntype TaskBuilderBase() =\n    member inline _.Zero() = 0\n\n    static member Wildcard() : int =\n        let value: _ = Source.Answer()\n        value\n\n    static member Interface() : int =\n        let disposable: IDisposable = Source.Stream()\n        disposable.Dispose()\n        42\n\n    static member Boxed() : int =\n        let boxed: Object = Source.Text()\n        Source.Describe(boxed)\n"
+
+                withObjectMemberDifferential
+                    "fsharp2-local-annotation-wildcard"
+                    sourceText
+                    "Wildcard"
+                <| fun oracleOutputPath outputPath ->
+                    let invoke assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        emittedAssembly
+                            .GetType("Contract.Annotations.TaskBuilderBase", throwOnError = true)
+                            .GetMethod("Wildcard")
+                            .Invoke(null, [||])
+                        :?> int
+
+                    let oracleBehavior = invoke oracleOutputPath
+                    let fsharp2Behavior = invoke outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "a wildcard local annotation should match the Compatibility Oracle"
+
+                    Expect.equal fsharp2Behavior 42 "Wildcard should return the bound value"
+
+            testCase "converts an annotated local to its interface annotation"
+            <| fun _ ->
+                let sourceText =
+                    "namespace Contract.Annotations\n\nopen System\nopen System.IO\n\ntype Source() =\n    static member Answer() : int = 42\n    static member Stream() : MemoryStream = new MemoryStream()\n    static member Text() : String = \"forty-two\"\n    static member Describe(value: Object) : int = 42\n\ntype TaskBuilderBase() =\n    member inline _.Zero() = 0\n\n    static member Wildcard() : int =\n        let value: _ = Source.Answer()\n        value\n\n    static member Interface() : int =\n        let disposable: IDisposable = Source.Stream()\n        disposable.Dispose()\n        42\n\n    static member Boxed() : int =\n        let boxed: Object = Source.Text()\n        Source.Describe(boxed)\n"
+
+                withObjectMemberDifferential
+                    "fsharp2-local-annotation-interface"
+                    sourceText
+                    "Interface"
+                <| fun oracleOutputPath outputPath ->
+                    let invoke assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        emittedAssembly
+                            .GetType("Contract.Annotations.TaskBuilderBase", throwOnError = true)
+                            .GetMethod("Interface")
+                            .Invoke(null, [||])
+                        :?> int
+
+                    let oracleBehavior = invoke oracleOutputPath
+                    let fsharp2Behavior = invoke outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "an interface local annotation should match the Compatibility Oracle"
+
+                    Expect.equal fsharp2Behavior 42 "Interface should return the bound value"
+
+            testCase "converts an annotated local to its object annotation"
+            <| fun _ ->
+                let sourceText =
+                    "namespace Contract.Annotations\n\nopen System\nopen System.IO\n\ntype Source() =\n    static member Answer() : int = 42\n    static member Stream() : MemoryStream = new MemoryStream()\n    static member Text() : String = \"forty-two\"\n    static member Describe(value: Object) : int = 42\n\ntype TaskBuilderBase() =\n    member inline _.Zero() = 0\n\n    static member Wildcard() : int =\n        let value: _ = Source.Answer()\n        value\n\n    static member Interface() : int =\n        let disposable: IDisposable = Source.Stream()\n        disposable.Dispose()\n        42\n\n    static member Boxed() : int =\n        let boxed: Object = Source.Text()\n        Source.Describe(boxed)\n"
+
+                withObjectMemberDifferential "fsharp2-local-annotation-object" sourceText "Boxed"
+                <| fun oracleOutputPath outputPath ->
+                    let invoke assemblyPath =
+                        let emittedAssembly = Assembly.Load(File.ReadAllBytes(assemblyPath))
+
+                        emittedAssembly
+                            .GetType("Contract.Annotations.TaskBuilderBase", throwOnError = true)
+                            .GetMethod("Boxed")
+                            .Invoke(null, [||])
+                        :?> int
+
+                    let oracleBehavior = invoke oracleOutputPath
+                    let fsharp2Behavior = invoke outputPath
+
+                    Expect.equal
+                        fsharp2Behavior
+                        oracleBehavior
+                        "an object local annotation should match the Compatibility Oracle"
+
+                    Expect.equal fsharp2Behavior 42 "Boxed should return the bound value"
+
             testCase "pipes a parenthesized value-type construction"
             <| fun _ ->
                 let sourceText =

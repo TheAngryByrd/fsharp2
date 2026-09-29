@@ -445,6 +445,7 @@ type internal ParsedExpression =
         bindingName: string *
         isMutable: bool *
         isInline: bool *
+        bindingType: ParsedTypeExpression option *
         value: ParsedExpression *
         body: ParsedExpression *
         bindingRange: SourceRange *

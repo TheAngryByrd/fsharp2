@@ -1361,6 +1361,7 @@ module internal Frontend =
                                         pipelineName,
                                         false,
                                         false,
+                                        None,
                                         expression,
                                         calledExpression,
                                         expressionRange,
@@ -2537,7 +2538,7 @@ module internal Frontend =
 
                         let! localFunctionParameters = parseLocalFunctionParameters []
 
-                        let! _bindingType =
+                        let! bindingType =
                             match (current ()).Kind with
                             | Colon ->
                                 consume ()
@@ -2610,6 +2611,10 @@ module internal Frontend =
                                 bindingName,
                                 isMutable,
                                 shouldExpandLocalFunction,
+                                (if List.isEmpty localFunctionParameters then
+                                     bindingType
+                                 else
+                                     None),
                                 value,
                                 body,
                                 bindingRange,
@@ -2887,6 +2892,7 @@ module internal Frontend =
                                                 name,
                                                 false,
                                                 false,
+                                                None,
                                                 ExpressionMemberAccess(
                                                     ValueReference parameterName,
                                                     itemName
@@ -3114,6 +3120,7 @@ module internal Frontend =
                                     bindingName,
                                     isMutable,
                                     false,
+                                    None,
                                     bindingValue,
                                     body,
                                     bindingRange,
@@ -3332,6 +3339,7 @@ module internal Frontend =
                                     name,
                                     false,
                                     false,
+                                    None,
                                     value,
                                     body,
                                     bindingRange,
@@ -3542,6 +3550,7 @@ module internal Frontend =
                                     bindingName,
                                     false,
                                     false,
+                                    None,
                                     value,
                                     body,
                                     bindingRange,

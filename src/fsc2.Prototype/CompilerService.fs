@@ -878,11 +878,19 @@ module private InlineExpansion =
                 matchHeaderRange,
                 range
             )
-        | LetExpression(bindingName, isMutable, isInline, value, body, bindingRange, bodyRange) ->
+        | LetExpression(bindingName,
+                        isMutable,
+                        isInline,
+                        bindingType,
+                        value,
+                        body,
+                        bindingRange,
+                        bodyRange) ->
             LetExpression(
                 bindingName,
                 isMutable,
                 isInline,
+                bindingType,
                 transform value,
                 transform body,
                 bindingRange,
@@ -1040,11 +1048,19 @@ module private InlineExpansion =
                 | _ -> name
 
             LocalAssignment(name, substitute replacements value)
-        | LetExpression(bindingName, isMutable, isInline, value, body, bindingRange, bodyRange) ->
+        | LetExpression(bindingName,
+                        isMutable,
+                        isInline,
+                        bindingType,
+                        value,
+                        body,
+                        bindingRange,
+                        bodyRange) ->
             LetExpression(
                 bindingName,
                 isMutable,
                 isInline,
+                bindingType,
                 substitute replacements value,
                 substitute
                     (replacements
@@ -1141,11 +1157,19 @@ module private InlineExpansion =
         | Some expression -> expression
         | None ->
             match expression with
-            | LetExpression(bindingName, isMutable, isInline, value, body, bindingRange, bodyRange) ->
+            | LetExpression(bindingName,
+                            isMutable,
+                            isInline,
+                            bindingType,
+                            value,
+                            body,
+                            bindingRange,
+                            bodyRange) ->
                 LetExpression(
                     bindingName,
                     isMutable,
                     isInline,
+                    bindingType,
                     replaceCalls functionName parameters functionBody value,
                     (if bindingName = functionName then
                          body
@@ -1172,7 +1196,7 @@ module private InlineExpansion =
 
         let rec expandExpression =
             function
-            | LetExpression(bindingName, false, true, value, body, _, _) ->
+            | LetExpression(bindingName, false, true, _, value, body, _, _) ->
                 expandedLocalFunction <- true
 
                 let parameters, functionBody = lambdaParameters value
@@ -1186,7 +1210,7 @@ module private InlineExpansion =
 
     let sourceRange defaultRange =
         function
-        | LetExpression(_, false, true, _, _, _, bodyRange) -> bodyRange
+        | LetExpression(_, false, true, _, _, _, _, bodyRange) -> bodyRange
         | _ -> defaultRange
 
 /// A deliberately small in-memory query owner. Query identities and cached
@@ -1374,7 +1398,7 @@ type internal CompilerService() =
         | UnitLambdaExpression(value, _) -> [ value ]
         | FunctionApplication(functionExpression, argumentExpression)
         | EqualityExpression(functionExpression, argumentExpression, _)
-        | LetExpression(_, _, _, functionExpression, argumentExpression, _, _)
+        | LetExpression(_, _, _, _, functionExpression, argumentExpression, _, _)
         | ComputationBindingExpression(_, functionExpression, argumentExpression, _, _)
         | WhileExpression(functionExpression, argumentExpression, _, _, _) -> [
             functionExpression
@@ -1458,7 +1482,7 @@ type internal CompilerService() =
                 |> not)
             ->
             Some(receiverName, receiverRange)
-        | LetExpression(bindingName, _, _, value, body, _, _) ->
+        | LetExpression(bindingName, _, _, _, value, body, _, _) ->
             match tryFindLaterModuleReference laterModuleNames boundNames value with
             | Some reference -> Some reference
             | None ->
@@ -4939,7 +4963,7 @@ type internal CompilerService() =
 
                                     collect state body
                                 )
-                            | LetExpression(_, _, _, value, body, _, _) ->
+                            | LetExpression(_, _, _, _, value, body, _, _) ->
                                 let constraints = collect constraints value
                                 collect constraints body
                             | ComputationExpression(_, body, _) -> collect constraints body
@@ -5910,10 +5934,12 @@ type internal CompilerService() =
                                     | LetExpression(firstTaskName,
                                                     false,
                                                     false,
+                                                    _,
                                                     UnitApplication leftName,
                                                     LetExpression(secondTaskName,
                                                                   false,
                                                                   false,
+                                                                  _,
                                                                   UnitApplication rightName,
                                                                   returnExpression,
                                                                   _,
@@ -5929,11 +5955,13 @@ type internal CompilerService() =
                                                                    LetExpression(firstTaskName,
                                                                                  false,
                                                                                  false,
+                                                                                 _,
                                                                                  FunctionApplication(ValueReference leftName,
                                                                                                      ValueReference leftEnvironmentName),
                                                                                  LetExpression(secondTaskName,
                                                                                                false,
                                                                                                false,
+                                                                                               _,
                                                                                                FunctionApplication(ValueReference rightName,
                                                                                                                    ValueReference rightEnvironmentName),
                                                                                                returnExpression,
@@ -6285,6 +6313,7 @@ type internal CompilerService() =
                                             "a named argument is valid only inside a method or constructor call"
                                     | ComputationExpression(builderName,
                                                             LetExpression(resultsName,
+                                                                          _,
                                                                           _,
                                                                           _,
                                                                           TypeConstruction(_, [], _),
@@ -10754,6 +10783,7 @@ type internal CompilerService() =
                                     | LetExpression(bindingName,
                                                     isMutable,
                                                     _,
+                                                    bindingType,
                                                     value,
                                                     body,
                                                     bindingRange,
@@ -10801,7 +10831,7 @@ type internal CompilerService() =
                                                     fst
                                                     >> tryExpectedBindingType
                                                 )
-                                            | LetExpression(_, _, _, _, nestedBody, _, _) ->
+                                            | LetExpression(_, _, _, _, _, nestedBody, _, _) ->
                                                 tryExpectedBindingType nestedBody
                                             | ConditionalExpression(ifCondition,
                                                                     ifTrue,
@@ -10870,9 +10900,73 @@ type internal CompilerService() =
 
                                             typeArguments [] [] nextLocalIndex arguments
 
-                                        let expectedBindingType = tryExpectedBindingType body
+                                        let annotatedBindingType =
+                                            match bindingType with
+                                            | None
+                                            | Some(ParsedWildcardType _)
+                                            | Some(ParsedFlexibleType _) -> Ok None
+                                            | Some annotation ->
+                                                annotation
+                                                |> expandTypeAbbreviations Set.empty
+                                                |> resolveType declaredMethodParameters
+                                                |> Result.bind (fun resolvedAnnotation ->
+                                                    toCliType
+                                                        methodParameterIndex
+                                                        annotation.Range
+                                                        resolvedAnnotation
+                                                    |> Result.map (fun annotatedType ->
+                                                        Some(resolvedAnnotation, annotatedType)
+                                                    )
+                                                )
 
-                                        let typedValue =
+                                        let rec isReferenceConvertible
+                                            (visited: Set<string>)
+                                            expectedType
+                                            actualType
+                                            =
+                                            let isReferenceType =
+                                                match actualType with
+                                                | CliString
+                                                | CliObject
+                                                | CliArray _ -> true
+                                                | CliNamedType typeReference
+                                                | CliGenericType(typeReference, _) ->
+                                                    not typeReference.IsValueType
+                                                | _ -> false
+
+                                            if not isReferenceType then
+                                                false
+                                            elif
+                                                expectedType = actualType
+                                                || expectedType = CliObject
+                                            then
+                                                true
+                                            else
+                                                match actualType with
+                                                | CliNamedType typeReference when
+                                                    not (
+                                                        visited.Contains(
+                                                            typeReference.DeclarationId
+                                                        )
+                                                    )
+                                                    ->
+                                                    let visited =
+                                                        visited.Add(typeReference.DeclarationId)
+
+                                                    Seq.append
+                                                        (references.BaseType(
+                                                            typeReference.DeclarationId
+                                                         )
+                                                         |> Option.toList)
+                                                        (references.Interfaces(
+                                                            typeReference.DeclarationId
+                                                        ))
+                                                    |> Seq.exists (
+                                                        isReferenceConvertible visited expectedType
+                                                    )
+                                                | _ -> false
+
+                                        let typeValueWithExpectedType expectedBindingType =
                                             match value, expectedBindingType with
                                             | MemberCall(receiverName, memberName, arguments),
                                               Some expectedReturnType ->
@@ -10886,6 +10980,50 @@ type internal CompilerService() =
                                                     localBindings
                                                     nextLocalIndex
                                                     value
+
+                                        let typedValue =
+                                            annotatedBindingType
+                                            |> Result.bind (fun annotatedBindingType ->
+                                                let usageBindingType () =
+                                                    typeValueWithExpectedType (
+                                                        tryExpectedBindingType body
+                                                    )
+
+                                                match annotatedBindingType with
+                                                | None -> usageBindingType ()
+                                                | Some(_, annotatedType) ->
+                                                    match
+                                                        typeValueWithExpectedType (
+                                                            Some annotatedType
+                                                        )
+                                                    with
+                                                    | Ok typed -> Ok typed
+                                                    | Error _ -> usageBindingType ()
+                                            )
+                                            |> Result.map (fun
+                                                               (typedValue,
+                                                                valueType,
+                                                                nextValueLocalIndex) ->
+                                                match annotatedBindingType with
+                                                | Ok(Some(TypedNamedType annotatedResolvedType,
+                                                          annotatedType)) when
+                                                    annotatedType
+                                                    <> valueType
+                                                    && isReferenceConvertible
+                                                        Set.empty
+                                                        annotatedType
+                                                        valueType
+                                                    ->
+                                                    TypedUpcast(
+                                                        valueType,
+                                                        annotatedType,
+                                                        annotatedResolvedType,
+                                                        typedValue
+                                                    ),
+                                                    annotatedType,
+                                                    nextValueLocalIndex
+                                                | _ -> typedValue, valueType, nextValueLocalIndex
+                                            )
 
                                         match typedValue with
                                         | Error error -> Error error
@@ -13301,6 +13439,7 @@ type internal CompilerService() =
                                                         LetExpression(keepGoingName,
                                                                       true,
                                                                       false,
+                                                                      _,
                                                                       BooleanLiteral true,
                                                                       WhileExpression(ValueReference conditionName,
                                                                                       ComputationBindingExpression(guardResultName,
