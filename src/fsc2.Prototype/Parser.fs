@@ -629,11 +629,6 @@ module internal Parser =
         Range = token.Range
     }
 
-    let private skippedToken (token: LexicalToken) = {
-        Tokens = ImmutableArray.Create token
-        Range = token.Range
-    }
-
     let private mergeSkipped (first: SkippedSyntax) (second: SkippedSyntax) = {
         Tokens = first.Tokens.AddRange second.Tokens
         Range = span first.Range second.Range
@@ -2847,17 +2842,17 @@ module internal Parser =
 
         SyntaxTypeRepresentation.Record(fields.ToImmutable())
 
+    // The Compatibility Oracle ends a union that starts on the definition line at an offside '|'.
+    let private unionContinuesAt (definition: SourcePosition option) firstLine (bar: LayoutToken) =
+        match definition with
+        | Some context when firstLine = context.Line -> not (isOffside context bar)
+        | _ -> true
+
     let private parseUnionCases state (definition: SourcePosition option) =
         let cursor = state.Cursor
         let cases = ImmutableArray.CreateBuilder<SyntaxUnionCase>()
         let mutable more = true
-        let firstLine = cursor.Current.Range.Start.Line
-
-        // The Compatibility Oracle ends a union that starts on the definition line at an offside '|'.
-        let continuesAt (bar: LayoutToken) =
-            match definition with
-            | Some context when firstLine = context.Line -> not (isOffside context bar)
-            | _ -> true
+        let continuesAt = unionContinuesAt definition cursor.Current.Range.Start.Line
 
         while more do
             let start = cursor.Current
@@ -3053,18 +3048,11 @@ module internal Parser =
     let private startsUnion (cursor: Cursor) (definition: SourcePosition option) =
         let bar = cursor.Peek 1
 
-        let continuesAtBar =
-            isOperator "|" bar
-            && (
-                match definition with
-                | Some context -> not (isOffside context bar)
-                | None -> true
-            )
-
         isOperator "|" cursor.Current
         || (isIdentifier cursor.Current
             && (isKeyword "of" bar
-                || continuesAtBar))
+                || (isOperator "|" bar
+                    && unionContinuesAt definition cursor.Current.Range.Start.Line bar)))
 
     let private startsMember (token: LayoutToken) =
         isKeyword "member" token
@@ -3255,12 +3243,13 @@ module internal Parser =
                     let andToken = cursor.Advance()
 
                     let skipped =
-                        [
-                            Option.map skippedToken andToken.Token
-                            skipUntil state andToken.Range.Start
-                        ]
-                        |> List.choose id
-                        |> List.reduce mergeSkipped
+                        let keyword = {
+                            Tokens = ImmutableArray.CreateRange(Option.toList andToken.Token)
+                            Range = andToken.Range
+                        }
+
+                        skipUntil state andToken.Range.Start
+                        |> Option.fold mergeSkipped keyword
 
                     if rest.Count = 0 then
                         first <- withSkipped first skipped
