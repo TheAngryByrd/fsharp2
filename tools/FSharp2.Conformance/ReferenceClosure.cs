@@ -83,19 +83,25 @@ public static class ReferenceClosure
         }
 
         var fileName = $"{assemblyName}.dll";
-        var matches = Directory
+        var candidates = Directory
             .EnumerateFiles(packRoot, fileName, SearchOption.AllDirectories)
-            .Where(path => string.Equals(Hashing.Sha256File(path), expectedHash, StringComparison.Ordinal))
             .OrderBy(static path => path, StringComparer.Ordinal)
+            .Select(path => (Path: path, Hash: Hashing.Sha256File(path)))
             .ToArray();
-        return matches.Length switch
+        var match = candidates.FirstOrDefault(candidate =>
+            string.Equals(candidate.Hash, expectedHash, StringComparison.Ordinal));
+        if (match.Path is not null)
         {
-            0 => throw Invalid(
-                "reference-hash",
-                fileName,
-                $"The selected SDK does not contain a '{fileName}' file with hash '{expectedHash}'."),
-            _ => matches[0],
-        };
+            return match.Path;
+        }
+
+        var found = candidates.Length == 0
+            ? "No candidate file exists."
+            : "Found: " + string.Join("; ", candidates.Select(candidate => $"{candidate.Path} = {candidate.Hash}")) + ".";
+        throw Invalid(
+            "reference-hash",
+            fileName,
+            $"The selected SDK ({sdk.Rid}) does not contain a '{fileName}' file with hash '{expectedHash}'. {found}");
     }
 
     private static string RequireHashMatch(string path, string expectedHash)
