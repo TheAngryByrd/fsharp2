@@ -3278,8 +3278,18 @@ let first = 42
 
                 Expect.stringContains
                     targets
-                    "tools/$(FSharp2CompilerHostRuntimeIdentifier)/fsc2.exe"
+                    "tools/$(FSharp2CompilerHostRuntimeIdentifier)/$(FSharp2CompilerHostExecutableName)"
                     "The MSBuild target must select the packaged fsc2 adapter."
+
+                Expect.stringContains
+                    targets
+                    "StartsWith('win'))\">fsc2.exe</FSharp2CompilerHostExecutableName>"
+                    "The Windows packaged adapter must be fsc2.exe."
+
+                Expect.stringContains
+                    targets
+                    "<FSharp2CompilerHostExecutableName Condition=\"'$(FSharp2CompilerHostExecutableName)' == ''\">fsc2</FSharp2CompilerHostExecutableName>"
+                    "The non-Windows packaged adapter must be fsc2."
 
                 Expect.stringContains
                     targets
@@ -3288,6 +3298,11 @@ let first = 42
 
                 Expect.stringContains
                     packageProject
-                    "PackagePath=\"tools/$(FSharp2CompilerHostRuntimeIdentifier)/fsc2.exe\""
+                    "Include=\"$(FSharp2CompilerHostPublishDirectory)$(FSharp2CompilerHostExecutableName)\""
+                    "The package must pack the published fsc2 adapter."
+
+                Expect.stringContains
+                    packageProject
+                    "PackagePath=\"tools/$(FSharp2CompilerHostRuntimeIdentifier)\""
                     "The package must place fsc2 at the MSBuild target path."
         ]
