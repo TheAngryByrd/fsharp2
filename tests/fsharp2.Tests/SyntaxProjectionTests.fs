@@ -281,7 +281,7 @@ module SyntaxProjectionTests =
             + first.Length
         )
 
-    let private compileRequest logicalPath (text: string) =
+    let private compileRequest (files: (string * string) list) =
         let referenceSnapshot name (path: string) =
             let image = IO.File.ReadAllBytes path
 
@@ -300,7 +300,7 @@ module SyntaxProjectionTests =
                     StableIdentity.create "assembly:Program",
                     "Program"
                 ),
-                [| snapshot logicalPath text |],
+                [| for logicalPath, text in files -> snapshot logicalPath text |],
                 [|
                     referenceSnapshot
                         "System.Runtime"
@@ -317,7 +317,7 @@ module SyntaxProjectionTests =
                     false,
                     DebugFormat.None,
                     [||],
-                    [| logicalPath |],
+                    [| for logicalPath, _ in files -> logicalPath |],
                     [||]
                 ),
                 SigningOptions.Create(SigningMode.Unsigned, [||]),
@@ -509,11 +509,12 @@ module SyntaxProjectionTests =
             testCase
                 "the compiler service parses an implicit module in the last file of an executable"
             <| fun _ ->
-                // The Compatibility Oracle accepts each text. It also accepts a namespace that has only internal types.
+                // The Compatibility Oracle accepts each text. It also accepts a namespace that has only internal types, and a namespace prefix that has only such namespaces.
                 for text in
                     [
                         "open System\n\n[<EntryPoint>]\nlet main argv = 0\n"
                         "open Microsoft.FSharp.Primitives.Basics\n\n[<EntryPoint>]\nlet main argv = 0\n"
+                        "open Microsoft.FSharp.Text\n\n[<EntryPoint>]\nlet main argv = 0\n"
                         "[<EntryPoint>]\nlet main argv = 0\n"
                         "let before = 1\n[<EntryPoint>]\nlet main argv = 0\n"
                         "// For more information see https://aka.ms/fsharp-console-apps\r\n[<EntryPoint>]\r\nlet main argv = 0\r\n"
@@ -527,6 +528,31 @@ module SyntaxProjectionTests =
                         1
                         $"The syntax parser produced the parsed module:\n{text}"
 
+            testCase "the compiler service parses an implicit module after a named module"
+            <| fun _ ->
+                let result, projections =
+                    compileFilesWithService CompilationTarget.Executable [
+                        "Lib.fs", "module Lib\nlet answer = 42\n"
+                        "Program.fs", "[<EntryPoint>]\nlet main argv = 0\n"
+                    ]
+
+                Expect.isOk result "The Compatibility Oracle compiles the two files"
+                Expect.equal projections 2 "The syntax parser produced both parsed modules"
+
+            testCase
+                "an implicit module with the name of an earlier module is rejected (Oracle FS0248)"
+            <| fun _ ->
+                let result =
+                    compileRequest [
+                        "Program.fs", "module Program\nlet answer = 42\n"
+                        "src/Program.fs", "[<EntryPoint>]\nlet main argv = 0\n"
+                    ]
+
+                Expect.equal
+                    result.Outcome
+                    CompilationOutcome.Failed
+                    $"The Compatibility Oracle reports FS0248: Two modules named 'Program' occur in two parts of this assembly. The result is %A{result.Diagnostics}"
+
             testCase
                 "an implicit module compiles to the public module that the Compatibility Oracle names"
             <| fun _ ->
@@ -538,7 +564,7 @@ module SyntaxProjectionTests =
                         "Program.fs", "[<EntryPoint>]\nlet main argv = 0\n"
                         "src/program.fs", "[<EntryPoint>]\nlet main argv = 0\n"
                     ] do
-                    let result = compileRequest logicalPath text
+                    let result = compileRequest [ logicalPath, text ]
 
                     Expect.equal
                         result.Outcome
@@ -589,7 +615,10 @@ module SyntaxProjectionTests =
                     "an unknown nested namespace (Oracle FS0039)",
                     CompilationTarget.Executable,
                     [ "Program.fs", $"open System.Nope{entryPoint}" ]
-                    "no entry point (FS0988)",
+                    "an unknown namespace under a prefix with only internal types (Oracle FS0039)",
+                    CompilationTarget.Executable,
+                    [ "Program.fs", $"open Microsoft.FSharp.Text.Nope{entryPoint}" ]
+                    "no entry point (Oracle FS0988)",
                     CompilationTarget.Executable,
                     [ "Program.fs", "open System\nlet x = 1\n" ]
                     "a file name that is not an identifier (FS0221)",
