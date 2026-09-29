@@ -7021,13 +7021,69 @@ module M =
             "IncompleteAfterRecovery.fs(3,1,3,2): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
             "IncompleteAfterRecovery.fs(5,1,5,1): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (4:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
         ]
-    ]
 
-    let private unmodeledIncompleteConstructCases = [
         "t_generic.fs",
         "module M\nopen type System.Collections.Generic.List<int>\nlet x = )\n",
         [ "t_generic.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding" ]
 
+        "s_t_gen.fsi", "module A\nopen type System.Collections.Generic.List<int>\nval x: int\n", []
+
+        "t_gen_eof.fs", "module A\nopen type System.Collections.Generic.List<int>\n", []
+
+        "t_gen_nest2.fs",
+        "module A\nopen type System.Collections.Generic.List<List<int>>\nlet x = 1\n",
+        []
+
+        "t_gen_nested.fs",
+        "module A\nmodule B =\n    open type System.Collections.Generic.List<int>\n    let x = 1\n",
+        []
+
+        "t_gen_post.fs", "module A\nopen type int list\nlet x = 1\n", []
+
+        "t_gen_space.fs",
+        "module A\nopen type System.Collections.Generic.List <int>\nlet x = 1\n",
+        [
+            "t_gen_space.fs(2,43,2,48): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "t_gen_tuple.fs", "module A\nopen type (int * int)\nlet x = 1\n", []
+
+        "t_gen_var.fs", "module A\nopen type System.Collections.Generic.List<'T>\nlet x = 1\n", []
+
+        "t_gen_wild.fs", "module A\nopen type System.Collections.Generic.List<_>\nlet x = 1\n", []
+
+        "t_gen.fs", "module A\nopen type System.Collections.Generic.List<int>\nlet x = 1\n", []
+
+        "t_gen2.fs",
+        "module A\nopen type System.Collections.Generic.Dictionary<int, string>\nlet x = 1\n",
+        []
+
+        "t_eof_gen.fs", "module A\nopen type List<int>", []
+
+        "t_genpost.fs", "module A\nopen type List<int> list\nlet x = 1\n", []
+
+        "t_paren.fs", "module A\nopen type (int)\nlet x = 1\n", []
+
+        "t_post2.fs", "module A\nopen type int list option\nlet x = 1\n", []
+
+        "t_space2.fs",
+        "module A\nopen type List <int>\nlet x = 1\n",
+        [
+            "t_space2.fs(2,16,2,21): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "t_var.fs", "module A\nopen type 'T\nlet x = 1\n", []
+
+        "t_wild.fs", "module A\nopen type _\nlet x = 1\n", []
+
+        "v_space.fsi",
+        "module A\nval x: System.Collections.Generic.List <int>\nval y: int\n",
+        [
+            "v_space.fsi(2,40,2,45): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+    ]
+
+    let private unmodeledIncompleteConstructCases = [
         "t_global.fs",
         "module M\nopen type global.System.Math\nlet x = )\n",
         [ "t_global.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding" ]
@@ -8255,6 +8311,103 @@ module M =
             "b_and_indented.fs(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
         ]
 
+
+        "o_gen.fs",
+        "module A\nopen System.Collections.Generic.List<int>\nlet x = 1\n",
+        [
+            "o_gen.fs(2,37,2,38): error FS0010: Unexpected type application  in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "s_t_global.fsi", "module A\nopen type global.System.Math\nval x: int\n", []
+
+        "t_gen_arr.fs", "module A\nopen type int[]\nlet x = 1\n", []
+
+        "t_gen_dotafter.fs",
+        "module A\nopen type System.Collections.Generic.List<int>.Enumerator\nlet x = 1\n",
+        []
+
+        "t_gen_empty.fs",
+        "module A\nopen type System.Collections.Generic.List<>\nlet x = 1\n",
+        [
+            "t_gen_empty.fs(3,1,3,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:6). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "t_gen_empty.fs(2,42,2,44): error FS0010: Unexpected infix operator in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "t_gen_fn.fs",
+        "module A\nopen type int -> int\nlet x = 1\n",
+        [
+            "t_gen_fn.fs(2,15,2,17): error FS0010: Unexpected symbol '->' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "t_gen_open.fs",
+        "module A\nopen type System.Collections.Generic.List<\nlet x = 1\n",
+        [
+            "t_gen_open.fs(2,44,3,1): error FS1241: Expected type argument or static argument"
+            "t_gen_open.fs(2,44,3,1): error FS0010: Incomplete structured construct at or before this point in type arguments. Expected ',' or other token."
+            "t_gen_open.fs(2,44,3,1): error FS1241: Expected type argument or static argument"
+        ]
+
+        "t_global_alone.fs", "module A\nopen type global\nlet x = 1\n", []
+
+        "t_global_dot.fs",
+        "module A\nopen type global.\nlet x = 1\n",
+        [
+            "t_global_dot.fs(2,19,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "t_global_gen.fs",
+        "module A\nopen type global.System.Collections.Generic.List<int>\nlet x = 1\n",
+        []
+
+        "t_same.fs", "module A\nopen type System.Math let x = 1\n", []
+
+        "t_colon.fs",
+        "module A\nopen type a: int\nlet x = 1\n",
+        [
+            "t_colon.fs(2,12,2,13): error FS0010: Unexpected symbol ':' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "t_gen_offs2.fs",
+        "module A\nmodule B =\n    open type List<int>\n  let y = 2\nlet x = 1\n",
+        [
+            "t_gen_offs2.fs(5,1,5,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (4:3). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+        ]
+
+        "t_gen_offside.fs",
+        "module A\nopen type List\n<int>\nlet x = 1\n",
+        [
+            "t_gen_offside.fs(3,1,3,2): error FS0010: Unexpected symbol '<' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "t_gen_same.fs", "module A\nopen type List<int> let x = 1\n", []
+
+        "t_gennext.fs",
+        "module A\nopen type List<\n    int>\nlet x = 1\n",
+        [
+            "t_gennext.fs(3,5,3,8): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:6). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+        ]
+
+        "t_postnext.fs", "module A\nopen type int\n    list\nlet x = 1\n", []
+
+        "t_prefix.fs",
+        "module A\nopen type (int, string) Dictionary\nlet x = 1\n",
+        [
+            "t_prefix.fs(2,11,2,35): error FS0062: This construct is deprecated. The use of multiple parenthesized type parameters before a generic type name such as '(int, int) Map' was deprecated in F# 2.0 and is no longer supported. You can enable this feature by using '--langversion:5.0' and '--mlcompatibility'."
+        ]
+
+        "t_star.fs",
+        "module A\nopen type int * int\nlet x = 1\n",
+        [
+            "t_star.fs(2,15,2,16): error FS0010: Unexpected symbol '*' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "v_global.fsi", "module A\nval x: global.System.String\nval y: int\n", []
+
+        "v_space.fs",
+        "module A\nlet x: System.Collections.Generic.List <int> = null\n",
+        [
+            "v_space.fs(2,40,2,45): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
     ]
 
     let private strictIndentationCases = [

@@ -41,13 +41,44 @@ module ParserTests =
         )
         |> Seq.toList
 
+    let rec private typeShape syntaxType =
+        match syntaxType with
+        | SyntaxType.LongIdentifier name -> name.Text
+        | SyntaxType.Variable variable -> variable.Text
+        | SyntaxType.Application(typeConstructor, arguments, true, _) ->
+            let arguments =
+                arguments
+                |> Seq.map typeShape
+                |> String.concat ", "
+
+            $"{arguments} {typeShape typeConstructor}"
+        | SyntaxType.Application(typeConstructor, arguments, false, _) ->
+            let arguments =
+                arguments
+                |> Seq.map typeShape
+                |> String.concat ", "
+
+            $"{typeShape typeConstructor}<{arguments}>"
+        | SyntaxType.Function(argument, result, _) ->
+            $"({typeShape argument} -> {typeShape result})"
+        | SyntaxType.Tuple(elements, _) ->
+            let elements =
+                elements
+                |> Seq.map typeShape
+                |> String.concat " * "
+
+            $"({elements})"
+        | SyntaxType.Parenthesized(inner, _) -> typeShape inner
+        | SyntaxType.SignatureParameter(name, parameterType, _) ->
+            $"{name.Text}: {typeShape parameterType}"
+        | SyntaxType.Missing _ -> "<missing>"
+
     let private openTargetShape target =
         match target with
         | SyntaxOpenTarget.ModuleOrNamespace name -> name.Text
         | SyntaxOpenTarget.GlobalModuleOrNamespace(_, None) -> "global"
         | SyntaxOpenTarget.GlobalModuleOrNamespace(_, Some name) -> $"global.{name.Text}"
-        | SyntaxOpenTarget.Type(SyntaxType.LongIdentifier name) -> $"type {name.Text}"
-        | SyntaxOpenTarget.Type other -> $"type {other}"
+        | SyntaxOpenTarget.Type syntaxType -> $"type {typeShape syntaxType}"
 
     let rec private declarationShape declaration =
         match declaration with
@@ -131,38 +162,6 @@ module ParserTests =
     let private parseSignature logicalPath text =
         prepare logicalPath text
         |> Parser.parseSignatureFile
-
-    let rec private typeShape syntaxType =
-        match syntaxType with
-        | SyntaxType.LongIdentifier name -> name.Text
-        | SyntaxType.Variable variable -> variable.Text
-        | SyntaxType.Application(typeConstructor, arguments, true, _) ->
-            let arguments =
-                arguments
-                |> Seq.map typeShape
-                |> String.concat ", "
-
-            $"{arguments} {typeShape typeConstructor}"
-        | SyntaxType.Application(typeConstructor, arguments, false, _) ->
-            let arguments =
-                arguments
-                |> Seq.map typeShape
-                |> String.concat ", "
-
-            $"{typeShape typeConstructor}<{arguments}>"
-        | SyntaxType.Function(argument, result, _) ->
-            $"({typeShape argument} -> {typeShape result})"
-        | SyntaxType.Tuple(elements, _) ->
-            let elements =
-                elements
-                |> Seq.map typeShape
-                |> String.concat " * "
-
-            $"({elements})"
-        | SyntaxType.Parenthesized(inner, _) -> typeShape inner
-        | SyntaxType.SignatureParameter(name, parameterType, _) ->
-            $"{name.Text}: {typeShape parameterType}"
-        | SyntaxType.Missing _ -> "<missing>"
 
     let rec private signatureShape declaration =
         match declaration with
@@ -1267,6 +1266,8 @@ open System.IO
 open global
 open global.System
 open type System.Math
+open type System.Collections.Generic.List<int>
+open type int list
 "
 
                 Expect.isEmpty
@@ -1281,6 +1282,8 @@ open type System.Math
                         "open global"
                         "open global.System"
                         "open type System.Math"
+                        "open type System.Collections.Generic.List<int>"
+                        "open type int list"
                     ]
                     "Each open declaration keeps its target"
 

@@ -940,8 +940,11 @@ module internal Parser =
             parseApplicationType state context
 
     and private parseApplicationType state context =
+        parsePostfixTypes state context (parseAtomicType state context)
+
+    and private parsePostfixTypes state context first =
         let cursor = state.Cursor
-        let mutable result = parseAtomicType state context
+        let mutable result = first
 
         while isIdentifier cursor.Current
               && not (isOffside context cursor.Current)
@@ -958,17 +961,17 @@ module internal Parser =
 
         result
 
+    and private parseNestedType state context =
+        parseTypeOperand
+            state
+            context
+            (fun _ -> None)
+            TypeGap.UnexpectedToken
+            (fun () -> parseType state context (fun _ -> None))
+
     and private parseAtomicType state context =
         let cursor = state.Cursor
         let token = cursor.Current
-
-        let nested () =
-            parseTypeOperand
-                state
-                context
-                (fun _ -> None)
-                TypeGap.UnexpectedToken
-                (fun () -> parseType state context (fun _ -> None))
 
         if isTypeVariable cursor then
             cursor.Advance()
@@ -986,7 +989,7 @@ module internal Parser =
             cursor.Advance()
             |> ignore
 
-            let inner = nested ()
+            let inner = parseNestedType state context
 
             if isDelimiter ")" cursor.Current then
                 let close = cursor.Advance()
@@ -997,42 +1000,54 @@ module internal Parser =
 
                 SyntaxType.Parenthesized(inner, span token.Range (emptyAt cursor.LastEnd))
         else
-            let name = SyntaxType.LongIdentifier(longIdentifier state)
+            parseTypeArguments state context (SyntaxType.LongIdentifier(longIdentifier state))
 
-            if isOperator "<" cursor.Current then
+    and private parseTypeArguments state context name =
+        let cursor = state.Cursor
+
+        if isOperator "<" cursor.Current then
+            let openToken = cursor.Advance()
+
+            let arguments = ImmutableArray.CreateBuilder<SyntaxType>()
+            arguments.Add(parseNestedType state context)
+
+            while isDelimiter "," cursor.Current do
                 cursor.Advance()
                 |> ignore
 
-                let arguments = ImmutableArray.CreateBuilder<SyntaxType>()
-                arguments.Add(nested ())
+                arguments.Add(parseNestedType state context)
 
-                while isDelimiter "," cursor.Current do
-                    cursor.Advance()
-                    |> ignore
+            if closesTypeArguments cursor.Current then
+                let close = cursor.AdvanceFirstCharacter()
 
-                    arguments.Add(nested ())
+                if
+                    openToken.Range.Start.Offset
+                    <> name.Range.End.Offset
+                then
+                    reportWarning
+                        state
+                        "FS1190"
+                        "Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+                        (span openToken.Range close.Range)
 
-                if closesTypeArguments cursor.Current then
-                    let close = cursor.AdvanceFirstCharacter()
-
-                    SyntaxType.Application(
-                        name,
-                        arguments.ToImmutable(),
-                        false,
-                        span name.Range close.Range
-                    )
-                else
-                    if not (reportedAt state cursor.Current) then
-                        reportUnsupported state cursor.Current "type arguments"
-
-                    SyntaxType.Application(
-                        name,
-                        arguments.ToImmutable(),
-                        false,
-                        span name.Range (emptyAt cursor.LastEnd)
-                    )
+                SyntaxType.Application(
+                    name,
+                    arguments.ToImmutable(),
+                    false,
+                    span name.Range close.Range
+                )
             else
-                name
+                if not (reportedAt state cursor.Current) then
+                    reportUnsupported state cursor.Current "type arguments"
+
+                SyntaxType.Application(
+                    name,
+                    arguments.ToImmutable(),
+                    false,
+                    span name.Range (emptyAt cursor.LastEnd)
+                )
+        else
+            name
 
     let private canStartAtom (token: LayoutToken) =
         isIdentifier token
@@ -2784,12 +2799,24 @@ module internal Parser =
                 else
                     Some(SyntaxOpenTarget.GlobalModuleOrNamespace(globalToken.Range, None))
             elif startsKeyword "type" then
-                cursor.Advance()
-                |> ignore
+                let typeContext = cursor.Advance().Range.Start
 
                 if startsName () then
-                    let name = longIdentifierWith state onTrailingDot
-                    Some(SyntaxOpenTarget.Type(SyntaxType.LongIdentifier name))
+                    let name = SyntaxType.LongIdentifier(longIdentifierWith state onTrailingDot)
+
+                    Some(
+                        SyntaxOpenTarget.Type(
+                            parsePostfixTypes
+                                state
+                                typeContext
+                                (parseTypeArguments state typeContext name)
+                        )
+                    )
+                elif
+                    canStartType cursor
+                    && not (isOffside context cursor.Current)
+                then
+                    Some(SyntaxOpenTarget.Type(parseApplicationType state typeContext))
                 elif endsLine context cursor.Current then
                     reportIncomplete state "open declaration"
                     None
