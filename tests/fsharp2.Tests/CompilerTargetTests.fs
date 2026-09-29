@@ -11337,6 +11337,7 @@ module CompilerTargetTests =
                             "--define:RELEASE"
                             $"--doc:{documentationPath}"
                             "--optimize-"
+                            "--tailcalls-"
                             "--checknulls+"
                             "--define:NULLABLE"
                             $"-r:{systemRuntime}"

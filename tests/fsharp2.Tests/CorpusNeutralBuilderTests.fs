@@ -1168,12 +1168,55 @@ type AsyncWhileCase() =
                 finally
                     Directory.Delete(root, true)
 
-            testCase "tailcalls minus rejects an unsupported option"
+            testCase "tailcalls plus rejects an unsupported option"
             <| fun _ ->
                 let root =
                     Path.Combine(
                         Path.GetTempPath(),
-                        "fsharp2-contract-tailcalls-minus",
+                        "fsharp2-contract-tailcalls-plus",
+                        Guid.NewGuid().ToString("N")
+                    )
+
+                Directory.CreateDirectory(root)
+                |> ignore
+
+                try
+                    let sourcePath = Path.Combine(root, "TailcallsCase.fs")
+                    let outputPath = Path.Combine(root, "TailcallsCase.dll")
+
+                    File.WriteAllText(
+                        sourcePath,
+                        """namespace ContractCases
+
+type TailcallsCase() =
+    member inline _.Value() = 42
+"""
+                    )
+
+                    let result = compileWithFSharp2 root outputPath sourcePath [] [ "--tailcalls+" ]
+
+                    let diagnostics =
+                        result.StandardOutput
+                        + result.StandardError
+
+                    Expect.equal result.ExitCode 1 diagnostics
+
+                    Expect.stringContains
+                        diagnostics
+                        "unsupported prototype option: --tailcalls+"
+                        "the compiler should reject an option whose semantics are not implemented"
+
+                    Expect.isFalse
+                        (File.Exists(outputPath))
+                        "the compiler should not emit an output assembly"
+                finally
+                    Directory.Delete(root, true)
+            testCase "tailcalls minus is accepted"
+            <| fun _ ->
+                let root =
+                    Path.Combine(
+                        Path.GetTempPath(),
+                        "fsharp2-contract-tailcalls-minus-accepted",
                         Guid.NewGuid().ToString("N")
                     )
 
@@ -1199,16 +1242,11 @@ type TailcallsCase() =
                         result.StandardOutput
                         + result.StandardError
 
-                    Expect.equal result.ExitCode 1 diagnostics
+                    Expect.equal result.ExitCode 0 diagnostics
 
-                    Expect.stringContains
-                        diagnostics
-                        "unsupported prototype option: --tailcalls-"
-                        "the compiler should reject an option whose semantics are not implemented"
-
-                    Expect.isFalse
+                    Expect.isTrue
                         (File.Exists(outputPath))
-                        "the compiler should not emit an output assembly"
+                        "the compiler should emit an output assembly without tail calls"
                 finally
                     Directory.Delete(root, true)
         ]
