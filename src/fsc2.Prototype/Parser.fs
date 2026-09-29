@@ -130,9 +130,9 @@ module internal Parser =
         | MakesNextIncomplete
         | Unmodeled
 
-    // The Compatibility Oracle loses the signature module header for the rest of the file after a nested recovery.
+    // The Compatibility Oracle loses the module header for the rest of the file after some recoveries.
     [<RequireQualifiedAccess>]
-    type private SignatureHeader =
+    type private ModuleHeader =
         | Kept
         | Lost
         | LostAtEnd of SourceRange
@@ -145,7 +145,7 @@ module internal Parser =
         mutable Recovery: Recovery
         mutable InAnonymousRoot: bool
         mutable Depth: int
-        mutable SignatureHeader: SignatureHeader
+        mutable ModuleHeader: ModuleHeader
     }
 
     [<RequireQualifiedAccess>]
@@ -3374,8 +3374,8 @@ module internal Parser =
             isEndOfFile state.Cursor.Current
             ->
             if reportsAtEnd then
-                state.SignatureHeader <-
-                    SignatureHeader.LostAtEnd(emptyAt state.Cursor.Current.Range.Start)
+                state.ModuleHeader <-
+                    ModuleHeader.LostAtEnd(emptyAt state.Cursor.Current.Range.Start)
         | Some(DeclarationAfterRecovery.ReportedAtRoot _)
         | Some DeclarationAfterRecovery.IncompleteAtNext ->
             let token = state.Cursor.Current
@@ -3564,8 +3564,8 @@ module internal Parser =
                                 else
                                     match rules.StartPoint list with
                                     | RecoveryPoint.SignatureFile when
-                                        (state.SignatureHeader
-                                         <> SignatureHeader.Kept)
+                                        (state.ModuleHeader
+                                         <> ModuleHeader.Kept)
                                         ->
                                         RecoveryPoint.NestedSignature
                                     | point -> point
@@ -3646,20 +3646,20 @@ module internal Parser =
                     | ListRecovery.Discards, DeclarationList.NestedModule
                     | ListRecovery.DiscardsInValue, DeclarationList.NestedModule ->
                         // The Compatibility Oracle skips the next tokens silently until a value, open, module, or namespace.
-                        state.SignatureHeader <- SignatureHeader.Lost
+                        state.ModuleHeader <- ModuleHeader.Lost
 
                         suppress
                             state
                             (DeclarationAfterRecovery.SkippedInSignatureModule(state.Depth, true))
                     | ListRecovery.DiscardsInsideValueType, DeclarationList.NestedModule ->
-                        state.SignatureHeader <- SignatureHeader.Lost
+                        state.ModuleHeader <- ModuleHeader.Lost
 
                         suppress
                             state
                             (DeclarationAfterRecovery.SkippedInSignatureModule(state.Depth, false))
                     | ListRecovery.Discards, _ when
-                        (state.SignatureHeader
-                         <> SignatureHeader.Kept)
+                        (state.ModuleHeader
+                         <> ModuleHeader.Kept)
                         ->
                         suppress
                             state
@@ -3673,8 +3673,8 @@ module internal Parser =
                         // The Compatibility Oracle discards the rest of the file after this recovery and reports no diagnostic for it.
                         suppress state (DeclarationAfterRecovery.Discarded None)
                     | ListRecovery.DiscardsInValue, _ when
-                        (state.SignatureHeader
-                         <> SignatureHeader.Kept)
+                        (state.ModuleHeader
+                         <> ModuleHeader.Kept)
                         ->
                         // The Compatibility Oracle keeps the lost module header, so this recovery also reports FS0222 at the end.
                         suppress
@@ -3908,8 +3908,8 @@ module internal Parser =
                         parseVal
                             state
                             (list = DeclarationList.NestedModule
-                             || (state.SignatureHeader
-                                 <> SignatureHeader.Kept))
+                             || (state.ModuleHeader
+                                 <> ModuleHeader.Kept))
                             attributes
                     )
                 else
@@ -3938,7 +3938,7 @@ module internal Parser =
         Recovery = Recovery.Parsing
         InAnonymousRoot = false
         Depth = 0
-        SignatureHeader = SignatureHeader.Kept
+        ModuleHeader = ModuleHeader.Kept
     }
 
     let parseImplementationFile (document: LexicalDocument) : ImplementationFileParseResult =
@@ -3966,10 +3966,10 @@ module internal Parser =
             }
             Diagnostics = ImmutableArray.CreateRange state.Diagnostics
             UnresumedRecoveryAtEnd =
-                match state.SignatureHeader with
-                | SignatureHeader.LostAtEnd range -> Some range
-                | SignatureHeader.Kept
-                | SignatureHeader.Lost -> None
+                match state.ModuleHeader with
+                | ModuleHeader.LostAtEnd range -> Some range
+                | ModuleHeader.Kept
+                | ModuleHeader.Lost -> None
         }
 
     let private missingDeclarationMessage =
