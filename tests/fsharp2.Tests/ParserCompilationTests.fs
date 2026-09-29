@@ -5659,6 +5659,50 @@ module M =
     ]
 
     let private unmodeledIncompleteConstructCases = [
+        "t_case_err_and.fs",
+        "module M\ntype T = | A of )\nand U = int\n",
+        [
+            "t_case_err_and.fs(2,17,2,18): error FS0010: Unexpected symbol ')' in union case"
+            "t_case_err_and.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "t_err_and.fs",
+        "module M\ntype T = )\nand U = int\n",
+        [
+            "t_err_and.fs(2,10,2,11): error FS0010: Unexpected symbol ')' in type definition"
+            "t_err_and.fs(3,1,3,4): error FS0010: Unexpected keyword 'and' in implementation file"
+        ]
+
+        "t_err_and_err.fs",
+        "module M\ntype T = )\nand U = )\n",
+        [
+            "t_err_and_err.fs(2,10,2,11): error FS0010: Unexpected symbol ')' in type definition"
+            "t_err_and_err.fs(3,1,3,4): error FS0010: Unexpected keyword 'and' in implementation file"
+        ]
+
+        "t_err_and_then_let.fs",
+        "module M\ntype T = )\nand U = int\nlet x = )\n",
+        [
+            "t_err_and_then_let.fs(2,10,2,11): error FS0010: Unexpected symbol ')' in type definition"
+            "t_err_and_then_let.fs(3,1,3,4): error FS0010: Unexpected keyword 'and' in implementation file"
+        ]
+
+        "t_noeq_and.fs", "module M\ntype T\nand U = int\n", []
+
+        "t_ok_and_err.fs",
+        "module M\ntype T = int\nand U = )\n",
+        [
+            "t_ok_and_err.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in type definition"
+            "t_ok_and_err.fs(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "t_ok_and_err_then_let.fs",
+        "module M\ntype T = int\nand U = )\nlet x = )\n",
+        [
+            "t_ok_and_err_then_let.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in type definition"
+            "t_ok_and_err_then_let.fs(4,1,4,4): error FS0010: Unexpected keyword 'let' or 'use' in implementation file"
+        ]
+
         "c_arrow_6.fsi",
         "module M\nmodule N =\n    val a: int ->\ntype T = int\n",
         [

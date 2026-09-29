@@ -620,6 +620,16 @@ module internal Parser =
         Range = token.Range
     }
 
+    let private skippedToken (token: LexicalToken) = {
+        Tokens = ImmutableArray.Create token
+        Range = token.Range
+    }
+
+    let private mergeSkipped (first: SkippedSyntax) (second: SkippedSyntax) = {
+        Tokens = first.Tokens.AddRange second.Tokens
+        Range = span first.Range second.Range
+    }
+
     // The Compatibility Oracle reports an incomplete construct at end of input from column 1 of the last line.
     let private lastLineToEnd (endOfFile: LayoutToken) =
         let eof = endOfFile.Range.Start
@@ -3109,22 +3119,35 @@ module internal Parser =
 
                     skipUntil state context
 
-            let mutable groupSkipped = None
+            let mutable skipped = skipped
+            let mutable recovery = recovery
 
             while continuesWithAnd cursor do
                 if cursor.Current.Kind = LayoutTokenKind.Separator then
                     cursor.Advance()
                     |> ignore
 
-                if not (reportedSince state reported) then
-                    reportUnsupported state cursor.Current "a type group"
+                // The Compatibility Oracle result of a later declaration depends on errors inside the group.
+                if
+                    recovery
+                    <> ListRecovery.Unmodeled
+                then
+                    if not (reportedAt state cursor.Current) then
+                        reportUnsupported state cursor.Current "a type group"
 
-                cursor.Advance()
-                |> ignore
+                    recovery <- ListRecovery.Unmodeled
 
-                groupSkipped <-
-                    groupSkipped
-                    |> Option.orElse (skipUntil state context)
+                let andToken = cursor.Advance()
+
+                skipped <-
+                    [
+                        skipped
+                        Option.map skippedToken andToken.Token
+                        skipUntil state context
+                    ]
+                    |> List.choose id
+                    |> List.reduce mergeSkipped
+                    |> Some
 
             keepFirstDiagnosticSince state reported
 
@@ -3134,7 +3157,7 @@ module internal Parser =
                 Name = name
                 PrimaryConstructor = primaryConstructor
                 Representation = representation
-                Skipped = Option.orElse groupSkipped skipped
+                Skipped = skipped
                 Range = span (declarationStart attributes typeToken) (emptyAt cursor.LastEnd)
             }
 

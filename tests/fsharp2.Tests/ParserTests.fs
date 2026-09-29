@@ -1219,6 +1219,40 @@ module Values =
                     ]
                     "Skipped tokens"
 
+            testCase "a type group keeps every skipped token"
+            <| fun _ ->
+                let result =
+                    parse
+                        "Group.fs"
+                        "module Program
+type T = int )
+and U = string
+and V = bool
+"
+
+                match Seq.exactlyOne (Seq.exactlyOne result.File.Contents).Declarations with
+                | ImplementationDeclaration.Type definition ->
+                    let skipped = Expect.wantSome definition.Skipped "Skipped tokens"
+
+                    Expect.equal (position skipped.Range) (2, 14, 4, 13) "Skipped range"
+
+                    Expect.sequenceEqual
+                        (skipped.Tokens
+                         |> Seq.map _.Text)
+                        [
+                            ")"
+                            "and"
+                            "U"
+                            "="
+                            "string"
+                            "and"
+                            "V"
+                            "="
+                            "bool"
+                        ]
+                        "Skipped tokens"
+                | other -> failtest $"Expected a type declaration, found {other}"
+
             testCase "an expression declaration keeps the tokens skipped after its recovery"
             <| fun _ ->
                 let result = parse "Skipped.fs" "module Program\nf x ) g\n"
