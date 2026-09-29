@@ -184,6 +184,29 @@ module internal Parser =
         End = finish.End
     }
 
+    let private opens opening (token: LayoutToken) (next: LayoutToken) =
+        isDelimiter opening token
+        && next.Range.Start.Offset = token.Range.End.Offset
+
+    let private startsAttributeList token (next: LayoutToken) =
+        opens "[" token next
+        && isOperator "<" next
+
+    let private startsBarBracket token (next: LayoutToken) =
+        (opens "[" token next
+         || opens "{" token next)
+        && isOperator "|" next
+
+    // The Compatibility Oracle reads '[<', '[|', and '{|' as one token, and the lexer splits them.
+    let private sourceTokenRange (token: LayoutToken) next =
+        if
+            startsAttributeList token next
+            || startsBarBracket token next
+        then
+            span token.Range next.Range
+        else
+            token.Range
+
     let private emptyAt position = { Start = position; End = position }
 
     let private reportUnmarked state code message (range: SourceRange) =
@@ -346,10 +369,7 @@ module internal Parser =
             "when"
         ]
 
-    let private closesArrayOrAttribute (cursor: Cursor) =
-        let token = cursor.Current
-        let next = cursor.Peek 1
-
+    let private closesArrayOrAttribute token (next: LayoutToken) =
         (isOperator "|" token
          || isOperator ">" token)
         && isDelimiter "]" next
@@ -395,7 +415,7 @@ module internal Parser =
 
         if excluded then
             None
-        elif closesArrayOrAttribute cursor then
+        elif closesArrayOrAttribute token next then
             symbol $"{text}]" (span token.Range next.Range)
         elif
             isDelimiter ")" token
@@ -427,9 +447,13 @@ module internal Parser =
                 isOperator "=" token
                 || isOperator ":" token
                 || isOperator "." token
+                || isOperator "|" token
                 ->
                 symbol text token.Range
+            | RecoveryPoint.DefinitionStart when isKeyword "and" token -> keyword ()
+            | RecoveryPoint.NamespaceFile when isOperator "|" token -> symbol text token.Range
             | RecoveryPoint.ValueColon when isIdentifier token -> Some("identifier", token.Range)
+            | RecoveryPoint.ValueType when isKeyword "and" token -> keyword ()
             | RecoveryPoint.LambdaStart when isOperator "->" token -> symbol text token.Range
             | RecoveryPoint.NestedFirstDefinition when isOperator "=" token ->
                 symbol text token.Range
@@ -473,6 +497,11 @@ module internal Parser =
                 && not (text.StartsWith("\"\"\"", StringComparison.Ordinal))
                 ->
                 Some("string literal", token.Range)
+            | _ when
+                signatureStart
+                && startsBarBracket token next
+                ->
+                symbol $"{text}|" (span token.Range next.Range)
             | _ when
                 signatureStart
                 && (isDelimiter "(" token
@@ -626,7 +655,7 @@ module internal Parser =
         if isEndOfFile next then
             lastLineToEnd next
         elif closesBlock then
-            next.Range
+            sourceTokenRange next (cursor.Peek(offset + 1))
         else
             // The Compatibility Oracle starts an incomplete construct one column after the last token.
             {
@@ -645,19 +674,11 @@ module internal Parser =
     let private nextTokenOrEndRange (cursor: Cursor) =
         let offset, _ = nextSource cursor
         let token = cursor.Peek offset
-        let following = cursor.Peek(offset + 1)
 
         if isEndOfFile token then
             lastLineToEnd token
-        // The Compatibility Oracle reads '[<' as one token.
-        elif
-            isDelimiter "[" token
-            && isOperator "<" following
-            && following.Range.Start.Offset = token.Range.End.Offset
-        then
-            span token.Range following.Range
         else
-            token.Range
+            sourceTokenRange token (cursor.Peek(offset + 1))
 
     let private offsideMessage (context: SourcePosition) =
         $"Unexpected syntax or possible incorrect indentation: this token is offside of context started at position ({context.Line}:{context.Column}). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
@@ -1364,7 +1385,7 @@ module internal Parser =
                 precedence
                 >= minimum
                 && not (isOffside context cursor.Current)
-                && not (closesArrayOrAttribute cursor)
+                && not (closesArrayOrAttribute cursor.Current (cursor.Peek 1))
                 ->
                 let token = cursor.Current
                 let next = cursor.Peek 1
@@ -1846,7 +1867,7 @@ module internal Parser =
 
         if
             isOperator "|" cursor.Current
-            && not (closesArrayOrAttribute cursor)
+            && not (closesArrayOrAttribute cursor.Current (cursor.Peek 1))
             && not (reportedAt state cursor.Current)
         then
             reportUnsupported state cursor.Current "a lambda expression body"
@@ -1997,12 +2018,7 @@ module internal Parser =
         )
 
     let private isAttributeListStart (cursor: Cursor) =
-        let token = cursor.Current
-        let next = cursor.Peek 1
-
-        isDelimiter "[" token
-        && isOperator "<" next
-        && next.Range.Start.Offset = token.Range.End.Offset
+        startsAttributeList cursor.Current (cursor.Peek 1)
 
     let private isAttributeListEnd (cursor: Cursor) =
         let token = cursor.Current
@@ -2134,7 +2150,12 @@ module internal Parser =
                       - 1]
             .Range.End.Line = context.Line
 
-    let private reportWithoutBody state context construct code message marksNextToken =
+    [<RequireQualifiedAccess>]
+    type private NextToken =
+        | Marked
+        | ReportedAgain
+
+    let private reportWithoutBody state context construct code message nextToken =
         let cursor = state.Cursor
         let range = nextTokenOrEndRange cursor
         let _, closesBlock = nextSource cursor
@@ -2152,7 +2173,7 @@ module internal Parser =
 
         // The Compatibility Oracle reports a token after a closed block again in the outer declaration list.
         if
-            marksNextToken
+            nextToken = NextToken.Marked
             && not closesBlock
         then
             report state code message range
@@ -2246,7 +2267,7 @@ module internal Parser =
                         "a binding"
                         "FS0010"
                         "Incomplete structured construct at or before this point in binding"
-                        true
+                        NextToken.Marked
 
                     missing
                 elif endsBinding context cursor.Current then
@@ -2279,6 +2300,11 @@ module internal Parser =
                     (emptyAt cursor.LastEnd)
         }
 
+    let private continuesWithAnd (cursor: Cursor) =
+        isKeyword "and" cursor.Current
+        || (cursor.Current.Kind = LayoutTokenKind.Separator
+            && isKeyword "and" (cursor.Peek 1))
+
     let private useInModuleMessage =
         "'use' bindings are not permitted in modules and are treated as 'let' bindings"
 
@@ -2310,12 +2336,7 @@ module internal Parser =
         bindings.Add(parseBinding state context attributes)
         let firstBindingRecovered = reportedSince state reported
 
-        let continuesWithAnd () =
-            isKeyword "and" cursor.Current
-            || (cursor.Current.Kind = LayoutTokenKind.Separator
-                && isKeyword "and" (cursor.Peek 1))
-
-        while continuesWithAnd () do
+        while continuesWithAnd cursor do
             if cursor.Current.Kind = LayoutTokenKind.Separator then
                 cursor.Advance()
                 |> ignore
@@ -2406,14 +2427,14 @@ module internal Parser =
                 && LanguageBehavior.isActive state.Language LanguageBehavior.StrictIndentation
             then
                 let missing = missingExpression cursor.Current
-                // The Compatibility Oracle reports the next token again in the declaration list after a 'do' without a body.
+
                 reportWithoutBody
                     state
                     context
                     "a do declaration"
                     "FS3524"
                     "Expecting expression"
-                    false
+                    NextToken.ReportedAgain
 
                 missing
             else
@@ -2456,6 +2477,51 @@ module internal Parser =
 
         ImplementationDeclaration.Expression(attributes, body, skipped, range), recovery
 
+    let private offsetAfterAttributeLists (cursor: Cursor) start =
+        let rec after offset =
+            let token = cursor.Peek offset
+            let next = cursor.Peek(offset + 1)
+
+            if startsAttributeList token next then
+                let rec close offset =
+                    let token = cursor.Peek offset
+                    let next = cursor.Peek(offset + 1)
+
+                    if isEndOfFile token then
+                        offset
+                    elif
+                        isOperator ">" token
+                        && isDelimiter "]" next
+                        && next.Range.Start.Offset = token.Range.End.Offset
+                    then
+                        offset + 2
+                    else
+                        close (offset + 1)
+
+                let rec skipSeparators offset =
+                    if (cursor.Peek offset).Kind = LayoutTokenKind.Separator then
+                        skipSeparators (offset + 1)
+                    else
+                        offset
+
+                after (skipSeparators (close (offset + 2)))
+            else
+                offset
+
+        after start
+
+    let private resumesSignatureModule (token: LayoutToken) =
+        isKeyword "val" token
+        || isKeyword "open" token
+        || isKeyword "module" token
+
+    let private closesContext (token: LayoutToken) =
+        isDelimiter ")" token
+        || isDelimiter "]" token
+        || isDelimiter "}" token
+        || isKeyword "end" token
+        || isKeyword "and" token
+
     let private parseVal state nested attributes =
         let cursor = state.Cursor
         let valToken = cursor.Advance()
@@ -2465,6 +2531,7 @@ module internal Parser =
         let mutable typeStart = -1
         let mutable recoveredInsideType = false
         let mutable skipped = None
+        let mutable rest = ListRecovery.Continues
 
         let recover point =
             if not (reportedSince state reported) then
@@ -2480,10 +2547,83 @@ module internal Parser =
 
             skipped <- skipUntil state context
 
+        let endAfterColonOrArrow () =
+            let offset, closesBlock = nextSource cursor
+            let next = cursor.Peek offset
+            let afterColon = cursor.Current.Range.Start.Offset = typeStart
+
+            let lostInValue () =
+                recovered <- Some RecoveryPoint.ValueType
+                recoveredInsideType <- not afterColon
+
+            let atColumn =
+                not closesBlock
+                && not (isEndOfFile next)
+                && isOffside context next
+
+            if
+                atColumn
+                && closesContext next
+            then
+                // The Compatibility Oracle reports a closing token at the value column as unexpected inside the value type.
+                if cursor.Current.Kind = LayoutTokenKind.Separator then
+                    cursor.Advance()
+                    |> ignore
+
+                reportUnexpected state RecoveryPoint.ValueType "a value signature"
+                |> ignore
+
+                cursor.Advance()
+                |> ignore
+
+                lostInValue ()
+                skipped <- skipUntil state context
+            elif
+                atColumn
+                && (closesArrayOrAttribute next (cursor.Peek(offset + 1))
+                    || (isKind LexicalTokenKind.Keyword next
+                        && closingKeywords.Contains(tokenText next)))
+            then
+                reportUnsupported state next "a value signature"
+            elif
+                atColumn
+                && not (resumesSignatureModule next)
+                && not (isKeyword "type" next)
+                && not (startsAttributeList next (cursor.Peek(offset + 1)))
+            then
+                reportIncomplete state "value signature"
+
+                if nested then
+                    lostInValue ()
+                elif afterColon then
+                    rest <- ListRecovery.Unmodeled
+                else
+                    // The Compatibility Oracle discards the rest of the file silently after an incomplete root value type.
+                    rest <- ListRecovery.Discards
+            elif not closesBlock then
+                reportIncomplete state "value signature"
+            elif afterColon then
+                reportIncomplete state "value signature"
+
+                if isKeyword "type" (cursor.Peek(offsetAfterAttributeLists cursor offset)) then
+                    reportUnsupported state next "a type after a value signature without a type"
+                else
+                    // The Compatibility Oracle loses the module header and skips silently to the next value, open, or module.
+                    recovered <- Some RecoveryPoint.ValueType
+            elif isEndOfFile next then
+                reportIncomplete state "value signature"
+            else
+                // The Compatibility Oracle reports the token after a closed block again in the outer declaration list.
+                reportUnmarked
+                    state
+                    "FS0010"
+                    "Incomplete structured construct at or before this point in value signature"
+                    (afterLastToken cursor)
+
         let onGap gap =
             match gap with
             | TypeGap.UnexpectedToken -> Some(recover RecoveryPoint.ValueType)
-            | TypeGap.EndAfterColonOrArrow -> Some(reportIncomplete state "value signature")
+            | TypeGap.EndAfterColonOrArrow -> Some(endAfterColonOrArrow ())
             | TypeGap.EndAfterStar -> None
 
         let accessibility = parseAccessibility cursor
@@ -2546,7 +2686,7 @@ module internal Parser =
 
         let recovery =
             match recovered with
-            | None -> ListRecovery.Continues
+            | None -> rest
             | Some RecoveryPoint.SignatureFile
             | Some RecoveryPoint.NestedSignature -> ListRecovery.Discards
             | Some _ when recoveredInsideType -> ListRecovery.DiscardsInsideValueType
@@ -2969,6 +3109,23 @@ module internal Parser =
 
                     skipUntil state context
 
+            let mutable groupSkipped = None
+
+            while continuesWithAnd cursor do
+                if cursor.Current.Kind = LayoutTokenKind.Separator then
+                    cursor.Advance()
+                    |> ignore
+
+                if not (reportedSince state reported) then
+                    reportUnsupported state cursor.Current "a type group"
+
+                cursor.Advance()
+                |> ignore
+
+                groupSkipped <-
+                    groupSkipped
+                    |> Option.orElse (skipUntil state context)
+
             keepFirstDiagnosticSince state reported
 
             let definition = {
@@ -2977,7 +3134,7 @@ module internal Parser =
                 Name = name
                 PrimaryConstructor = primaryConstructor
                 Representation = representation
-                Skipped = skipped
+                Skipped = Option.orElse groupSkipped skipped
                 Range = span (declarationStart attributes typeToken) (emptyAt cursor.LastEnd)
             }
 
@@ -3008,48 +3165,6 @@ module internal Parser =
     let private reportAfterRecovery state (token: LayoutToken) =
         reportUnsupported state token "a declaration after syntax recovery"
         state.Recovery <- Recovery.Interrupted state.Diagnostics.Count
-
-    let private offsetAfterAttributeLists (cursor: Cursor) =
-        let rec after offset =
-            let token = cursor.Peek offset
-            let next = cursor.Peek(offset + 1)
-
-            if
-                isDelimiter "[" token
-                && isOperator "<" next
-                && next.Range.Start.Offset = token.Range.End.Offset
-            then
-                let rec close offset =
-                    let token = cursor.Peek offset
-                    let next = cursor.Peek(offset + 1)
-
-                    if isEndOfFile token then
-                        offset
-                    elif
-                        isOperator ">" token
-                        && isDelimiter "]" next
-                        && next.Range.Start.Offset = token.Range.End.Offset
-                    then
-                        offset + 2
-                    else
-                        close (offset + 1)
-
-                let rec skipSeparators offset =
-                    if (cursor.Peek offset).Kind = LayoutTokenKind.Separator then
-                        skipSeparators (offset + 1)
-                    else
-                        offset
-
-                after (skipSeparators (close (offset + 2)))
-            else
-                offset
-
-        after 0
-
-    let private resumesSignatureModule (token: LayoutToken) =
-        isKeyword "val" token
-        || isKeyword "open" token
-        || isKeyword "module" token
 
     let private suppress state next =
         state.Recovery <- Recovery.Suppressing(state.Diagnostics.Count, next)
@@ -3242,9 +3357,9 @@ module internal Parser =
             else
                 match pendingDeclaration state with
                 | Some(DeclarationAfterRecovery.SkippedInSignatureModule(recoveryDepth, _)) when
-                    resumesSignatureModule (cursor.Peek(offsetAfterAttributeLists cursor))
+                    resumesSignatureModule (cursor.Peek(offsetAfterAttributeLists cursor 0))
                     ->
-                    let resumeOffset = offsetAfterAttributeLists cursor
+                    let resumeOffset = offsetAfterAttributeLists cursor 0
 
                     if
                         state.Depth
