@@ -1695,6 +1695,25 @@ module ParserGrammarTests =
         []
     ]
 
+    let private delimitedLineInventedCases = [
+        "LambdaBodyAtBindingColumn.fs",
+        "module A\nlet f () =\n    g (fun x ->\nx)\n",
+        [
+            "LambdaBodyAtBindingColumn.fs(4,1): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "LambdaBodyAtBindingColumn.fs(3,8): error FS0611: Missing function body"
+            "LambdaBodyAtBindingColumn.fs(4,1): error FS0010: Unexpected identifier in expression"
+        ],
+        [
+            "LambdaBodyAtBindingColumn.fs(4,2): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "LambdaBodyAtModuleExpressionColumn.fs",
+        "List.iter (fun x ->\nignore x) [ 1 ]\n",
+        [],
+        [
+            "LambdaBodyAtModuleExpressionColumn.fs(2,9): error FS0010: Unexpected symbol ')' in implementation file"
+        ]
+    ]
+
     [<Tests>]
     let tests =
         testList "Issue29.ParserGrammar" [
@@ -2215,6 +2234,29 @@ let items = [ origin.X; 1 ]
                             result.Diagnostics
                             (oracleLines logicalPath result)
             ]
+
+            testList
+                "a lambda body offside inside a delimiter reports FSC2P1001 first and a known extra FS0010"
+                [
+                    for logicalPath, text, oracle, invented in delimitedLineInventedCases ->
+                        testCase logicalPath
+                        <| fun _ ->
+                            let result = parse logicalPath text
+
+                            Expect.equal
+                                (Seq.head result.Diagnostics).Code
+                                "FSC2P1001"
+                                "The first diagnostic is the explicit unsupported diagnostic"
+
+                            Expect.sequenceEqual
+                                (oracleLines logicalPath result
+                                 |> List.filter (fun line ->
+                                     not (line.Contains ": error FSC2P1001: ")
+                                     && not (List.contains line oracle)
+                                 ))
+                                invented
+                                "The FS diagnostics that the Compatibility Oracle does not report"
+                ]
 
             testCase
                 "an else or a clause bar left of the inner construct inside a delimiter belongs to the outer construct"
