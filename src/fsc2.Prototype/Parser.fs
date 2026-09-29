@@ -1723,7 +1723,11 @@ module internal Parser =
                 |> ignore
 
                 let value =
-                    if state.InDelimiters then
+                    // The Oracle starts a block for the value only when the value starts on a later line.
+                    if
+                        state.InDelimiters
+                        && cursor.Current.Range.Start.Line = cursor.LastEnd.Line
+                    then
                         parseBranchStart state context None
                     else
                         parseBranch state context None

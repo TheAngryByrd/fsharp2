@@ -1570,6 +1570,58 @@ module ParserGrammarTests =
         "module A\nlet f c =\n    if c then\n        ignore (\n            1)\n    ignore 2\n",
         [ "let f c = seq[if c then [ignore (1)]; [ignore 2]]" ],
         [ "seq(3,5--6,13)" ]
+        "AssignValueLines.fs",
+        "module A\nlet mutable x = 0\nlet f () =\n    (x <-\n        1\n        2)\n",
+        [
+            "let mutable x = 0"
+            "let f () = ({x <- seq[1; 2]})"
+        ],
+        [
+            "set(4,6--6,10)"
+            "seq(5,9--6,10)"
+        ]
+        "AssignValueLinesInList.fs",
+        "module A\nlet mutable x = 0\nlet f () =\n    [ x <-\n        1\n        2 ]\n",
+        [
+            "let mutable x = 0"
+            "let f () = [{x <- seq[1; 2]}]"
+        ],
+        []
+        "AssignValueLinesThenItem.fs",
+        "module A\nlet mutable x = 0\nlet f () =\n    (x <-\n        1\n        2\n     ignore 3)\n",
+        [
+            "let mutable x = 0"
+            "let f () = (seq[{x <- seq[1; 2]}; [ignore 3]])"
+        ],
+        [
+            "seq(4,6--7,14)"
+            "set(4,6--6,10)"
+            "seq(5,9--6,10)"
+        ]
+        "AssignValueLocalLet.fs",
+        "module A\nlet mutable x = 0\nlet f () =\n    (x <-\n        let y = 1\n        y)\n",
+        [
+            "let mutable x = 0"
+            "let f () = ({x <- let y = 1 in y})"
+        ],
+        [
+            "set(4,6--6,10)"
+            "let(5,9--6,10)"
+        ]
+        "AssignValueLinePipe.fs",
+        "module A\nlet mutable x = 0\nlet f () =\n    (x <-\n        1\n        |> id)\n",
+        [
+            "let mutable x = 0"
+            "let f () = ({x <- {1 |> id}})"
+        ],
+        [ "set(4,6--6,14)" ]
+        "AssignValueSameLineThenAligned.fs",
+        "module A\nlet mutable x = 0\nlet f () =\n    (x <- 1\n          2)\n",
+        [
+            "let mutable x = 0"
+            "let f () = ({x <- [1 2]})"
+        ],
+        [ "set(4,6--5,12)" ]
     ]
 
     let private delimitedLineExplicitCases = [
@@ -1631,6 +1683,15 @@ module ParserGrammarTests =
         ]
         "LocalLetLineOpensLambda.fs",
         "module A\nlet f xs =\n    let g = List.map (fun x ->\n        x)\n    g xs\n",
+        []
+        "AssignValueAtTarget.fs",
+        "module A\nlet mutable x = 0\nlet f () =\n    (x <-\n     1\n     2)\n",
+        []
+        "AssignValueLeftOfTarget.fs",
+        "module A\nlet mutable x = 0\nlet f () =\n    (x <-\n    1)\n",
+        []
+        "LambdaBodyAtLaterBlockLine.fs",
+        "module A\nlet f () =\n    ignore 0\n    List.iter (fun x ->\n    ignore x) [ 1 ]\n",
         []
     ]
 
