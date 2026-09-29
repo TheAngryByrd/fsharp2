@@ -83,9 +83,12 @@ module ParserGrammarTests =
         | SyntaxPattern.Missing _ -> "<missing>"
 
     let private bindingHead (binding: SyntaxBinding) =
+        let mutability = if binding.IsMutable then "mutable " else ""
+
         Seq.append [ binding.Head ] binding.Parameters
         |> Seq.map patternShape
         |> String.concat " "
+        |> sprintf "%s%s" mutability
 
     let rec private expressionShape expression =
         match expression with
@@ -151,6 +154,8 @@ module ParserGrammarTests =
             let recursive = if isRecursive then " rec" else ""
 
             $"{keywordText}{recursive} {bindingHead binding} = {expressionShape binding.Body} in {expressionShape body}"
+        | SyntaxExpression.LongIdentifierSet(name, value, _) ->
+            $"{{{name.Text} <- {expressionShape value}}}"
         | SyntaxExpression.Missing _ -> "<missing>"
 
     let private memberShape (value: SyntaxMember) =
@@ -265,6 +270,20 @@ module ParserGrammarTests =
             text "let" range
             :: blockRanges binding.Body
             @ blockRanges body
+        | SyntaxExpression.LongIdentifierSet(_, value, range) ->
+            text "set" range
+            :: blockRanges value
+        | SyntaxExpression.Infix(_, left, right, _) ->
+            blockRanges left
+            @ blockRanges right
+        | SyntaxExpression.Tuple(items, _) ->
+            items
+            |> Seq.collect blockRanges
+            |> Seq.toList
+        | SyntaxExpression.Application(func, argument, _) ->
+            blockRanges func
+            @ blockRanges argument
+        | SyntaxExpression.Parenthesized(inner, _) -> blockRanges inner
         | SyntaxExpression.If(_, thenBranch, elseBranch, _) ->
             blockRanges thenBranch
             @ (elseBranch
@@ -297,6 +316,48 @@ module ParserGrammarTests =
             | _ -> Seq.empty
         )
         |> Seq.toList
+
+    let rec private localBindings expression =
+        match expression with
+        | SyntaxExpression.LetOrUse(_, _, binding, body, _) ->
+            binding
+            :: localBindings binding.Body
+            @ localBindings body
+        | SyntaxExpression.Sequential(first, second, _) ->
+            localBindings first
+            @ localBindings second
+        | _ -> []
+
+    let rec private bindings (declarations: ImplementationDeclaration seq) =
+        declarations
+        |> Seq.toList
+        |> List.collect (fun declaration ->
+            match declaration with
+            | ImplementationDeclaration.Let(_, _, bindings, _) ->
+                bindings
+                |> Seq.toList
+                |> List.collect (fun binding ->
+                    binding
+                    :: localBindings binding.Body
+                )
+            | ImplementationDeclaration.NestedModule nested -> bindings nested.Declarations
+            | _ -> []
+        )
+
+    let private bindingText (binding: SyntaxBinding) =
+        let startLine, startColumn, _, _ =
+            binding.Accessibility
+            |> Option.map _.Range
+            |> Option.defaultValue binding.Head.Range
+            |> position
+
+        let _, _, endLine, endColumn =
+            Seq.append [ binding.Head ] binding.Parameters
+            |> Seq.last
+            |> _.Range
+            |> position
+
+        $"{bindingHead binding} = {expressionShape binding.Body} ({startLine},{startColumn}--{endLine},{endColumn})"
 
     let private shapes logicalPath text =
         let result = parse logicalPath text
@@ -746,6 +807,43 @@ module ParserGrammarTests =
         "SequentialInfix.fs", "module A\nlet f () =\n    1\n    + 2\n", []
     ]
 
+    let private blockOffsideExplicitCases = [
+        "BlockOffsideBinding.fs",
+        "module A\nlet f =\n    g\n  1\n",
+        [
+            "BlockOffsideBinding.fs(4,3): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BlockOffsideBinding.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ],
+        "BlockOffsideBinding.fs(4,3)"
+        "BlockOffsideBeforeRoot.fs",
+        "module A\nlet f =\n    g\n  1\nlet h = 2\n",
+        [
+            "BlockOffsideBeforeRoot.fs(4,3): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BlockOffsideBeforeRoot.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+            "BlockOffsideBeforeRoot.fs(6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ],
+        "BlockOffsideBeforeRoot.fs(4,3)"
+        "BlockOffsideNestedBinding.fs",
+        "module A\nmodule M =\n    let f =\n        g\n      1\n",
+        [
+            "BlockOffsideNestedBinding.fs(5,7): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BlockOffsideNestedBinding.fs(3,5): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ],
+        "BlockOffsideNestedBinding.fs(5,7)"
+        "BlockOffsideDo.fs",
+        "module A\ndo\n    ignore\n  1\n",
+        [
+            "BlockOffsideDo.fs(4,3): error FS0010: Unexpected integer literal in definition. Expected incomplete structured construct at or before this point or other token."
+        ],
+        "BlockOffsideDo.fs(4,3)"
+        "BlockOffsideNestedDo.fs",
+        "module A\nmodule M =\n    do\n        ignore\n      1\n",
+        [
+            "BlockOffsideNestedDo.fs(5,7): error FS0010: Unexpected integer literal in definition. Expected incomplete structured construct at or before this point or other token."
+        ],
+        "BlockOffsideNestedDo.fs(5,7)"
+    ]
+
     // The Compatibility Oracle reports no parse diagnostic for each text. The ranges are the FCS 43.10.101 LetOrUse and Sequential ranges, with 1-based columns.
     let private localLetCases = [
         "LocalLet.fs",
@@ -956,11 +1054,266 @@ module ParserGrammarTests =
         [
             "LocalLetAnd.fs(3,5): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
         ]
-        "LocalLetMutable.fs", "module A\nlet f () =\n    let mutable x = 1\n    x\n", []
         "LocalLetNoEquals.fs",
         "module A\nlet f () =\n    let x 1\n    x\n",
         [
             "LocalLetNoEquals.fs(4,5): error FS0010: Incomplete structured construct at or before this point in binding. Expected '=' or other token."
+        ]
+    ]
+
+    // Compatibility Oracle reports no parse diagnostic. Ranges are the FCS 43.10.101 binding head pattern ranges, 1-based columns.
+    let private mutableBindingCases = [
+        "MutableRoot.fs", "module A\nlet mutable x = 1\n", [ "mutable x = 1 (2,13--2,14)" ]
+        "MutablePrivate.fs",
+        "module A\nlet mutable private x = 1\n",
+        [ "mutable x = 1 (2,13--2,22)" ]
+        "MutableRec.fs", "module A\nlet rec mutable x = 1\n", [ "mutable x = 1 (2,17--2,18)" ]
+        "MutableAnd.fs",
+        "module A\nlet rec f () = x\nand mutable x = 2\n",
+        [
+            "f () = x (2,9--2,13)"
+            "mutable x = 2 (3,13--3,14)"
+        ]
+        "MutableParameters.fs",
+        "module A\nlet mutable f x = x\n",
+        [ "mutable f x = x (2,13--2,16)" ]
+        "MutableTuple.fs",
+        "module A\nlet mutable a, b = 1, 2\n",
+        [ "mutable a, b = 1, 2 (2,13--2,17)" ]
+        "MutableParenthesized.fs",
+        "module A\nlet mutable (x) = 1\n",
+        [ "mutable (x) = 1 (2,13--2,16)" ]
+        "MutableWildcard.fs", "module A\nlet mutable _ = 1\n", [ "mutable _ = 1 (2,13--2,14)" ]
+        "MutableBlock.fs", "module A\nlet mutable x =\n    1\n", [ "mutable x = 1 (2,13--2,14)" ]
+        "MutableAttribute.fs",
+        "module A\n[<DefaultValue>]\nlet mutable x = 1\n",
+        [ "mutable x = 1 (3,13--3,14)" ]
+        "MutableTwo.fs",
+        "module A\nlet mutable x = 1\nlet mutable y = x\n",
+        [
+            "mutable x = 1 (2,13--2,14)"
+            "mutable y = x (3,13--3,14)"
+        ]
+        "MutableNested.fs",
+        "module A\nmodule M =\n    let mutable x = 1\n",
+        [ "mutable x = 1 (3,17--3,18)" ]
+        "LocalMutable.fs",
+        "module A\nlet f () =\n    let mutable x = 1\n    x\n",
+        [
+            "f () = let mutable x = 1 in x (2,5--2,9)"
+            "mutable x = 1 (3,17--3,18)"
+        ]
+        "LocalMutableRec.fs",
+        "module A\nlet f () =\n    let rec mutable x = 1\n    x\n",
+        [
+            "f () = let rec mutable x = 1 in x (2,5--2,9)"
+            "mutable x = 1 (3,21--3,22)"
+        ]
+        "LocalMutableEntryPoint.fs",
+        "module A\n[<EntryPoint>]\nlet main _ =\n    let mutable count = 0\n    count\n",
+        [
+            "main _ = let mutable count = 0 in count (3,5--3,11)"
+            "mutable count = 0 (4,17--4,22)"
+        ]
+    ]
+
+    let private mutableBindingErrorCases = [
+        "MutableTwice.fs",
+        "module A\nlet mutable mutable x = 1\n",
+        [ "MutableTwice.fs(2,13): error FS0010: Unexpected keyword 'mutable' in binding" ]
+        "MutableAfterAccessibility.fs",
+        "module A\nlet private mutable x = 1\n",
+        [
+            "MutableAfterAccessibility.fs(2,13): error FS0010: Unexpected keyword 'mutable' in binding"
+        ]
+        "MutableAfterAccessibilityBeforeRoot.fs",
+        "module A\nlet mutable x = 1\nlet private mutable y = 2\nlet z = 3\n",
+        [
+            "MutableAfterAccessibilityBeforeRoot.fs(3,13): error FS0010: Unexpected keyword 'mutable' in binding"
+        ]
+        "MutableNoName.fs",
+        "module A\nlet mutable = 1\n",
+        [ "MutableNoName.fs(2,13): error FS0010: Unexpected symbol '=' in binding" ]
+        "MutableValue.fs",
+        "module A\nlet mutable x = )\n",
+        [ "MutableValue.fs(2,17): error FS0010: Unexpected symbol ')' in binding" ]
+        "MutableInBody.fs",
+        "module A\nlet x = mutable\n",
+        [ "MutableInBody.fs(2,9): error FS0010: Unexpected keyword 'mutable' in binding" ]
+        "MutableInBodyBlock.fs",
+        "module A\nlet x =\n    mutable\n",
+        [ "MutableInBodyBlock.fs(3,5): error FS0010: Unexpected keyword 'mutable' in binding" ]
+        "LocalMutableLast.fs",
+        "module A\nlet f () =\n    let mutable x = 1\n",
+        [
+            "LocalMutableLast.fs(3,5): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+        ]
+    ]
+
+    // Compatibility Oracle reports no parse diagnostic. Ranges are FCS 43.10.101 LongIdentSet, LetOrUse, and Sequential ranges, 1-based columns.
+    let private assignmentCases = [
+        "AssignLocal.fs",
+        "module A\nlet f () =\n    let mutable x = 0\n    x <- x + 1\n    x\n",
+        [ "let f () = let mutable x = 0 in seq[{x <- {x + 1}}; x]" ],
+        [
+            "let(3,5--5,6)"
+            "seq(4,5--5,6)"
+            "set(4,5--4,15)"
+        ]
+        "AssignLong.fs",
+        "module A\nlet f () =\n    a.b <- 1\n",
+        [ "let f () = {a.b <- 1}" ],
+        [ "set(3,5--3,13)" ]
+        "AssignTuple.fs",
+        "module A\nlet f () =\n    x <- 1, 2\n",
+        [ "let f () = {x <- 1, 2}" ],
+        [ "set(3,5--3,14)" ]
+        "AssignApplication.fs",
+        "module A\nlet f () =\n    x <- g 1\n",
+        [ "let f () = {x <- [g 1]}" ],
+        [ "set(3,5--3,13)" ]
+        "AssignChain.fs",
+        "module A\nlet f () =\n    x <- y <- 1\n",
+        [ "let f () = {x <- {y <- 1}}" ],
+        [
+            "set(3,5--3,16)"
+            "set(3,10--3,16)"
+        ]
+        "AssignIf.fs",
+        "module A\nlet f () =\n    if c then x <- 1 else x <- 2\n",
+        [ "let f () = if c then {x <- 1} else {x <- 2}" ],
+        [
+            "set(3,15--3,21)"
+            "set(3,27--3,33)"
+        ]
+        "AssignLambda.fs",
+        "module A\nlet f () =\n    ignore (fun () -> x <- 1)\n",
+        [ "let f () = [ignore (fun () -> {x <- 1})]" ],
+        [ "set(3,23--3,29)" ]
+        "AssignParenthesized.fs",
+        "module A\nlet f () =\n    ignore (x <- 1)\n",
+        [ "let f () = [ignore ({x <- 1})]" ],
+        [ "set(3,13--3,19)" ]
+        "AssignBlock.fs",
+        "module A\nlet f () =\n    x <-\n        1\n",
+        [ "let f () = {x <- 1}" ],
+        [ "set(3,5--4,10)" ]
+        "AssignBlockSequential.fs",
+        "module A\nlet f () =\n    x <-\n        ignore 1\n        2\n",
+        [ "let f () = {x <- seq[[ignore 1]; 2]}" ],
+        [
+            "set(3,5--5,10)"
+            "seq(4,9--5,10)"
+        ]
+        "AssignClause.fs",
+        "module A\nlet f () =\n    match c with\n    | _ -> x <- 1\n",
+        [ "let f () = match c with | _ -> {x <- 1}" ],
+        [ "set(4,12--4,18)" ]
+        "AssignInfix.fs",
+        "module A\nlet f () =\n    x <- 1 + 2\n",
+        [ "let f () = {x <- {1 + 2}}" ],
+        [ "set(3,5--3,15)" ]
+        "AssignOr.fs",
+        "module A\nlet f () =\n    x <- a || b\n",
+        [ "let f () = {x <- {a || b}}" ],
+        [ "set(3,5--3,16)" ]
+        "AssignEquals.fs",
+        "module A\nlet f () =\n    x <- a = b\n",
+        [ "let f () = {x <- {a = b}}" ],
+        [ "set(3,5--3,15)" ]
+        "AssignPipe.fs",
+        "module A\nlet f () =\n    x <- 1 |> id\n",
+        [ "let f () = {x <- {1 |> id}}" ],
+        [ "set(3,5--3,17)" ]
+        "AssignAfterInfix.fs",
+        "module A\nlet f () =\n    a + b <- 1\n",
+        [ "let f () = {a + {b <- 1}}" ],
+        [ "set(3,9--3,15)" ]
+        "AssignAfterComma.fs",
+        "module A\nlet f () =\n    a, b <- 1\n",
+        [ "let f () = a, {b <- 1}" ],
+        [ "set(3,8--3,14)" ]
+        "AssignIfValue.fs",
+        "module A\nlet f () =\n    x <- if c then 1 else 2\n",
+        [ "let f () = {x <- if c then 1 else 2}" ],
+        [ "set(3,5--3,28)" ]
+        "AssignMatchValue.fs",
+        "module A\nlet f () =\n    x <- match c with _ -> 1\n",
+        [ "let f () = {x <- match c with | _ -> 1}" ],
+        [ "set(3,5--3,29)" ]
+        "AssignLambdaValue.fs",
+        "module A\nlet f () =\n    x <- fun y -> y\n",
+        [ "let f () = {x <- fun y -> y}" ],
+        [ "set(3,5--3,20)" ]
+        "AssignSequential.fs",
+        "module A\nlet f () =\n    x <- 1\n    x\n",
+        [ "let f () = seq[{x <- 1}; x]" ],
+        [
+            "seq(3,5--4,6)"
+            "set(3,5--3,11)"
+        ]
+        "AssignThenBlock.fs",
+        "module A\nlet f () =\n    if c then\n        x <- 1\n    x\n",
+        [ "let f () = seq[if c then {x <- 1}; x]" ],
+        [
+            "seq(3,5--5,6)"
+            "set(4,9--4,15)"
+        ]
+        "AssignBindingLine.fs",
+        "module A\nlet f () = x <- 1\n",
+        [ "let f () = {x <- 1}" ],
+        [ "set(2,12--2,18)" ]
+        "AssignDo.fs", "module A\ndo x <- 1\n", [ "do {x <- 1}" ], [ "set(2,4--2,10)" ]
+        "AssignModuleExpression.fs", "module A\nx <- 1\n", [ "expr {x <- 1}" ], []
+    ]
+
+    let private assignmentExplicitCases = [
+        "AssignToApplication.fs", "module A\nlet f () =\n    g x <- 1\n", []
+        "AssignToParenthesized.fs", "module A\nlet f () =\n    (x) <- 1\n", []
+        "AssignToIndex.fs", "module A\nlet f () =\n    a[0] <- 1\n", []
+        "AssignToConstant.fs", "module A\nlet f () =\n    1 <- 2\n", []
+        "AssignToDotLambda.fs", "module A\nlet f () =\n    _.x <- 1\n", []
+        "AssignClose.fs",
+        "module A\nlet f () =\n    x <- )\n",
+        [ "AssignClose.fs(3,10): error FS0010: Unexpected symbol ')' in expression" ]
+        "AssignMissing.fs",
+        "module A\nlet f () =\n    x <-\n",
+        [
+            "AssignMissing.fs(4,1): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "AssignMissing.fs(4,1): error FS3524: Expecting expression"
+        ]
+        "AssignMissingBeforeRoot.fs",
+        "module A\nlet f () =\n    x <-\nlet g = 1\n",
+        [
+            "AssignMissingBeforeRoot.fs(4,1): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "AssignMissingBeforeRoot.fs(4,1): error FS3524: Expecting expression"
+        ]
+        "AssignValueNextLine.fs", "module A\nlet f () =\n    x <- \n    1\n", []
+        "AssignOperatorNextLine.fs", "module A\nlet f () =\n    x\n        <- 1\n", []
+        "AssignOperatorSameColumn.fs",
+        "module A\nlet f () =\n    x\n    <- 1\n",
+        [
+            "AssignOperatorSameColumn.fs(4,5): error FS0010: Unexpected symbol '<-' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+    ]
+
+    let private mutableBindingExplicitCases = [
+        "MutableTyped.fs", "module A\nlet mutable x: int = 1\n", []
+        "MutableNextLine.fs", "module A\nlet mutable\n    x = 1\n", []
+        "LocalMutableTwice.fs",
+        "module A\nlet f () =\n    let mutable mutable x = 1\n    x\n",
+        [ "LocalMutableTwice.fs(3,17): error FS0010: Unexpected keyword 'mutable' in binding" ]
+        "LocalMutableAccessibility.fs",
+        "module A\nlet f () =\n    let mutable private x = 1\n    x\n",
+        []
+        "LocalMutableNextLine.fs",
+        "module A\nlet f () =\n    let mutable\n        x = 1\n    x\n",
+        []
+        "MutableInPattern.fs",
+        "module A\nlet (mutable x) = 1\n",
+        [
+            "MutableInPattern.fs(2,6): error FS0010: Unexpected keyword 'mutable' in pattern. Expected ')' or other token."
+            "MutableInPattern.fs(2,5): error FS0583: Unmatched '('"
         ]
     ]
 
@@ -1298,6 +1651,30 @@ let items = [ origin.X; 1 ]
                             (oracleLines logicalPath result)
             ]
 
+            testList
+                "a line between the binding column and the block column stays explicit at the Oracle position"
+                [
+                    for logicalPath, text, oracle, position in blockOffsideExplicitCases ->
+                        testCase logicalPath
+                        <| fun _ ->
+                            let result = parse logicalPath text
+                            let lines = oracleLines logicalPath result
+
+                            SyntaxDiagnosticText.expectExplicitlyUnsupported
+                                oracle
+                                result.Diagnostics
+                                lines
+
+                            Expect.sequenceEqual
+                                (lines
+                                 |> List.filter (fun line -> line.Contains ": error FSC2P1001: ")
+                                 |> List.map (fun line ->
+                                     line.Substring(0, line.IndexOf ": error ")
+                                 ))
+                                [ position ]
+                                "The explicit diagnostic is at the first Compatibility Oracle diagnostic"
+                ]
+
             testList "a let or use at the start of a block line binds the rest of the block" [
                 for logicalPath, text, expectedDeclarations, expectedRanges in localLetCases ->
                     testCase logicalPath
@@ -1348,6 +1725,78 @@ let items = [ origin.X; 1 ]
 
             testList "a local binding that the parser does not model stays explicit" [
                 for logicalPath, text, oracle in localLetExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testList "a mutable keyword before the head pattern marks the binding mutable" [
+                for logicalPath, text, expected in mutableBindingCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        Expect.isEmpty
+                            (oracleLines logicalPath result)
+                            "The Compatibility Oracle reports no diagnostic"
+
+                        Expect.sequenceEqual
+                            (bindings (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.map bindingText)
+                            expected
+                            "The bindings with their head pattern ranges"
+            ]
+
+            testList "a mutable keyword that a binding cannot take reports the Oracle diagnostic" [
+                for logicalPath, text, oracle in mutableBindingErrorCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        Expect.sequenceEqual
+                            (oracleLines logicalPath result)
+                            oracle
+                            "The Compatibility Oracle diagnostics"
+            ]
+
+            testList "an assignment sets the long identifier before it to the expression after it" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in assignmentCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with assignments"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect blockRanges)
+                            expectedRanges
+                            "The assignment, local binding, and sequential expression ranges"
+            ]
+
+            testList "an assignment that the parser does not model stays explicit" [
+                for logicalPath, text, oracle in assignmentExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testList "a mutable binding that the parser does not model stays explicit" [
+                for logicalPath, text, oracle in mutableBindingExplicitCases ->
                     testCase logicalPath
                     <| fun _ ->
                         let result = parse logicalPath text

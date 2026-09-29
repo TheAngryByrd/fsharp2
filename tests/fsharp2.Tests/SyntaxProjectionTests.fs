@@ -79,6 +79,7 @@ module SyntaxProjectionTests =
         fun body -> $"let echo (value: int) = {body}"
         fun body -> $"let private hidden = {body}"
         fun body -> $"[<EntryPoint>]\nlet main argv = {body}"
+        fun body -> $"let mutable counter = {body}"
     ]
 
     let private layouts = [
