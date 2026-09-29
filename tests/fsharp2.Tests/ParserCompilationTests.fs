@@ -5384,6 +5384,501 @@ module M =
 
         "r_nested_type_and.fs", "module M\nmodule N =\n    type T = int\n    and U = string\n", []
 
+        "f_case_eof.fs",
+        "module M\ntype U = A of )\n",
+        [
+            "f_case_eof.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "f_case_eof.fs(3,1,3,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "f_case_let.fs",
+        "module M\ntype U = A of )\nlet x = )\n",
+        [
+            "f_case_let.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "f_case_let.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "m_case_and.fs",
+        "module M\ntype T = int\nand U = A of )\nand V = int\n",
+        [
+            "m_case_and.fs(3,14,3,15): error FS0010: Unexpected symbol ')' in type definition"
+            "m_case_and.fs(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "m_case_eof.fs",
+        "module M\ntype T = int\nand U = A of )\n",
+        [
+            "m_case_eof.fs(3,14,3,15): error FS0010: Unexpected symbol ')' in type definition"
+            "m_case_eof.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "m_case_let.fs",
+        "module M\ntype T = int\nand U = A of )\nlet x = )\n",
+        [
+            "m_case_let.fs(3,14,3,15): error FS0010: Unexpected symbol ')' in type definition"
+            "m_case_let.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "m_case_nested_root.fs",
+        "module M\nmodule N =\n    type T = int\n    and U = A of )\nlet x = )\n",
+        [
+            "m_case_nested_root.fs(4,18,4,19): error FS0010: Unexpected symbol ')' in type definition"
+            "m_case_nested_root.fs(5,9,5,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "m_case_nested.fs",
+        "module M\nmodule N =\n    type T = int\n    and U = A of )\n",
+        [
+            "m_case_nested.fs(4,18,4,19): error FS0010: Unexpected symbol ')' in type definition"
+            "m_case_nested.fs(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "m_case_ns.fs",
+        "namespace Q\ntype T = int\nand U = A of )\n",
+        [
+            "m_case_ns.fs(3,14,3,15): error FS0010: Unexpected symbol ')' in type definition"
+            "m_case_ns.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "m_case_third_eof.fs",
+        "module M\ntype T = int\nand U = string\nand V = A of )\n",
+        [
+            "m_case_third_eof.fs(4,14,4,15): error FS0010: Unexpected symbol ')' in type definition"
+            "m_case_third_eof.fs(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "m_case_type.fs",
+        "module M\ntype T = int\nand U = A of )\ntype V = int\n",
+        [
+            "m_case_type.fs(3,14,3,15): error FS0010: Unexpected symbol ')' in type definition"
+            "m_case_type.fs(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "m_field_eof.fs",
+        "module M\ntype T = int\nand U = { A: ) }\n",
+        [ "m_field_eof.fs(3,14,3,15): error FS0010: Unexpected symbol ')' in field declaration" ]
+
+        "m_noeq_eof.fs",
+        "module M\ntype T = int\nand U )\n",
+        [
+            "m_noeq_eof.fs(3,7,3,8): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "e1_14ce.fs",
+        "module M\ntype U = A of )\nmodule N =\n    let x = )\n",
+        [
+            "e1_14ce.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "e1_14ce.fs(4,13,4,14): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e1_3053.fs",
+        "module M\ntype U = A of )\nopen System\nlet x = )\n",
+        [
+            "e1_3053.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "e1_3053.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e1_4772.fs",
+        "module M\ntype U = A of )\n[<A>]\nlet x = )\n",
+        [
+            "e1_4772.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "e1_4772.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e1_68b3.fs",
+        "module M\ntype U = A of )\n\n",
+        [
+            "e1_68b3.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "e1_68b3.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "e1_c726.fs",
+        "module M\ntype U = A of )\nf )\n",
+        [
+            "e1_c726.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "e1_c726.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "e2_14ce.fs",
+        "module M\ntype U = | A of )\nmodule N =\n    let x = )\n",
+        [
+            "e2_14ce.fs(2,17,2,18): error FS0010: Unexpected symbol ')' in union case"
+            "e2_14ce.fs(4,13,4,14): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e2_3053.fs",
+        "module M\ntype U = | A of )\nopen System\nlet x = )\n",
+        [
+            "e2_3053.fs(2,17,2,18): error FS0010: Unexpected symbol ')' in union case"
+            "e2_3053.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e2_4772.fs",
+        "module M\ntype U = | A of )\n[<A>]\nlet x = )\n",
+        [
+            "e2_4772.fs(2,17,2,18): error FS0010: Unexpected symbol ')' in union case"
+            "e2_4772.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e2_68b3.fs",
+        "module M\ntype U = | A of )\n\n",
+        [
+            "e2_68b3.fs(2,17,2,18): error FS0010: Unexpected symbol ')' in union case"
+            "e2_68b3.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "e2_adf0.fs",
+        "module M\ntype U = | A of )\nlet x = )\n",
+        [
+            "e2_adf0.fs(2,17,2,18): error FS0010: Unexpected symbol ')' in union case"
+            "e2_adf0.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e2_c726.fs",
+        "module M\ntype U = | A of )\nf )\n",
+        [
+            "e2_c726.fs(2,17,2,18): error FS0010: Unexpected symbol ')' in union case"
+            "e2_c726.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "e3_14ce.fs",
+        "module M\ntype U = A | B of )\nmodule N =\n    let x = )\n",
+        [
+            "e3_14ce.fs(2,19,2,20): error FS0010: Unexpected symbol ')' in union case"
+            "e3_14ce.fs(4,13,4,14): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e3_3053.fs",
+        "module M\ntype U = A | B of )\nopen System\nlet x = )\n",
+        [
+            "e3_3053.fs(2,19,2,20): error FS0010: Unexpected symbol ')' in union case"
+            "e3_3053.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e3_4772.fs",
+        "module M\ntype U = A | B of )\n[<A>]\nlet x = )\n",
+        [
+            "e3_4772.fs(2,19,2,20): error FS0010: Unexpected symbol ')' in union case"
+            "e3_4772.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e3_68b3.fs",
+        "module M\ntype U = A | B of )\n\n",
+        [
+            "e3_68b3.fs(2,19,2,20): error FS0010: Unexpected symbol ')' in union case"
+            "e3_68b3.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "e3_adf0.fs",
+        "module M\ntype U = A | B of )\nlet x = )\n",
+        [
+            "e3_adf0.fs(2,19,2,20): error FS0010: Unexpected symbol ')' in union case"
+            "e3_adf0.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e3_c726.fs",
+        "module M\ntype U = A | B of )\nf )\n",
+        [
+            "e3_c726.fs(2,19,2,20): error FS0010: Unexpected symbol ')' in union case"
+            "e3_c726.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "e4_14ce.fs",
+        "module M\ntype U = A of int * )\nmodule N =\n    let x = )\n",
+        [
+            "e4_14ce.fs(2,21,2,22): error FS0010: Unexpected symbol ')' in type definition"
+            "e4_14ce.fs(4,13,4,14): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e4_3053.fs",
+        "module M\ntype U = A of int * )\nopen System\nlet x = )\n",
+        [
+            "e4_3053.fs(2,21,2,22): error FS0010: Unexpected symbol ')' in type definition"
+            "e4_3053.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e4_4772.fs",
+        "module M\ntype U = A of int * )\n[<A>]\nlet x = )\n",
+        [
+            "e4_4772.fs(2,21,2,22): error FS0010: Unexpected symbol ')' in type definition"
+            "e4_4772.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e4_68b3.fs",
+        "module M\ntype U = A of int * )\n\n",
+        [
+            "e4_68b3.fs(2,21,2,22): error FS0010: Unexpected symbol ')' in type definition"
+            "e4_68b3.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "e4_adf0.fs",
+        "module M\ntype U = A of int * )\nlet x = )\n",
+        [
+            "e4_adf0.fs(2,21,2,22): error FS0010: Unexpected symbol ')' in type definition"
+            "e4_adf0.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e4_c726.fs",
+        "module M\ntype U = A of int * )\nf )\n",
+        [
+            "e4_c726.fs(2,21,2,22): error FS0010: Unexpected symbol ')' in type definition"
+            "e4_c726.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "e5_14ce.fs",
+        "module M\ntype U = A of x: )\nmodule N =\n    let x = )\n",
+        [
+            "e5_14ce.fs(2,18,2,19): error FS0010: Unexpected symbol ')' in type definition"
+            "e5_14ce.fs(4,13,4,14): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e5_3053.fs",
+        "module M\ntype U = A of x: )\nopen System\nlet x = )\n",
+        [
+            "e5_3053.fs(2,18,2,19): error FS0010: Unexpected symbol ')' in type definition"
+            "e5_3053.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e5_4772.fs",
+        "module M\ntype U = A of x: )\n[<A>]\nlet x = )\n",
+        [
+            "e5_4772.fs(2,18,2,19): error FS0010: Unexpected symbol ')' in type definition"
+            "e5_4772.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e5_68b3.fs",
+        "module M\ntype U = A of x: )\n\n",
+        [
+            "e5_68b3.fs(2,18,2,19): error FS0010: Unexpected symbol ')' in type definition"
+            "e5_68b3.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "e5_adf0.fs",
+        "module M\ntype U = A of x: )\nlet x = )\n",
+        [
+            "e5_adf0.fs(2,18,2,19): error FS0010: Unexpected symbol ')' in type definition"
+            "e5_adf0.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e5_c726.fs",
+        "module M\ntype U = A of x: )\nf )\n",
+        [
+            "e5_c726.fs(2,18,2,19): error FS0010: Unexpected symbol ')' in type definition"
+            "e5_c726.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "e6_14ce.fs",
+        "module M\ntype U = | A | )\nmodule N =\n    let x = )\n",
+        [
+            "e6_14ce.fs(2,16,2,17): error FS0010: Unexpected symbol ')' in union case"
+            "e6_14ce.fs(4,13,4,14): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e6_3053.fs",
+        "module M\ntype U = | A | )\nopen System\nlet x = )\n",
+        [
+            "e6_3053.fs(2,16,2,17): error FS0010: Unexpected symbol ')' in union case"
+            "e6_3053.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e6_4772.fs",
+        "module M\ntype U = | A | )\n[<A>]\nlet x = )\n",
+        [
+            "e6_4772.fs(2,16,2,17): error FS0010: Unexpected symbol ')' in union case"
+            "e6_4772.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e6_68b3.fs",
+        "module M\ntype U = | A | )\n\n",
+        [
+            "e6_68b3.fs(2,16,2,17): error FS0010: Unexpected symbol ')' in union case"
+            "e6_68b3.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "e6_adf0.fs",
+        "module M\ntype U = | A | )\nlet x = )\n",
+        [
+            "e6_adf0.fs(2,16,2,17): error FS0010: Unexpected symbol ')' in union case"
+            "e6_adf0.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e6_c726.fs",
+        "module M\ntype U = | A | )\nf )\n",
+        [
+            "e6_c726.fs(2,16,2,17): error FS0010: Unexpected symbol ')' in union case"
+            "e6_c726.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "b_block_eof.fs",
+        "module M\ntype U =\n    | A of )\n",
+        [
+            "b_block_eof.fs(3,12,3,13): error FS0010: Unexpected symbol ')' in union case"
+            "b_block_eof.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "b_block_expr.fs",
+        "module M\ntype U =\n    | A\n    | )\nf )\n",
+        [
+            "b_block_expr.fs(4,7,4,8): error FS0010: Unexpected symbol ')' in union case"
+            "b_block_expr.fs(6,1,6,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "b_block_let.fs",
+        "module M\ntype U =\n    | A of )\nlet x = )\n",
+        [
+            "b_block_let.fs(3,12,3,13): error FS0010: Unexpected symbol ')' in union case"
+            "b_block_let.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "b_block_type.fs",
+        "module M\ntype U =\n    | A of )\ntype V = int\nlet x = )\n",
+        [
+            "b_block_type.fs(3,12,3,13): error FS0010: Unexpected symbol ')' in union case"
+            "b_block_type.fs(5,9,5,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "b_deep_eof.fs",
+        "module M\nmodule N =\n    module O =\n        type U = A of )\n",
+        [
+            "b_deep_eof.fs(4,23,4,24): error FS0010: Unexpected symbol ')' in type definition"
+            "b_deep_eof.fs(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "b_deep.fs",
+        "module M\nmodule N =\n    module O =\n        type U = A of )\n    let y = )\nlet x = )\n",
+        [
+            "b_deep.fs(4,23,4,24): error FS0010: Unexpected symbol ')' in type definition"
+            "b_deep.fs(5,13,5,14): error FS0010: Unexpected symbol ')' in binding"
+            "b_deep.fs(6,9,6,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "b_expr_then_let.fs",
+        "module M\ntype U = A of )\nf 1\nlet x = )\n",
+        [
+            "b_expr_then_let.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "b_expr_then_let.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "b_let_then_eof_ok.fs",
+        "module M\ntype U = A of )\nlet x = 1\n",
+        [
+            "b_let_then_eof_ok.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+        ]
+
+        "b_nested_inner_let.fs",
+        "module M\nmodule N =\n    type U = A of )\n    let y = )\n",
+        [
+            "b_nested_inner_let.fs(3,19,3,20): error FS0010: Unexpected symbol ')' in type definition"
+            "b_nested_inner_let.fs(4,13,4,14): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "b_ns_let.fs",
+        "namespace Q\ntype U = A of )\nmodule N =\n    let x = )\n",
+        [
+            "b_ns_let.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "b_ns_let.fs(4,13,4,14): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "b_open_eof.fs",
+        "module M\ntype U = A of )\nopen System\n",
+        [
+            "b_open_eof.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "b_open_eof.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "b_record_let.fs",
+        "module M\ntype U = { A: ) }\nlet x = )\n",
+        [
+            "b_record_let.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in field declaration"
+            "b_record_let.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "b_type_then_let.fs",
+        "module M\ntype U = A of )\ntype V = int\nlet x = )\n",
+        [
+            "b_type_then_let.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "b_type_then_let.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "r_and_let.fs",
+        "module M\ntype U = A of )\nand V = int\nlet x = )\n",
+        [
+            "r_and_let.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "r_and_let.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "r_attr_ok.fs",
+        "module M\ntype U = A of )\n[<A>]\nlet x = 1\n",
+        [ "r_attr_ok.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition" ]
+
+        "r_close_let.fs",
+        "module M\ntype U = A of )\n)\nlet x = )\n",
+        [
+            "r_close_let.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "r_close_let.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "r_do_ok_let.fs",
+        "module M\ntype U = A of )\ndo ()\nlet x = )\n",
+        [
+            "r_do_ok_let.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "r_do_ok_let.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "r_do_ok.fs",
+        "module M\ntype U = A of )\ndo ()\n",
+        [ "r_do_ok.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition" ]
+
+        "r_expr_err_let.fs",
+        "module M\ntype U = A of )\nf )\nlet x = )\n",
+        [
+            "r_expr_err_let.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "r_expr_err_let.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "r_hash.fs",
+        "module M\ntype U = A of )\n#nowarn \"1\"\nlet x = )\n",
+        [
+            "r_hash.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "r_hash.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "r_let_rec.fs",
+        "module M\ntype U = A of )\nlet rec f x = )\n",
+        [
+            "r_let_rec.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "r_let_rec.fs(3,15,3,16): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "r_module_ok.fs",
+        "module M\ntype U = A of )\nmodule N =\n    let x = 1\n",
+        [ "r_module_ok.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition" ]
+
+        "r_open_open.fs",
+        "module M\ntype U = A of )\nopen System\nopen System\n",
+        [
+            "r_open_open.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "r_open_open.fs(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "p_attr_do.fs",
+        "module M\ntype U = A of )\n[<A>]\ndo ()\n",
+        [ "p_attr_do.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition" ]
+
+        "p_let_err.fs",
+        "module M\ntype U = A of )\nlet x = 1\nlet y = )\n",
+        [
+            "p_let_err.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "p_let_err.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "t_case_err_and.fs",
+        "module M\ntype T = | A of )\nand U = int\n",
+        [
+            "t_case_err_and.fs(2,17,2,18): error FS0010: Unexpected symbol ')' in union case"
+            "t_case_err_and.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
         "b_and.fs",
         "module M\nlet rec a = 1\nand b =\nlet c = 1\n",
         [
@@ -5740,6 +6235,324 @@ module M =
     ]
 
     let private unmodeledIncompleteConstructCases = [
+        "m_field_let.fs",
+        "module M\ntype T = int\nand U = { A: ) }\nlet x = )\n",
+        [
+            "m_field_let.fs(3,14,3,15): error FS0010: Unexpected symbol ')' in field declaration"
+            "m_field_let.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e1_13b9.fs",
+        "module M\ntype U = A of )\ntype V = )\n",
+        [
+            "e1_13b9.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "e1_13b9.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "e1_645d.fs",
+        "module M\ntype U = A of )\ndo )\n",
+        [
+            "e1_645d.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "e1_645d.fs(4,1,4,1): error FS3524: Expecting expression"
+        ]
+
+        "e1_68ab.fs",
+        "module M\ntype U = A of )\nexception E\nlet x = )\n",
+        [
+            "e1_68ab.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "e1_68ab.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e2_13b9.fs",
+        "module M\ntype U = | A of )\ntype V = )\n",
+        [
+            "e2_13b9.fs(2,17,2,18): error FS0010: Unexpected symbol ')' in union case"
+            "e2_13b9.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "e2_645d.fs",
+        "module M\ntype U = | A of )\ndo )\n",
+        [
+            "e2_645d.fs(2,17,2,18): error FS0010: Unexpected symbol ')' in union case"
+            "e2_645d.fs(4,1,4,1): error FS3524: Expecting expression"
+        ]
+
+        "e2_68ab.fs",
+        "module M\ntype U = | A of )\nexception E\nlet x = )\n",
+        [
+            "e2_68ab.fs(2,17,2,18): error FS0010: Unexpected symbol ')' in union case"
+            "e2_68ab.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e3_13b9.fs",
+        "module M\ntype U = A | B of )\ntype V = )\n",
+        [
+            "e3_13b9.fs(2,19,2,20): error FS0010: Unexpected symbol ')' in union case"
+            "e3_13b9.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "e3_645d.fs",
+        "module M\ntype U = A | B of )\ndo )\n",
+        [
+            "e3_645d.fs(2,19,2,20): error FS0010: Unexpected symbol ')' in union case"
+            "e3_645d.fs(4,1,4,1): error FS3524: Expecting expression"
+        ]
+
+        "e3_68ab.fs",
+        "module M\ntype U = A | B of )\nexception E\nlet x = )\n",
+        [
+            "e3_68ab.fs(2,19,2,20): error FS0010: Unexpected symbol ')' in union case"
+            "e3_68ab.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e4_13b9.fs",
+        "module M\ntype U = A of int * )\ntype V = )\n",
+        [
+            "e4_13b9.fs(2,21,2,22): error FS0010: Unexpected symbol ')' in type definition"
+            "e4_13b9.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "e4_645d.fs",
+        "module M\ntype U = A of int * )\ndo )\n",
+        [
+            "e4_645d.fs(2,21,2,22): error FS0010: Unexpected symbol ')' in type definition"
+            "e4_645d.fs(4,1,4,1): error FS3524: Expecting expression"
+        ]
+
+        "e4_68ab.fs",
+        "module M\ntype U = A of int * )\nexception E\nlet x = )\n",
+        [
+            "e4_68ab.fs(2,21,2,22): error FS0010: Unexpected symbol ')' in type definition"
+            "e4_68ab.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e5_13b9.fs",
+        "module M\ntype U = A of x: )\ntype V = )\n",
+        [
+            "e5_13b9.fs(2,18,2,19): error FS0010: Unexpected symbol ')' in type definition"
+            "e5_13b9.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "e5_645d.fs",
+        "module M\ntype U = A of x: )\ndo )\n",
+        [
+            "e5_645d.fs(2,18,2,19): error FS0010: Unexpected symbol ')' in type definition"
+            "e5_645d.fs(4,1,4,1): error FS3524: Expecting expression"
+        ]
+
+        "e5_68ab.fs",
+        "module M\ntype U = A of x: )\nexception E\nlet x = )\n",
+        [
+            "e5_68ab.fs(2,18,2,19): error FS0010: Unexpected symbol ')' in type definition"
+            "e5_68ab.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e6_13b9.fs",
+        "module M\ntype U = | A | )\ntype V = )\n",
+        [
+            "e6_13b9.fs(2,16,2,17): error FS0010: Unexpected symbol ')' in union case"
+            "e6_13b9.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "e6_645d.fs",
+        "module M\ntype U = | A | )\ndo )\n",
+        [
+            "e6_645d.fs(2,16,2,17): error FS0010: Unexpected symbol ')' in union case"
+            "e6_645d.fs(4,1,4,1): error FS3524: Expecting expression"
+        ]
+
+        "e6_68ab.fs",
+        "module M\ntype U = | A | )\nexception E\nlet x = )\n",
+        [
+            "e6_68ab.fs(2,16,2,17): error FS0010: Unexpected symbol ')' in union case"
+            "e6_68ab.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e7_13b9.fs",
+        "module M\ntype U = A of int |\ntype V = )\n",
+        [
+            "e7_13b9.fs(3,1,3,5): error FS0010: Incomplete structured construct at or before this point in union case"
+            "e7_13b9.fs(3,10,3,11): error FS0010: Unexpected symbol ')' in type definition"
+            "e7_13b9.fs(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "e7_14ce.fs",
+        "module M\ntype U = A of int |\nmodule N =\n    let x = )\n",
+        [
+            "e7_14ce.fs(3,1,3,7): error FS0010: Incomplete structured construct at or before this point in union case"
+            "e7_14ce.fs(4,13,4,14): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e7_3053.fs",
+        "module M\ntype U = A of int |\nopen System\nlet x = )\n",
+        [
+            "e7_3053.fs(3,1,3,5): error FS0010: Incomplete structured construct at or before this point in union case"
+            "e7_3053.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e7_4772.fs",
+        "module M\ntype U = A of int |\n[<A>]\nlet x = )\n",
+        [
+            "e7_4772.fs(3,1,3,3): error FS0010: Incomplete structured construct at or before this point in union case"
+            "e7_4772.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e7_645d.fs",
+        "module M\ntype U = A of int |\ndo )\n",
+        [
+            "e7_645d.fs(3,1,3,3): error FS0010: Incomplete structured construct at or before this point in union case"
+            "e7_645d.fs(3,4,3,5): error FS0010: Unexpected symbol ')' in expression"
+            "e7_645d.fs(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "e7_68ab.fs",
+        "module M\ntype U = A of int |\nexception E\nlet x = )\n",
+        [
+            "e7_68ab.fs(3,1,3,10): error FS0010: Incomplete structured construct at or before this point in union case"
+            "e7_68ab.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e7_68b3.fs",
+        "module M\ntype U = A of int |\n\n",
+        [
+            "e7_68b3.fs(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in union case"
+        ]
+
+        "e7_adf0.fs",
+        "module M\ntype U = A of int |\nlet x = )\n",
+        [
+            "e7_adf0.fs(3,1,3,4): error FS0010: Incomplete structured construct at or before this point in union case"
+            "e7_adf0.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e7_c726.fs",
+        "module M\ntype U = A of int |\nf )\n",
+        [
+            "e7_c726.fs(3,1,3,2): error FS0010: Incomplete structured construct at or before this point in union case"
+            "e7_c726.fs(3,3,3,4): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "b_anon_let.fs",
+        "type U = A of )\nlet x = )\n",
+        [
+            "b_anon_let.fs(1,15,1,16): error FS0010: Unexpected symbol ')' in type definition"
+            "b_anon_let.fs(2,9,2,10): error FS0010: Unexpected symbol ')' in binding"
+            "b_anon_let.fs(3,1,3,1): error FS3113: Unexpected end of input in type definition"
+            "b_anon_let.fs(1,1,2,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "r_attr_type.fs",
+        "module M\ntype U = A of )\n[<A>]\ntype V = )\nlet x = )\n",
+        [
+            "r_attr_type.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "r_attr_type.fs(5,9,5,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "r_exc_eof.fs",
+        "module M\ntype U = A of )\nexception E\n",
+        [
+            "r_exc_eof.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "r_exc_eof.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "r_let_bang.fs",
+        "module M\ntype U = A of )\nlet! x = 1\n",
+        [
+            "r_let_bang.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "r_let_bang.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "r_module_err_name.fs",
+        "module M\ntype U = A of )\nmodule )\n",
+        [
+            "r_module_err_name.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "r_module_err_name.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "r_open_err.fs",
+        "module M\ntype U = A of )\nopen )\n",
+        [
+            "r_open_err.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "r_open_err.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "r_use_err.fs",
+        "module M\ntype U = A of )\nuse x = )\n",
+        [
+            "r_use_err.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "r_use_err.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding"
+            "r_use_err.fs(3,1,3,8): error FS0523: 'use' bindings are not permitted in primary constructors"
+        ]
+
+        "r_use_ok.fs",
+        "module M\ntype U = A of )\nuse x = 1\n",
+        [
+            "r_use_ok.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "r_use_ok.fs(3,1,3,10): error FS0523: 'use' bindings are not permitted in primary constructors"
+        ]
+
+        "p_close.fs",
+        "module M\ntype U = A of )\nlet x = 1\n)\n",
+        [
+            "p_close.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "p_close.fs(4,1,4,2): error FS0010: Unexpected symbol ')' in type definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "p_do_ok_type.fs",
+        "module M\ntype U = A of )\ndo ()\ntype V = int\n",
+        [
+            "p_do_ok_type.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "p_do_ok_type.fs(4,1,4,5): error FS0010: Unexpected keyword 'type' in type definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "p_expr_err.fs",
+        "module M\ntype U = A of )\nlet x = 1\nf )\n",
+        [
+            "p_expr_err.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "p_expr_err.fs(4,1,4,2): error FS0010: Unexpected identifier in member definition"
+            "p_expr_err.fs(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "p_module.fs",
+        "module M\ntype U = A of )\nlet x = 1\nmodule N =\n    let y = )\n",
+        [
+            "p_module.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "p_module.fs(4,1,4,7): error FS0010: Unexpected keyword 'module' in type definition. Expected incomplete structured construct at or before this point or other token."
+            "p_module.fs(5,13,5,14): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "p_open_err.fs",
+        "module M\ntype U = A of )\nlet x = 1\nopen )\n",
+        [
+            "p_open_err.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "p_open_err.fs(4,1,4,5): error FS0010: Unexpected keyword 'open' in member definition"
+            "p_open_err.fs(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "p_open_ok_eof.fs",
+        "module M\ntype U = A of )\nlet x = 1\nopen System\n",
+        [
+            "p_open_ok_eof.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "p_open_ok_eof.fs(4,1,4,5): error FS0010: Unexpected keyword 'open' in member definition"
+            "p_open_ok_eof.fs(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "p_type_err.fs",
+        "module M\ntype U = A of )\nlet x = 1\ntype V = )\n",
+        [
+            "p_type_err.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "p_type_err.fs(4,1,4,5): error FS0010: Unexpected keyword 'type' in type definition. Expected incomplete structured construct at or before this point or other token."
+            "p_type_err.fs(4,10,4,11): error FS0010: Unexpected symbol ')' in type definition"
+            "p_type_err.fs(5,1,5,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
+        "p_type_ok_eof.fs",
+        "module M\ntype U = A of )\nlet x = 1\ntype V = int\n",
+        [
+            "p_type_ok_eof.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition"
+            "p_type_ok_eof.fs(4,1,4,5): error FS0010: Unexpected keyword 'type' in type definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
         "u_col10.fs", "module M\ntype U = A\n         | B\n", []
 
         "u_col11.fs", "module M\ntype U = A\n          | B\n", []
@@ -5836,13 +6649,6 @@ module M =
         [
             "g_same_line.fs(2,14,2,17): error FS0010: Unexpected keyword 'and' in member definition"
             "g_same_line.fs(3,1,3,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
-        ]
-
-        "t_case_err_and.fs",
-        "module M\ntype T = | A of )\nand U = int\n",
-        [
-            "t_case_err_and.fs(2,17,2,18): error FS0010: Unexpected symbol ')' in union case"
-            "t_case_err_and.fs(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
         ]
 
         "t_err_and.fs",
