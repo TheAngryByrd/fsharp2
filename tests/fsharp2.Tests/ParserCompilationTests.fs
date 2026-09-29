@@ -4688,6 +4688,62 @@ module M =
 
         "r_type_bar.fs", "module M\ntype T =\n| A\n| B\n", []
 
+        "k_attr_nested_do.fs",
+        "module M\nmodule N =\n    do\n[<A>]\nlet b = 1\n",
+        [
+            "k_attr_nested_do.fs(4,1,4,3): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "k_attr_nested_do.fs(4,1,4,3): error FS3524: Expecting expression"
+        ]
+
+        "s_attr_closed.fsi",
+        "module M\nmodule N =\n    val a: int ->\n[<A>]\nval b: int\n",
+        [
+            "s_attr_closed.fsi(4,1,4,3): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "s_attr_eof.fsi",
+        "module M\nval a: int ->\n[<A>]\nval b: int\n",
+        [
+            "s_attr_eof.fsi(2,15,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "t_anon_root.fsi",
+        "module M\n{| A = 1 |}\n",
+        [
+            "t_anon_root.fsi(2,1,2,3): error FS0010: Unexpected symbol '{|'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "t_arr_after_val.fsi",
+        "module M\nval a: int\n[| 1 |]\n",
+        [
+            "t_arr_after_val.fsi(3,1,3,3): error FS0010: Unexpected symbol '[|'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "t_arr_nested.fsi",
+        "module M\nmodule N =\n    [| 1 |]\n",
+        [
+            "t_arr_nested.fsi(3,5,3,7): error FS0010: Unexpected symbol '[|' in signature file"
+            "t_arr_nested.fsi(4,1,4,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "t_arr_ns.fsi",
+        "namespace Q\n[| 1 |]\n",
+        [
+            "t_arr_ns.fsi(2,1,2,3): error FS0010: Unexpected symbol '[|'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "t_arr_root.fsi",
+        "module M\n[| 1 |]\n",
+        [
+            "t_arr_root.fsi(2,1,2,3): error FS0010: Unexpected symbol '[|'. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "t_bracket_root.fsi",
+        "module M\n[ 1 ]\n",
+        [
+            "t_bracket_root.fsi(2,1,2,2): error FS0010: Unexpected symbol '['. Expected incomplete structured construct at or before this point or other token."
+        ]
+
         "b_and.fs",
         "module M\nlet rec a = 1\nand b =\nlet c = 1\n",
         [
@@ -5044,6 +5100,56 @@ module M =
     ]
 
     let private unmodeledIncompleteConstructCases = [
+        "k_anon_bind.fs",
+        "module M\nlet a =\n{| A = 1 |}\n",
+        [
+            "k_anon_bind.fs(3,1,3,3): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "k_anon_bind.fs(3,1,3,3): error FS0010: Incomplete structured construct at or before this point in binding"
+        ]
+
+        "k_anon_do.fs",
+        "module M\ndo\n{| A = 1 |}\n",
+        [
+            "k_anon_do.fs(3,1,3,3): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "k_anon_do.fs(3,1,3,3): error FS3524: Expecting expression"
+        ]
+
+        "k_arr_bind.fs",
+        "module M\nlet a =\n[| 1 |]\n",
+        [
+            "k_arr_bind.fs(3,1,3,3): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "k_arr_bind.fs(3,1,3,3): error FS0010: Incomplete structured construct at or before this point in binding"
+        ]
+
+        "k_arr_do.fs",
+        "module M\ndo\n[| 1 |]\n",
+        [
+            "k_arr_do.fs(3,1,3,3): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "k_arr_do.fs(3,1,3,3): error FS3524: Expecting expression"
+        ]
+
+        "k_arr_nested.fs",
+        "module M\nmodule N =\n    let a =\n[| 1 |]\n",
+        [
+            "k_arr_nested.fs(4,1,4,3): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "k_arr_nested.fs(4,1,4,3): error FS0010: Incomplete structured construct at or before this point in binding"
+        ]
+
+        "k_bracket_space_bar.fs",
+        "module M\nlet a =\n[ | 1 |]\n",
+        [
+            "k_bracket_space_bar.fs(3,1,3,2): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "k_bracket_space_bar.fs(3,1,3,2): error FS0010: Incomplete structured construct at or before this point in binding"
+            "k_bracket_space_bar.fs(3,3,3,4): error FS0010: Unexpected symbol '|' in expression. Expected ']' or other token."
+            "k_bracket_space_bar.fs(3,1,3,2): error FS0598: Unmatched '['"
+        ]
+
+        "u_arr_root.fs",
+        "module M\nlet x = 1\n)\n[| 1 |]\n",
+        [
+            "u_arr_root.fs(3,1,3,2): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
         "d_anon_nested.fs",
         "module N =\n    do\nlet b = 1\n",
         [

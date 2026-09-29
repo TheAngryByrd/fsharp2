@@ -184,6 +184,29 @@ module internal Parser =
         End = finish.End
     }
 
+    let private opens opening (token: LayoutToken) (next: LayoutToken) =
+        isDelimiter opening token
+        && next.Range.Start.Offset = token.Range.End.Offset
+
+    let private startsAttributeList token (next: LayoutToken) =
+        opens "[" token next
+        && isOperator "<" next
+
+    let private startsBarBracket token (next: LayoutToken) =
+        (opens "[" token next
+         || opens "{" token next)
+        && isOperator "|" next
+
+    // The Compatibility Oracle reads '[<', '[|', and '{|' as one token, and the lexer splits them.
+    let private sourceTokenRange (token: LayoutToken) next =
+        if
+            startsAttributeList token next
+            || startsBarBracket token next
+        then
+            span token.Range next.Range
+        else
+            token.Range
+
     let private emptyAt position = { Start = position; End = position }
 
     let private reportUnmarked state code message (range: SourceRange) =
@@ -346,10 +369,7 @@ module internal Parser =
             "when"
         ]
 
-    let private closesArrayOrAttribute (cursor: Cursor) =
-        let token = cursor.Current
-        let next = cursor.Peek 1
-
+    let private closesArrayOrAttribute token (next: LayoutToken) =
         (isOperator "|" token
          || isOperator ">" token)
         && isDelimiter "]" next
@@ -395,7 +415,7 @@ module internal Parser =
 
         if excluded then
             None
-        elif closesArrayOrAttribute cursor then
+        elif closesArrayOrAttribute token next then
             symbol $"{text}]" (span token.Range next.Range)
         elif
             isDelimiter ")" token
@@ -476,6 +496,11 @@ module internal Parser =
                 && not (text.StartsWith("\"\"\"", StringComparison.Ordinal))
                 ->
                 Some("string literal", token.Range)
+            | _ when
+                signatureStart
+                && startsBarBracket token next
+                ->
+                symbol $"{text}|" (span token.Range next.Range)
             | _ when
                 signatureStart
                 && (isDelimiter "(" token
@@ -629,7 +654,7 @@ module internal Parser =
         if isEndOfFile next then
             lastLineToEnd next
         elif closesBlock then
-            next.Range
+            sourceTokenRange next (cursor.Peek(offset + 1))
         else
             // The Compatibility Oracle starts an incomplete construct one column after the last token.
             {
@@ -648,19 +673,11 @@ module internal Parser =
     let private nextTokenOrEndRange (cursor: Cursor) =
         let offset, _ = nextSource cursor
         let token = cursor.Peek offset
-        let following = cursor.Peek(offset + 1)
 
         if isEndOfFile token then
             lastLineToEnd token
-        // The Compatibility Oracle reads '[<' as one token.
-        elif
-            isDelimiter "[" token
-            && isOperator "<" following
-            && following.Range.Start.Offset = token.Range.End.Offset
-        then
-            span token.Range following.Range
         else
-            token.Range
+            sourceTokenRange token (cursor.Peek(offset + 1))
 
     let private offsideMessage (context: SourcePosition) =
         $"Unexpected syntax or possible incorrect indentation: this token is offside of context started at position ({context.Line}:{context.Column}). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
@@ -1367,7 +1384,7 @@ module internal Parser =
                 precedence
                 >= minimum
                 && not (isOffside context cursor.Current)
-                && not (closesArrayOrAttribute cursor)
+                && not (closesArrayOrAttribute cursor.Current (cursor.Peek 1))
                 ->
                 let token = cursor.Current
                 let next = cursor.Peek 1
@@ -1849,7 +1866,7 @@ module internal Parser =
 
         if
             isOperator "|" cursor.Current
-            && not (closesArrayOrAttribute cursor)
+            && not (closesArrayOrAttribute cursor.Current (cursor.Peek 1))
             && not (reportedAt state cursor.Current)
         then
             reportUnsupported state cursor.Current "a lambda expression body"
@@ -2000,12 +2017,7 @@ module internal Parser =
         )
 
     let private isAttributeListStart (cursor: Cursor) =
-        let token = cursor.Current
-        let next = cursor.Peek 1
-
-        isDelimiter "[" token
-        && isOperator "<" next
-        && next.Range.Start.Offset = token.Range.End.Offset
+        startsAttributeList cursor.Current (cursor.Peek 1)
 
     let private isAttributeListEnd (cursor: Cursor) =
         let token = cursor.Current
@@ -3034,11 +3046,7 @@ module internal Parser =
             let token = cursor.Peek offset
             let next = cursor.Peek(offset + 1)
 
-            if
-                isDelimiter "[" token
-                && isOperator "<" next
-                && next.Range.Start.Offset = token.Range.End.Offset
-            then
+            if startsAttributeList token next then
                 let rec close offset =
                     let token = cursor.Peek offset
                     let next = cursor.Peek(offset + 1)
