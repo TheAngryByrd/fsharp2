@@ -22,6 +22,43 @@ type internal LayoutResult = {
 }
 
 module internal Layout =
+    let isPrefixOperator (token: LexicalToken) (next: LexicalToken option) =
+        token.Kind = LexicalTokenKind.Operator
+        && (token.Text.StartsWith('+')
+            || token.Text.StartsWith('-')
+            || token.Text.StartsWith('%')
+            || token.Text = "&"
+            || token.Text = "&&")
+        && next
+           |> Option.exists (fun next -> next.Range.Start.Offset = token.Range.End.Offset)
+
+    // The FCS lexical filter does not treat '=', '<', '>', or a prefix operator as an infix token for layout.
+    let isInfixToken (token: LexicalToken) (next: LexicalToken option) =
+        match token.Kind with
+        | LexicalTokenKind.Delimiter -> token.Text = ","
+        | LexicalTokenKind.Operator when not (isPrefixOperator token next) ->
+            match token.Text with
+            | "="
+            | "<"
+            | ">"
+            | "|"
+            | "->"
+            | "<-"
+            | "<@"
+            | "<@@"
+            | "@>"
+            | "@@>" -> false
+            | "!="
+            | "::"
+            | ":="
+            | ":>"
+            | ":?>"
+            | "??" -> true
+            | text ->
+                "@^<>=|&+-*/%$".IndexOf(text[0])
+                >= 0
+        | _ -> false
+
     let apply (source: DecodedSource) (directives: DirectiveResult) (lexed: LexerResult) =
         let tokens = ResizeArray<LayoutToken>()
         let diagnostics = ResizeArray<SourceLexicalDiagnostic>(directives.Diagnostics)
@@ -209,7 +246,16 @@ module internal Layout =
                 else
                     let closedOpeners = ResizeArray<SourcePosition>()
 
-                    while indents.Head > indentation do
+                    // 15.1.9: an infix token can be left of a block column by its length plus one.
+                    let continuesBlock column =
+                        isInfixToken lineTokens[0] (Array.tryItem 1 lineTokens)
+                        && indentation
+                           + lineTokens[0].Text.Length
+                           + 1
+                           >= column
+
+                    while indents.Head > indentation
+                          && not (continuesBlock indents.Head) do
                         indents <- indents.Tail
 
                         match openers with
@@ -225,7 +271,14 @@ module internal Layout =
                             (startOffset
                              + charIndex)
 
-                    if
+                    if indents.Head > indentation then
+                        event
+                            LayoutTokenKind.Separator
+                            line
+                            column
+                            (startOffset
+                             + charIndex)
+                    elif
                         indentation
                         <> indents.Head
                     then

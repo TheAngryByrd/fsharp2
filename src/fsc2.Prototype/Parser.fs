@@ -628,16 +628,35 @@ module internal Parser =
         && token.Range.Start.Column
            <= context.Offside.Column
 
+    let private isLayoutInfix (token: LayoutToken) (next: LayoutToken) =
+        token.Token
+        |> Option.exists (fun lexical -> Layout.isInfixToken lexical next.Token)
+
     // 15.1.9: an infix token can be left of the block column by its length plus one.
-    let private isOffsideInfix state (context: Frame) (token: LayoutToken) =
-        if state.InDelimiters then
+    let private isOffsideInfix state (context: Frame) (token: LayoutToken) (next: LayoutToken) =
+        let laterLine =
             token.Kind = LayoutTokenKind.SourceToken
             && token.Range.Start.Line > context.Offside.Line
+
+        let undented =
+            laterLine
             && token.Range.Start.Column
                + (tokenText token).Length
                + 1 < context.Offside.Column
-        else
+
+        if not state.InDelimiters then
             isOffside context token
+        elif isLayoutInfix token next then
+            undented
+        elif
+            token.Token
+            |> Option.exists (fun lexical -> Layout.isPrefixOperator lexical next.Token)
+        then
+            isOffside context token
+        else
+            undented
+            || laterLine
+               && token.Range.Start.Column = context.Offside.Column
 
     let private isLeftOfBlock state (context: Frame) (token: LayoutToken) =
         state.InDelimiters
@@ -849,45 +868,46 @@ module internal Parser =
             Some(SyntaxConstant.Boolean false)
         | _ -> None
 
-    let private infixPrecedence (token: LayoutToken) =
-        if not (isKind LexicalTokenKind.Operator token) then
-            None
-        else
-            let text = tokenText token
+    let private operatorPrecedence (text: string) =
+        match text with
+        | "->"
+        | "<-"
+        | ":="
+        | ":>"
+        | ":?"
+        | ":?>"
+        | "|"
+        | "."
+        | ".."
+        | ":" -> None
+        | "||" -> Some(1, false)
+        | "&"
+        | "&&" -> Some(2, false)
+        | "::" -> Some(6, true)
+        | "!=" -> Some(4, false)
+        | _ when text.StartsWith("**", StringComparison.Ordinal) -> Some(9, true)
+        | _ ->
+            match text[0] with
+            | '<'
+            | '>'
+            | '='
+            | '|'
+            | '&'
+            | '$' -> Some(4, false)
+            | '^'
+            | '@' -> Some(5, true)
+            | '+'
+            | '-' -> Some(7, false)
+            | '*'
+            | '/'
+            | '%' -> Some(8, false)
+            | _ -> None
 
-            match text with
-            | "->"
-            | "<-"
-            | ":="
-            | ":>"
-            | ":?"
-            | ":?>"
-            | "|"
-            | "."
-            | ".."
-            | ":" -> None
-            | "||" -> Some(1, false)
-            | "&"
-            | "&&" -> Some(2, false)
-            | "::" -> Some(6, true)
-            | "!=" -> Some(4, false)
-            | _ when text.StartsWith("**", StringComparison.Ordinal) -> Some(9, true)
-            | _ ->
-                match text[0] with
-                | '<'
-                | '>'
-                | '='
-                | '|'
-                | '&'
-                | '$' -> Some(4, false)
-                | '^'
-                | '@' -> Some(5, true)
-                | '+'
-                | '-' -> Some(7, false)
-                | '*'
-                | '/'
-                | '%' -> Some(8, false)
-                | _ -> None
+    let private infixPrecedence (token: LayoutToken) =
+        if isKind LexicalTokenKind.Operator token then
+            operatorPrecedence (tokenText token)
+        else
+            None
 
     [<RequireQualifiedAccess>]
     type private TypeGap =
@@ -1573,19 +1593,78 @@ module internal Parser =
             "->"
         ]
 
+    let private continuesAssignedValue (range: SourceRange) (value: SyntaxExpression) =
+        range.Start.Line = value.Range.Start.Line
+
+    let rec private attachInfix
+        (operator: SyntaxIdentifier)
+        precedence
+        rightAssociative
+        (left: SyntaxExpression)
+        (right: SyntaxExpression)
+        =
+        let bindsLooser (inner: SyntaxIdentifier) =
+            match operatorPrecedence inner.Text with
+            | Some(innerPrecedence, _) ->
+                innerPrecedence < precedence
+                || innerPrecedence = precedence
+                   && rightAssociative
+            | None -> false
+
+        match left with
+        | SyntaxExpression.Infix(inner, innerLeft, innerRight, _) when bindsLooser inner ->
+            let attached = attachInfix operator precedence rightAssociative innerRight right
+            SyntaxExpression.Infix(inner, innerLeft, attached, span innerLeft.Range attached.Range)
+        | SyntaxExpression.Tuple(items, _) ->
+            let last =
+                attachInfix
+                    operator
+                    precedence
+                    rightAssociative
+                    items[items.Length
+                          - 1]
+                    right
+
+            SyntaxExpression.Tuple(
+                items.SetItem(
+                    items.Length
+                    - 1,
+                    last
+                ),
+                span items[0].Range last.Range
+            )
+        | SyntaxExpression.LongIdentifierSet(name, value, range) when
+            continuesAssignedValue range value
+            ->
+            let value = attachInfix operator precedence rightAssociative value right
+            SyntaxExpression.LongIdentifierSet(name, value, span range value.Range)
+        | _ -> SyntaxExpression.Infix(operator, left, right, span left.Range right.Range)
+
+    let rec private appendTupleItem (left: SyntaxExpression) (right: SyntaxExpression) =
+        match left with
+        | SyntaxExpression.Tuple(items, _) ->
+            SyntaxExpression.Tuple(items.Add right, span items[0].Range right.Range)
+        | SyntaxExpression.LongIdentifierSet(name, value, range) when
+            continuesAssignedValue range value
+            ->
+            let value = appendTupleItem value right
+            SyntaxExpression.LongIdentifierSet(name, value, span range value.Range)
+        | _ ->
+            SyntaxExpression.Tuple(ImmutableArray.Create(left, right), span left.Range right.Range)
+
     let rec private parseExpression state context =
         let cursor = state.Cursor
         let first = parseInfix state context 0
 
         if
             isDelimiter "," cursor.Current
-            && not (isOffsideInfix state context cursor.Current)
+            && not (isOffsideInfix state context cursor.Current (cursor.Peek 1))
         then
             let items = ImmutableArray.CreateBuilder<SyntaxExpression>()
             items.Add first
 
             while isDelimiter "," cursor.Current
-                  && not (isOffsideInfix state context cursor.Current) do
+                  && not (isOffsideInfix state context cursor.Current (cursor.Peek 1)) do
                 cursor.Advance()
                 |> ignore
 
@@ -1671,30 +1750,10 @@ module internal Parser =
             | Some(precedence, rightAssociative) when
                 precedence
                 >= minimum
-                && not (isOffsideInfix state context cursor.Current)
+                && not (isOffsideInfix state context cursor.Current (cursor.Peek 1))
                 && not (closesArrayOrAttribute cursor.Current (cursor.Peek 1))
                 ->
-                let token = cursor.Current
-                let next = cursor.Peek 1
-                let text = tokenText token
-                let followsWithoutSpace = token.Range.Start.Offset = cursor.LastEnd.Offset
-                let precedesWithoutSpace = next.Range.Start.Offset = token.Range.End.Offset
-
-                if
-                    followsWithoutSpace
-                    && text.StartsWith("<", StringComparison.Ordinal)
-                    && not (adjacentLessThanIsOperator cursor)
-                then
-                    reportUnsupported state token "a type application in an expression"
-                elif
-                    not followsWithoutSpace
-                    && precedesWithoutSpace
-                    && (text = "-"
-                        || text = "+")
-                then
-                    reportUnsupported state token "a prefix operator application"
-
-                let operator = identifier (cursor.Advance())
+                let operator = parseInfixOperator state
 
                 let right =
                     parseInfix
@@ -1710,6 +1769,32 @@ module internal Parser =
             | _ -> stop <- true
 
         left
+
+    and private parseInfixOperator state =
+        let cursor = state.Cursor
+        let token = cursor.Current
+        let next = cursor.Peek 1
+        let text = tokenText token
+        let followsWithoutSpace = token.Range.Start.Offset = cursor.LastEnd.Offset
+        let precedesWithoutSpace = next.Range.Start.Offset = token.Range.End.Offset
+
+        if reportedAt state token then
+            ()
+        elif
+            followsWithoutSpace
+            && text.StartsWith("<", StringComparison.Ordinal)
+            && not (adjacentLessThanIsOperator cursor)
+        then
+            reportUnsupported state token "a type application in an expression"
+        elif
+            not followsWithoutSpace
+            && precedesWithoutSpace
+            && (text = "-"
+                || text = "+")
+        then
+            reportUnsupported state token "a prefix operator application"
+
+        identifier (cursor.Advance())
 
     and private parseOperand state context =
         let cursor = state.Cursor
@@ -2001,9 +2086,93 @@ module internal Parser =
             && cursor.Current.Range.Start.Column = column
             && startsBlockItem cursor.Current
 
+    and private continueInfixLines state context column (item: SyntaxExpression) =
+        let cursor = state.Cursor
+        let reported = state.Diagnostics.Count
+        let mutable result = item
+        let mutable continued = false
+        let mutable undented = false
+        let mutable more = not result.IsLetOrUse
+
+        while more
+              && not (reportedSince state reported) do
+            let separated = cursor.Current.Kind = LayoutTokenKind.Separator
+
+            let token = if separated then cursor.Peek 1 else cursor.Current
+
+            let next = if separated then cursor.Peek 2 else cursor.Peek 1
+
+            let operator =
+                isDelimiter "," token
+                || (infixPrecedence token).IsSome
+
+            let onLine =
+                if separated then
+                    isLayoutInfix token next
+                elif
+                    token.Kind = LayoutTokenKind.SourceToken
+                    && token.Range.Start.Line > cursor.LastEnd.Line
+                then
+                    // The layout emits no separator for a line at the block column after a nested block closes.
+                    isLayoutInfix token next
+                    && token.Range.Start.Column = column
+                else
+                    continued
+                    && token.Kind = LayoutTokenKind.SourceToken
+                    && not (closesArrayOrAttribute token next)
+
+            if
+                not (
+                    operator
+                    && onLine
+                )
+            then
+                more <- false
+            else
+                if separated then
+                    cursor.Advance()
+                    |> ignore
+
+                if token.Range.Start.Column < column then
+                    undented <- true
+
+                if isDelimiter "," cursor.Current then
+                    cursor.Advance()
+                    |> ignore
+
+                    result <- appendTupleItem result (parseInfix state context 0)
+                else
+                    let precedence, rightAssociative = (infixPrecedence cursor.Current).Value
+                    let operator = parseInfixOperator state
+
+                    let right =
+                        parseInfix
+                            state
+                            context
+                            (if rightAssociative then
+                                 precedence
+                             else
+                                 precedence
+                                 + 1)
+
+                    result <- attachInfix operator precedence rightAssociative result right
+
+                continued <- true
+
+        // The Oracle continues an item after an undented infix line with a line at the block column.
+        if
+            undented
+            && cursor.Current.Kind = LayoutTokenKind.Separator
+            && not (reportedSince state reported)
+        then
+            reportUnsupported state (cursor.Peek 1) "a line after an undented infix operator"
+
+        result
+
     and private parseSequentialAfter state context (first: SyntaxExpression) =
         let cursor = state.Cursor
-        let items = ResizeArray [ first ]
+        let column = first.Range.Start.Column
+        let items = ResizeArray [ continueInfixLines state context column first ]
         let mutable bound = false
 
         while not bound
@@ -2012,7 +2181,7 @@ module internal Parser =
                 items.Add(parseLocalBinding state context)
                 bound <- true
             else
-                items.Add(parseExpression state context)
+                items.Add(continueInfixLines state context column (parseExpression state context))
 
         items
         |> Seq.reduceBack (fun item rest ->
