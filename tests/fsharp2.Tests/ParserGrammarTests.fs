@@ -647,6 +647,14 @@ module ParserGrammarTests =
         "module A\nlet f () =\n    ignore 1\n    match 1 with\n    | _ -> 2\n",
         [ "let f () = seq[[ignore 1]; match 1 with | _ -> 2]" ],
         [ 3, 5, 5, 13 ]
+        "SequentialIfAfter.fs",
+        "module A\nlet f () =\n    ignore 1\n    if true then 2 else 3\n",
+        [ "let f () = seq[[ignore 1]; if Boolean true then 2 else 3]" ],
+        [ 3, 5, 4, 26 ]
+        "SequentialLambdaAfter.fs",
+        "module A\nlet f () =\n    ignore 1\n    fun x -> x\n",
+        [ "let f () = seq[[ignore 1]; fun x -> x]" ],
+        [ 3, 5, 4, 15 ]
         "SequentialMember.fs",
         "module A\ntype T() =\n    member _.M() =\n        ignore 1\n        2\n",
         [ "type T() = member _.M () = seq[[ignore 1]; 2]" ],

@@ -553,6 +553,12 @@ module SyntaxProjectionTests =
                     CompilationOutcome.Failed
                     $"The Compatibility Oracle reports FS0248: Two modules named 'Program' occur in two parts of this assembly. The result is %A{result.Diagnostics}"
 
+                Expect.sequenceEqual
+                    (result.Diagnostics
+                     |> Seq.map _.Code)
+                    [ "FSC2P9999" ]
+                    "No checker rule reports FS0248 yet, so emission fails with an internal error"
+
             testCase
                 "an implicit module compiles to the public module that the Compatibility Oracle names"
             <| fun _ ->
