@@ -18,6 +18,12 @@
   },
   "$defs": {
     "hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "hashBySdkRid": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[a-z]+(-[a-z0-9]+)*$" },
+      "additionalProperties": { "$ref": "#/$defs/hash" }
+    },
     "diagnosticDisposition": {
       "enum": ["reachable", "reserved", "aliased", "retired", "unreachable"]
     },
@@ -90,12 +96,12 @@
     "reference": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["order", "stableId", "logicalPath", "sha256", "assemblyName", "version", "culture", "publicKeyToken", "evaluatedItemSource"],
+      "required": ["order", "stableId", "logicalPath", "sha256BySdkRid", "assemblyName", "version", "culture", "publicKeyToken", "evaluatedItemSource"],
       "properties": {
         "order": { "type": "integer", "minimum": 0 },
         "stableId": { "type": "string", "pattern": "^[a-z][a-z0-9.-]+$" },
         "logicalPath": { "type": "string", "pattern": "^/[^\\\\]+$" },
-        "sha256": { "$ref": "#/$defs/hash" },
+        "sha256BySdkRid": { "$ref": "#/$defs/hashBySdkRid" },
         "assemblyName": { "type": "string", "minLength": 1 },
         "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$" },
         "culture": { "type": "string" },

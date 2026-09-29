@@ -28,8 +28,15 @@ public static class ReferenceClosure
                      .EnumerateArray()
                      .OrderBy(static item => item.GetProperty("order").GetInt32()))
         {
-            var expectedHash = reference.GetProperty("sha256").GetString()!;
             var assemblyName = reference.GetProperty("assemblyName").GetString()!;
+            if (!reference.GetProperty("sha256BySdkRid").TryGetProperty(sdk.Rid, out var hashProperty))
+            {
+                throw Invalid(
+                    "reference-hash-rid",
+                    reference.GetProperty("logicalPath").GetString()!,
+                    $"The closure does not record a '{assemblyName}' hash for SDK runtime identifier '{sdk.Rid}'.");
+            }
+            var expectedHash = hashProperty.GetString()!;
             var physicalPath = ResolveReferencePath(sdk, assemblyName, expectedHash);
             var bytes = File.ReadAllBytes(physicalPath);
             var actualHash = Hashing.Sha256(bytes);

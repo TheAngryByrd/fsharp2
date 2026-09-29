@@ -1125,6 +1125,7 @@ public static class ConformanceRunner
                 sdk.Root,
                 sdk.DotnetPath,
                 sdk.Version,
+                sdk.Rid,
                 sdk.Environment,
             },
             cancellationToken).ConfigureAwait(false);

@@ -56,7 +56,25 @@ public static class SdkSelection
                 $"Selected dotnet reported '{version}'. Expected '{expectedVersion}'.");
         }
 
-        return new(selectedRoot, dotnetPath, version, environment.ToImmutable());
+        var rid = ReadRid(selectedRoot, version);
+        return new(selectedRoot, dotnetPath, version, rid, environment.ToImmutable());
+    }
+
+    private static string ReadRid(string sdkRoot, string version)
+    {
+        // The SDK .version file lists the commit, the version, and the SDK runtime identifier on the first three lines.
+        var versionFilePath = Path.Combine(sdkRoot, "sdk", version, ".version");
+        if (!File.Exists(versionFilePath))
+        {
+            throw Invalid(versionFilePath, "The selected SDK does not contain its .version file.");
+        }
+
+        var lines = File.ReadAllLines(versionFilePath);
+        if (lines.Length < 3 || string.IsNullOrWhiteSpace(lines[2]))
+        {
+            throw Invalid(versionFilePath, "The selected SDK .version file does not declare a runtime identifier.");
+        }
+        return lines[2].Trim();
     }
 
     public static string DefaultRoot(string sdkVersion)

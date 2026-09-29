@@ -168,16 +168,22 @@ module MaterializationTests =
                             (fun document ->
                                 let documentObject = document.AsObject()
                                 let references = (documentObject["references"]).AsArray()
-                                let firstReference = references[0].AsObject()
 
-                                firstReference["sha256"] <-
-                                    JsonValue.Create(
-                                        "sha256:"
-                                        + String.replicate 64 "0"
-                                    )
+                                let hashes =
+                                    (references[0].AsObject()["sha256BySdkRid"]).AsObject()
+
+                                for rid in
+                                    hashes
+                                    |> Seq.map (fun entry -> entry.Key)
+                                    |> List.ofSeq do
+                                    hashes[rid] <-
+                                        JsonValue.Create(
+                                            "sha256:"
+                                            + String.replicate 64 "0"
+                                        )
                             )
 
-                        let changedReference =
+                        let materializeFailure () =
                             try
                                 materialize root "language.files.ordered-modules-positive"
                                 |> ignore
@@ -185,6 +191,8 @@ module MaterializationTests =
                                 None
                             with :? ConformanceContractException as error ->
                                 Some error
+
+                        let changedReference = materializeFailure ()
 
                         Expect.isSome
                             changedReference
@@ -194,6 +202,30 @@ module MaterializationTests =
                             (changedReference.Value.Issues
                              |> Seq.exists (fun issue -> issue.Code = "reference-hash"))
                             "A changed target-reference hash reports reference-hash"
+
+                        let sdkRid = SdkSelection.Resolve(root, sdkRoot, null).Rid
+
+                        mutateJson
+                            closurePath
+                            (fun document ->
+                                let references = (document.AsObject()["references"]).AsArray()
+
+                                (references[0].AsObject()["sha256BySdkRid"])
+                                    .AsObject()
+                                    .Remove(sdkRid)
+                                |> ignore
+                            )
+
+                        let missingRid = materializeFailure ()
+
+                        Expect.isSome
+                            missingRid
+                            "A closure without the selected SDK runtime identifier fails before compilation"
+
+                        Expect.isTrue
+                            (missingRid.Value.Issues
+                             |> Seq.exists (fun issue -> issue.Code = "reference-hash-rid"))
+                            "A closure without the selected SDK runtime identifier reports reference-hash-rid"
                     )
 
             testCase "Conformance Materialization normalizes all option groups"
