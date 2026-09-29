@@ -2737,11 +2737,22 @@ module internal Parser =
             let name =
                 longIdentifierWith
                     state
-                    (fun _ ->
+                    (fun dot ->
+                        let offset, closesBlock = nextSource cursor
+
+                        // The Compatibility Oracle reports the missing name at the dot when the declaration list ends after it.
                         if
+                            closesBlock
+                            || isEndOfFile (cursor.Peek offset)
+                        then
+                            report
+                                state
+                                "FS3117"
+                                "Unexpected end of type. Expected a name after this point."
+                                dot.Range
+                        elif
                             cursor.Current.Kind = LayoutTokenKind.Separator
                             || (cursor.Current.Kind = LayoutTokenKind.SourceToken
-                                && not (isEndOfFile cursor.Current)
                                 && isOffside context cursor.Current)
                         then
                             reportIncomplete state "open declaration"

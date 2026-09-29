@@ -5932,6 +5932,142 @@ module M =
         "module M\ntype U = A of )\nmodule N =\n    let x = 1\nopen System\n",
         [ "n_open.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition" ]
 
+        "o_anon.fs",
+        "open System.\nlet x = 1\n",
+        [
+            "o_anon.fs(1,14,2,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+            "o_anon.fs(1,1,2,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "o_comment.fs",
+        "module M\nopen System. // c\nlet x = 1\n",
+        [
+            "o_comment.fs(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "o_dot_ident_same.fs", "module M\nopen System. IO\n", []
+
+        "o_eof_nonl.fs",
+        "module M\nopen System.",
+        [
+            "o_eof_nonl.fs(2,12,2,13): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "o_eof.fs",
+        "module M\nopen System.\n",
+        [
+            "o_eof.fs(2,12,2,13): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "o_nested_root_err.fs",
+        "module M\nmodule N =\n    open System.\nlet b = )\n",
+        [
+            "o_nested_root_err.fs(3,16,3,17): error FS3117: Unexpected end of type. Expected a name after this point."
+            "o_nested_root_err.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "o_next_let_err.fs",
+        "module M\nopen System.\nlet x = )\n",
+        [
+            "o_next_let_err.fs(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+            "o_next_let_err.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "o_next_let.fs",
+        "module M\nopen System.\nlet x = 1\n",
+        [
+            "o_next_let.fs(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "o_next_open.fs",
+        "module M\nopen System.\nopen System\n",
+        [
+            "o_next_open.fs(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "o_next_type.fs",
+        "module M\nopen System.\ntype T = int\n",
+        [
+            "o_next_type.fs(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "o_ns_next.fs",
+        "namespace Q\nopen System.\nmodule N =\n    let x = )\n",
+        [
+            "o_ns_next.fs(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+            "o_ns_next.fs(4,13,4,14): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "o_ns.fs",
+        "namespace Q\nopen System.\n",
+        [
+            "o_ns.fs(2,12,2,13): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "o_space.fs",
+        "module M\nopen System. \n",
+        [
+            "o_space.fs(2,12,2,13): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "o_two_dots.fs",
+        "module M\nopen System.IO.\n",
+        [
+            "o_two_dots.fs(2,15,2,16): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "s_nested.fsi",
+        "module M\nmodule N =\n    open System.\nval x: int\n",
+        [
+            "s_nested.fsi(3,16,3,17): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "i_attr.fs",
+        "module M\nopen System.\n[<A>]\nlet x = )\n",
+        [
+            "i_attr.fs(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+            "i_attr.fs(4,9,4,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "i_do.fs",
+        "module M\nopen System.\ndo ()\n",
+        [
+            "i_do.fs(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "i_space_next.fs",
+        "module M\nopen System. \nlet x = )\n",
+        [
+            "i_space_next.fs(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+            "i_space_next.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "s_module_ok.fsi",
+        "module M\nopen System.\nmodule N =\n    val x: int\n",
+        [
+            "s_module_ok.fsi(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "s_nested_next.fsi",
+        "module M\nmodule N =\n    open System.\n    val x: int\n",
+        [
+            "s_nested_next.fsi(3,18,4,5): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "s_ns_val.fsi",
+        "namespace Q\nopen System.\nmodule N =\n    val x: )\n",
+        [
+            "s_ns_val.fsi(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+            "s_ns_val.fsi(4,12,4,13): error FS0010: Unexpected symbol ')' in value signature"
+            "s_ns_val.fsi(5,1,5,1): error FS0222: Files in libraries or multiple-file applications must begin with a namespace or module declaration, e.g. 'namespace SomeNamespace.SubNamespace' or 'module SomeNamespace.SomeModule'. Only the last source file of an application may omit such a declaration."
+        ]
+
+        "s_val_ok.fsi",
+        "module M\nopen System.\nval x: int\n",
+        [
+            "s_val_ok.fsi(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
         "b_and.fs",
         "module M\nlet rec a = 1\nand b =\nlet c = 1\n",
         [
@@ -6288,6 +6424,39 @@ module M =
     ]
 
     let private unmodeledIncompleteConstructCases = [
+        "o_dot_close.fs",
+        "module M\nopen System.)\n",
+        [
+            "o_dot_close.fs(2,12,2,13): error FS3117: Unexpected end of type. Expected a name after this point."
+            "o_dot_close.fs(2,13,2,14): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+
+        "o_global.fs",
+        "module M\nopen global.\n",
+        [
+            "o_global.fs(2,12,2,13): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "o_type.fs",
+        "module M\nopen type System.\n",
+        [
+            "o_type.fs(2,17,2,18): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "i_expr.fs",
+        "module M\nopen System.\nf 1\n",
+        [
+            "i_expr.fs(2,14,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "i_nested_close.fs",
+        "module M\nmodule N =\n    open System.)\n",
+        [
+            "i_nested_close.fs(3,16,3,17): error FS3117: Unexpected end of type. Expected a name after this point."
+            "i_nested_close.fs(3,17,3,18): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "i_nested_close.fs(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+
         "l_open_let.fs",
         "module M\ntype U = A of )\nlet x = 1\nopen System\nlet y = )\n",
         [
@@ -7166,23 +7335,6 @@ module M =
             "b_and_indented.fs(4,1,4,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
         ]
 
-        "od_nested_root.fs",
-        "module M\nmodule N =\n    open System.\nlet b = 1\n",
-        [
-            "od_nested_root.fs(3,16,3,17): error FS3117: Unexpected end of type. Expected a name after this point."
-        ]
-
-        "od_root_eof_nonl.fs",
-        "module M\nopen System.",
-        [
-            "od_root_eof_nonl.fs(2,12,2,13): error FS3117: Unexpected end of type. Expected a name after this point."
-        ]
-
-        "od_root_eof.fs",
-        "module M\nopen System.\n",
-        [
-            "od_root_eof.fs(2,12,2,13): error FS3117: Unexpected end of type. Expected a name after this point."
-        ]
     ]
 
     let private strictIndentationCases = [
