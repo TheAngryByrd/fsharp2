@@ -89,6 +89,10 @@ module internal SyntaxRouting =
             | None -> []
         | rest -> rest
 
+    let private startsModuleOrNamespace token =
+        isToken LexicalTokenKind.Keyword "module" token
+        || isToken LexicalTokenKind.Keyword "namespace" token
+
     let hasProjectableTokenShape implicitModule (document: LexicalDocument) =
         let tokens =
             document.Tokens
@@ -112,9 +116,7 @@ module internal SyntaxRouting =
             && isIdentifier name
             ->
             declarations rest
-        | openToken :: _, ImplicitModule.Accepted _ when
-            isToken LexicalTokenKind.Keyword "open" openToken
-            ->
+        | first :: _, ImplicitModule.Accepted _ when not (startsModuleOrNamespace first) ->
             match openDeclarations tokens with
             | _ :: _ as rest -> declarations rest
             | [] -> false
@@ -132,7 +134,7 @@ module internal SyntaxRouting =
         | ImplicitModule.Rejected -> false
         | ImplicitModule.Accepted _ ->
             not document.Tokens.IsEmpty
-            && isToken LexicalTokenKind.Keyword "open" document.Tokens[0]
+            && not (startsModuleOrNamespace document.Tokens[0])
 
     let tryProject implicitModule (document: LexicalDocument) =
         if isEligible implicitModule document then
