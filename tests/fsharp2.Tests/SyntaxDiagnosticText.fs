@@ -23,12 +23,19 @@ module internal SyntaxDiagnosticText =
             (fun diagnostic -> diagnostic.Code = "FSC2P1001")
             "Unsupported syntax must report an explicit FSC2P1001 diagnostic"
 
-        for line in lines do
-            if not (line.Contains ": error FSC2P1001: ") then
-                Expect.contains
-                    oracle
-                    line
-                    "Each FS diagnostic must be a diagnostic that the Compatibility Oracle reports"
+        let oracleCount line =
+            oracle
+            |> List.filter ((=) line)
+            |> List.length
+
+        for line, occurrences in
+            lines
+            |> List.filter (fun line -> not (line.Contains ": error FSC2P1001: "))
+            |> List.countBy id do
+            Expect.isLessThanOrEqual
+                occurrences
+                (oracleCount line)
+                $"Each FS diagnostic must be a diagnostic that the Compatibility Oracle reports, no more often than the Oracle: {line}"
 
         // The Compatibility Oracle reports FS0058 at the position of the diagnostic that follows it.
         let recoveryGroups =

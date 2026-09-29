@@ -620,6 +620,16 @@ module internal Parser =
         Range = token.Range
     }
 
+    let private skippedToken (token: LexicalToken) = {
+        Tokens = ImmutableArray.Create token
+        Range = token.Range
+    }
+
+    let private mergeSkipped (first: SkippedSyntax) (second: SkippedSyntax) = {
+        Tokens = first.Tokens.AddRange second.Tokens
+        Range = span first.Range second.Range
+    }
+
     // The Compatibility Oracle reports an incomplete construct at end of input from column 1 of the last line.
     let private lastLineToEnd (endOfFile: LayoutToken) =
         let eof = endOfFile.Range.Start
@@ -2814,10 +2824,17 @@ module internal Parser =
 
         SyntaxTypeRepresentation.Record(fields.ToImmutable())
 
-    let private parseUnionCases state =
+    let private parseUnionCases state (definition: SourcePosition option) =
         let cursor = state.Cursor
         let cases = ImmutableArray.CreateBuilder<SyntaxUnionCase>()
         let mutable more = true
+        let firstLine = cursor.Current.Range.Start.Line
+
+        // The Compatibility Oracle ends a union that starts on the definition line at an offside '|'.
+        let continuesAt (bar: LayoutToken) =
+            match definition with
+            | Some context when firstLine = context.Line -> not (isOffside context bar)
+            | _ -> true
 
         while more do
             let start = cursor.Current
@@ -2901,11 +2918,15 @@ module internal Parser =
 
                 if failed then
                     more <- false
-                elif isOperator "|" cursor.Current then
+                elif
+                    isOperator "|" cursor.Current
+                    && continuesAt cursor.Current
+                then
                     ()
                 elif
                     cursor.Current.Kind = LayoutTokenKind.Separator
                     && isOperator "|" (cursor.Peek 1)
+                    && continuesAt (cursor.Peek 1)
                 then
                     cursor.Advance()
                     |> ignore
@@ -3006,23 +3027,33 @@ module internal Parser =
 
         SyntaxTypeRepresentation.Class(members.ToImmutable())
 
-    let private startsUnion (cursor: Cursor) =
+    let private startsUnion (cursor: Cursor) (definition: SourcePosition option) =
+        let bar = cursor.Peek 1
+
+        let continuesAtBar =
+            isOperator "|" bar
+            && (
+                match definition with
+                | Some context -> not (isOffside context bar)
+                | None -> true
+            )
+
         isOperator "|" cursor.Current
         || (isIdentifier cursor.Current
-            && (isKeyword "of" (cursor.Peek 1)
-                || isOperator "|" (cursor.Peek 1)))
+            && (isKeyword "of" bar
+                || continuesAtBar))
 
     let private startsMember (token: LayoutToken) =
         isKeyword "member" token
         || isKeyword "static" token
 
-    let private parseRepresentation state context =
+    let private parseRepresentation state context definition =
         let cursor = state.Cursor
 
         if isDelimiter "{" cursor.Current then
             parseRecordFields state
-        elif startsUnion cursor then
-            parseUnionCases state
+        elif startsUnion cursor definition then
+            parseUnionCases state definition
         elif startsMember cursor.Current then
             parseMembers state
         elif canStartType cursor then
@@ -3035,16 +3066,15 @@ module internal Parser =
 
             missing
 
-    let private parseTypeDefinition state attributes =
+    let private parseTypeDefinitionAfter state attributes (keyword: LayoutToken) =
         let cursor = state.Cursor
-        let typeToken = cursor.Advance()
-        let context = typeToken.Range.Start
+        let context = keyword.Range.Start
         let reported = state.Diagnostics.Count
         let accessibility = parseAccessibility cursor
 
         if not (isIdentifier cursor.Current) then
             reportUnsupported state cursor.Current "a type name"
-            None, ListRecovery.Continues
+            None
         else
             let name = identifier (cursor.Advance())
 
@@ -3062,7 +3092,7 @@ module internal Parser =
                     if cursor.Current.Kind = LayoutTokenKind.BeginBlock then
                         let block = cursor.Advance()
                         let blockReported = state.Diagnostics.Count
-                        let representation = parseRepresentation state block.Range.Start
+                        let representation = parseRepresentation state block.Range.Start None
 
                         if
                             cursor.Current.Kind
@@ -3079,7 +3109,7 @@ module internal Parser =
 
                         representation, ListRecovery.Continues
                     else
-                        parseRepresentation state context, ListRecovery.Continues
+                        parseRepresentation state context (Some context), ListRecovery.Continues
                 // The Compatibility Oracle ends the definition at ')', '}', or 'end' after a type name, but reports '=' as expected for other closing tokens.
                 elif
                     isDelimiter ")" cursor.Current
@@ -3109,23 +3139,6 @@ module internal Parser =
 
                     skipUntil state context
 
-            let mutable groupSkipped = None
-
-            while continuesWithAnd cursor do
-                if cursor.Current.Kind = LayoutTokenKind.Separator then
-                    cursor.Advance()
-                    |> ignore
-
-                if not (reportedSince state reported) then
-                    reportUnsupported state cursor.Current "a type group"
-
-                cursor.Advance()
-                |> ignore
-
-                groupSkipped <-
-                    groupSkipped
-                    |> Option.orElse (skipUntil state context)
-
             keepFirstDiagnosticSince state reported
 
             let definition = {
@@ -3134,11 +3147,92 @@ module internal Parser =
                 Name = name
                 PrimaryConstructor = primaryConstructor
                 Representation = representation
-                Skipped = Option.orElse groupSkipped skipped
-                Range = span (declarationStart attributes typeToken) (emptyAt cursor.LastEnd)
+                Skipped = skipped
+                Range = span (declarationStart attributes keyword) (emptyAt cursor.LastEnd)
             }
 
-            Some(ImplementationDeclaration.Type definition), recovery
+            Some(definition, recovery)
+
+    let private withSkipped (definition: SyntaxTypeDefinition) (skipped: SkippedSyntax) = {
+        definition with
+            Skipped =
+                definition.Skipped
+                |> Option.map (fun previous -> mergeSkipped previous skipped)
+                |> Option.orElse (Some skipped)
+            Range = span definition.Range skipped.Range
+    }
+
+    let private parseTypeDefinition state attributes =
+        let cursor = state.Cursor
+        let typeToken = cursor.Advance()
+        let reported = state.Diagnostics.Count
+
+        match parseTypeDefinitionAfter state attributes typeToken with
+        | None -> None, ListRecovery.Continues
+        | Some(first, firstRecovery) ->
+            let mutable first = first
+            let rest = ImmutableArray.CreateBuilder<SyntaxTypeDefinition>()
+            let mutable recovery = firstRecovery
+
+            while continuesWithAnd cursor do
+                if cursor.Current.Kind = LayoutTokenKind.Separator then
+                    cursor.Advance()
+                    |> ignore
+
+                if
+                    recovery = ListRecovery.Continues
+                    && not (reportedSince state reported)
+                then
+                    let andToken = cursor.Advance()
+                    let attributes = parseAttributeLists state
+
+                    match parseTypeDefinitionAfter state attributes andToken with
+                    | Some(definition, definitionRecovery) when not (reportedSince state reported) ->
+                        rest.Add definition
+                        recovery <- definitionRecovery
+                    | Some(definition, _) ->
+                        // The Compatibility Oracle reports the next root declaration after an error inside a type group.
+                        rest.Add definition
+                        recovery <- ListRecovery.Unmodeled
+                    | None -> recovery <- ListRecovery.Unmodeled
+                else
+                    // The Compatibility Oracle result of a later declaration depends on errors inside the group.
+                    if
+                        recovery
+                        <> ListRecovery.Unmodeled
+                    then
+                        if not (reportedAt state cursor.Current) then
+                            reportUnsupported state cursor.Current "a type group"
+
+                        recovery <- ListRecovery.Unmodeled
+
+                    let andToken = cursor.Advance()
+
+                    let skipped =
+                        [
+                            Option.map skippedToken andToken.Token
+                            skipUntil state andToken.Range.Start
+                        ]
+                        |> List.choose id
+                        |> List.reduce mergeSkipped
+
+                    if rest.Count = 0 then
+                        first <- withSkipped first skipped
+                    else
+                        rest[rest.Count
+                             - 1] <-
+                            withSkipped
+                                rest[rest.Count
+                                     - 1]
+                                skipped
+
+            let group = {
+                First = first
+                Rest = rest.ToImmutable()
+                Range = span first.Range (emptyAt cursor.LastEnd)
+            }
+
+            Some(ImplementationDeclaration.Type group), recovery
 
     type private DeclarationRules<'Declaration> = {
         Parse:

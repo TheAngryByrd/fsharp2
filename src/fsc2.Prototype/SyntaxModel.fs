@@ -206,6 +206,12 @@ type internal SyntaxTypeDefinition = {
     Range: SourceRange
 }
 
+type internal SyntaxTypeGroup = {
+    First: SyntaxTypeDefinition
+    Rest: ImmutableArray<SyntaxTypeDefinition>
+    Range: SourceRange
+}
+
 type internal SyntaxNestedModule<'Declaration> = {
     Attributes: ImmutableArray<SyntaxAttributeList>
     Accessibility: SyntaxAccess option
@@ -234,7 +240,7 @@ type internal ImplementationDeclaration =
         SyntaxExpression *
         skipped: SkippedSyntax option *
         SourceRange
-    | Type of SyntaxTypeDefinition
+    | Type of SyntaxTypeGroup
     | NestedModule of SyntaxNestedModule<ImplementationDeclaration>
     | Skipped of SkippedSyntax
 
@@ -245,7 +251,7 @@ type internal ImplementationDeclaration =
         | Do(_, _, range)
         | Expression(_, _, _, range) -> range
         | NestedModule nested -> nested.Range
-        | Type definition -> definition.Range
+        | Type group -> group.Range
         | Skipped skipped -> skipped.Range
 
 type internal SyntaxValueSignature = {
