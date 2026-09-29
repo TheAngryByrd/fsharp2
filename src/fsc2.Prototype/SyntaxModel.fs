@@ -120,6 +120,22 @@ type internal SyntaxPattern =
         | Missing missing -> missing.Range
 
 [<RequireQualifiedAccess>]
+type internal SyntaxAccessibility =
+    | Public
+    | Internal
+    | Private
+
+type internal SyntaxAccess = {
+    Kind: SyntaxAccessibility
+    Range: SourceRange
+}
+
+[<RequireQualifiedAccess>]
+type internal SyntaxLetKeyword =
+    | Let
+    | Use
+
+[<RequireQualifiedAccess>]
 type internal SyntaxExpression =
     | Constant of SyntaxConstant * SourceRange
     | Identifier of LongIdentifier
@@ -135,6 +151,12 @@ type internal SyntaxExpression =
     | DotLambda of body: SyntaxExpression * SourceRange
     | BracketApplication of SyntaxExpression * SyntaxExpression * SourceRange
     | Sequential of SyntaxExpression * SyntaxExpression * SourceRange
+    | LetOrUse of
+        keyword: SyntaxLetKeyword *
+        isRecursive: bool *
+        SyntaxBinding *
+        body: SyntaxExpression *
+        SourceRange
     | Missing of MissingSyntax
 
     member this.Range =
@@ -152,7 +174,8 @@ type internal SyntaxExpression =
         | Record(_, range)
         | DotLambda(_, range)
         | BracketApplication(_, _, range)
-        | Sequential(_, _, range) -> range
+        | Sequential(_, _, range)
+        | LetOrUse(_, _, _, _, range) -> range
         | Missing missing -> missing.Range
 
 and internal SyntaxMatchClause = {
@@ -168,30 +191,19 @@ and internal SyntaxRecordFieldValue = {
     Range: SourceRange
 }
 
-type internal SyntaxAttribute = {
+and internal SyntaxAttribute = {
     Target: SyntaxIdentifier option
     Name: LongIdentifier
     Argument: SyntaxExpression option
     Range: SourceRange
 }
 
-type internal SyntaxAttributeList = {
+and internal SyntaxAttributeList = {
     Attributes: ImmutableArray<SyntaxAttribute>
     Range: SourceRange
 }
 
-[<RequireQualifiedAccess>]
-type internal SyntaxAccessibility =
-    | Public
-    | Internal
-    | Private
-
-type internal SyntaxAccess = {
-    Kind: SyntaxAccessibility
-    Range: SourceRange
-}
-
-type internal SyntaxBinding = {
+and internal SyntaxBinding = {
     Attributes: ImmutableArray<SyntaxAttributeList>
     Accessibility: SyntaxAccess option
     Head: SyntaxPattern
@@ -272,11 +284,6 @@ type internal SyntaxNestedModule<'Declaration> = {
     DiscardedByRecovery: ImmutableArray<'Declaration>
     Range: SourceRange
 }
-
-[<RequireQualifiedAccess>]
-type internal SyntaxLetKeyword =
-    | Let
-    | Use
 
 [<RequireQualifiedAccess>]
 type internal ImplementationDeclaration =

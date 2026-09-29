@@ -82,6 +82,11 @@ module ParserGrammarTests =
             $"{patternShape inner}: {typeShape patternType}"
         | SyntaxPattern.Missing _ -> "<missing>"
 
+    let private bindingHead (binding: SyntaxBinding) =
+        Seq.append [ binding.Head ] binding.Parameters
+        |> Seq.map patternShape
+        |> String.concat " "
+
     let rec private expressionShape expression =
         match expression with
         | SyntaxExpression.Constant(SyntaxConstant.Numeric text, _)
@@ -137,6 +142,15 @@ module ParserGrammarTests =
             $"{expressionShape target}[{expressionShape index}]"
         | SyntaxExpression.Sequential(first, second, _) ->
             $"seq[{expressionShape first}; {expressionShape second}]"
+        | SyntaxExpression.LetOrUse(keyword, isRecursive, binding, body, _) ->
+            let keywordText =
+                match keyword with
+                | SyntaxLetKeyword.Let -> "let"
+                | SyntaxLetKeyword.Use -> "use"
+
+            let recursive = if isRecursive then " rec" else ""
+
+            $"{keywordText}{recursive} {bindingHead binding} = {expressionShape binding.Body} in {expressionShape body}"
         | SyntaxExpression.Missing _ -> "<missing>"
 
     let private memberShape (value: SyntaxMember) =
@@ -203,13 +217,7 @@ module ParserGrammarTests =
             |> String.concat " and "
         | ImplementationDeclaration.Let(_, _, bindings, _) ->
             let binding = Seq.exactlyOne bindings
-
-            let head =
-                Seq.append [ binding.Head ] binding.Parameters
-                |> Seq.map patternShape
-                |> String.concat " "
-
-            $"let {head} = {expressionShape binding.Body}"
+            $"let {bindingHead binding} = {expressionShape binding.Body}"
         | ImplementationDeclaration.Expression(attributes, body, _, _) when attributes.IsEmpty ->
             $"expr {expressionShape body}"
         | ImplementationDeclaration.Expression(attributes, body, _, _) ->
@@ -242,6 +250,53 @@ module ParserGrammarTests =
             |> Seq.toList
         | SyntaxExpression.Lambda(_, body, _) -> sequentialRanges body
         | _ -> []
+
+    let rec private blockRanges expression =
+        let text name range =
+            let startLine, startColumn, endLine, endColumn = position range
+            $"{name}({startLine},{startColumn}--{endLine},{endColumn})"
+
+        match expression with
+        | SyntaxExpression.Sequential(first, second, range) ->
+            text "seq" range
+            :: blockRanges first
+            @ blockRanges second
+        | SyntaxExpression.LetOrUse(_, _, binding, body, range) ->
+            text "let" range
+            :: blockRanges binding.Body
+            @ blockRanges body
+        | SyntaxExpression.If(_, thenBranch, elseBranch, _) ->
+            blockRanges thenBranch
+            @ (elseBranch
+               |> Option.map blockRanges
+               |> Option.defaultValue [])
+        | SyntaxExpression.Match(_, clauses, _) ->
+            clauses
+            |> Seq.collect (fun clause -> blockRanges clause.Result)
+            |> Seq.toList
+        | SyntaxExpression.Lambda(_, body, _) -> blockRanges body
+        | _ -> []
+
+    let private declarationBodies (declarations: ImplementationDeclaration seq) =
+        declarations
+        |> Seq.collect (fun declaration ->
+            match declaration with
+            | ImplementationDeclaration.Let(_, _, bindings, _) ->
+                bindings
+                |> Seq.map _.Body
+            | ImplementationDeclaration.Do(_, body, _) -> Seq.singleton body
+            | ImplementationDeclaration.Type group ->
+                Seq.append [ group.First ] group.Rest
+                |> Seq.collect (fun definition ->
+                    match definition.Representation with
+                    | SyntaxTypeRepresentation.Class members ->
+                        members
+                        |> Seq.map _.Body
+                    | _ -> Seq.empty
+                )
+            | _ -> Seq.empty
+        )
+        |> Seq.toList
 
     let private shapes logicalPath text =
         let result = parse logicalPath text
@@ -655,6 +710,22 @@ module ParserGrammarTests =
         "module A\nlet f () =\n    ignore 1\n    fun x -> x\n",
         [ "let f () = seq[[ignore 1]; fun x -> x]" ],
         [ 3, 5, 4, 15 ]
+        "SequentialAfterIfBlock.fs",
+        "module A\nlet f c =\n    if c then\n        ignore 1\n    else\n        ignore 2\n    3\n",
+        [ "let f c = seq[if c then [ignore 1] else [ignore 2]; 3]" ],
+        [ 3, 5, 7, 6 ]
+        "SequentialAfterThenBlock.fs",
+        "module A\nlet f c =\n    if c then\n        ignore 1\n    3\n",
+        [ "let f c = seq[if c then [ignore 1]; 3]" ],
+        [ 3, 5, 5, 6 ]
+        "SequentialAfterNestedBlocks.fs",
+        "module A\nlet f c =\n    if c then\n        if c then\n            ignore 1\n    3\n",
+        [ "let f c = seq[if c then if c then [ignore 1]; 3]" ],
+        [ 3, 5, 6, 6 ]
+        "SequentialAfterMatchBlock.fs",
+        "module A\nlet f v =\n    match v with\n    | _ ->\n        ignore 1\n    2\n",
+        [ "let f v = seq[match v with | _ -> [ignore 1]; 2]" ],
+        [ 3, 5, 6, 6 ]
         "SequentialMember.fs",
         "module A\ntype T() =\n    member _.M() =\n        ignore 1\n        2\n",
         [ "type T() = member _.M () = seq[[ignore 1]; 2]" ],
@@ -673,7 +744,224 @@ module ParserGrammarTests =
             "SequentialCloseAfter.fs(4,7): error FS0010: Unexpected symbol ')' in binding. Expected incomplete structured construct at or before this point or other token."
         ]
         "SequentialInfix.fs", "module A\nlet f () =\n    1\n    + 2\n", []
-        "SequentialLet.fs", "module A\nlet f () =\n    ignore 1\n    let x = 2\n    x\n", []
+    ]
+
+    // The Compatibility Oracle reports no parse diagnostic for each text. The ranges are the FCS 43.10.101 LetOrUse and Sequential ranges, with 1-based columns.
+    let private localLetCases = [
+        "LocalLet.fs",
+        "module A\nlet f () =\n    let x = 1\n    x\n",
+        [ "let f () = let x = 1 in x" ],
+        [ "let(3,5--4,6)" ]
+        "LocalLetAfter.fs",
+        "module A\nlet f () =\n    ignore 1\n    let x = 2\n    x\n",
+        [ "let f () = seq[[ignore 1]; let x = 2 in x]" ],
+        [
+            "seq(3,5--5,6)"
+            "let(4,5--5,6)"
+        ]
+        "LocalLetTwo.fs",
+        "module A\nlet f () =\n    let x = 1\n    let y = 2\n    x\n",
+        [ "let f () = let x = 1 in let y = 2 in x" ],
+        [
+            "let(3,5--5,6)"
+            "let(4,5--5,6)"
+        ]
+        "LocalLetBlock.fs",
+        "module A\nlet f () =\n    let x =\n        1\n    x\n",
+        [ "let f () = let x = 1 in x" ],
+        [ "let(3,5--5,6)" ]
+        "LocalLetBlockSequential.fs",
+        "module A\nlet f () =\n    let x =\n        ignore 1\n        2\n    x\n",
+        [ "let f () = let x = seq[[ignore 1]; 2] in x" ],
+        [
+            "let(3,5--6,6)"
+            "seq(4,9--5,10)"
+        ]
+        "LocalFunction.fs",
+        "module A\nlet f () =\n    let g y = y\n    g 1\n",
+        [ "let f () = let g y = y in [g 1]" ],
+        [ "let(3,5--4,8)" ]
+        "LocalUse.fs",
+        "module A\nlet f () =\n    use x = 1\n    x\n",
+        [ "let f () = use x = 1 in x" ],
+        [ "let(3,5--4,6)" ]
+        "LocalRec.fs",
+        "module A\nlet f () =\n    let rec g x = g x\n    g 1\n",
+        [ "let f () = let rec g x = [g x] in [g 1]" ],
+        [ "let(3,5--4,8)" ]
+        "LocalLetSequentialBody.fs",
+        "module A\nlet f () =\n    let x = 1\n    ignore x\n    x\n",
+        [ "let f () = let x = 1 in seq[[ignore x]; x]" ],
+        [
+            "let(3,5--5,6)"
+            "seq(4,5--5,6)"
+        ]
+        "LocalLetEntryPoint.fs",
+        "module A\n[<EntryPoint>]\nlet main argv =\n    let name = \"x\"\n    printfn \"%s\" name\n    0\n",
+        [ "let main argv = let name = \"x\" in seq[[[printfn \"%s\"] name]; 0]" ],
+        [
+            "let(4,5--6,6)"
+            "seq(5,5--6,6)"
+        ]
+        "LocalLetDo.fs",
+        "module A\ndo\n    let x = 1\n    ignore x\n",
+        [ "do let x = 1 in [ignore x]" ],
+        [ "let(3,5--4,13)" ]
+        "LocalLetThen.fs",
+        "module A\nlet f c =\n    if c then\n        let x = 1\n        x\n    else\n        2\n",
+        [ "let f c = if c then let x = 1 in x else 2" ],
+        [ "let(4,9--5,10)" ]
+        "LocalLetClause.fs",
+        "module A\nlet f v =\n    match v with\n    | _ ->\n        let x = 1\n        x\n",
+        [ "let f v = match v with | _ -> let x = 1 in x" ],
+        [ "let(5,9--6,10)" ]
+        "LocalLetLambda.fs",
+        "module A\nlet f =\n    fun () ->\n        let x = 1\n        x\n",
+        [ "let f = fun () -> let x = 1 in x" ],
+        [ "let(4,9--5,10)" ]
+        "LocalLetMember.fs",
+        "module A\ntype T() =\n    member _.M() =\n        let x = 1\n        x\n",
+        [ "type T() = member _.M () = let x = 1 in x" ],
+        [ "let(4,9--5,10)" ]
+        "LocalLetTuple.fs",
+        "module A\nlet f () =\n    let a, b = 1, 2\n    a\n",
+        [ "let f () = let a, b = 1, 2 in a" ],
+        [ "let(3,5--4,6)" ]
+        "LocalLetNested.fs",
+        "module A\nlet f () =\n    let g () =\n        let y = 1\n        y\n    g ()\n",
+        [ "let f () = let g () = let y = 1 in y in [g ()]" ],
+        [
+            "let(3,5--6,9)"
+            "let(4,9--5,10)"
+        ]
+        "LocalLetBeforeRoot.fs",
+        "module A\nlet f () =\n    let x = 1\n    x\nlet g = 2\n",
+        [
+            "let f () = let x = 1 in x"
+            "let g = 2"
+        ],
+        [ "let(3,5--4,6)" ]
+    ]
+
+    // The ranges are the FCS 43.10.101 ranges. FCS gives the missing body an empty range after the binding.
+    let private unfinishedLocalLetCases = [
+        "UnfinishedAfter.fs",
+        "module A\nlet f () =\n    ignore 1\n    let x = 2\n",
+        [
+            "UnfinishedAfter.fs(4,5): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+        ],
+        [ "let f () = seq[[ignore 1]; let x = 2 in <missing>]" ],
+        [
+            "seq(3,5--4,14)"
+            "let(4,5--4,14)"
+        ]
+        "UnfinishedOnly.fs",
+        "module A\nlet f () =\n    let x = 2\n",
+        [
+            "UnfinishedOnly.fs(3,5): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+        ],
+        [ "let f () = let x = 2 in <missing>" ],
+        [ "let(3,5--3,14)" ]
+        "UnfinishedUse.fs",
+        "module A\nlet f () =\n    use x = 2\n",
+        [
+            "UnfinishedUse.fs(3,5): error FS0588: The block following this 'use' is unfinished. Every code block is an expression and must have a result. 'use' cannot be the final code element in a block. Consider giving this block an explicit result."
+        ],
+        [ "let f () = use x = 2 in <missing>" ],
+        [ "let(3,5--3,14)" ]
+        "UnfinishedRec.fs",
+        "module A\nlet f () =\n    let rec g x = g x\n",
+        [
+            "UnfinishedRec.fs(3,5): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+        ],
+        [ "let f () = let rec g x = [g x] in <missing>" ],
+        [ "let(3,5--3,22)" ]
+        "UnfinishedFunction.fs",
+        "module A\nlet f () =\n    let g y = y\n",
+        [
+            "UnfinishedFunction.fs(3,5): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+        ],
+        [ "let f () = let g y = y in <missing>" ],
+        [ "let(3,5--3,16)" ]
+        "UnfinishedBlock.fs",
+        "module A\nlet f () =\n    let x =\n        1\n",
+        [
+            "UnfinishedBlock.fs(3,5): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+        ],
+        [ "let f () = let x = 1 in <missing>" ],
+        [ "let(3,5--4,10)" ]
+        "UnfinishedInner.fs",
+        "module A\nlet f () =\n    let x =\n        let y = 1\n    x\n",
+        [
+            "UnfinishedInner.fs(4,9): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+        ],
+        [ "let f () = let x = let y = 1 in <missing> in x" ],
+        [
+            "let(3,5--5,6)"
+            "let(4,9--4,18)"
+        ]
+        "UnfinishedThen.fs",
+        "module A\nlet f c =\n    if c then\n        let x = 1\n    else\n        2\n",
+        [
+            "UnfinishedThen.fs(4,9): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+        ],
+        [ "let f c = if c then let x = 1 in <missing> else 2" ],
+        [ "let(4,9--4,18)" ]
+        "UnfinishedDo.fs",
+        "module A\ndo\n    let x = 1\n",
+        [
+            "UnfinishedDo.fs(3,5): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+        ],
+        [ "do let x = 1 in <missing>" ],
+        [ "let(3,5--3,14)" ]
+        "UnfinishedBeforeRoot.fs",
+        "module A\nlet f () =\n    ignore 1\n    let x = 2\nlet g = 3\n",
+        [
+            "UnfinishedBeforeRoot.fs(4,5): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+        ],
+        [
+            "let f () = seq[[ignore 1]; let x = 2 in <missing>]"
+            "let g = 3"
+        ],
+        [
+            "seq(3,5--4,14)"
+            "let(4,5--4,14)"
+        ]
+        "UnfinishedBeforeRootError.fs",
+        "module A\nlet f () =\n    ignore 1\n    let x = 2\nlet g = )\n",
+        [
+            "UnfinishedBeforeRootError.fs(4,5): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+            "UnfinishedBeforeRootError.fs(5,9): error FS0010: Unexpected symbol ')' in binding"
+        ],
+        [
+            "let f () = seq[[ignore 1]; let x = 2 in <missing>]"
+            "let g = <missing>"
+        ],
+        [
+            "seq(3,5--4,14)"
+            "let(4,5--4,14)"
+        ]
+    ]
+
+    let private localLetExplicitCases = [
+        "LocalLetClose.fs",
+        "module A\nlet f () =\n    let x = 1\n    )\n",
+        [
+            "LocalLetClose.fs(3,5): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+            "LocalLetClose.fs(4,5): error FS0010: Unexpected symbol ')' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "LocalLetIn.fs", "module A\nlet f () =\n    let x = 1 in x\n", []
+        "LocalLetAnd.fs",
+        "module A\nlet f () =\n    let a = 1\n    and b = 2\n    a\n",
+        [
+            "LocalLetAnd.fs(3,5): error FS0576: The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+        ]
+        "LocalLetMutable.fs", "module A\nlet f () =\n    let mutable x = 1\n    x\n", []
+        "LocalLetNoEquals.fs",
+        "module A\nlet f () =\n    let x 1\n    x\n",
+        [
+            "LocalLetNoEquals.fs(4,5): error FS0010: Incomplete structured construct at or before this point in binding. Expected '=' or other token."
+        ]
     ]
 
     [<Tests>]
@@ -989,27 +1277,8 @@ let items = [ origin.X; 1 ]
                         let root = Seq.exactlyOne (parse logicalPath text).File.Contents
 
                         let ranges =
-                            root.Declarations
-                            |> Seq.collect (fun declaration ->
-                                match declaration with
-                                | ImplementationDeclaration.Let(_, _, bindings, _) ->
-                                    bindings
-                                    |> Seq.collect (fun binding -> sequentialRanges binding.Body)
-                                | ImplementationDeclaration.Do(_, body, _) -> sequentialRanges body
-                                | ImplementationDeclaration.Type group ->
-                                    Seq.append [ group.First ] group.Rest
-                                    |> Seq.collect (fun definition ->
-                                        match definition.Representation with
-                                        | SyntaxTypeRepresentation.Class members ->
-                                            members
-                                            |> Seq.collect (fun value ->
-                                                sequentialRanges value.Body
-                                            )
-                                        | _ -> Seq.empty
-                                    )
-                                | _ -> Seq.empty
-                            )
-                            |> Seq.toList
+                            declarationBodies root.Declarations
+                            |> List.collect sequentialRanges
 
                         Expect.sequenceEqual
                             ranges
@@ -1019,6 +1288,66 @@ let items = [ origin.X; 1 ]
 
             testList "a sequential expression that the parser does not model stays explicit" [
                 for logicalPath, text, oracle in sequentialExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testList "a let or use at the start of a block line binds the rest of the block" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in localLetCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with local bindings"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect blockRanges)
+                            expectedRanges
+                            "The local binding and sequential expression ranges"
+            ]
+
+            testList "a let or use at the end of a block reports FS0588 and parsing continues" [
+                for logicalPath, text, oracle, expectedDeclarations, expectedRanges in
+                    unfinishedLocalLetCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        let declarations =
+                            (Seq.exactlyOne result.File.Contents).Declarations
+                            |> Seq.map declarationShape
+                            |> Seq.toList
+
+                        Expect.sequenceEqual
+                            (oracleLines logicalPath result)
+                            oracle
+                            "The Compatibility Oracle diagnostics"
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with an unfinished local binding"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect blockRanges)
+                            expectedRanges
+                            "The local binding and sequential expression ranges"
+            ]
+
+            testList "a local binding that the parser does not model stays explicit" [
+                for logicalPath, text, oracle in localLetExplicitCases ->
                     testCase logicalPath
                     <| fun _ ->
                         let result = parse logicalPath text

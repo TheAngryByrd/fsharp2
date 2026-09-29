@@ -259,6 +259,8 @@ module internal Parser =
 
     let private letAndCode = "FS0576"
 
+    let private unfinishedLocalBindingCode = "FS0588"
+
     let private offsideCode = "FS0058"
 
     let private typeArgumentSpaceCode = "FS1190"
@@ -272,6 +274,8 @@ module internal Parser =
            <> useInModuleCode
         && code
            <> letAndCode
+        && code
+           <> unfinishedLocalBindingCode
         && code
            <> offsideCode
         && code
@@ -1215,6 +1219,17 @@ module internal Parser =
         || isKeyword "match" token
         || isKeyword "fun" token
 
+    let private startsLocalBinding (token: LayoutToken) =
+        isKeyword "let" token
+        || isKeyword "use" token
+
+    let private startsBlockItem (token: LayoutToken) =
+        canStartExpression token
+        || startsLocalBinding token
+
+    let private unfinishedLocalBindingMessage keyword =
+        $"The block following this '{keyword}' is unfinished. Every code block is an expression and must have a result. '{keyword}' cannot be the final code element in a block. Consider giving this block an explicit result."
+
     let private missingExpression (token: LayoutToken) =
         SyntaxExpression.Missing {
             Expected = "expression"
@@ -1828,20 +1843,134 @@ module internal Parser =
 
             missing
 
-    and private parseSequentialAfter state context (first: SyntaxExpression) =
+    and private continuesBlock state column =
         let cursor = state.Cursor
-        let items = ResizeArray [ first ]
 
-        while cursor.Current.Kind = LayoutTokenKind.Separator
-              && canStartExpression (cursor.Peek 1) do
+        if
+            cursor.Current.Kind = LayoutTokenKind.Separator
+            && startsBlockItem (cursor.Peek 1)
+        then
             cursor.Advance()
             |> ignore
 
-            items.Add(parseExpression state context)
+            true
+        else
+            // The layout emits no separator for a line at the block column after a nested block closes.
+            cursor.Current.Kind = LayoutTokenKind.SourceToken
+            && cursor.Current.Range.Start.Line > cursor.LastEnd.Line
+            && cursor.Current.Range.Start.Column = column
+            && startsBlockItem cursor.Current
+
+    and private parseSequentialAfter state context (first: SyntaxExpression) =
+        let cursor = state.Cursor
+        let items = ResizeArray [ first ]
+        let mutable bound = false
+
+        while not bound
+              && continuesBlock state first.Range.Start.Column do
+            if startsLocalBinding cursor.Current then
+                items.Add(parseLocalBinding state context)
+                bound <- true
+            else
+                items.Add(parseExpression state context)
 
         items
         |> Seq.reduceBack (fun item rest ->
             SyntaxExpression.Sequential(item, rest, span item.Range rest.Range)
+        )
+
+    and private parseLocalBinding state context =
+        let cursor = state.Cursor
+        let reported = state.Diagnostics.Count
+        let keywordToken = cursor.Advance()
+        let bindingContext = keywordToken.Range.Start
+
+        let keyword =
+            if isKeyword "use" keywordToken then
+                SyntaxLetKeyword.Use
+            else
+                SyntaxLetKeyword.Let
+
+        let isRecursive =
+            if isKeyword "rec" cursor.Current then
+                cursor.Advance()
+                |> ignore
+
+                true
+            else
+                false
+
+        let head =
+            if canStartPattern cursor.Current then
+                parsePattern state bindingContext
+            else
+                reportUnsupported state cursor.Current "a local binding"
+                missingPattern cursor.Current
+
+        let parameters = ImmutableArray.CreateBuilder<SyntaxPattern>()
+
+        while not (reportedSince state reported)
+              && canStartPattern cursor.Current
+              && not (isOffside bindingContext cursor.Current) do
+            parameters.Add(parseAtomicPattern state bindingContext)
+
+        let value =
+            if reportedSince state reported then
+                missingExpression cursor.Current
+            elif isOperator "=" cursor.Current then
+                cursor.Advance()
+                |> ignore
+
+                parseBranch state bindingContext None
+            else
+                reportUnsupported state cursor.Current "a local binding"
+                missingExpression cursor.Current
+
+        let binding = {
+            Attributes = ImmutableArray.Empty
+            Accessibility = None
+            Head = head
+            Parameters = parameters.ToImmutable()
+            Body = value
+            Skipped = None
+            Range = span head.Range (emptyAt cursor.LastEnd)
+        }
+
+        let body =
+            if reportedSince state reported then
+                missingExpression cursor.Current
+            elif continuesBlock state keywordToken.Range.Start.Column then
+                let first =
+                    if startsLocalBinding cursor.Current then
+                        parseLocalBinding state context
+                    else
+                        parseExpression state context
+
+                if reportedSince state reported then
+                    first
+                else
+                    parseSequentialAfter state context first
+            elif cursor.Current.Kind = LayoutTokenKind.EndBlock then
+                report
+                    state
+                    unfinishedLocalBindingCode
+                    (unfinishedLocalBindingMessage (tokenText keywordToken))
+                    keywordToken.Range
+
+                SyntaxExpression.Missing {
+                    Expected = "expression"
+                    Range = emptyAt cursor.LastEnd
+                }
+            else
+                reportUnsupported state cursor.Current "a local binding"
+                missingExpression cursor.Current
+
+        SyntaxExpression.LetOrUse(
+            keyword,
+            isRecursive,
+            binding,
+            body,
+            span keywordToken.Range body.Range
         )
 
     and private parseBranch state context point =
@@ -1851,7 +1980,12 @@ module internal Parser =
             let block = cursor.Advance()
             let blockContext = block.Range.Start
             let reported = state.Diagnostics.Count
-            let body = parseBranchStart state blockContext point
+
+            let body =
+                if startsLocalBinding cursor.Current then
+                    parseLocalBinding state blockContext
+                else
+                    parseBranchStart state blockContext point
 
             let body =
                 if reportedSince state reported then
@@ -2407,9 +2541,9 @@ module internal Parser =
             recovered <- true
             skipped <- skipUntil state context
 
-        let parseBody () =
+        let parseBody bodyContext =
             if canStartExpression cursor.Current then
-                parseExpression state context
+                parseExpression state bodyContext
             else
                 let missing = missingExpression cursor.Current
                 recover (Some RecoveryPoint.BindingStart)
@@ -2444,16 +2578,19 @@ module internal Parser =
                 |> ignore
 
                 if cursor.Current.Kind = LayoutTokenKind.BeginBlock then
-                    cursor.Advance()
-                    |> ignore
+                    let blockContext = cursor.Advance().Range.Start
 
-                    let body = parseBody ()
+                    let body =
+                        if startsLocalBinding cursor.Current then
+                            parseLocalBinding state blockContext
+                        else
+                            parseBody blockContext
 
                     let body =
                         if reportedSince state reported then
                             body
                         else
-                            parseSequentialAfter state context body
+                            parseSequentialAfter state blockContext body
 
                     if
                         cursor.Current.Kind
@@ -2491,7 +2628,7 @@ module internal Parser =
                     recover None
                     missing
                 else
-                    parseBody ()
+                    parseBody context
 
         if
             not recovered
@@ -2606,12 +2743,13 @@ module internal Parser =
 
         let body =
             if cursor.Current.Kind = LayoutTokenKind.BeginBlock then
-                cursor.Advance()
-                |> ignore
+                let blockContext = cursor.Advance().Range.Start
 
                 let body =
-                    if canStartExpression cursor.Current then
-                        parseExpression state context
+                    if startsLocalBinding cursor.Current then
+                        parseLocalBinding state blockContext
+                    elif canStartExpression cursor.Current then
+                        parseExpression state blockContext
                     else
                         reportUnsupported state cursor.Current "a do declaration"
                         missingExpression cursor.Current
@@ -2620,7 +2758,7 @@ module internal Parser =
                     if reportedSince state reported then
                         body
                     else
-                        parseSequentialAfter state context body
+                        parseSequentialAfter state blockContext body
 
                 if
                     cursor.Current.Kind
