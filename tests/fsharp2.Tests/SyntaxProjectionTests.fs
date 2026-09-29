@@ -475,6 +475,10 @@ module SyntaxProjectionTests =
                                     ImplicitModule.Rejected
                                     source)
                                 $"The token shape check must accept a projectable source:\n{text}"
+
+                            Expect.isFalse
+                                (SyntaxRouting.isImplicitModuleCandidate (implicitModule ()) source)
+                                $"The parse key of a named module must not depend on the references:\n{text}"
                         | SyntaxProjectionResult.ProjectionUnsupported _ -> ()
 
                 Expect.isGreaterThan projectable 0 "The corpus contains projectable sources"
@@ -499,11 +503,22 @@ module SyntaxProjectionTests =
             testCase
                 "the compiler service parses an implicit module with an open declaration in the last file of an executable"
             <| fun _ ->
-                let result, projections =
-                    compileWithService "open System\n\n[<EntryPoint>]\nlet main argv = 0\n"
+                // The Compatibility Oracle also accepts a namespace that has only internal types.
+                for namespaceName in
+                    [
+                        "System"
+                        "Microsoft.FSharp.Primitives.Basics"
+                    ] do
+                    let result, projections =
+                        compileWithService
+                            $"open {namespaceName}\n\n[<EntryPoint>]\nlet main argv = 0\n"
 
-                Expect.isOk result "The implicit module compiles"
-                Expect.equal projections 1 "The syntax parser produced the parsed module"
+                    Expect.isOk result $"The implicit module that opens {namespaceName} compiles"
+
+                    Expect.equal
+                        projections
+                        1
+                        $"The syntax parser produced the parsed module that opens {namespaceName}"
 
             testCase
                 "an implicit module compiles to the public module that the Compatibility Oracle names"
@@ -553,10 +568,10 @@ module SyntaxProjectionTests =
                     "no open declaration",
                     CompilationTarget.Executable,
                     [ "Program.fs", entryPoint ]
-                    "an unknown namespace (FS0039)",
+                    "an unknown namespace (Oracle FS0039)",
                     CompilationTarget.Executable,
                     [ "Program.fs", $"open Nonexistent{entryPoint}" ]
-                    "an unknown nested namespace (FS0039)",
+                    "an unknown nested namespace (Oracle FS0039)",
                     CompilationTarget.Executable,
                     [ "Program.fs", $"open System.Nope{entryPoint}" ]
                     "no entry point (FS0988)",
@@ -669,6 +684,10 @@ module SyntaxProjectionTests =
                             Expect.isFalse
                                 (SyntaxRouting.isEligible ImplicitModule.Rejected source)
                                 $"The syntax parser must not run on an implicit module that the Compatibility Oracle rejects:\n{text}"
+
+                            Expect.isTrue
+                                (SyntaxRouting.isImplicitModuleCandidate (implicitModule ()) source)
+                                $"The parse key of a projectable implicit module must depend on the references:\n{text}"
                         | SyntaxProjectionResult.ProjectionUnsupported _ -> ()
 
                 Expect.isGreaterThan

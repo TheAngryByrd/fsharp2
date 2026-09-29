@@ -127,12 +127,12 @@ module internal SyntaxRouting =
         && Frontend.isTokenizedLikeLexicalDocument document
         && hasProjectableTokenShape implicitModule document
 
-    let isImplicitModuleCandidate implicitModule document =
+    let isImplicitModuleCandidate implicitModule (document: LexicalDocument) =
         match implicitModule with
         | ImplicitModule.Rejected -> false
         | ImplicitModule.Accepted _ ->
-            isEligible implicitModule document
-            && not (isEligible ImplicitModule.Rejected document)
+            not document.Tokens.IsEmpty
+            && isToken LexicalTokenKind.Keyword "open" document.Tokens[0]
 
     let tryProject implicitModule (document: LexicalDocument) =
         if isEligible implicitModule document then
