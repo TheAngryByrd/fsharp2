@@ -7248,6 +7248,49 @@ module M =
         [
             "w_val_open.fsi(2,13,2,18): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
         ]
+
+        "e_bind_after.fs",
+        "module M\nlet f = ) (x: List <int>)\nlet y = 1\n",
+        [ "e_bind_after.fs(2,9,2,10): error FS0010: Unexpected symbol ')' in binding" ]
+
+        "e_group_after.fs",
+        "module M\ntype T = A of )\nand U = List <int>\nlet y = 1\n",
+        [ "e_group_after.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition" ]
+
+        "e_nested.fs",
+        "module M\nmodule N =\n    let rec f = )\n    and g (x: List <int>) = 1\nlet y = 1\n",
+        [ "e_nested.fs(3,17,3,18): error FS0010: Unexpected symbol ')' in binding" ]
+
+        "e_rec_and_err.fs",
+        "module M\nlet rec f = )\nand g (x: List <int>) = )\n",
+        [ "e_rec_and_err.fs(2,13,2,14): error FS0010: Unexpected symbol ')' in binding" ]
+
+        "e_rec_and.fs",
+        "module M\nlet rec f = )\nand g (x: List <int>) = 1\n",
+        [ "e_rec_and.fs(2,13,2,14): error FS0010: Unexpected symbol ')' in binding" ]
+
+        "e_rec_and2.fs",
+        "module M\nlet rec f (x: List <int>) = )\nand g (y: Map <int, int>) = 1\n",
+        [
+            "e_rec_and2.fs(2,20,2,25): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+            "e_rec_and2.fs(2,29,2,30): error FS0010: Unexpected symbol ')' in binding"
+        ]
+
+        "e_union_after.fs",
+        "module M\ntype U = A of ) | B of List <int>\nlet y = 1\n",
+        [ "e_union_after.fs(2,15,2,16): error FS0010: Unexpected symbol ')' in type definition" ]
+
+        "e_union_next.fs",
+        "module M\ntype U =\n    | A of )\n    | B of List <int>\nlet y = 1\n",
+        [ "e_union_next.fs(3,12,3,13): error FS0010: Unexpected symbol ')' in union case" ]
+
+        "e_val_after.fsi",
+        "module M\nval x: ) -> List <int>\nval y: int\n",
+        [ "e_val_after.fsi(2,8,2,9): error FS0010: Unexpected symbol ')' in value signature" ]
+
+        "e_val_next.fsi",
+        "module M\nval x: )\nval y: List <int>\n",
+        [ "e_val_next.fsi(2,8,2,9): error FS0010: Unexpected symbol ')' in value signature" ]
     ]
 
     let private unmodeledIncompleteConstructCases = [
@@ -8588,6 +8631,20 @@ module M =
         "v_g_under.fsi",
         "module A\nval x: global._\nval y: int\n",
         [ "v_g_under.fsi(2,15,2,16): error FS0010: Unexpected symbol '_' in value signature" ]
+
+        "e_param_after.fs",
+        "module M\nlet f (a: ) (x: List <int>) = 1\nlet y = 1\n",
+        [
+            "e_param_after.fs(2,11,2,12): error FS0010: Unexpected symbol ')' in pattern"
+            "e_param_after.fs(2,22,2,27): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+
+        "e_use_warn.fs",
+        "module M\nlet h () =\n    use f = )\n    let g (x: List <int>) = 1\n    g\n",
+        [
+            "e_use_warn.fs(3,13,3,14): error FS0010: Unexpected symbol ')' in binding"
+            "e_use_warn.fs(4,20,4,25): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
     ]
 
     let private strictIndentationCases = [
