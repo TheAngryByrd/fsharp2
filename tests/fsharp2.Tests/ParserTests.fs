@@ -73,7 +73,10 @@ module ParserTests =
                 |> String.concat "; "
 
             $"module {nested.Name.Text} = [{inner}]"
-        | ImplementationDeclaration.Type definition -> $"type {definition.Name.Text}"
+        | ImplementationDeclaration.Type group ->
+            Seq.append [ group.First ] group.Rest
+            |> Seq.map (fun definition -> $"type {definition.Name.Text}")
+            |> String.concat " and "
         | ImplementationDeclaration.Do(attributes, _, _) ->
             $"do [{attributes.Length} attribute lists]"
         | ImplementationDeclaration.Expression(attributes, _, _, _) ->
@@ -1219,6 +1222,29 @@ module Values =
                     ]
                     "Skipped tokens"
 
+            testCase "a type group keeps each definition in order"
+            <| fun _ ->
+                let result =
+                    parse
+                        "Group.fs"
+                        "module Program
+type T = int
+and U = string
+and V = bool
+let x = 1
+"
+
+                Expect.isEmpty result.Diagnostics "A valid type group has no diagnostics"
+
+                Expect.sequenceEqual
+                    (result.File.Contents
+                     |> Seq.collect (rootShapes declarationShape))
+                    [
+                        "type T and type U and type V"
+                        "let x/0"
+                    ]
+                    "The group keeps each definition, and the next declaration follows it"
+
             testCase "a type group keeps every skipped token"
             <| fun _ ->
                 let result =
@@ -1231,8 +1257,8 @@ and V = bool
 "
 
                 match Seq.exactlyOne (Seq.exactlyOne result.File.Contents).Declarations with
-                | ImplementationDeclaration.Type definition ->
-                    let skipped = Expect.wantSome definition.Skipped "Skipped tokens"
+                | ImplementationDeclaration.Type group ->
+                    let skipped = Expect.wantSome group.First.Skipped "Skipped tokens"
 
                     Expect.equal (position skipped.Range) (2, 14, 4, 13) "Skipped range"
 

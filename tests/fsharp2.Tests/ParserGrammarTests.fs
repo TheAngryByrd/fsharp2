@@ -184,7 +184,10 @@ module ParserGrammarTests =
 
     let rec private declarationShape declaration =
         match declaration with
-        | ImplementationDeclaration.Type definition -> typeDefinitionShape definition
+        | ImplementationDeclaration.Type group ->
+            Seq.append [ group.First ] group.Rest
+            |> Seq.map typeDefinitionShape
+            |> String.concat " and "
         | ImplementationDeclaration.Let(_, _, bindings, _) ->
             let binding = Seq.exactlyOne bindings
 
