@@ -2127,6 +2127,33 @@ module ParserGrammarTests =
     ]
 
     let private infixLineExplicitCases = [
+        "InfixAtColumnQuestionQuestion.fs",
+        "module A
+let f a b =
+    a
+    ?? b
+",
+        [
+            "InfixAtColumnQuestionQuestion.fs(4,5): error FS0010: Unexpected symbol '??' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "InfixUndentedQuestionQuestion.fs",
+        "module A
+let f a b =
+      a
+    ?? b
+",
+        [
+            "InfixUndentedQuestionQuestion.fs(4,5): error FS0010: Unexpected symbol '??' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "InfixLineParenQuestionQuestion.fs",
+        "module A
+let f a b =
+    (a
+     ?? b)
+",
+        [
+            "InfixLineParenQuestionQuestion.fs(4,6): error FS0010: Unexpected symbol '??' in expression"
+        ]
         "InfixAtColumnEquals.fs",
         "module A\nlet f a b =\n    a\n    = b\n",
         [

@@ -52,8 +52,7 @@ module internal Layout =
             | "::"
             | ":="
             | ":>"
-            | ":?>"
-            | "??" -> true
+            | ":?>" -> true
             | text ->
                 "@^<>=|&+-*/%$".IndexOf(text[0])
                 >= 0
