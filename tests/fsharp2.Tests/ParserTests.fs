@@ -44,6 +44,8 @@ module ParserTests =
     let rec private typeShape syntaxType =
         match syntaxType with
         | SyntaxType.LongIdentifier name -> name.Text
+        | SyntaxType.GlobalLongIdentifier(_, None, _) -> "global"
+        | SyntaxType.GlobalLongIdentifier(_, Some name, _) -> $"global.{name.Text}"
         | SyntaxType.Variable variable -> variable.Text
         | SyntaxType.Application(typeConstructor, arguments, true, _) ->
             let arguments =
@@ -1268,6 +1270,7 @@ open global.System
 open type System.Math
 open type System.Collections.Generic.List<int>
 open type int list
+open type global.System.Math
 "
 
                 Expect.isEmpty
@@ -1284,6 +1287,7 @@ open type int list
                         "open type System.Math"
                         "open type System.Collections.Generic.List<int>"
                         "open type int list"
+                        "open type global.System.Math"
                     ]
                     "Each open declaration keeps its target"
 

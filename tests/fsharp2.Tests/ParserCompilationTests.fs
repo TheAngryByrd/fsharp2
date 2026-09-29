@@ -7081,13 +7081,85 @@ module M =
         [
             "v_space.fsi(2,40,2,45): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
         ]
-    ]
 
-    let private unmodeledIncompleteConstructCases = [
         "t_global.fs",
         "module M\nopen type global.System.Math\nlet x = )\n",
         [ "t_global.fs(3,9,3,10): error FS0010: Unexpected symbol ')' in binding" ]
 
+        "s_t_global.fsi", "module A\nopen type global.System.Math\nval x: int\n", []
+
+        "t_global_alone.fs", "module A\nopen type global\nlet x = 1\n", []
+
+        "t_global_dot.fs",
+        "module A\nopen type global.\nlet x = 1\n",
+        [
+            "t_global_dot.fs(2,19,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "t_global_gen.fs",
+        "module A\nopen type global.System.Collections.Generic.List<int>\nlet x = 1\n",
+        []
+
+        "v_global.fsi", "module A\nval x: global.System.String\nval y: int\n", []
+
+        "a_g_alone.fs", "module A\ntype T = global\nlet x = 1\n", []
+
+        "a_g_gen.fs",
+        "module A\ntype T = global.System.Collections.Generic.List<int>\nlet x = 1\n",
+        []
+
+        "a_g.fs", "module A\ntype T = global.System.String\nlet x = 1\n", []
+
+        "r_g_alone.fs", "module A\ntype R = { F: global }\nlet x = 1\n", []
+
+        "r_g.fs", "module A\ntype R = { F: global.System.String }\nlet x = 1\n", []
+
+        "t_g_dot_eof.fs",
+        "module A\nopen type global.",
+        [
+            "t_g_dot_eof.fs(2,17,2,18): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "t_g_dot2_eof.fs",
+        "module A\nopen type global.System.",
+        [
+            "t_g_dot2_eof.fs(2,24,2,25): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "t_g_dot2.fs",
+        "module A\nopen type global.System.\nlet x = 1\n",
+        [
+            "t_g_dot2.fs(2,26,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
+        ]
+
+        "t_g.fs", "module A\nopen type global.System.Math\nlet x = 1\n", []
+
+        "u_g_named.fs", "module A\ntype U = C of n: global.System.String\nlet x = 1\n", []
+
+        "u_g.fs", "module A\ntype U = C of global.System.String\nlet x = 1\n", []
+
+        "v_g_alone.fsi", "module A\nval x: global\nval y: int\n", []
+
+        "v_g_arg.fsi", "module A\nval x: List<global.System.String>\nval y: int\n", []
+
+        "v_g_fn.fsi", "module A\nval f: global.System.String -> int\nval y: int\n", []
+
+        "v_g_gen.fsi",
+        "module A\nval x: global.System.Collections.Generic.List<int>\nval y: int\n",
+        []
+
+        "v_g_paren.fsi", "module A\nval x: (global.System.String)\nval y: int\n", []
+
+        "v_g_post.fsi",
+        "module A\nval x: int global.Microsoft.FSharp.Collections.list\nval y: int\n",
+        []
+
+        "v_g_space.fsi", "module A\nval x: global .System.String\nval y: int\n", []
+
+        "v_g_tuple.fsi", "module A\nval x: global.System.String * int\nval y: int\n", []
+    ]
+
+    let private unmodeledIncompleteConstructCases = [
         "ns_after_ok.fsi",
         "module M\nval y: int\nval x: )\nnamespace Q\nval z: int\n",
         [
@@ -8318,8 +8390,6 @@ module M =
             "o_gen.fs(2,37,2,38): error FS0010: Unexpected type application  in definition. Expected incomplete structured construct at or before this point or other token."
         ]
 
-        "s_t_global.fsi", "module A\nopen type global.System.Math\nval x: int\n", []
-
         "t_gen_arr.fs", "module A\nopen type int[]\nlet x = 1\n", []
 
         "t_gen_dotafter.fs",
@@ -8346,18 +8416,6 @@ module M =
             "t_gen_open.fs(2,44,3,1): error FS0010: Incomplete structured construct at or before this point in type arguments. Expected ',' or other token."
             "t_gen_open.fs(2,44,3,1): error FS1241: Expected type argument or static argument"
         ]
-
-        "t_global_alone.fs", "module A\nopen type global\nlet x = 1\n", []
-
-        "t_global_dot.fs",
-        "module A\nopen type global.\nlet x = 1\n",
-        [
-            "t_global_dot.fs(2,19,3,1): error FS0010: Incomplete structured construct at or before this point in open declaration"
-        ]
-
-        "t_global_gen.fs",
-        "module A\nopen type global.System.Collections.Generic.List<int>\nlet x = 1\n",
-        []
 
         "t_same.fs", "module A\nopen type System.Math let x = 1\n", []
 
@@ -8401,13 +8459,44 @@ module M =
             "t_star.fs(2,15,2,16): error FS0010: Unexpected symbol '*' in definition. Expected incomplete structured construct at or before this point or other token."
         ]
 
-        "v_global.fsi", "module A\nval x: global.System.String\nval y: int\n", []
-
         "v_space.fs",
         "module A\nlet x: System.Collections.Generic.List <int> = null\n",
         [
             "v_space.fs(2,40,2,45): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
         ]
+
+        "a_g_dot.fs",
+        "module A\ntype T = global.\nlet x = 1\n",
+        [
+            "a_g_dot.fs(2,16,2,17): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "v_g_dot_eof.fsi",
+        "module A\nval x: global.",
+        [
+            "v_g_dot_eof.fsi(2,14,2,15): error FS3117: Unexpected end of type. Expected a name after this point."
+        ]
+
+        "v_g_dot.fsi",
+        "module A\nval x: global.\nval y: int\n",
+        [
+            "v_g_dot.fsi(2,16,3,1): error FS0010: Incomplete structured construct at or before this point in value signature"
+        ]
+
+        "v_g_dotnext.fsi", "module A\nval x: global.\n    System.String\nval y: int\n", []
+
+        "v_g_kw.fsi",
+        "module A\nval x: global.type\nval y: int\n",
+        [
+            "v_g_kw.fsi(2,14,2,15): error FS3117: Unexpected end of type. Expected a name after this point."
+            "v_g_kw.fsi(2,20,3,1): error FS0010: Incomplete structured construct at or before this point in type name"
+        ]
+
+        "v_g_next.fsi", "module A\nval x: global\n    .System.String\nval y: int\n", []
+
+        "v_g_under.fsi",
+        "module A\nval x: global._\nval y: int\n",
+        [ "v_g_under.fsi(2,15,2,16): error FS0010: Unexpected symbol '_' in value signature" ]
     ]
 
     let private strictIndentationCases = [

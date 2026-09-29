@@ -745,10 +745,11 @@ module internal Parser =
                         .Range
         }
 
+    let private unsupportedTrailingDot state (_: LayoutToken) =
+        reportUnsupported state state.Cursor.Current "a long identifier"
+
     let private longIdentifier state =
-        longIdentifierWith
-            state
-            (fun _ -> reportUnsupported state state.Cursor.Current "a long identifier")
+        longIdentifierWith state (unsupportedTrailingDot state)
 
     let private constant (token: LayoutToken) =
         match sourceKind token with
@@ -823,6 +824,7 @@ module internal Parser =
 
     let private canStartType (cursor: Cursor) =
         isIdentifier cursor.Current
+        || isKeyword "global" cursor.Current
         || isDelimiter "(" cursor.Current
         || isTypeVariable cursor
 
@@ -946,10 +948,11 @@ module internal Parser =
         let cursor = state.Cursor
         let mutable result = first
 
-        while isIdentifier cursor.Current
-              && not (isOffside context cursor.Current)
-              && not (isOperator ":" (cursor.Peek 1)) do
-            let typeConstructor = SyntaxType.LongIdentifier(longIdentifier state)
+        while (isKeyword "global" cursor.Current
+               || (isIdentifier cursor.Current
+                   && not (isOperator ":" (cursor.Peek 1))))
+              && not (isOffside context cursor.Current) do
+            let typeConstructor = parseTypeConstructor state (unsupportedTrailingDot state)
 
             result <-
                 SyntaxType.Application(
@@ -1000,7 +1003,46 @@ module internal Parser =
 
                 SyntaxType.Parenthesized(inner, span token.Range (emptyAt cursor.LastEnd))
         else
-            parseTypeArguments state context (SyntaxType.LongIdentifier(longIdentifier state))
+            parseTypeName state context (unsupportedTrailingDot state)
+
+    and private parseTypeConstructor state onTrailingDot =
+        let cursor = state.Cursor
+
+        if isKeyword "global" cursor.Current then
+            let globalToken = cursor.Advance()
+
+            if isOperator "." cursor.Current then
+                let dot = cursor.Advance()
+
+                if
+                    isIdentifier cursor.Current
+                    && tokenText cursor.Current
+                       <> "_"
+                then
+                    let name = longIdentifierWith state onTrailingDot
+
+                    SyntaxType.GlobalLongIdentifier(
+                        globalToken.Range,
+                        Some name,
+                        span globalToken.Range name.Range
+                    )
+                else
+                    onTrailingDot dot
+
+                    SyntaxType.GlobalLongIdentifier(
+                        globalToken.Range,
+                        None,
+                        span globalToken.Range dot.Range
+                    )
+            else
+                SyntaxType.GlobalLongIdentifier(globalToken.Range, None, globalToken.Range)
+        else
+            SyntaxType.LongIdentifier(longIdentifierWith state onTrailingDot)
+
+    and private parseTypeName state context onTrailingDot =
+        match parseTypeConstructor state onTrailingDot with
+        | SyntaxType.GlobalLongIdentifier(_, None, _) as globalKeyword -> globalKeyword
+        | name -> parseTypeArguments state context name
 
     and private parseTypeArguments state context name =
         let cursor = state.Cursor
@@ -2801,15 +2843,16 @@ module internal Parser =
             elif startsKeyword "type" then
                 let typeContext = cursor.Advance().Range.Start
 
-                if startsName () then
-                    let name = SyntaxType.LongIdentifier(longIdentifierWith state onTrailingDot)
-
+                if
+                    startsName ()
+                    || startsKeyword "global"
+                then
                     Some(
                         SyntaxOpenTarget.Type(
                             parsePostfixTypes
                                 state
                                 typeContext
-                                (parseTypeArguments state typeContext name)
+                                (parseTypeName state typeContext onTrailingDot)
                         )
                     )
                 elif

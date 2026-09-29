@@ -32,6 +32,7 @@ type internal SyntaxConstant =
 [<RequireQualifiedAccess>]
 type internal SyntaxType =
     | LongIdentifier of LongIdentifier
+    | GlobalLongIdentifier of globalKeyword: SourceRange * LongIdentifier option * SourceRange
     | Variable of SyntaxIdentifier
     | Application of SyntaxType * ImmutableArray<SyntaxType> * isPostfix: bool * SourceRange
     | Function of SyntaxType * SyntaxType * SourceRange
@@ -44,6 +45,7 @@ type internal SyntaxType =
         match this with
         | LongIdentifier name -> name.Range
         | Variable variable -> variable.Range
+        | GlobalLongIdentifier(_, _, range)
         | Application(_, _, _, range)
         | Function(_, _, range)
         | Tuple(_, range)
