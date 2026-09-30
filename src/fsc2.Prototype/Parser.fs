@@ -43,32 +43,77 @@ module internal Parser =
 
             found
 
-        member _.LineStartColumn line =
+        // FCS starts a block item after '=', '->', 'then', 'else', or 'do' and at the line start. 'if' and '<-' start none.
+        member _.ItemColumn(token: LayoutToken) =
+            let line = token.Range.Start.Line
+
             let mutable position =
                 min
                     index
                     (tokens.Length
                      - 1)
 
-            let mutable column = None
-
-            while position
-                  >= 0
-                  && tokens[position].Range.Start.Line
+            while position > 0
+                  && tokens[position
+                            - 1]
+                      .Range.Start.Line
                      >= line do
-                let token = tokens[position]
-
-                if
-                    token.Kind = LayoutTokenKind.SourceToken
-                    && token.Range.Start.Line = line
-                then
-                    column <- Some token.Range.Start.Column
-
                 position <-
                     position
                     - 1
 
-            column
+            let mutable column = None
+            let mutable opensItem = false
+            let mutable depth = 0
+
+            while position < tokens.Length
+                  && tokens[position].Range.Start.Offset < token.Range.Start.Offset do
+                let current = tokens[position]
+
+                match current.Token with
+                | Some source when
+                    current.Kind = LayoutTokenKind.SourceToken
+                    && source.Range.Start.Line = line
+                    ->
+                    if
+                        column.IsNone
+                        || opensItem
+                           && depth = 0
+                    then
+                        column <- Some source.Range.Start.Column
+
+                    opensItem <-
+                        depth = 0
+                        && (source.Kind = LexicalTokenKind.Operator
+                            && (source.Text = "="
+                                || source.Text = "->")
+                            || source.Kind = LexicalTokenKind.Keyword
+                               && (source.Text = "then"
+                                   || source.Text = "else"
+                                   || source.Text = "do"))
+
+                    if source.Kind = LexicalTokenKind.Delimiter then
+                        if
+                            "([{".IndexOf(source.Text[0])
+                            >= 0
+                        then
+                            depth <- depth + 1
+                        elif
+                            ")]}"
+                                .IndexOf(
+                                    source.Text[source.Text.Length
+                                                - 1]
+                                )
+                            >= 0
+                        then
+                            depth <- max 0 (depth - 1)
+                | _ -> ()
+
+                position <-
+                    position
+                    + 1
+
+            if opensItem then Some token.Range.Start.Column else column
 
         member this.Peek offset =
             if offset = 0 then
@@ -2366,7 +2411,7 @@ module internal Parser =
         else
             parseBranchStart state context point
 
-    // The Oracle ends the block when a delimiter closes left of the column of the line that opened it, so a later token of the block is an error.
+    // The Oracle ends the block when a delimiter closes left of the block item that opened it, so a later token of the block is an error.
     and private reportAfterUndentedClose
         state
         (context: Frame)
@@ -2376,25 +2421,34 @@ module internal Parser =
         =
         let cursor = state.Cursor
 
+        let itemColumn = cursor.ItemColumn openToken
+
         if
             not state.InDelimiters
             && not (reportedSince state reported)
             && close.Range.Start.Line > openToken.Range.Start.Line
-            && cursor.LineStartColumn openToken.Range.Start.Line
+            && itemColumn
                |> Option.exists (fun column -> close.Range.Start.Column < column)
         then
             let next =
                 match cursor.Current.Kind with
-                | LayoutTokenKind.Separator
-                | LayoutTokenKind.BeginBlock -> Some(cursor.Peek 1)
+                | LayoutTokenKind.Separator ->
+                    let token = cursor.Peek 1
+
+                    if Some token.Range.Start.Column = itemColumn then
+                        Some(true, token)
+                    else
+                        Some(false, token)
+                | LayoutTokenKind.BeginBlock -> Some(false, cursor.Peek 1)
                 | LayoutTokenKind.SourceToken when not (isEndOfFile cursor.Current) ->
-                    Some cursor.Current
+                    Some(false, cursor.Current)
                 | _ -> None
 
             match next with
-            | Some token when
+            | Some(sameItemColumn, token) when
                 not (reportedAt state token)
-                && not (isOffside context token)
+                && (sameItemColumn
+                    || not (isOffside context token))
                 ->
                 reportUnsupported
                     state
@@ -2467,10 +2521,14 @@ module internal Parser =
                 if continues "else" then
                     let elseToken = cursor.Advance()
 
+                    // 15.1.10.1: an 'else' on the line of its 'if' takes the 'if' limit.
                     withUndentationColumn
                         state
-                        (elseToken.Range.Start.Column
-                         - 1)
+                        (if elseToken.Range.Start.Line = ifToken.Range.Start.Line then
+                             ifToken.Range.Start.Column
+                         else
+                             elseToken.Range.Start.Column
+                             - 1)
                         (fun () -> parseBranch state context None)
                     |> Some
                 elif continues "elif" then

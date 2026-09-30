@@ -4612,6 +4612,143 @@ let f a b =
         ]
     ]
 
+    let private undentedItemCloseCases = [
+        "UndentedItemCloseRootletCloseAtValue.fs",
+        "module A\nlet y = g (fun x ->\n         x) 2\n",
+        [ "let y = [[g (fun x -> x)] 2]" ],
+        [
+            "app(2,9--3,14)"
+            "app(2,9--3,12)"
+        ]
+        "UndentedItemCloseRootletCloseRightOfValue.fs",
+        "module A\nlet y = g (fun x ->\n          x) 2\n",
+        [ "let y = [[g (fun x -> x)] 2]" ],
+        [
+            "app(2,9--3,15)"
+            "app(2,9--3,13)"
+        ]
+        "UndentedItemCloseRootletCloseLeftNoToken.fs",
+        "module A\nlet y = g (fun x ->\n x)\n",
+        [ "let y = [g (fun x -> x)]" ],
+        [ "app(2,9--3,4)" ]
+        "UndentedItemCloseRootletBodyAppCloseRight.fs",
+        "module A\nlet y = g (fun x ->\n ignore x) 2\n",
+        [ "let y = [[g (fun x -> [ignore x])] 2]" ],
+        [
+            "app(2,9--3,13)"
+            "app(2,9--3,11)"
+            "app(3,2--3,10)"
+        ]
+        "UndentedItemCloseClauseResultCloseRight.fs",
+        "module A\nlet f v =\n    match v with\n    | _ -> g (fun x ->\n       ignore x) 2\n",
+        [ "let f v = match v with | _ -> [[g (fun x -> [ignore x])] 2]" ],
+        [
+            "app(4,12--5,19)"
+            "app(4,12--5,17)"
+            "app(5,8--5,16)"
+            "match(3,5--5,19)1"
+        ]
+        "UndentedItemCloseIfCondRightOfIf.fs",
+        "module A\nlet f () =\n    if g (fun x ->\n      x) then 1 else 2\n",
+        [ "let f () = if [g (fun x -> x)] then 1 else 2" ],
+        [
+            "app(3,8--4,9)"
+            "if(3,5--4,23)E"
+        ]
+        "UndentedItemCloseIfCondRightOfIfBodyApp.fs",
+        "module A\nlet f () =\n    if g (fun x ->\n      ignore x) then 1 else 2\n",
+        [ "let f () = if [g (fun x -> [ignore x])] then 1 else 2" ],
+        [
+            "app(3,8--4,16)"
+            "app(4,7--4,15)"
+            "if(3,5--4,30)E"
+        ]
+        "UndentedItemClosePipeLineCloseRight.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map (fun x ->\n  ignore x)\n    |> ignore\n",
+        [ "let f xs = {{xs |> [List.map (fun x -> [ignore x])]} |> ignore}" ],
+        [
+            "|>(3,5--6,14)"
+            "|>(3,5--5,12)"
+            "app(4,8--5,12)"
+            "app(5,3--5,11)"
+        ]
+        "UndentedItemClosePipeLineCloseAt.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map (fun x ->\n    x)\n    |> ignore\n",
+        [ "let f xs = {{xs |> [List.map (fun x -> x)]} |> ignore}" ],
+        [
+            "|>(3,5--6,14)"
+            "|>(3,5--5,7)"
+            "app(4,8--5,7)"
+        ]
+        "UndentedItemCloseAssignValue.fs",
+        "module A\nlet mutable z = 0\nlet f () =\n    z <- g (fun x ->\n      x) 2\n",
+        [
+            "let mutable z = 0"
+            "let f () = {z <- [[g (fun x -> x)] 2]}"
+        ],
+        [
+            "set(4,5--5,11)"
+            "app(4,10--5,11)"
+            "app(4,10--5,9)"
+        ]
+        "UndentedItemCloseRootletThenDecl.fs",
+        "module A\nlet y = g (fun x ->\n x)\nlet z = 1\n",
+        [
+            "let y = [g (fun x -> x)]"
+            "let z = 1"
+        ],
+        [ "app(2,9--3,4)" ]
+    ]
+
+    let private undentedItemCloseExplicitCases = [
+        "UndentedItemClosePipe3.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map (fun x ->\n  x)\n    |> ignore\n",
+        [
+            "UndentedItemClosePipe3.fs(6,5): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemClosePipe3.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "UndentedItemCloseRootlet.fs",
+        "module A\nlet y = g (fun x ->\n x) 2\n",
+        [
+            "UndentedItemCloseRootlet.fs(3,5): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemCloseRootlet.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "UndentedItemCloseLocalLetValue.fs",
+        "module A\nlet f () =\n    let y = g (fun x ->\n     x) 2\n    y\n",
+        [
+            "UndentedItemCloseLocalLetValue.fs(4,9): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemCloseLocalLetValue.fs(3,5): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "UndentedItemCloseLocalLetValueCloseRight.fs",
+        "module A\nlet f () =\n    let y = g (fun x ->\n     ignore x) 2\n    y\n",
+        []
+        "UndentedItemCloseClauseResult.fs",
+        "module A\nlet f v =\n    match v with\n    | _ -> g (fun x ->\n       x) 2\n",
+        [
+            "UndentedItemCloseClauseResult.fs(5,11): error FS0010: Unexpected integer literal in expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "UndentedItemCloseThenSameLine.fs",
+        "module A\nlet f c =\n    if c then g (fun x ->\n       x) 2\n    else 3\n",
+        [
+            "UndentedItemCloseThenSameLine.fs(4,11): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "UndentedItemCloseElseSameLine.fs",
+        "module A\nlet f c =\n    if c then 1 else g (fun x ->\n       x) 2\n",
+        [
+            "UndentedItemCloseElseSameLine.fs(4,11): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "UndentedItemCloseMemberValue.fs",
+        "module A\ntype T() =\n    member _.M = g (fun x ->\n       x) 2\n",
+        [
+            "UndentedItemCloseMemberValue.fs(4,11): error FS0010: Unexpected integer literal in member definition"
+        ]
+        "UndentedItemCloseDoValue.fs",
+        "module A\ndo g (fun x ->\n x) 2\n",
+        [
+            "UndentedItemCloseDoValue.fs(3,5): error FS0010: Unexpected integer literal in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+    ]
+
     [<Tests>]
     let tests =
         testList "Issue29.ParserGrammar" [
@@ -5440,6 +5577,43 @@ let items = [ origin.X; 1 ]
                                 result.Diagnostics
                                 (oracleLines logicalPath result)
                 ]
+
+            testList "a delimiter that closes left of its block item ends the item" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in
+                    undentedItemCloseCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with delimiters that close on a later line"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect (fun body ->
+                                 infixRanges body
+                                 @ applicationRanges body
+                                 @ conditionalRanges body
+                                 @ matchRanges body
+                             ))
+                            expectedRanges
+                            "The infix, application, conditional, and match ranges, and the clause count of each match"
+            ]
+
+            testList "a token after a delimiter that closes left of its block item stays explicit" [
+                for logicalPath, text, oracle in undentedItemCloseExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
 
             testCase
                 "an else or a clause bar left of the inner construct inside a delimiter belongs to the outer construct"
