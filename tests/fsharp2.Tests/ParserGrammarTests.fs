@@ -2309,7 +2309,6 @@ let f a b =
             "InfixAtColumnLess.fs(4,5): error FS0010: Unexpected symbol '<' in binding. Expected incomplete structured construct at or before this point or other token."
         ]
         "InfixAtColumnModuleExpr.fs", "module A\n1\n|> ignore\n", []
-        "InfixAtColumnColonEquals.fs", "module A\nlet f a b =\n    a\n    := b\n", []
         "InfixAtColumnAtLetColumn.fs", "module A\nlet x =\n    1\n+ 2\n", []
         "InfixAtColumnGreater.fs",
         "module A\nlet f a b =\n    a\n    > b\n",
@@ -5292,6 +5291,156 @@ let f a b =
         ]
     ]
 
+    let private assignmentOperatorCases = [
+        "AssignTupleValue.fs",
+        "module A\nlet r () = x := 1, 2\n",
+        [ "let r () = {x := 1, 2}" ],
+        [
+            ":=(2,12--2,21)"
+            "tuple(2,17--2,21)"
+        ]
+        "AssignBelowOr.fs",
+        "module A\nlet r () = x := a || b\n",
+        [ "let r () = {x := {a || b}}" ],
+        [
+            ":=(2,12--2,23)"
+            "||(2,17--2,23)"
+        ]
+        "AssignRightAssociative.fs",
+        "module A\nlet r () = x := y := 1\n",
+        [ "let r () = {x := {y := 1}}" ],
+        [
+            ":=(2,12--2,23)"
+            ":=(2,17--2,23)"
+        ]
+        "AssignTupleTarget.fs",
+        "module A\nlet r () = a, x := 1\n",
+        [ "let r () = {a, x := 1}" ],
+        [
+            ":=(2,12--2,21)"
+            "tuple(2,12--2,16)"
+        ]
+        "AssignApplicationTarget.fs",
+        "module A\nlet r () = f x := 1\n",
+        [ "let r () = {[f x] := 1}" ],
+        [
+            ":=(2,12--2,20)"
+            "app(2,12--2,15)"
+        ]
+        "AssignConditionalValue.fs",
+        "module A\nlet r c = x := if c then 1 else 2\n",
+        [ "let r c = {x := if c then 1 else 2}" ],
+        [ ":=(2,11--2,34)" ]
+        "AssignLambdaValue.fs",
+        "module A\nlet r () = x := fun y -> y\n",
+        [ "let r () = {x := fun y -> y}" ],
+        [ ":=(2,12--2,27)" ]
+        "AssignInSetValue.fs",
+        "module A\nlet mutable z = 0\nlet r () = z <- y := 1\n",
+        [
+            "let mutable z = 0"
+            "let r () = {z <- {y := 1}}"
+        ],
+        [
+            "set(3,12--3,23)"
+            ":=(3,17--3,23)"
+        ]
+        "AssignInParentheses.fs",
+        "module A\nlet r () = (x := 1, 2)\n",
+        [ "let r () = ({x := 1, 2})" ],
+        [
+            ":=(2,13--2,22)"
+            "tuple(2,18--2,22)"
+        ]
+        "AssignAdjacent.fs",
+        "module A\nlet r () = x:=1\n",
+        [ "let r () = {x := 1}" ],
+        [ ":=(2,12--2,16)" ]
+        "AssignModuleExpression.fs", "module A\nx := 1\n", [ "expr {x := 1}" ], [ ":=(2,1--2,7)" ]
+        "AssignSequentialItem.fs",
+        "module A\nlet r () =\n    x := 1\n    y\n",
+        [ "let r () = seq[{x := 1}; y]" ],
+        [
+            "seq(3,5--4,6)"
+            ":=(3,5--3,11)"
+        ]
+        "AssignValueNextLine.fs",
+        "module A\nlet r () =\n    x :=\n        1\n",
+        [ "let r () = {x := 1}" ],
+        [ ":=(3,5--4,10)" ]
+        "AssignOperatorLine.fs",
+        "module A\nlet r () =\n    x\n    := 1\n",
+        [ "let r () = {x := 1}" ],
+        [ ":=(3,5--4,9)" ]
+        "AssignOperatorLineUndented.fs",
+        "module A\nlet r () =\n    x\n  := 1\n",
+        [ "let r () = {x := 1}" ],
+        [ ":=(3,5--4,7)" ]
+        "AssignCommaLine.fs",
+        "module A\nlet r () =\n    x := 1\n    , 2\n",
+        [ "let r () = {x := 1, 2}" ],
+        [
+            ":=(3,5--4,8)"
+            "tuple(3,10--4,8)"
+        ]
+        "AssignInfixLine.fs",
+        "module A\nlet r () =\n    x := 1\n    + 2\n",
+        [ "let r () = {x := {1 + 2}}" ],
+        [
+            ":=(3,5--4,8)"
+            "+(3,10--4,8)"
+        ]
+        "AssignOperatorLineTwice.fs",
+        "module A\nlet r () =\n    x := y\n    := 1\n",
+        [ "let r () = {x := {y := 1}}" ],
+        [
+            ":=(3,5--4,9)"
+            ":=(3,10--4,9)"
+        ]
+        "AssignOperatorLineAfterSet.fs",
+        "module A\nlet mutable z = 0\nlet r () =\n    z <- y\n    := 1\n",
+        [
+            "let mutable z = 0"
+            "let r () = {z <- {y := 1}}"
+        ],
+        [
+            "set(4,5--5,9)"
+            ":=(4,10--5,9)"
+        ]
+        "AssignOperatorLineAfterSetBlock.fs",
+        "module A\nlet mutable z = 0\nlet r () =\n    z <-\n        y\n    := 1\n",
+        [
+            "let mutable z = 0"
+            "let r () = {{z <- y} := 1}"
+        ],
+        [
+            ":=(4,5--6,9)"
+            "set(4,5--5,10)"
+        ]
+        "AssignOperatorLineAfterLambda.fs",
+        "module A\nlet r =\n    fun () -> x\n    := 1\n",
+        [ "let r = {fun () -> x := 1}" ],
+        [ ":=(3,5--4,9)" ]
+        "InfixAtColumnColonEquals.fs",
+        "module A\nlet f a b =\n    a\n    := b\n",
+        [ "let f a b = {a := b}" ],
+        [ ":=(3,5--4,9)" ]
+    ]
+
+    let private assignmentOperatorExplicitCases = [
+        "AssignLineAfterUndentedClose.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map (fun x ->\n  x)\n  := 1\n",
+        [
+            "AssignLineAfterUndentedClose.fs(6,3): error FS0010: Unexpected symbol ':=' in binding. Expected incomplete structured construct at or before this point or other token."
+            "AssignLineAfterUndentedClose.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "AssignLineAtModuleColumn.fs",
+        "module A\nlet r () =\n    x\n:= 1\n",
+        [
+            "AssignLineAtModuleColumn.fs(4,1): error FS0010: Unexpected symbol ':=' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+    ]
+
     [<Tests>]
     let tests =
         testList "Issue29.ParserGrammar" [
@@ -6170,6 +6319,41 @@ let items = [ origin.X; 1 ]
 
             testList "a dot operator the parser does not model stays explicit" [
                 for logicalPath, text, oracle in dotOperatorExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testList "':=' binds looser than ',' and tighter than '<-'" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in
+                    assignmentOperatorCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with ':='"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect (fun body ->
+                                 infixRanges body
+                                 @ applicationRanges body
+                             ))
+                            expectedRanges
+                            "The infix, prefix, and application ranges"
+            ]
+
+            testList "a ':=' line the parser does not model stays explicit" [
+                for logicalPath, text, oracle in assignmentOperatorExplicitCases ->
                     testCase logicalPath
                     <| fun _ ->
                         let result = parse logicalPath text

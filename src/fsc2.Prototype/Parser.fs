@@ -1826,7 +1826,7 @@ module internal Parser =
                 innerPrecedence < precedence
                 || innerPrecedence = precedence
                    && rightAssociative
-            | None -> false
+            | None -> inner.Text = ":="
 
         match left with
         | SyntaxExpression.Infix(inner, innerLeft, innerRight, _) when bindsLooser inner ->
@@ -1866,10 +1866,44 @@ module internal Parser =
             ->
             let value = appendTupleItem value right
             SyntaxExpression.LongIdentifierSet(name, value, span range value.Range)
+        | SyntaxExpression.Infix(operator, target, value, _) when operator.Text = ":=" ->
+            let value = appendTupleItem value right
+            SyntaxExpression.Infix(operator, target, value, span target.Range value.Range)
         | _ ->
             SyntaxExpression.Tuple(ImmutableArray.Create(left, right), span left.Range right.Range)
 
+    // ':=' binds looser than ',' and tighter than '<-', and is right-associative.
+    let rec private attachAssignment
+        (operator: SyntaxIdentifier)
+        (left: SyntaxExpression)
+        (right: SyntaxExpression)
+        =
+        match left with
+        | SyntaxExpression.Infix(inner, target, value, _) when inner.Text = ":=" ->
+            let value = attachAssignment operator value right
+            SyntaxExpression.Infix(inner, target, value, span target.Range value.Range)
+        | SyntaxExpression.LongIdentifierSet(name, value, range) when
+            continuesAssignedValue range value
+            ->
+            let value = attachAssignment operator value right
+            SyntaxExpression.LongIdentifierSet(name, value, span range value.Range)
+        | _ -> SyntaxExpression.Infix(operator, left, right, span left.Range right.Range)
+
     let rec private parseExpression state context =
+        let cursor = state.Cursor
+        let left = parseTuple state context
+
+        if
+            isOperator ":=" cursor.Current
+            && not (isOffsideInfix state context cursor.Current (cursor.Peek 1))
+        then
+            let operator = identifier (cursor.Advance())
+            let right = parseExpression state context
+            SyntaxExpression.Infix(operator, left, right, span left.Range right.Range)
+        else
+            left
+
+    and private parseTuple state context =
         let cursor = state.Cursor
         let first = parseInfix state context 0
 
@@ -2390,6 +2424,7 @@ module internal Parser =
 
             let operator =
                 isDelimiter "," token
+                || isOperator ":=" token
                 || (infixPrecedence token).IsSome
 
             let onLine =
@@ -2427,6 +2462,9 @@ module internal Parser =
                     |> ignore
 
                     result <- appendTupleItem result (parseInfix state context 0)
+                elif isOperator ":=" cursor.Current then
+                    let operator = identifier (cursor.Advance())
+                    result <- attachAssignment operator result (parseExpression state context)
                 else
                     let precedence, rightAssociative = (infixPrecedence cursor.Current).Value
                     let operator = parseInfixOperator state
