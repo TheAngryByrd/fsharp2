@@ -73,6 +73,8 @@ module internal Layout =
                || token.Text = "|"
                || token.Text = ":")
 
+    type private BlockLine = { StartsWithBar: bool; HasArrow: bool }
+
     [<RequireQualifiedAccess>]
     type private ItemColumn =
         | Opened of int
@@ -145,7 +147,14 @@ module internal Layout =
         let tokens = ResizeArray<LayoutToken>()
         let diagnostics = ResizeArray<SourceLexicalDiagnostic>(directives.Diagnostics)
         let mutable indents = [ 0 ]
-        let mutable blockLines = [ false, false ]
+
+        let mutable blockLines = [
+            {
+                StartsWithBar = false
+                HasArrow = false
+            }
+        ]
+
         let mutable openers: SourcePosition list = []
         let mutable previousSignificantStart: SourcePosition option = None
         let mutable previousLastToken: LexicalToken option = None
@@ -352,7 +361,11 @@ module internal Layout =
                     lineTokens[0].Kind = LexicalTokenKind.Operator
                     && lineTokens[0].Text = "|"
 
-                let lineBlockLine = startsBar, lineHasArrow
+                let lineBlockLine = {
+                    StartsWithBar = startsBar
+                    HasArrow = lineHasArrow
+                }
+
                 let continuesIf = continuesConstruct lineTokens[0]
 
                 if continuesIf then
@@ -533,15 +546,15 @@ module internal Layout =
                         <> indents.Head
                         && not (
                             startsBar
-                            && fst blockLines.Head
+                            && blockLines.Head.StartsWithBar
                             && match lastPopped with
-                               | Some(poppedIndent, (poppedBar, poppedArrow)) ->
-                                   if poppedBar then
+                               | Some(poppedIndent, popped) ->
+                                   if popped.StartsWithBar then
                                        indentation
                                        <> poppedIndent
                                           - 1
                                    else
-                                       not poppedArrow
+                                       not popped.HasArrow
                                | None -> false
                         )
                     then
