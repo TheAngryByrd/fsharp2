@@ -1729,6 +1729,7 @@ type internal CompilerService() =
                         |> Option.map (fun (name, range) ->
                             name, range, undefinedModuleMessage references name
                         )
+                    | ParsedModuleExpression _
                     | ParsedLiteralField _
                     | ParsedNestedModule _
                     | ParsedTypeAbbreviation _
@@ -1757,6 +1758,7 @@ type internal CompilerService() =
                             |> Map.add
                                 fieldDeclaration.Name
                                 (declarationIdentity fieldDeclaration.Name "/literal-field:")
+                        | ParsedModuleExpression _
                         | ParsedNestedModule _
                         | ParsedTypeAbbreviation _
                         | ParsedStaticType _
@@ -1900,6 +1902,7 @@ type internal CompilerService() =
                     function
                     | ParsedTypeAbbreviation declaration -> Some(declaration.Name, declaration)
                     | ParsedMethod _
+                    | ParsedModuleExpression _
                     | ParsedLiteralField _
                     | ParsedNestedModule _
                     | ParsedStaticType _
@@ -1917,6 +1920,7 @@ type internal CompilerService() =
                         match declaration with
                         | ParsedStructType _ -> true
                         | ParsedMethod _
+                        | ParsedModuleExpression _
                         | ParsedLiteralField _
                         | ParsedNestedModule _
                         | ParsedTypeAbbreviation _
@@ -3226,6 +3230,8 @@ type internal CompilerService() =
 
             let rec typeDeclaration =
                 function
+                | ParsedModuleExpression declaration ->
+                    diagnostic declaration.BodyRange "a module-level expression is not supported"
                 | ParsedMethod declaration when
                     match declaration.Kind, declaration.Body with
                     | ParsedMethodKind.EntryPoint _, _

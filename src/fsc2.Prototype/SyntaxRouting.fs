@@ -45,30 +45,58 @@ module internal SyntaxRouting =
         startsWith checks tokens
         |> Option.defaultValue tokens
 
-    let private declaration tokens =
-        match skip entryPointAttribute tokens with
-        | letToken :: name :: rest when
-            isToken LexicalTokenKind.Keyword "let" letToken
-            && isIdentifier name
-            ->
-            let rest =
-                match startsWith unit rest with
-                | Some rest -> rest
-                | None ->
-                    match rest with
-                    | parameter :: rest when isIdentifier parameter -> rest
-                    | _ -> rest
+    let private startsDeclaration (token: LexicalToken) = token.Range.Start.Column = 1
 
-            match rest with
-            | equals :: rest when isToken LexicalTokenKind.Operator "=" equals ->
-                match startsWith unit rest with
-                | Some rest -> Some rest
-                | None ->
-                    match rest with
-                    | atom :: rest when isAtom atom -> Some rest
-                    | _ -> None
+    let rec private expression tokens =
+        match startsWith unit tokens with
+        | Some rest -> expression rest
+        | None ->
+            match tokens with
+            | atom :: rest when isAtom atom -> expression rest
+            | _ -> tokens
+
+    let private declaration tokens =
+        match tokens with
+        | doToken :: rest when
+            isToken LexicalTokenKind.Keyword "do" doToken
+            && startsDeclaration doToken
+            ->
+            match expression rest with
+            | remaining when remaining.Length < rest.Length -> Some remaining
             | _ -> None
-        | _ -> None
+        | first :: _ when
+            startsDeclaration first
+            && (isAtom first
+                || isToken LexicalTokenKind.Delimiter "(" first)
+            ->
+            match expression tokens with
+            | remaining when remaining.Length < tokens.Length -> Some remaining
+            | _ -> None
+        | _ ->
+
+            match skip entryPointAttribute tokens with
+            | letToken :: name :: rest when
+                isToken LexicalTokenKind.Keyword "let" letToken
+                && isIdentifier name
+                ->
+                let rest =
+                    match startsWith unit rest with
+                    | Some rest -> rest
+                    | None ->
+                        match rest with
+                        | parameter :: rest when isIdentifier parameter -> rest
+                        | _ -> rest
+
+                match rest with
+                | equals :: rest when isToken LexicalTokenKind.Operator "=" equals ->
+                    match startsWith unit rest with
+                    | Some rest -> Some rest
+                    | None ->
+                        match rest with
+                        | atom :: rest when isAtom atom -> Some rest
+                        | _ -> None
+                | _ -> None
+            | _ -> None
 
     let rec private qualifiedName tokens =
         match tokens with
