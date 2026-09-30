@@ -36,6 +36,7 @@ module internal Layout =
     let isInfixToken (token: LexicalToken) (next: LexicalToken option) =
         match token.Kind with
         | LexicalTokenKind.Delimiter -> token.Text = ","
+        | LexicalTokenKind.Keyword -> token.Text = "or"
         | LexicalTokenKind.Operator when not (isPrefixOperator token next) ->
             match token.Text with
             | "="
@@ -66,6 +67,13 @@ module internal Layout =
                 >= 0
         | _ -> false
 
+    // FCS counts the 'or' keyword as one character when an infix token undents.
+    let infixLength (token: LexicalToken) =
+        if token.Kind = LexicalTokenKind.Keyword then
+            1
+        else
+            token.Text.Length
+
     let private opensBlockAfter (token: LexicalToken) =
         token.Kind = LexicalTokenKind.Keyword
         && token.Text
@@ -74,6 +82,8 @@ module internal Layout =
            <> "false"
         && token.Text
            <> "null"
+        && token.Text
+           <> "or"
         || token.Kind = LexicalTokenKind.Operator
            && (token.Text = "="
                || token.Text = "->"
@@ -493,7 +503,7 @@ module internal Layout =
                     let continuesBlock column =
                         startsInfix
                         && indentation
-                           + lineTokens[0].Text.Length
+                           + infixLength lineTokens[0]
                            + 1
                            >= column
 

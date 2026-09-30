@@ -5441,6 +5441,127 @@ let f a b =
         ]
     ]
 
+    let private orKeywordCases = [
+        "OrKeywordBelowAnd.fs",
+        "module A\nlet r = a or b && c\n",
+        [ "let r = {a or {b && c}}" ],
+        [
+            "or(2,9--2,20)"
+            "&&(2,14--2,20)"
+        ]
+        "OrKeywordLeftAssociative.fs",
+        "module A\nlet r = a or b or c\n",
+        [ "let r = {{a or b} or c}" ],
+        [
+            "or(2,9--2,20)"
+            "or(2,9--2,15)"
+        ]
+        "OrKeywordAfterBarBar.fs",
+        "module A\nlet r = a || b or c\n",
+        [ "let r = {{a || b} or c}" ],
+        [
+            "or(2,9--2,20)"
+            "||(2,9--2,15)"
+        ]
+        "OrKeywordBeforeBarBar.fs",
+        "module A\nlet r = a or b || c\n",
+        [ "let r = {{a or b} || c}" ],
+        [
+            "||(2,9--2,20)"
+            "or(2,9--2,15)"
+        ]
+        "OrKeywordBelowComparison.fs",
+        "module A\nlet r = a or b = c\n",
+        [ "let r = {a or {b = c}}" ],
+        [
+            "or(2,9--2,19)"
+            "=(2,14--2,19)"
+        ]
+        "OrKeywordBelowAmpersand.fs",
+        "module A\nlet r = a & b or c\n",
+        [ "let r = {{a & b} or c}" ],
+        [
+            "or(2,9--2,19)"
+            "&(2,9--2,14)"
+        ]
+        "OrKeywordApplications.fs",
+        "module A\nlet r = f a or g b\n",
+        [ "let r = {[f a] or [g b]}" ],
+        [
+            "or(2,9--2,19)"
+            "app(2,9--2,12)"
+            "app(2,16--2,19)"
+        ]
+        "OrKeywordInTuple.fs",
+        "module A\nlet r = a, b or c\n",
+        [ "let r = a, {b or c}" ],
+        [
+            "tuple(2,9--2,18)"
+            "or(2,12--2,18)"
+        ]
+        "OrKeywordInAssignment.fs",
+        "module A\nlet r () = x := a or b\n",
+        [ "let r () = {x := {a or b}}" ],
+        [
+            ":=(2,12--2,23)"
+            "or(2,17--2,23)"
+        ]
+        "OrKeywordInCondition.fs",
+        "module A\nlet r = if a or b then 1 else 2\n",
+        [ "let r = if {a or b} then 1 else 2" ],
+        [ "or(2,12--2,18)" ]
+        "OrKeywordAdjacentParentheses.fs",
+        "module A\nlet r = (a)or(b)\n",
+        [ "let r = {(a) or (b)}" ],
+        [ "or(2,9--2,17)" ]
+        "OrKeywordLine.fs",
+        "module A\nlet r =\n    a\n    or b\n",
+        [ "let r = {a or b}" ],
+        [ "or(3,5--4,9)" ]
+        "OrKeywordLineUndented.fs",
+        "module A\nlet r =\n    a\n  or b\n",
+        [ "let r = {a or b}" ],
+        [ "or(3,5--4,7)" ]
+        "OrKeywordEndOfLine.fs",
+        "module A\nlet r =\n    a or\n        b\n",
+        [ "let r = {a or b}" ],
+        [ "or(3,5--4,10)" ]
+        "OrKeywordLineInParentheses.fs",
+        "module A\nlet r = (a\n        or b)\n",
+        [ "let r = ({a or b})" ],
+        [ "or(2,10--3,13)" ]
+        "OrKeywordThenInfixLine.fs",
+        "module A\nlet r =\n    a or b\n    |> f\n",
+        [ "let r = {a or {b |> f}}" ],
+        [
+            "or(3,5--4,9)"
+            "|>(3,10--4,9)"
+        ]
+        "OrKeywordAfterNestedBlock.fs",
+        "module A\nlet r c =\n    if c then\n        a\n    else\n        b\n    or d\n",
+        [ "let r c = {if c then a else b or d}" ],
+        [ "or(3,5--7,9)" ]
+        "BarBarLineUndentedTwoColumns.fs",
+        "module A\nlet r =\n    a\n || b\n",
+        [ "let r = {a || b}" ],
+        [ "||(3,5--4,6)" ]
+    ]
+
+    let private orKeywordExplicitCases = [
+        "OrKeywordLineUndentedBeyondLimit.fs",
+        "module A\nlet r =\n    a\n or b\n",
+        [
+            "OrKeywordLineUndentedBeyondLimit.fs(4,2): error FS0010: Unexpected keyword 'or' in binding. Expected incomplete structured construct at or before this point or other token."
+            "OrKeywordLineUndentedBeyondLimit.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "OrKeywordModuleLine.fs",
+        "module A\nlet a = 1\nor b\n",
+        [
+            "OrKeywordModuleLine.fs(3,1): error FS0010: Unexpected keyword 'or' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "OrKeywordEndOfLineAtBlockColumn.fs", "module A\nlet r =\n    a or\n    b\n", []
+    ]
+
     [<Tests>]
     let tests =
         testList "Issue29.ParserGrammar" [
@@ -6354,6 +6475,40 @@ let items = [ origin.X; 1 ]
 
             testList "a ':=' line the parser does not model stays explicit" [
                 for logicalPath, text, oracle in assignmentOperatorExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testList "the 'or' keyword is an infix operator at the '||' level" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in orKeywordCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with 'or'"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect (fun body ->
+                                 infixRanges body
+                                 @ applicationRanges body
+                             ))
+                            expectedRanges
+                            "The infix, prefix, and application ranges"
+            ]
+
+            testList "an 'or' line the parser does not model stays explicit" [
+                for logicalPath, text, oracle in orKeywordExplicitCases ->
                     testCase logicalPath
                     <| fun _ ->
                         let result = parse logicalPath text

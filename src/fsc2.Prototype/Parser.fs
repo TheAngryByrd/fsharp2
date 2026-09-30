@@ -713,10 +713,15 @@ module internal Parser =
             token.Kind = LayoutTokenKind.SourceToken
             && token.Range.Start.Line > context.Offside.Line
 
+        let length =
+            token.Token
+            |> Option.map Layout.infixLength
+            |> Option.defaultValue (tokenText token).Length
+
         let undented =
             laterLine
             && token.Range.Start.Column
-               + (tokenText token).Length
+               + length
                + 1 < context.Offside.Column
 
         if not state.InDelimiters then
@@ -956,7 +961,8 @@ module internal Parser =
         | "<@@"
         | "@>"
         | "@@>" -> None
-        | "||" -> Some(1, false)
+        | "||"
+        | "or" -> Some(1, false)
         | "&"
         | "&&" -> Some(2, false)
         | "::" -> Some(6, true)
@@ -1000,7 +1006,10 @@ module internal Parser =
             | _ -> None
 
     let private infixPrecedence (token: LayoutToken) =
-        if isKind LexicalTokenKind.Operator token then
+        if
+            isKind LexicalTokenKind.Operator token
+            || isKeyword "or" token
+        then
             operatorPrecedence (tokenText token)
         else
             None
