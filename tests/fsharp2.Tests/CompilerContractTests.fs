@@ -1430,6 +1430,65 @@ let main _ =
                     ]
                     "The invalid argument is a source-phase error at the Oracle position"
 
+            testCase "a second with after a match fails and emits no assembly"
+            <| fun _ ->
+                let result =
+                    compile
+                        "namespace N\n\ntype H() =\n    static member Run(a: int, b: int) : int =\n        match\n            a\n          with\n          | _ -> 1\n          with _ -> 2\n"
+
+                Expect.notEqual
+                    result.Outcome
+                    CompilationOutcome.Succeeded
+                    "The Compatibility Oracle rejects the second with with FS0058 and FS0010 at (9,11)"
+
+                Expect.isEmpty result.Artifacts "A failed compilation publishes no artifacts"
+
+            testCase "a with line between the match and its input compiles with the Oracle results"
+            <| fun _ ->
+                let result =
+                    compile
+                        "namespace N\n\ntype H() =\n    static member Run(a: int, b: int) : int =\n        match\n            a\n          with\n        | _ -> 1\n"
+
+                let diagnostics =
+                    result.Diagnostics
+                    |> Seq.map (fun diagnostic -> $"{diagnostic.Code}: {diagnostic.Message}")
+                    |> String.concat Environment.NewLine
+
+                Expect.equal
+                    result.Outcome
+                    CompilationOutcome.Succeeded
+                    $"The Compatibility Oracle accepts the with line. Diagnostics:{Environment.NewLine}{diagnostics}"
+
+                let assembly =
+                    result.Artifacts
+                    |> Seq.exactlyOne
+                    |> fun artifact -> Assembly.Load(bytes artifact.Bytes)
+
+                let run = assembly.GetType("N.H", true).GetMethod("Run")
+
+                Expect.sequenceEqual
+                    ([
+                        0, 0
+                        1, 2
+                        2, 1
+                     ]
+                     |> List.map (fun (a, b) ->
+                         run.Invoke(
+                             null,
+                             [|
+                                 box a
+                                 box b
+                             |]
+                         )
+                         :?> int
+                     ))
+                    [
+                        1
+                        1
+                        1
+                    ]
+                    "The Compatibility Oracle program returns 1 for each input"
+
             testCase "a nested if with a second else fails and emits no assembly"
             <| fun _ ->
                 let result =
