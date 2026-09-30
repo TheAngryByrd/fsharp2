@@ -95,6 +95,43 @@ and internal SyntaxNestedTypeName = {
     Range: SourceRange
 }
 
+// FCS never makes a named parameter type outside a signature, so a cast target holds no SignatureParameter.
+type internal SyntaxCastType =
+    private
+    | SyntaxCastType of SyntaxType
+
+    member this.Type =
+        let (SyntaxCastType syntaxType) = this
+        syntaxType
+
+    member this.Range = this.Type.Range
+
+module internal SyntaxCastType =
+    let rec private hasSignatureParameter syntaxType =
+        match syntaxType with
+        | SyntaxType.SignatureParameter _ -> true
+        | SyntaxType.Application(typeConstructor, arguments, _, _) ->
+            hasSignatureParameter typeConstructor
+            || Seq.exists hasSignatureParameter arguments
+        | SyntaxType.Array(element, _, _)
+        | SyntaxType.Parenthesized(element, _) -> hasSignatureParameter element
+        | SyntaxType.NestedName nested ->
+            Seq.exists hasSignatureParameter nested.Enclosing.Arguments
+        | SyntaxType.Function(argument, result, _) ->
+            hasSignatureParameter argument
+            || hasSignatureParameter result
+        | SyntaxType.Tuple(elements, _) -> Seq.exists hasSignatureParameter elements
+        | SyntaxType.LongIdentifier _
+        | SyntaxType.GlobalLongIdentifier _
+        | SyntaxType.Variable _
+        | SyntaxType.Missing _ -> false
+
+    let tryCreate syntaxType =
+        if hasSignatureParameter syntaxType then
+            None
+        else
+            Some(SyntaxCastType syntaxType)
+
 [<RequireQualifiedAccess>]
 type internal SyntaxPattern =
     | Named of SyntaxIdentifier
@@ -171,9 +208,9 @@ type internal SyntaxExpression =
         body: SyntaxExpression *
         SourceRange
     | LongIdentifierSet of LongIdentifier * value: SyntaxExpression * SourceRange
-    | Upcast of SyntaxExpression * targetType: SyntaxType * SourceRange
-    | Downcast of SyntaxExpression * targetType: SyntaxType * SourceRange
-    | TypeTest of SyntaxExpression * targetType: SyntaxType * SourceRange
+    | Upcast of SyntaxExpression * targetType: SyntaxCastType * SourceRange
+    | Downcast of SyntaxExpression * targetType: SyntaxCastType * SourceRange
+    | TypeTest of SyntaxExpression * targetType: SyntaxCastType * SourceRange
     | DotGet of SyntaxExpression * members: LongIdentifier * SourceRange
     | Missing of MissingSyntax
 

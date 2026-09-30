@@ -1395,6 +1395,8 @@ module internal Parser =
         if
             isIdentifier cursor.Current
             && isOperator ":" (cursor.Peek 1)
+            && context.Kind
+               <> FrameKind.CastType
         then
             let name = identifier (cursor.Advance())
 
@@ -2190,7 +2192,16 @@ module internal Parser =
         then
             reportUnsupported state endToken "a token after the target type of a cast"
 
-        cast target targetType (span target.Range targetType.Range)
+        let castType =
+            match SyntaxCastType.tryCreate targetType with
+            | Some castType -> castType
+            | None ->
+                reportUnsupported state operatorToken "a named parameter type in a cast"
+
+                SyntaxCastType.tryCreate (missingType operatorToken)
+                |> Option.get
+
+        cast target castType (span target.Range targetType.Range)
 
     and private parseInfixOperator state =
         let cursor = state.Cursor

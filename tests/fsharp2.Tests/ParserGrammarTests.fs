@@ -203,11 +203,11 @@ module ParserGrammarTests =
         | SyntaxExpression.LongIdentifierSet(name, value, _) ->
             $"{{{name.Text} <- {expressionShape value}}}"
         | SyntaxExpression.Upcast(target, targetType, _) ->
-            $"{{{expressionShape target} :> {typeShape targetType}}}"
+            $"{{{expressionShape target} :> {typeShape targetType.Type}}}"
         | SyntaxExpression.Downcast(target, targetType, _) ->
-            $"{{{expressionShape target} :?> {typeShape targetType}}}"
+            $"{{{expressionShape target} :?> {typeShape targetType.Type}}}"
         | SyntaxExpression.TypeTest(target, targetType, _) ->
-            $"{{{expressionShape target} :? {typeShape targetType}}}"
+            $"{{{expressionShape target} :? {typeShape targetType.Type}}}"
         | SyntaxExpression.DotGet(target, members, _) -> $"{expressionShape target}.{members.Text}"
         | SyntaxExpression.Missing _ -> "<missing>"
 
@@ -8368,6 +8368,1311 @@ let f a b =
         "Review410546_nlt5.fs", "let y =\n    a + x :? T\n    * U\n", []
         "Review410547_nlt6.fs", "let y =\n    x :? T\n    * 2\n", []
         "Review410548_nlt7.fs", "let y =\n    x :? T\n    * (2)\n", []
+        "Review410549_np.fs", "let y = x :> a: int\n", []
+        "Review410550_np.fs", "let y = (x :> a: int)\n", []
+        "Review410551_np.fs",
+        "let y = [ x :> a: int ]\n",
+        [
+            "Review410551_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410551_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410552_np.fs", "let y = f (x :> a: int) z\n", []
+        "Review410553_np.fs",
+        "let y = if x :> a: int then 1 else 2\n",
+        [
+            "Review410553_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression"
+            "Review410553_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410553_np.fs(1,31): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410553_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410554_np.fs",
+        "let y = { A = x :> a: int }\n",
+        [
+            "Review410554_np.fs(1,21): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410554_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410555_np.fs",
+        "let y = x :> a: int, 1\n",
+        [
+            "Review410555_np.fs(1,20): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410556_np.fs", "let y = 1, x :> a: int\n", []
+        "Review410557_np.fs",
+        "let y = x :> a: int = 1\n",
+        [
+            "Review410557_np.fs(1,21): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410558_np.fs",
+        "let y = x :> a: int && z\n",
+        [
+            "Review410558_np.fs(1,21): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410559_np.fs", "let y = x :> a:int\n", []
+        "Review410560_np.fs", "let y = (x :> a:int)\n", []
+        "Review410561_np.fs",
+        "let y = [ x :> a:int ]\n",
+        [
+            "Review410561_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410561_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410562_np.fs", "let y = f (x :> a:int) z\n", []
+        "Review410563_np.fs",
+        "let y = if x :> a:int then 1 else 2\n",
+        [
+            "Review410563_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression"
+            "Review410563_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410563_np.fs(1,30): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410563_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410564_np.fs",
+        "let y = { A = x :> a:int }\n",
+        [
+            "Review410564_np.fs(1,21): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410564_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410565_np.fs",
+        "let y = x :> a:int, 1\n",
+        [
+            "Review410565_np.fs(1,19): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410566_np.fs", "let y = 1, x :> a:int\n", []
+        "Review410567_np.fs",
+        "let y = x :> a:int = 1\n",
+        [
+            "Review410567_np.fs(1,20): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410568_np.fs",
+        "let y = x :> a:int && z\n",
+        [
+            "Review410568_np.fs(1,20): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410569_np.fs", "let y = x :> a: int -> int\n", []
+        "Review410570_np.fs", "let y = (x :> a: int -> int)\n", []
+        "Review410571_np.fs",
+        "let y = [ x :> a: int -> int ]\n",
+        [
+            "Review410571_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410571_np.fs(1,9): error FS0598: Unmatched '['"
+            "Review410571_np.fs(1,30): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410572_np.fs", "let y = f (x :> a: int -> int) z\n", []
+        "Review410573_np.fs",
+        "let y = if x :> a: int -> int then 1 else 2\n",
+        [
+            "Review410573_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression"
+            "Review410573_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410573_np.fs(1,31): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410574_np.fs",
+        "let y = { A = x :> a: int -> int }\n",
+        [
+            "Review410574_np.fs(1,21): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410574_np.fs(1,9): error FS0604: Unmatched '{'"
+            "Review410574_np.fs(1,34): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410575_np.fs",
+        "let y = x :> a: int -> int, 1\n",
+        [
+            "Review410575_np.fs(1,27): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410576_np.fs", "let y = 1, x :> a: int -> int\n", []
+        "Review410577_np.fs",
+        "let y = x :> a: int -> int = 1\n",
+        [
+            "Review410577_np.fs(1,28): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410578_np.fs",
+        "let y = x :> a: int -> int && z\n",
+        [
+            "Review410578_np.fs(1,28): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410579_np.fs", "let y = x :> int -> a: int\n", []
+        "Review410580_np.fs", "let y = (x :> int -> a: int)\n", []
+        "Review410581_np.fs",
+        "let y = [ x :> int -> a: int ]\n",
+        [
+            "Review410581_np.fs(1,24): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410581_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410582_np.fs", "let y = f (x :> int -> a: int) z\n", []
+        "Review410583_np.fs",
+        "let y = if x :> int -> a: int then 1 else 2\n",
+        [
+            "Review410583_np.fs(1,25): error FS0010: Unexpected symbol ':' in expression"
+            "Review410583_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410583_np.fs(1,38): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410583_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410584_np.fs",
+        "let y = { A = x :> int -> a: int }\n",
+        [
+            "Review410584_np.fs(1,28): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410584_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410585_np.fs",
+        "let y = x :> int -> a: int, 1\n",
+        [
+            "Review410585_np.fs(1,27): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410586_np.fs", "let y = 1, x :> int -> a: int\n", []
+        "Review410587_np.fs",
+        "let y = x :> int -> a: int = 1\n",
+        [
+            "Review410587_np.fs(1,28): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410588_np.fs",
+        "let y = x :> int -> a: int && z\n",
+        [
+            "Review410588_np.fs(1,28): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410589_np.fs", "let y = x :> a: int * int\n", []
+        "Review410590_np.fs", "let y = (x :> a: int * int)\n", []
+        "Review410591_np.fs",
+        "let y = [ x :> a: int * int ]\n",
+        [
+            "Review410591_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410591_np.fs(1,9): error FS0598: Unmatched '['"
+            "Review410591_np.fs(1,29): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410592_np.fs", "let y = f (x :> a: int * int) z\n", []
+        "Review410593_np.fs",
+        "let y = if x :> a: int * int then 1 else 2\n",
+        [
+            "Review410593_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression"
+            "Review410593_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410593_np.fs(1,30): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410594_np.fs",
+        "let y = { A = x :> a: int * int }\n",
+        [
+            "Review410594_np.fs(1,21): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410594_np.fs(1,9): error FS0604: Unmatched '{'"
+            "Review410594_np.fs(1,33): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410595_np.fs",
+        "let y = x :> a: int * int, 1\n",
+        [
+            "Review410595_np.fs(1,26): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410596_np.fs", "let y = 1, x :> a: int * int\n", []
+        "Review410597_np.fs",
+        "let y = x :> a: int * int = 1\n",
+        [
+            "Review410597_np.fs(1,27): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410598_np.fs",
+        "let y = x :> a: int * int && z\n",
+        [
+            "Review410598_np.fs(1,27): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410599_np.fs", "let y = x :> int * a: int\n", []
+        "Review410600_np.fs", "let y = (x :> int * a: int)\n", []
+        "Review410601_np.fs",
+        "let y = [ x :> int * a: int ]\n",
+        [
+            "Review410601_np.fs(1,23): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410601_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410602_np.fs", "let y = f (x :> int * a: int) z\n", []
+        "Review410603_np.fs",
+        "let y = if x :> int * a: int then 1 else 2\n",
+        [
+            "Review410603_np.fs(1,24): error FS0010: Unexpected symbol ':' in expression"
+            "Review410603_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410603_np.fs(1,37): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410603_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410604_np.fs",
+        "let y = { A = x :> int * a: int }\n",
+        [
+            "Review410604_np.fs(1,27): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410604_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410605_np.fs",
+        "let y = x :> int * a: int, 1\n",
+        [
+            "Review410605_np.fs(1,26): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410606_np.fs", "let y = 1, x :> int * a: int\n", []
+        "Review410607_np.fs",
+        "let y = x :> int * a: int = 1\n",
+        [
+            "Review410607_np.fs(1,27): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410608_np.fs",
+        "let y = x :> int * a: int && z\n",
+        [
+            "Review410608_np.fs(1,27): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410609_np.fs",
+        "let y = x :> (a: int)\n",
+        [
+            "Review410609_np.fs(1,16): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410610_np.fs",
+        "let y = (x :> (a: int))\n",
+        [
+            "Review410610_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410611_np.fs",
+        "let y = [ x :> (a: int) ]\n",
+        [
+            "Review410611_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410612_np.fs",
+        "let y = f (x :> (a: int)) z\n",
+        [
+            "Review410612_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410613_np.fs",
+        "let y = if x :> (a: int) then 1 else 2\n",
+        [
+            "Review410613_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410614_np.fs",
+        "let y = { A = x :> (a: int) }\n",
+        [
+            "Review410614_np.fs(1,22): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410615_np.fs",
+        "let y = x :> (a: int), 1\n",
+        [
+            "Review410615_np.fs(1,16): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410616_np.fs",
+        "let y = 1, x :> (a: int)\n",
+        [
+            "Review410616_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410617_np.fs",
+        "let y = x :> (a: int) = 1\n",
+        [
+            "Review410617_np.fs(1,16): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410618_np.fs",
+        "let y = x :> (a: int) && z\n",
+        [
+            "Review410618_np.fs(1,16): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410619_np.fs", "let y = x :> a: T<int>\n", []
+        "Review410620_np.fs", "let y = (x :> a: T<int>)\n", []
+        "Review410621_np.fs",
+        "let y = [ x :> a: T<int> ]\n",
+        [
+            "Review410621_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410621_np.fs(1,9): error FS0598: Unmatched '['"
+            "Review410621_np.fs(1,26): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410622_np.fs", "let y = f (x :> a: T<int>) z\n", []
+        "Review410623_np.fs",
+        "let y = if x :> a: T<int> then 1 else 2\n",
+        [
+            "Review410623_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression"
+            "Review410623_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410623_np.fs(1,27): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410624_np.fs",
+        "let y = { A = x :> a: T<int> }\n",
+        [
+            "Review410624_np.fs(1,21): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410624_np.fs(1,9): error FS0604: Unmatched '{'"
+            "Review410624_np.fs(1,30): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410625_np.fs",
+        "let y = x :> a: T<int>, 1\n",
+        [
+            "Review410625_np.fs(1,23): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410626_np.fs", "let y = 1, x :> a: T<int>\n", []
+        "Review410627_np.fs",
+        "let y = x :> a: T<int> = 1\n",
+        [
+            "Review410627_np.fs(1,24): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410628_np.fs",
+        "let y = x :> a: T<int> && z\n",
+        [
+            "Review410628_np.fs(1,24): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410629_np.fs", "let y = x :> a : int\n", []
+        "Review410630_np.fs", "let y = (x :> a : int)\n", []
+        "Review410631_np.fs",
+        "let y = [ x :> a : int ]\n",
+        [
+            "Review410631_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410631_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410632_np.fs", "let y = f (x :> a : int) z\n", []
+        "Review410633_np.fs",
+        "let y = if x :> a : int then 1 else 2\n",
+        [
+            "Review410633_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression"
+            "Review410633_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410633_np.fs(1,32): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410633_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410634_np.fs",
+        "let y = { A = x :> a : int }\n",
+        [
+            "Review410634_np.fs(1,22): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410634_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410635_np.fs",
+        "let y = x :> a : int, 1\n",
+        [
+            "Review410635_np.fs(1,21): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410636_np.fs", "let y = 1, x :> a : int\n", []
+        "Review410637_np.fs",
+        "let y = x :> a : int = 1\n",
+        [
+            "Review410637_np.fs(1,22): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410638_np.fs",
+        "let y = x :> a : int && z\n",
+        [
+            "Review410638_np.fs(1,22): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410639_np.fs",
+        "let y = x :> ?a: int\n",
+        [ "Review410639_np.fs(1,14): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410640_np.fs",
+        "let y = (x :> ?a: int)\n",
+        [ "Review410640_np.fs(1,15): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410641_np.fs",
+        "let y = [ x :> ?a: int ]\n",
+        [ "Review410641_np.fs(1,16): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410642_np.fs",
+        "let y = f (x :> ?a: int) z\n",
+        [ "Review410642_np.fs(1,17): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410643_np.fs",
+        "let y = if x :> ?a: int then 1 else 2\n",
+        [ "Review410643_np.fs(1,17): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410644_np.fs",
+        "let y = { A = x :> ?a: int }\n",
+        [ "Review410644_np.fs(1,20): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410645_np.fs",
+        "let y = x :> ?a: int, 1\n",
+        [ "Review410645_np.fs(1,14): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410646_np.fs",
+        "let y = 1, x :> ?a: int\n",
+        [ "Review410646_np.fs(1,17): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410647_np.fs",
+        "let y = x :> ?a: int = 1\n",
+        [ "Review410647_np.fs(1,14): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410648_np.fs",
+        "let y = x :> ?a: int && z\n",
+        [ "Review410648_np.fs(1,14): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410649_np.fs", "let y = x :> a: int list\n", []
+        "Review410650_np.fs", "let y = (x :> a: int list)\n", []
+        "Review410651_np.fs",
+        "let y = [ x :> a: int list ]\n",
+        [
+            "Review410651_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410651_np.fs(1,9): error FS0598: Unmatched '['"
+            "Review410651_np.fs(1,28): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410652_np.fs", "let y = f (x :> a: int list) z\n", []
+        "Review410653_np.fs",
+        "let y = if x :> a: int list then 1 else 2\n",
+        [
+            "Review410653_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression"
+            "Review410653_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410653_np.fs(1,29): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410654_np.fs",
+        "let y = { A = x :> a: int list }\n",
+        [
+            "Review410654_np.fs(1,21): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410654_np.fs(1,9): error FS0604: Unmatched '{'"
+            "Review410654_np.fs(1,32): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410655_np.fs",
+        "let y = x :> a: int list, 1\n",
+        [
+            "Review410655_np.fs(1,25): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410656_np.fs", "let y = 1, x :> a: int list\n", []
+        "Review410657_np.fs",
+        "let y = x :> a: int list = 1\n",
+        [
+            "Review410657_np.fs(1,26): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410658_np.fs",
+        "let y = x :> a: int list && z\n",
+        [
+            "Review410658_np.fs(1,26): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410659_np.fs", "let y = x :?> a: int\n", []
+        "Review410660_np.fs", "let y = (x :?> a: int)\n", []
+        "Review410661_np.fs",
+        "let y = [ x :?> a: int ]\n",
+        [
+            "Review410661_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410661_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410662_np.fs", "let y = f (x :?> a: int) z\n", []
+        "Review410663_np.fs",
+        "let y = if x :?> a: int then 1 else 2\n",
+        [
+            "Review410663_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression"
+            "Review410663_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410663_np.fs(1,32): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410663_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410664_np.fs",
+        "let y = { A = x :?> a: int }\n",
+        [
+            "Review410664_np.fs(1,22): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410664_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410665_np.fs",
+        "let y = x :?> a: int, 1\n",
+        [
+            "Review410665_np.fs(1,21): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410666_np.fs", "let y = 1, x :?> a: int\n", []
+        "Review410667_np.fs",
+        "let y = x :?> a: int = 1\n",
+        [
+            "Review410667_np.fs(1,22): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410668_np.fs",
+        "let y = x :?> a: int && z\n",
+        [
+            "Review410668_np.fs(1,22): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410669_np.fs", "let y = x :?> a:int\n", []
+        "Review410670_np.fs", "let y = (x :?> a:int)\n", []
+        "Review410671_np.fs",
+        "let y = [ x :?> a:int ]\n",
+        [
+            "Review410671_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410671_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410672_np.fs", "let y = f (x :?> a:int) z\n", []
+        "Review410673_np.fs",
+        "let y = if x :?> a:int then 1 else 2\n",
+        [
+            "Review410673_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression"
+            "Review410673_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410673_np.fs(1,31): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410673_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410674_np.fs",
+        "let y = { A = x :?> a:int }\n",
+        [
+            "Review410674_np.fs(1,22): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410674_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410675_np.fs",
+        "let y = x :?> a:int, 1\n",
+        [
+            "Review410675_np.fs(1,20): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410676_np.fs", "let y = 1, x :?> a:int\n", []
+        "Review410677_np.fs",
+        "let y = x :?> a:int = 1\n",
+        [
+            "Review410677_np.fs(1,21): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410678_np.fs",
+        "let y = x :?> a:int && z\n",
+        [
+            "Review410678_np.fs(1,21): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410679_np.fs", "let y = x :?> a: int -> int\n", []
+        "Review410680_np.fs", "let y = (x :?> a: int -> int)\n", []
+        "Review410681_np.fs",
+        "let y = [ x :?> a: int -> int ]\n",
+        [
+            "Review410681_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410681_np.fs(1,9): error FS0598: Unmatched '['"
+            "Review410681_np.fs(1,31): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410682_np.fs", "let y = f (x :?> a: int -> int) z\n", []
+        "Review410683_np.fs",
+        "let y = if x :?> a: int -> int then 1 else 2\n",
+        [
+            "Review410683_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression"
+            "Review410683_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410683_np.fs(1,32): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410684_np.fs",
+        "let y = { A = x :?> a: int -> int }\n",
+        [
+            "Review410684_np.fs(1,22): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410684_np.fs(1,9): error FS0604: Unmatched '{'"
+            "Review410684_np.fs(1,35): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410685_np.fs",
+        "let y = x :?> a: int -> int, 1\n",
+        [
+            "Review410685_np.fs(1,28): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410686_np.fs", "let y = 1, x :?> a: int -> int\n", []
+        "Review410687_np.fs",
+        "let y = x :?> a: int -> int = 1\n",
+        [
+            "Review410687_np.fs(1,29): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410688_np.fs",
+        "let y = x :?> a: int -> int && z\n",
+        [
+            "Review410688_np.fs(1,29): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410689_np.fs", "let y = x :?> int -> a: int\n", []
+        "Review410690_np.fs", "let y = (x :?> int -> a: int)\n", []
+        "Review410691_np.fs",
+        "let y = [ x :?> int -> a: int ]\n",
+        [
+            "Review410691_np.fs(1,25): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410691_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410692_np.fs", "let y = f (x :?> int -> a: int) z\n", []
+        "Review410693_np.fs",
+        "let y = if x :?> int -> a: int then 1 else 2\n",
+        [
+            "Review410693_np.fs(1,26): error FS0010: Unexpected symbol ':' in expression"
+            "Review410693_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410693_np.fs(1,39): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410693_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410694_np.fs",
+        "let y = { A = x :?> int -> a: int }\n",
+        [
+            "Review410694_np.fs(1,29): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410694_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410695_np.fs",
+        "let y = x :?> int -> a: int, 1\n",
+        [
+            "Review410695_np.fs(1,28): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410696_np.fs", "let y = 1, x :?> int -> a: int\n", []
+        "Review410697_np.fs",
+        "let y = x :?> int -> a: int = 1\n",
+        [
+            "Review410697_np.fs(1,29): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410698_np.fs",
+        "let y = x :?> int -> a: int && z\n",
+        [
+            "Review410698_np.fs(1,29): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410699_np.fs", "let y = x :?> a: int * int\n", []
+        "Review410700_np.fs", "let y = (x :?> a: int * int)\n", []
+        "Review410701_np.fs",
+        "let y = [ x :?> a: int * int ]\n",
+        [
+            "Review410701_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410701_np.fs(1,9): error FS0598: Unmatched '['"
+            "Review410701_np.fs(1,30): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410702_np.fs", "let y = f (x :?> a: int * int) z\n", []
+        "Review410703_np.fs",
+        "let y = if x :?> a: int * int then 1 else 2\n",
+        [
+            "Review410703_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression"
+            "Review410703_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410703_np.fs(1,31): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410704_np.fs",
+        "let y = { A = x :?> a: int * int }\n",
+        [
+            "Review410704_np.fs(1,22): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410704_np.fs(1,9): error FS0604: Unmatched '{'"
+            "Review410704_np.fs(1,34): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410705_np.fs",
+        "let y = x :?> a: int * int, 1\n",
+        [
+            "Review410705_np.fs(1,27): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410706_np.fs", "let y = 1, x :?> a: int * int\n", []
+        "Review410707_np.fs",
+        "let y = x :?> a: int * int = 1\n",
+        [
+            "Review410707_np.fs(1,28): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410708_np.fs",
+        "let y = x :?> a: int * int && z\n",
+        [
+            "Review410708_np.fs(1,28): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410709_np.fs", "let y = x :?> int * a: int\n", []
+        "Review410710_np.fs", "let y = (x :?> int * a: int)\n", []
+        "Review410711_np.fs",
+        "let y = [ x :?> int * a: int ]\n",
+        [
+            "Review410711_np.fs(1,24): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410711_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410712_np.fs", "let y = f (x :?> int * a: int) z\n", []
+        "Review410713_np.fs",
+        "let y = if x :?> int * a: int then 1 else 2\n",
+        [
+            "Review410713_np.fs(1,25): error FS0010: Unexpected symbol ':' in expression"
+            "Review410713_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410713_np.fs(1,38): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410713_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410714_np.fs",
+        "let y = { A = x :?> int * a: int }\n",
+        [
+            "Review410714_np.fs(1,28): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410714_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410715_np.fs",
+        "let y = x :?> int * a: int, 1\n",
+        [
+            "Review410715_np.fs(1,27): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410716_np.fs", "let y = 1, x :?> int * a: int\n", []
+        "Review410717_np.fs",
+        "let y = x :?> int * a: int = 1\n",
+        [
+            "Review410717_np.fs(1,28): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410718_np.fs",
+        "let y = x :?> int * a: int && z\n",
+        [
+            "Review410718_np.fs(1,28): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410719_np.fs",
+        "let y = x :?> (a: int)\n",
+        [
+            "Review410719_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410720_np.fs",
+        "let y = (x :?> (a: int))\n",
+        [
+            "Review410720_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410721_np.fs",
+        "let y = [ x :?> (a: int) ]\n",
+        [
+            "Review410721_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410722_np.fs",
+        "let y = f (x :?> (a: int)) z\n",
+        [
+            "Review410722_np.fs(1,20): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410723_np.fs",
+        "let y = if x :?> (a: int) then 1 else 2\n",
+        [
+            "Review410723_np.fs(1,20): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410724_np.fs",
+        "let y = { A = x :?> (a: int) }\n",
+        [
+            "Review410724_np.fs(1,23): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410725_np.fs",
+        "let y = x :?> (a: int), 1\n",
+        [
+            "Review410725_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410726_np.fs",
+        "let y = 1, x :?> (a: int)\n",
+        [
+            "Review410726_np.fs(1,20): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410727_np.fs",
+        "let y = x :?> (a: int) = 1\n",
+        [
+            "Review410727_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410728_np.fs",
+        "let y = x :?> (a: int) && z\n",
+        [
+            "Review410728_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410729_np.fs", "let y = x :?> a: T<int>\n", []
+        "Review410730_np.fs", "let y = (x :?> a: T<int>)\n", []
+        "Review410731_np.fs",
+        "let y = [ x :?> a: T<int> ]\n",
+        [
+            "Review410731_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410731_np.fs(1,9): error FS0598: Unmatched '['"
+            "Review410731_np.fs(1,27): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410732_np.fs", "let y = f (x :?> a: T<int>) z\n", []
+        "Review410733_np.fs",
+        "let y = if x :?> a: T<int> then 1 else 2\n",
+        [
+            "Review410733_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression"
+            "Review410733_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410733_np.fs(1,28): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410734_np.fs",
+        "let y = { A = x :?> a: T<int> }\n",
+        [
+            "Review410734_np.fs(1,22): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410734_np.fs(1,9): error FS0604: Unmatched '{'"
+            "Review410734_np.fs(1,31): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410735_np.fs",
+        "let y = x :?> a: T<int>, 1\n",
+        [
+            "Review410735_np.fs(1,24): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410736_np.fs", "let y = 1, x :?> a: T<int>\n", []
+        "Review410737_np.fs",
+        "let y = x :?> a: T<int> = 1\n",
+        [
+            "Review410737_np.fs(1,25): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410738_np.fs",
+        "let y = x :?> a: T<int> && z\n",
+        [
+            "Review410738_np.fs(1,25): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410739_np.fs", "let y = x :?> a : int\n", []
+        "Review410740_np.fs", "let y = (x :?> a : int)\n", []
+        "Review410741_np.fs",
+        "let y = [ x :?> a : int ]\n",
+        [
+            "Review410741_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410741_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410742_np.fs", "let y = f (x :?> a : int) z\n", []
+        "Review410743_np.fs",
+        "let y = if x :?> a : int then 1 else 2\n",
+        [
+            "Review410743_np.fs(1,20): error FS0010: Unexpected symbol ':' in expression"
+            "Review410743_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410743_np.fs(1,33): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410743_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410744_np.fs",
+        "let y = { A = x :?> a : int }\n",
+        [
+            "Review410744_np.fs(1,23): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410744_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410745_np.fs",
+        "let y = x :?> a : int, 1\n",
+        [
+            "Review410745_np.fs(1,22): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410746_np.fs", "let y = 1, x :?> a : int\n", []
+        "Review410747_np.fs",
+        "let y = x :?> a : int = 1\n",
+        [
+            "Review410747_np.fs(1,23): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410748_np.fs",
+        "let y = x :?> a : int && z\n",
+        [
+            "Review410748_np.fs(1,23): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410749_np.fs",
+        "let y = x :?> ?a: int\n",
+        [ "Review410749_np.fs(1,15): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410750_np.fs",
+        "let y = (x :?> ?a: int)\n",
+        [ "Review410750_np.fs(1,16): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410751_np.fs",
+        "let y = [ x :?> ?a: int ]\n",
+        [ "Review410751_np.fs(1,17): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410752_np.fs",
+        "let y = f (x :?> ?a: int) z\n",
+        [ "Review410752_np.fs(1,18): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410753_np.fs",
+        "let y = if x :?> ?a: int then 1 else 2\n",
+        [ "Review410753_np.fs(1,18): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410754_np.fs",
+        "let y = { A = x :?> ?a: int }\n",
+        [ "Review410754_np.fs(1,21): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410755_np.fs",
+        "let y = x :?> ?a: int, 1\n",
+        [ "Review410755_np.fs(1,15): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410756_np.fs",
+        "let y = 1, x :?> ?a: int\n",
+        [ "Review410756_np.fs(1,18): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410757_np.fs",
+        "let y = x :?> ?a: int = 1\n",
+        [ "Review410757_np.fs(1,15): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410758_np.fs",
+        "let y = x :?> ?a: int && z\n",
+        [ "Review410758_np.fs(1,15): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410759_np.fs", "let y = x :?> a: int list\n", []
+        "Review410760_np.fs", "let y = (x :?> a: int list)\n", []
+        "Review410761_np.fs",
+        "let y = [ x :?> a: int list ]\n",
+        [
+            "Review410761_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410761_np.fs(1,9): error FS0598: Unmatched '['"
+            "Review410761_np.fs(1,29): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410762_np.fs", "let y = f (x :?> a: int list) z\n", []
+        "Review410763_np.fs",
+        "let y = if x :?> a: int list then 1 else 2\n",
+        [
+            "Review410763_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression"
+            "Review410763_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410763_np.fs(1,30): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410764_np.fs",
+        "let y = { A = x :?> a: int list }\n",
+        [
+            "Review410764_np.fs(1,22): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410764_np.fs(1,9): error FS0604: Unmatched '{'"
+            "Review410764_np.fs(1,33): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410765_np.fs",
+        "let y = x :?> a: int list, 1\n",
+        [
+            "Review410765_np.fs(1,26): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410766_np.fs", "let y = 1, x :?> a: int list\n", []
+        "Review410767_np.fs",
+        "let y = x :?> a: int list = 1\n",
+        [
+            "Review410767_np.fs(1,27): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410768_np.fs",
+        "let y = x :?> a: int list && z\n",
+        [
+            "Review410768_np.fs(1,27): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410769_np.fs", "let y = x :? a: int\n", []
+        "Review410770_np.fs", "let y = (x :? a: int)\n", []
+        "Review410771_np.fs",
+        "let y = [ x :? a: int ]\n",
+        [
+            "Review410771_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410771_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410772_np.fs", "let y = f (x :? a: int) z\n", []
+        "Review410773_np.fs",
+        "let y = if x :? a: int then 1 else 2\n",
+        [
+            "Review410773_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression"
+            "Review410773_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410773_np.fs(1,31): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410773_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410774_np.fs",
+        "let y = { A = x :? a: int }\n",
+        [
+            "Review410774_np.fs(1,21): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410774_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410775_np.fs",
+        "let y = x :? a: int, 1\n",
+        [
+            "Review410775_np.fs(1,20): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410776_np.fs", "let y = 1, x :? a: int\n", []
+        "Review410777_np.fs",
+        "let y = x :? a: int = 1\n",
+        [
+            "Review410777_np.fs(1,21): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410778_np.fs",
+        "let y = x :? a: int && z\n",
+        [
+            "Review410778_np.fs(1,21): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410779_np.fs", "let y = x :? a:int\n", []
+        "Review410780_np.fs", "let y = (x :? a:int)\n", []
+        "Review410781_np.fs",
+        "let y = [ x :? a:int ]\n",
+        [
+            "Review410781_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410781_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410782_np.fs", "let y = f (x :? a:int) z\n", []
+        "Review410783_np.fs",
+        "let y = if x :? a:int then 1 else 2\n",
+        [
+            "Review410783_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression"
+            "Review410783_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410783_np.fs(1,30): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410783_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410784_np.fs",
+        "let y = { A = x :? a:int }\n",
+        [
+            "Review410784_np.fs(1,21): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410784_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410785_np.fs",
+        "let y = x :? a:int, 1\n",
+        [
+            "Review410785_np.fs(1,19): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410786_np.fs", "let y = 1, x :? a:int\n", []
+        "Review410787_np.fs",
+        "let y = x :? a:int = 1\n",
+        [
+            "Review410787_np.fs(1,20): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410788_np.fs",
+        "let y = x :? a:int && z\n",
+        [
+            "Review410788_np.fs(1,20): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410789_np.fs", "let y = x :? a: int -> int\n", []
+        "Review410790_np.fs", "let y = (x :? a: int -> int)\n", []
+        "Review410791_np.fs",
+        "let y = [ x :? a: int -> int ]\n",
+        [
+            "Review410791_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410791_np.fs(1,9): error FS0598: Unmatched '['"
+            "Review410791_np.fs(1,30): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410792_np.fs", "let y = f (x :? a: int -> int) z\n", []
+        "Review410793_np.fs",
+        "let y = if x :? a: int -> int then 1 else 2\n",
+        [
+            "Review410793_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression"
+            "Review410793_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410793_np.fs(1,31): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410794_np.fs",
+        "let y = { A = x :? a: int -> int }\n",
+        [
+            "Review410794_np.fs(1,21): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410794_np.fs(1,9): error FS0604: Unmatched '{'"
+            "Review410794_np.fs(1,34): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410795_np.fs",
+        "let y = x :? a: int -> int, 1\n",
+        [
+            "Review410795_np.fs(1,27): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410796_np.fs", "let y = 1, x :? a: int -> int\n", []
+        "Review410797_np.fs",
+        "let y = x :? a: int -> int = 1\n",
+        [
+            "Review410797_np.fs(1,28): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410798_np.fs",
+        "let y = x :? a: int -> int && z\n",
+        [
+            "Review410798_np.fs(1,28): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410799_np.fs", "let y = x :? int -> a: int\n", []
+        "Review410800_np.fs", "let y = (x :? int -> a: int)\n", []
+        "Review410801_np.fs",
+        "let y = [ x :? int -> a: int ]\n",
+        [
+            "Review410801_np.fs(1,24): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410801_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410802_np.fs", "let y = f (x :? int -> a: int) z\n", []
+        "Review410803_np.fs",
+        "let y = if x :? int -> a: int then 1 else 2\n",
+        [
+            "Review410803_np.fs(1,25): error FS0010: Unexpected symbol ':' in expression"
+            "Review410803_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410803_np.fs(1,38): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410803_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410804_np.fs",
+        "let y = { A = x :? int -> a: int }\n",
+        [
+            "Review410804_np.fs(1,28): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410804_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410805_np.fs",
+        "let y = x :? int -> a: int, 1\n",
+        [
+            "Review410805_np.fs(1,27): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410806_np.fs", "let y = 1, x :? int -> a: int\n", []
+        "Review410807_np.fs",
+        "let y = x :? int -> a: int = 1\n",
+        [
+            "Review410807_np.fs(1,28): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410808_np.fs",
+        "let y = x :? int -> a: int && z\n",
+        [
+            "Review410808_np.fs(1,28): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410809_np.fs", "let y = x :? a: int * int\n", []
+        "Review410810_np.fs", "let y = (x :? a: int * int)\n", []
+        "Review410811_np.fs",
+        "let y = [ x :? a: int * int ]\n",
+        [
+            "Review410811_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410811_np.fs(1,9): error FS0598: Unmatched '['"
+            "Review410811_np.fs(1,29): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410812_np.fs", "let y = f (x :? a: int * int) z\n", []
+        "Review410813_np.fs",
+        "let y = if x :? a: int * int then 1 else 2\n",
+        [
+            "Review410813_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression"
+            "Review410813_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410813_np.fs(1,30): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410814_np.fs",
+        "let y = { A = x :? a: int * int }\n",
+        [
+            "Review410814_np.fs(1,21): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410814_np.fs(1,9): error FS0604: Unmatched '{'"
+            "Review410814_np.fs(1,33): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410815_np.fs",
+        "let y = x :? a: int * int, 1\n",
+        [
+            "Review410815_np.fs(1,26): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410816_np.fs", "let y = 1, x :? a: int * int\n", []
+        "Review410817_np.fs",
+        "let y = x :? a: int * int = 1\n",
+        [
+            "Review410817_np.fs(1,27): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410818_np.fs",
+        "let y = x :? a: int * int && z\n",
+        [
+            "Review410818_np.fs(1,27): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410819_np.fs", "let y = x :? int * a: int\n", []
+        "Review410820_np.fs", "let y = (x :? int * a: int)\n", []
+        "Review410821_np.fs",
+        "let y = [ x :? int * a: int ]\n",
+        [
+            "Review410821_np.fs(1,23): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410821_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410822_np.fs", "let y = f (x :? int * a: int) z\n", []
+        "Review410823_np.fs",
+        "let y = if x :? int * a: int then 1 else 2\n",
+        [
+            "Review410823_np.fs(1,24): error FS0010: Unexpected symbol ':' in expression"
+            "Review410823_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410823_np.fs(1,37): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410823_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410824_np.fs",
+        "let y = { A = x :? int * a: int }\n",
+        [
+            "Review410824_np.fs(1,27): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410824_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410825_np.fs",
+        "let y = x :? int * a: int, 1\n",
+        [
+            "Review410825_np.fs(1,26): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410826_np.fs", "let y = 1, x :? int * a: int\n", []
+        "Review410827_np.fs",
+        "let y = x :? int * a: int = 1\n",
+        [
+            "Review410827_np.fs(1,27): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410828_np.fs",
+        "let y = x :? int * a: int && z\n",
+        [
+            "Review410828_np.fs(1,27): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410829_np.fs",
+        "let y = x :? (a: int)\n",
+        [
+            "Review410829_np.fs(1,16): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410830_np.fs",
+        "let y = (x :? (a: int))\n",
+        [
+            "Review410830_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410831_np.fs",
+        "let y = [ x :? (a: int) ]\n",
+        [
+            "Review410831_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410832_np.fs",
+        "let y = f (x :? (a: int)) z\n",
+        [
+            "Review410832_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410833_np.fs",
+        "let y = if x :? (a: int) then 1 else 2\n",
+        [
+            "Review410833_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410834_np.fs",
+        "let y = { A = x :? (a: int) }\n",
+        [
+            "Review410834_np.fs(1,22): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410835_np.fs",
+        "let y = x :? (a: int), 1\n",
+        [
+            "Review410835_np.fs(1,16): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410836_np.fs",
+        "let y = 1, x :? (a: int)\n",
+        [
+            "Review410836_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410837_np.fs",
+        "let y = x :? (a: int) = 1\n",
+        [
+            "Review410837_np.fs(1,16): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410838_np.fs",
+        "let y = x :? (a: int) && z\n",
+        [
+            "Review410838_np.fs(1,16): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410839_np.fs", "let y = x :? a: T<int>\n", []
+        "Review410840_np.fs", "let y = (x :? a: T<int>)\n", []
+        "Review410841_np.fs",
+        "let y = [ x :? a: T<int> ]\n",
+        [
+            "Review410841_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410841_np.fs(1,9): error FS0598: Unmatched '['"
+            "Review410841_np.fs(1,26): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410842_np.fs", "let y = f (x :? a: T<int>) z\n", []
+        "Review410843_np.fs",
+        "let y = if x :? a: T<int> then 1 else 2\n",
+        [
+            "Review410843_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression"
+            "Review410843_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410843_np.fs(1,27): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410844_np.fs",
+        "let y = { A = x :? a: T<int> }\n",
+        [
+            "Review410844_np.fs(1,21): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410844_np.fs(1,9): error FS0604: Unmatched '{'"
+            "Review410844_np.fs(1,30): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410845_np.fs",
+        "let y = x :? a: T<int>, 1\n",
+        [
+            "Review410845_np.fs(1,23): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410846_np.fs", "let y = 1, x :? a: T<int>\n", []
+        "Review410847_np.fs",
+        "let y = x :? a: T<int> = 1\n",
+        [
+            "Review410847_np.fs(1,24): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410848_np.fs",
+        "let y = x :? a: T<int> && z\n",
+        [
+            "Review410848_np.fs(1,24): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410849_np.fs", "let y = x :? a : int\n", []
+        "Review410850_np.fs", "let y = (x :? a : int)\n", []
+        "Review410851_np.fs",
+        "let y = [ x :? a : int ]\n",
+        [
+            "Review410851_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410851_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410852_np.fs", "let y = f (x :? a : int) z\n", []
+        "Review410853_np.fs",
+        "let y = if x :? a : int then 1 else 2\n",
+        [
+            "Review410853_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression"
+            "Review410853_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410853_np.fs(1,32): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410853_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410854_np.fs",
+        "let y = { A = x :? a : int }\n",
+        [
+            "Review410854_np.fs(1,22): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410854_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410855_np.fs",
+        "let y = x :? a : int, 1\n",
+        [
+            "Review410855_np.fs(1,21): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410856_np.fs", "let y = 1, x :? a : int\n", []
+        "Review410857_np.fs",
+        "let y = x :? a : int = 1\n",
+        [
+            "Review410857_np.fs(1,22): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410858_np.fs",
+        "let y = x :? a : int && z\n",
+        [
+            "Review410858_np.fs(1,22): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410859_np.fs",
+        "let y = x :? ?a: int\n",
+        [ "Review410859_np.fs(1,14): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410860_np.fs",
+        "let y = (x :? ?a: int)\n",
+        [ "Review410860_np.fs(1,15): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410861_np.fs",
+        "let y = [ x :? ?a: int ]\n",
+        [ "Review410861_np.fs(1,16): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410862_np.fs",
+        "let y = f (x :? ?a: int) z\n",
+        [ "Review410862_np.fs(1,17): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410863_np.fs",
+        "let y = if x :? ?a: int then 1 else 2\n",
+        [ "Review410863_np.fs(1,17): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410864_np.fs",
+        "let y = { A = x :? ?a: int }\n",
+        [ "Review410864_np.fs(1,20): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410865_np.fs",
+        "let y = x :? ?a: int, 1\n",
+        [ "Review410865_np.fs(1,14): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410866_np.fs",
+        "let y = 1, x :? ?a: int\n",
+        [ "Review410866_np.fs(1,17): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410867_np.fs",
+        "let y = x :? ?a: int = 1\n",
+        [ "Review410867_np.fs(1,14): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410868_np.fs",
+        "let y = x :? ?a: int && z\n",
+        [ "Review410868_np.fs(1,14): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410869_np.fs", "let y = x :? a: int list\n", []
+        "Review410870_np.fs", "let y = (x :? a: int list)\n", []
+        "Review410871_np.fs",
+        "let y = [ x :? a: int list ]\n",
+        [
+            "Review410871_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410871_np.fs(1,9): error FS0598: Unmatched '['"
+            "Review410871_np.fs(1,28): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410872_np.fs", "let y = f (x :? a: int list) z\n", []
+        "Review410873_np.fs",
+        "let y = if x :? a: int list then 1 else 2\n",
+        [
+            "Review410873_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression"
+            "Review410873_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410873_np.fs(1,29): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410874_np.fs",
+        "let y = { A = x :? a: int list }\n",
+        [
+            "Review410874_np.fs(1,21): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410874_np.fs(1,9): error FS0604: Unmatched '{'"
+            "Review410874_np.fs(1,32): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410875_np.fs",
+        "let y = x :? a: int list, 1\n",
+        [
+            "Review410875_np.fs(1,25): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410876_np.fs", "let y = 1, x :? a: int list\n", []
+        "Review410877_np.fs",
+        "let y = x :? a: int list = 1\n",
+        [
+            "Review410877_np.fs(1,26): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410878_np.fs",
+        "let y = x :? a: int list && z\n",
+        [
+            "Review410878_np.fs(1,26): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
     ]
 
     let private unreadableSignedLiteralCases = [
