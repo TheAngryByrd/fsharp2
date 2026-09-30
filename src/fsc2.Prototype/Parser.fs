@@ -2342,9 +2342,40 @@ module internal Parser =
     and private parseIf state context =
         let cursor = state.Cursor
         let ifToken = cursor.Advance()
-        let condition = parseExpression state context
 
-        if not (isKeyword "then" cursor.Current) then
+        let condition =
+            if cursor.Current.Kind = LayoutTokenKind.BeginBlock then
+                parseBranch state context None
+            else
+                parseExpression state context
+
+        let continuation () =
+            if cursor.Current.Kind = LayoutTokenKind.Separator then
+                cursor.Peek 1
+            else
+                cursor.Current
+
+        // 15.1.9: 'then', 'elif', and 'else' can align with 'if'. One of them at or right of the 'if' column belongs to it.
+        let belongs keyword (token: LayoutToken) =
+            isKeyword keyword token
+            && token.Range.Start.Column
+               >= ifToken.Range.Start.Column
+            && not (isLeftOfBlock state context token)
+            && (cursor.Current.Kind
+                <> LayoutTokenKind.Separator
+                || token.Range.Start.Column = ifToken.Range.Start.Column)
+
+        let continues keyword =
+            if belongs keyword (continuation ()) then
+                if cursor.Current.Kind = LayoutTokenKind.Separator then
+                    cursor.Advance()
+                    |> ignore
+
+                true
+            else
+                false
+
+        if not (continues "then") then
             if not (reportedAt state cursor.Current) then
                 reportUnsupported state cursor.Current "a conditional expression"
 
@@ -2363,19 +2394,8 @@ module internal Parser =
                     (frameAt FrameKind.Then thenToken)
                     (fun () -> parseBranch state context None)
 
-            if
-                cursor.Current.Kind = LayoutTokenKind.Separator
-                && (isKeyword "else" (cursor.Peek 1)
-                    || isKeyword "elif" (cursor.Peek 1))
-                && (cursor.Peek 1).Range.Start.Column = ifToken.Range.Start.Column
-            then
-                cursor.Advance()
-                |> ignore
-
             let elseBranch =
-                if isLeftOfBlock state context cursor.Current then
-                    None
-                elif isKeyword "else" cursor.Current then
+                if continues "else" then
                     let elseToken = cursor.Advance()
 
                     withUndentationLimit
@@ -2383,10 +2403,21 @@ module internal Parser =
                         (frameAt FrameKind.Else elseToken)
                         (fun () -> parseBranch state context None)
                     |> Some
-                elif isKeyword "elif" cursor.Current then
+                elif continues "elif" then
                     Some(parseIf state context)
                 else
                     None
+
+            let next = continuation ()
+
+            // The Oracle rejects a second 'else' or 'elif' that belongs to the same 'if'.
+            if
+                elseBranch.IsSome
+                && (belongs "else" next
+                    || belongs "elif" next)
+                && not (reportedAt state next)
+            then
+                reportUnsupported state next "a conditional expression"
 
             SyntaxExpression.If(
                 condition,
