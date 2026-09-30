@@ -711,8 +711,17 @@ type internal ParsedTypeAbbreviationDeclaration = {
 
     override _.ToString() = "ParsedTypeAbbreviationDeclaration"
 
+type internal ParsedModuleExpressionDeclaration = {
+    Body: ParsedExpression
+    BodyRange: SourceRange
+    Range: SourceRange
+} with
+
+    override _.ToString() = "ParsedModuleExpressionDeclaration"
+
 type internal ParsedDeclaration =
     | ParsedMethod of ParsedMethodDeclaration
+    | ParsedModuleExpression of ParsedModuleExpressionDeclaration
     | ParsedLiteralField of ParsedLiteralFieldDeclaration
     | ParsedNestedModule of ParsedNestedModuleDeclaration
     | ParsedTypeAbbreviation of ParsedTypeAbbreviationDeclaration
@@ -770,6 +779,7 @@ module internal ParsedDeclaration =
                 + declaration.Name
             )
         | ParsedMethod _
+        | ParsedModuleExpression _
         | ParsedLiteralField _
         | ParsedNestedModule _ -> None
 

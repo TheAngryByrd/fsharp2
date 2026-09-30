@@ -432,6 +432,7 @@ module SyntaxProjectionTests =
                         "module Program\ntype Point = { X: int }\n"
                         "module Program\nlet answer = 1 + 2\n"
                         "module Program\nlet answer = f x\n"
+                        "module Program\nlet answer = 1\n  printfn \"a\"\n"
                         "module Program\nlet rec answer = 42\n"
                         "module Program\nlet answer = match x with | A -> 1\n"
                         "module Program\n[<Literal>]\nlet answer = 42\n"
@@ -590,6 +591,153 @@ module SyntaxProjectionTests =
                         ("", "Program", Reflection.TypeAttributes.Public)
                         $"The assembly for {logicalPath} contains the public module Program"
 
+            testList "a module-level expression is projected as a do-expression declaration" [
+                let application =
+                    FunctionApplication(ValueReference "printfn", StringLiteral "Hello from F#")
+
+                let range (startLine, startColumn, startOffset) (endLine, endColumn, endOffset) = {
+                    Start = {
+                        Offset = startOffset
+                        Line = startLine
+                        Column = startColumn
+                    }
+                    End = {
+                        Offset = endOffset
+                        Line = endLine
+                        Column = endColumn
+                    }
+                }
+
+                for name, logicalPath, text, expected in
+                    [
+                        "the dotnet new console program",
+                        "Program.fs",
+                        "// For more information see https://aka.ms/fsharp-console-apps\nprintfn \"Hello from F#\"\n",
+                        [
+                            {
+                                Body = application
+                                BodyRange = range (2, 1, 63) (2, 24, 86)
+                                Range = range (2, 1, 63) (2, 24, 86)
+                            }
+                        ]
+                        "an explicit do",
+                        "Program.fs",
+                        "do printfn \"Hello from F#\"\n",
+                        [
+                            {
+                                Body = application
+                                BodyRange = range (1, 4, 3) (1, 27, 26)
+                                Range = range (1, 1, 0) (1, 27, 26)
+                            }
+                        ]
+                        "two expressions around a binding",
+                        "Program.fs",
+                        "printfn \"Hello from F#\"\nlet x = 1\nx\n",
+                        [
+                            {
+                                Body = application
+                                BodyRange = range (1, 1, 0) (1, 24, 23)
+                                Range = range (1, 1, 0) (1, 24, 23)
+                            }
+                            {
+                                Body = ValueReference "x"
+                                BodyRange = range (3, 1, 34) (3, 2, 35)
+                                Range = range (3, 1, 34) (3, 2, 35)
+                            }
+                        ]
+                    ] ->
+                    testCase name
+                    <| fun _ ->
+                        match projectImplicit logicalPath text with
+                        | Some [ parsedModule ] ->
+                            Expect.equal
+                                parsedModule.Name
+                                "Program"
+                                "The implicit module name comes from the file name"
+
+                            Expect.sequenceEqual
+                                (parsedModule.Declarations
+                                 |> List.choose (
+                                     function
+                                     | ParsedModuleExpression declaration -> Some declaration
+                                     | _ -> None
+                                 ))
+                                expected
+                                "The module-level expressions and their FCS SynModuleDecl.Expr ranges"
+                        | other -> failtest $"Expected one projected module, but got %A{other}"
+            ]
+
+            testCase "a module-level expression in a named module is projected"
+            <| fun _ ->
+                match project "module Program\nlet x = 1\nprintfn \"a\"\n" with
+                | SyntaxProjectionResult.Projected [ parsedModule ] ->
+                    Expect.equal
+                        (parsedModule.Declarations
+                         |> List.map (
+                             function
+                             | ParsedMethod declaration -> $"method {declaration.Name}"
+                             | ParsedModuleExpression _ -> "expression"
+                             | _ -> "other"
+                         ))
+                        [
+                            "method x"
+                            "expression"
+                        ]
+                        "The binding and the module-level expression keep their order"
+                | other -> failtest $"Expected one projected module, but got %A{other}"
+
+            testCase
+                "a program that needs the implicit entry point fails with an explicit diagnostic"
+            <| fun _ ->
+                for text in
+                    [
+                        "// For more information see https://aka.ms/fsharp-console-apps\r\nprintfn \"Hello from F#\"\r\n"
+                        "printfn \"a\"\nprintfn \"b\"\n"
+                        "let x = 1\nprintfn \"a\"\n"
+                        "do printfn \"a\"\n"
+                        "1\n"
+                        "module Program\nprintfn \"a\"\n"
+                    ] do
+                    let result, projections =
+                        compileFilesWithService CompilationTarget.Executable [ "Program.fs", text ]
+
+                    Expect.equal
+                        projections
+                        1
+                        $"The syntax parser produces the parsed module:\n{text}"
+
+                    match result with
+                    | Error diagnostic ->
+                        Expect.equal
+                            (diagnostic.Code, diagnostic.Message)
+                            ("FSC2P1001", "a module-level expression is not supported")
+                            $"The checker rejects the module-level expression explicitly:\n{text}"
+                    | Ok _ ->
+                        failtest
+                            $"The prototype compiled a program that needs the implicit entry point:\n{text}"
+
+            testCase "a namespace value keeps the prototype parser diagnostic (Oracle FS0201)"
+            <| fun _ ->
+                for text in
+                    [
+                        "namespace N\nprintfn \"a\"\n"
+                        "namespace N\ndo printfn \"a\"\n"
+                    ] do
+                    let result, projections =
+                        compileFilesWithService CompilationTarget.Executable [ "Program.fs", text ]
+
+                    Expect.equal
+                        projections
+                        0
+                        $"The syntax parser does not project a namespace:\n{text}"
+
+                    match result with
+                    | Error diagnostic ->
+                        Expect.equal diagnostic.Code "FSC2P1001" $"The result is explicit:\n{text}"
+                    | Ok _ ->
+                        failtest
+                            $"The prototype compiled a namespace value that the Oracle rejects:\n{text}"
+
             testCase "every other implicit module keeps the prototype parser result"
             <| fun _ ->
                 let entryPoint = "\n[<EntryPoint>]\nlet main argv = 0\n"
@@ -610,12 +758,6 @@ module SyntaxProjectionTests =
                     "no open declaration and no entry point (Oracle FS0988)",
                     CompilationTarget.Executable,
                     [ "Program.fs", "let x = 1\n" ]
-                    "the dotnet new console program",
-                    CompilationTarget.Executable,
-                    [
-                        "Program.fs",
-                        "// For more information see https://aka.ms/fsharp-console-apps\r\nprintfn \"Hello from F#\"\r\n"
-                    ]
                     "an unknown namespace (Oracle FS0039)",
                     CompilationTarget.Executable,
                     [ "Program.fs", $"open Nonexistent{entryPoint}" ]

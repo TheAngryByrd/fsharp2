@@ -60,6 +60,29 @@ module internal SyntaxProjection =
             Ok(ValueReference name.Parts[0].Text, name.Range)
         | other -> Error other.Range
 
+    let rec private projectApplication (expression: SyntaxExpression) =
+        match expression with
+        | SyntaxExpression.Application(func, argument, _) ->
+            projectApplication func
+            |> Result.bind (fun func ->
+                projectBody argument
+                |> Result.map (fun (argument, _) -> FunctionApplication(func, argument))
+            )
+        | other ->
+            projectBody other
+            |> Result.map fst
+
+    let private projectModuleExpression (body: SyntaxExpression) (range: SourceRange) =
+        projectApplication body
+        |> Result.map (fun projected ->
+            ParsedModuleExpression {
+                Body = projected
+                BodyRange = body.Range
+                Range = range
+            },
+            false
+        )
+
     let private isEntryPointAttribute (attributes: ImmutableArray<SyntaxAttributeList>) =
         match List.ofSeq attributes with
         | [] -> Ok false
@@ -138,6 +161,12 @@ module internal SyntaxProjection =
             bindings.Length = 1
             ->
             projectBinding bindings[0] range
+        | ImplementationDeclaration.Expression(attributes, body, None, range) when
+            attributes.IsEmpty
+            ->
+            projectModuleExpression body range
+        | ImplementationDeclaration.Do(attributes, body, range) when attributes.IsEmpty ->
+            projectModuleExpression body range
         | other -> Error other.Range
 
     let private projectDeclarations rootRange (declarations: ImplementationDeclaration list) =
@@ -250,7 +279,18 @@ module internal SyntaxProjection =
                         |> Result.bind (fun (openedNamespaces, rest) ->
                             projectDeclarations root.Range rest
                             |> Result.bind (fun (declarations, endsWithEntryPoint) ->
-                                if endsWithEntryPoint then
+                                let hasModuleExpression =
+                                    declarations
+                                    |> List.exists (
+                                        function
+                                        | ParsedModuleExpression _ -> true
+                                        | _ -> false
+                                    )
+
+                                if
+                                    endsWithEntryPoint
+                                    || hasModuleExpression
+                                then
                                     Ok [
                                         parsedModule
                                             contentFingerprint
