@@ -377,6 +377,7 @@ module internal Parser =
            <> offsideCode
         && code
            <> typeArgumentSpaceCode
+        && not (NumericLiteral.rangeErrorCodes.Contains code)
 
     let private reportedAt state (token: LayoutToken) =
         state.ReportedStarts.Contains token.Range.Start.Offset
@@ -1075,191 +1076,25 @@ module internal Parser =
         next.Kind = LayoutTokenKind.SourceToken
         && next.Range.Start.Offset = token.Range.End.Offset
 
-    // FCS LexFilter merges an adjacent sign into a signed integer, float, decimal, or bignum literal, but not into an unsigned literal.
-    let private numericForms =
-        let decimalDigits = "[0-9](?:_*[0-9])*"
-
-        let radixDigits =
-            "(?:0[xX][0-9a-fA-F](?:_*[0-9a-fA-F])*|0[oO][0-7](?:_*[0-7])*|0[bB][01](?:_*[01])*)"
-
-        let floating =
-            $"(?:{decimalDigits}\\.(?:{decimalDigits})?(?:[eE][+-]?{decimalDigits})?|{decimalDigits}[eE][+-]?{decimalDigits})"
-
-        let form pattern =
-            Text.RegularExpressions.Regex(
-                $"^(?:{pattern})$",
-                Text.RegularExpressions.RegexOptions.CultureInvariant
-            )
-
-        {|
-            Unsigned = form $"(?:{decimalDigits}|{radixDigits})(?:u|uy|us|ul|uL|UL|un)"
-            Signed =
-                form (
-                    String.concat "|" [
-                        $"(?:{decimalDigits}|{radixDigits})(?:y|s|l|n|L)?"
-                        $"{decimalDigits}[QRZING]"
-                        $"{radixDigits}(?:lf|LF)"
-                        $"(?:{floating}|{decimalDigits})[fF]"
-                        floating
-                        $"(?:{floating}|{decimalDigits})[mM]"
-                    ]
-                )
-        |}
-
-    // FCS merges an adjacent sign into every numeric literal except an unsigned integer. The lexer does not check the literal form.
-    let private takesSign (token: LayoutToken) =
-        isKind LexicalTokenKind.NumericLiteral token
-        && not (numericForms.Unsigned.IsMatch(tokenText token))
-
-    // The lexer does not check literal ranges or digits, and the Oracle reports FS1142 to FS1156 for such a literal.
-    let private readsWithSign (sign: LayoutToken) (literal: LayoutToken) =
-        let text = (tokenText literal).Replace("_", "")
-
-        let suffix =
-            text[text.Length
-                 - 1]
-
-        let withoutSuffix =
-            text.Substring(
-                0,
-                text.Length
-                - 1
-            )
-
-        let radix =
-            match text with
-            | _ when text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) -> 16
-            | _ when text.StartsWith("0o", StringComparison.OrdinalIgnoreCase) -> 8
-            | _ when text.StartsWith("0b", StringComparison.OrdinalIgnoreCase) -> 2
-            | _ -> 10
-
-        if
-            radix = 10
-            && "mM".IndexOf suffix
-               >= 0
-        then
-            fst (
-                Decimal.TryParse(
-                    withoutSuffix,
-                    Globalization.NumberStyles.Float,
-                    Globalization.CultureInfo.InvariantCulture
-                )
-            )
-        elif
-            text.EndsWith("lf", StringComparison.OrdinalIgnoreCase)
-            || radix = 10
-               && (text.IndexOfAny [|
-                       '.'
-                       'e'
-                       'E'
-                   |]
-                   >= 0
-                   || "fFIQRZNG".IndexOf suffix
-                      >= 0)
-        then
-            true
+    let private numericLiteral (token: LayoutToken) =
+        if isKind LexicalTokenKind.NumericLiteral token then
+            NumericLiteral.tryParse (tokenText token)
         else
-            let bits, digits =
-                match suffix with
-                | 'y' -> 8, withoutSuffix
-                | 's' -> 16, withoutSuffix
-                | 'l' -> 32, withoutSuffix
-                | 'L'
-                | 'n' -> 64, withoutSuffix
-                | _ -> 32, text
+            None
 
-            let digitValues =
-                (if radix = 10 then digits else digits.Substring 2)
-                |> Seq.map (fun digit -> "0123456789abcdef".IndexOf(Char.ToLowerInvariant digit))
-                |> Seq.toList
+    let private takesSign (token: LayoutToken) =
+        numericLiteral token
+        |> Option.exists _.TakesSign
 
-            if
-                digitValues.IsEmpty
-                || digitValues
-                   |> List.exists (fun value ->
-                       value < 0
-                       || value
-                          >= radix
-                   )
-            then
-                false
-            else
-                let magnitude =
-                    digitValues
-                    |> List.fold
-                        (fun (value: Numerics.BigInteger) digit ->
-                            value
-                            * Numerics.BigInteger radix
-                            + Numerics.BigInteger digit
-                        )
-                        Numerics.BigInteger.Zero
-
-                let limit = Numerics.BigInteger.Pow(Numerics.BigInteger 2, bits - 1)
-
-                magnitude < limit
-                || radix = 10
-                   && isOperator "-" sign
-                   && magnitude = limit
-
-    let private fitsWithSign (sign: LayoutToken) (literal: LayoutToken) =
-        numericForms.Signed.IsMatch(tokenText literal)
-        && readsWithSign sign literal
-
-    // FCS keeps an unsigned literal after a sign, and the Oracle reports FS1143 to FS1150 for one outside its range.
-    let private unsignedLiteralFits (literal: LayoutToken) =
-        let text = (tokenText literal).Replace("_", "")
-        let lower = text.ToLowerInvariant()
-
-        let bits, suffixLength =
-            if lower.EndsWith("uy", StringComparison.Ordinal) then
-                8, 2
-            elif lower.EndsWith("us", StringComparison.Ordinal) then
-                16, 2
-            elif
-                lower.EndsWith("ul", StringComparison.Ordinal)
-                || lower.EndsWith("un", StringComparison.Ordinal)
-            then
-                64, 2
-            else
-                32, 1
-
-        let digits =
-            lower.Substring(
-                0,
-                text.Length
-                - suffixLength
-            )
-
-        let radix, digits =
-            if digits.StartsWith("0x", StringComparison.Ordinal) then
-                16, digits.Substring 2
-            elif digits.StartsWith("0o", StringComparison.Ordinal) then
-                8, digits.Substring 2
-            elif digits.StartsWith("0b", StringComparison.Ordinal) then
-                2, digits.Substring 2
-            else
-                10, digits
-
-        let magnitude =
-            digits
-            |> Seq.fold
-                (fun (value: Numerics.BigInteger) digit ->
-                    value
-                    * Numerics.BigInteger radix
-                    + Numerics.BigInteger("0123456789abcdef".IndexOf digit)
-                )
-                Numerics.BigInteger.Zero
-
-        numericForms.Unsigned.IsMatch(tokenText literal)
-        && magnitude < Numerics.BigInteger.Pow(Numerics.BigInteger 2, bits)
-
-    let private reportUnsignedOperand state (token: LayoutToken) =
-        if
-            isKind LexicalTokenKind.NumericLiteral token
-            && not (takesSign token)
-            && not (unsignedLiteralFits token)
-        then
-            reportUnsupported state token "an unsigned literal outside its range"
+    // The lexer reports a literal outside its range. FCS reports a decimal literal at the signed limit when no adjacent '-' precedes it.
+    let private reportSignedLimit state (literal: LayoutToken) range =
+        match
+            numericLiteral literal
+            |> Option.map _.Range
+        with
+        | Some(NumericLiteralRange.FitsOnlyAfterMinus error) ->
+            report state error.Code error.Message range
+        | _ -> ()
 
     let private isSignedLiteral (cursor: Cursor) =
         isSign cursor.Current
@@ -1833,6 +1668,7 @@ module internal Parser =
             cursor.Advance()
             |> ignore
 
+            reportSignedLimit state token token.Range
             SyntaxPattern.Constant(value, token.Range)
         | None when
             isIdentifier token
@@ -2231,7 +2067,6 @@ module internal Parser =
             && not (isSignedLiteral cursor)
         then
             let operatorToken = cursor.Advance()
-            reportUnsignedOperand state cursor.Current
 
             let operand =
                 if
@@ -2357,9 +2192,6 @@ module internal Parser =
         let cursor = state.Cursor
         let operatorToken = cursor.Advance()
 
-        if isSign operatorToken then
-            reportUnsignedOperand state cursor.Current
-
         let operand =
             if canStartAtom cursor.Current then
                 parseArgument state context (Some operatorToken.Range)
@@ -2456,6 +2288,7 @@ module internal Parser =
             cursor.Advance()
             |> ignore
 
+            reportSignedLimit state token token.Range
             SyntaxExpression.Constant(value, token.Range)
         | None when
             isIdentifier token
@@ -2521,11 +2354,8 @@ module internal Parser =
 
             let literal = cursor.Advance()
 
-            if not (fitsWithSign token literal) then
-                reportUnsupported
-                    state
-                    literal
-                    "a signed literal that is outside its range or not readable"
+            if isOperator "+" token then
+                reportSignedLimit state literal (span token.Range literal.Range)
 
             SyntaxExpression.Constant(
                 SyntaxConstant.Numeric(

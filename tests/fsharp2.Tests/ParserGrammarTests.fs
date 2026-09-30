@@ -26,6 +26,44 @@ module ParserGrammarTests =
         )
         |> Seq.toList
 
+    let private lexicalAndParserLines logicalPath text =
+        let language =
+            LanguageVersion.normalize (Some "10.0")
+            |> Result.defaultWith failtest
+
+        let document =
+            SourceSnapshot.Create(StableIdentity.create logicalPath, logicalPath, text, "content")
+            |> LexicalPipeline.prepare language Array.empty
+
+        let line (start: SourcePosition) severity code message =
+            start, $"{logicalPath}({start.Line},{start.Column}): {severity} {code}: {message}"
+
+        let lexical =
+            document.Diagnostics
+            |> Seq.map (fun diagnostic ->
+                let severity =
+                    match diagnostic.Severity with
+                    | DiagnosticSeverity.Warning -> "warning"
+                    | _ -> "error"
+
+                line diagnostic.Range.Start severity diagnostic.Code diagnostic.Message
+            )
+
+        let syntax =
+            (Parser.parseImplementationFile document).Diagnostics
+            |> Seq.map (fun diagnostic ->
+                line
+                    diagnostic.Range.Start
+                    (SyntaxDiagnosticText.severity diagnostic)
+                    diagnostic.Code
+                    diagnostic.Message
+            )
+
+        Seq.append lexical syntax
+        |> Seq.sortBy (fun (start, _) -> start.Line, start.Column)
+        |> Seq.map snd
+        |> Seq.toList
+
     let rec private typeShape syntaxType =
         match syntaxType with
         | SyntaxType.LongIdentifier name -> name.Text
@@ -5169,27 +5207,6 @@ let f a b =
             "PrefixSignHeadConditionalOperand.fs(2,12): error FS0010: Unexpected keyword 'if' in expression"
         ]
         "PrefixSignModuleSubtractionLine.fs", "module A\nlet a = 1\n- 1\n", []
-        "PrefixSignInt32Overflow.fs",
-        "module A\nlet r = f -2147483649\n",
-        [
-            "PrefixSignInt32Overflow.fs(2,12): error FS1147: This number is outside the allowable range for 32-bit signed integers"
-        ]
-        "PrefixPlusInt32Limit.fs",
-        "module A\nlet r = f +2147483648\n",
-        [
-            "PrefixPlusInt32Limit.fs(2,11): error FS1147: This number is outside the allowable range for 32-bit signed integers"
-        ]
-        "PrefixPlusSByteLimit.fs",
-        "module A\nlet r = f +128y\n",
-        [
-            "PrefixPlusSByteLimit.fs(2,11): error FS1142: This number is outside the allowable range for 8-bit signed integers"
-        ]
-        "PrefixSignDecimalOverflow.fs",
-        "module A\nlet r = f -79228162514264337593543950336m\n",
-        [
-            "PrefixSignDecimalOverflow.fs(2,12): error FS1154: This number is outside the allowable range for decimal literals"
-        ]
-        "PrefixSignHexLimit.fs", "module A\nlet r = f -0x80000000\n", []
         "PrefixSignUndentedInParentheses.fs", "module A\nlet r = (f\n        -1)\n", []
         "SpacedSignLineLeftOfLocalValue.fs",
         "module A\nlet f a =\n    let g =\n        a\n   + 1\n    g\n",
@@ -5853,15 +5870,418 @@ let f a b =
         ]
     ]
 
+    let private numericLiteralCases = [
+        "SignedSingleBitsOutOfRange.fs",
+        "module A\nlet r = f -0x123456789lf\n",
+        [ "let r = [f -0x123456789lf]" ],
+        [
+            "SignedSingleBitsOutOfRange.fs(2,12): error FS1155: This number is outside the allowable range for 32-bit floats"
+        ]
+        "SignedSingleBitsOutOfRangeHead.fs",
+        "module A\nlet r = -0x123456789lf\n",
+        [ "let r = -0x123456789lf" ],
+        [
+            "SignedSingleBitsOutOfRangeHead.fs(2,10): error FS1155: This number is outside the allowable range for 32-bit floats"
+        ]
+        "SignedSingleBitsOutOfRangeInList.fs",
+        "module A\nlet r = [ -0x100000000lf ]\n",
+        [ "let r = [-0x100000000lf]" ],
+        [
+            "SignedSingleBitsOutOfRangeInList.fs(2,12): error FS1155: This number is outside the allowable range for 32-bit floats"
+        ]
+        "SignedDoubleBitsOutOfRange.fs",
+        "module A\nlet r = f -0x1234567890123456789LF\n",
+        [ "let r = [f -0x1234567890123456789LF]" ],
+        [ "SignedDoubleBitsOutOfRange.fs(2,12): error FS1153: Invalid floating point number" ]
+        "SignedDoubleBitsAboveLimit.fs",
+        "module A\nlet r = f -0x10000000000000000LF\n",
+        [ "let r = [f -0x10000000000000000LF]" ],
+        [ "SignedDoubleBitsAboveLimit.fs(2,12): error FS1153: Invalid floating point number" ]
+        "SignedSingleBitsLimit.fs",
+        "module A\nlet r = f -0xFFFFFFFFlf\n",
+        [ "let r = [f -0xFFFFFFFFlf]" ],
+        []
+        "SignedDoubleBitsLimit.fs",
+        "module A\nlet r = f -0x7FF0000000000000LF\n",
+        [ "let r = [f -0x7FF0000000000000LF]" ],
+        []
+        "SingleBitsOutOfRange.fs",
+        "module A\nlet r = f 0x123456789lf\n",
+        [ "let r = [f 0x123456789lf]" ],
+        [
+            "SingleBitsOutOfRange.fs(2,11): error FS1155: This number is outside the allowable range for 32-bit floats"
+        ]
+        "DoubleBitsOutOfRange.fs",
+        "module A\nlet r = f 0x10000000000000000LF\n",
+        [ "let r = [f 0x10000000000000000LF]" ],
+        [ "DoubleBitsOutOfRange.fs(2,11): error FS1153: Invalid floating point number" ]
+        "Int32AtLimit.fs",
+        "module A\nlet r = f 2147483648\n",
+        [ "let r = [f 2147483648]" ],
+        [
+            "Int32AtLimit.fs(2,11): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "Int32AtLimitHead.fs",
+        "module A\nlet r = 2147483648\n",
+        [ "let r = 2147483648" ],
+        [
+            "Int32AtLimitHead.fs(2,9): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "SByteAtLimit.fs",
+        "module A\nlet r = f 128y\n",
+        [ "let r = [f 128y]" ],
+        [
+            "SByteAtLimit.fs(2,11): error FS1142: This number is outside the allowable range for 8-bit signed integers"
+        ]
+        "Int16AtLimit.fs",
+        "module A\nlet r = f 32768s\n",
+        [ "let r = [f 32768s]" ],
+        [
+            "Int16AtLimit.fs(2,11): error FS1145: This number is outside the allowable range for 16-bit signed integers"
+        ]
+        "Int64AtLimit.fs",
+        "module A\nlet r = f 9223372036854775808L\n",
+        [ "let r = [f 9223372036854775808L]" ],
+        [
+            "Int64AtLimit.fs(2,11): error FS1149: This number is outside the allowable range for 64-bit signed integers"
+        ]
+        "NativeIntAtLimit.fs",
+        "module A\nlet r = f 9223372036854775808n\n",
+        [ "let r = [f 9223372036854775808n]" ],
+        [
+            "NativeIntAtLimit.fs(2,11): error FS1151: This number is outside the allowable range for signed native integers"
+        ]
+        "Int32AboveLimit.fs",
+        "module A\nlet r = f 21474836479\n",
+        [ "let r = [f 21474836479]" ],
+        [
+            "Int32AboveLimit.fs(2,11): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "ByteAboveLimit.fs",
+        "module A\nlet r = f 256uy\n",
+        [ "let r = [f 256uy]" ],
+        [
+            "ByteAboveLimit.fs(2,11): error FS1144: This number is outside the allowable range for 8-bit unsigned integers"
+        ]
+        "UInt16AboveLimit.fs",
+        "module A\nlet r = f 65536us\n",
+        [ "let r = [f 65536us]" ],
+        [
+            "UInt16AboveLimit.fs(2,11): error FS1146: This number is outside the allowable range for 16-bit unsigned integers"
+        ]
+        "UInt32AboveLimit.fs",
+        "module A\nlet r = f 4294967296u\n",
+        [ "let r = [f 4294967296u]" ],
+        [
+            "UInt32AboveLimit.fs(2,11): error FS1148: This number is outside the allowable range for 32-bit unsigned integers"
+        ]
+        "UInt32LowerLAboveLimit.fs",
+        "module A\nlet r = f 4294967296ul\n",
+        [ "let r = [f 4294967296ul]" ],
+        [
+            "UInt32LowerLAboveLimit.fs(2,11): error FS1148: This number is outside the allowable range for 32-bit unsigned integers"
+        ]
+        "UInt64AboveLimit.fs",
+        "module A\nlet r = f 18446744073709551616UL\n",
+        [ "let r = [f 18446744073709551616UL]" ],
+        [
+            "UInt64AboveLimit.fs(2,11): error FS1150: This number is outside the allowable range for 64-bit unsigned integers"
+        ]
+        "UNativeIntAboveLimit.fs",
+        "module A\nlet r = f 18446744073709551616un\n",
+        [ "let r = [f 18446744073709551616un]" ],
+        [
+            "UNativeIntAboveLimit.fs(2,11): error FS1152: This number is outside the allowable range for unsigned native integers"
+        ]
+        "HexSByteAboveLimit.fs",
+        "module A\nlet r = f 0x100y\n",
+        [ "let r = [f 0x100y]" ],
+        [
+            "HexSByteAboveLimit.fs(2,11): error FS1143: This number is outside the allowable range for hexadecimal 8-bit signed integers"
+        ]
+        "OctalSByteAboveLimit.fs",
+        "module A\nlet r = f 0o400y\n",
+        [ "let r = [f 0o400y]" ],
+        [
+            "OctalSByteAboveLimit.fs(2,11): error FS1143: This number is outside the allowable range for hexadecimal 8-bit signed integers"
+        ]
+        "HexInt16AboveLimit.fs",
+        "module A\nlet r = f 0x10000s\n",
+        [ "let r = [f 0x10000s]" ],
+        [
+            "HexInt16AboveLimit.fs(2,11): error FS1145: This number is outside the allowable range for 16-bit signed integers"
+        ]
+        "HexInt32AboveLimit.fs",
+        "module A\nlet r = f 0x100000000\n",
+        [ "let r = [f 0x100000000]" ],
+        [
+            "HexInt32AboveLimit.fs(2,11): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "BinaryInt32AboveLimit.fs",
+        "module A\nlet r = f 0b100000000000000000000000000000000\n",
+        [ "let r = [f 0b100000000000000000000000000000000]" ],
+        [
+            "BinaryInt32AboveLimit.fs(2,11): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "HexInt64AboveLimit.fs",
+        "module A\nlet r = f 0x10000000000000000L\n",
+        [ "let r = [f 0x10000000000000000L]" ],
+        [
+            "HexInt64AboveLimit.fs(2,11): error FS1149: This number is outside the allowable range for 64-bit signed integers"
+        ]
+        "DecimalAboveLimit.fs",
+        "module A\nlet r = f 79228162514264337593543950336M\n",
+        [ "let r = [f 79228162514264337593543950336M]" ],
+        [
+            "DecimalAboveLimit.fs(2,11): error FS1154: This number is outside the allowable range for decimal literals"
+        ]
+        "DecimalExponentAboveLimit.fs",
+        "module A\nlet r = f 1e29M\n",
+        [ "let r = [f 1e29M]" ],
+        [
+            "DecimalExponentAboveLimit.fs(2,11): error FS1154: This number is outside the allowable range for decimal literals"
+        ]
+        "HexInt32AllBits.fs", "module A\nlet r = f 0xFFFFFFFF\n", [ "let r = [f 0xFFFFFFFF]" ], []
+        "HexSByteAllBits.fs", "module A\nlet r = f 0xFFy\n", [ "let r = [f 0xFFy]" ], []
+        "SignedHexSByteAllBits.fs", "module A\nlet r = -0xFFy\n", [ "let r = -0xFFy" ], []
+        "SignedHexInt16AllBits.fs",
+        "module A\nlet r = f -0xFF_FFs\n",
+        [ "let r = [f -0xFF_FFs]" ],
+        []
+        "PrefixSignHexLimit.fs",
+        "module A\nlet r = f -0x80000000\n",
+        [ "let r = [f -0x80000000]" ],
+        []
+        "PrefixSignInt32Overflow.fs",
+        "module A\nlet r = f -2147483649\n",
+        [ "let r = [f -2147483649]" ],
+        [
+            "PrefixSignInt32Overflow.fs(2,12): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "PrefixPlusInt32Limit.fs",
+        "module A\nlet r = f +2147483648\n",
+        [ "let r = [f +2147483648]" ],
+        [
+            "PrefixPlusInt32Limit.fs(2,11): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "PrefixPlusSByteLimit.fs",
+        "module A\nlet r = f +128y\n",
+        [ "let r = [f +128y]" ],
+        [
+            "PrefixPlusSByteLimit.fs(2,11): error FS1142: This number is outside the allowable range for 8-bit signed integers"
+        ]
+        "PrefixSignDecimalOverflow.fs",
+        "module A\nlet r = f -79228162514264337593543950336m\n",
+        [ "let r = [f -79228162514264337593543950336m]" ],
+        [
+            "PrefixSignDecimalOverflow.fs(2,12): error FS1154: This number is outside the allowable range for decimal literals"
+        ]
+        "SignedHexInt64SignBit.fs",
+        "module A\nlet r = f -0x8000000000000000L\n",
+        [ "let r = [f -0x8000000000000000L]" ],
+        []
+        "SignedBinarySByteAllBits.fs",
+        "module A\nlet r = f -0b11111111y\n",
+        [ "let r = [f -0b11111111y]" ],
+        []
+        "SignedHexInt32AboveLimit.fs",
+        "module A\nlet r = f -0x100000000\n",
+        [ "let r = [f -0x100000000]" ],
+        [
+            "SignedHexInt32AboveLimit.fs(2,12): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "SignedInt32Limit.fs",
+        "module A\nlet r = f -2147483648\n",
+        [ "let r = [f -2147483648]" ],
+        []
+        "SignedInt32LimitHead.fs", "module A\nlet r = -2147483648\n", [ "let r = -2147483648" ], []
+        "SignedInt32LimitInParentheses.fs",
+        "module A\nlet r = (-2147483648)\n",
+        [ "let r = (-2147483648)" ],
+        []
+        "SignedInt32LimitAfterSubtraction.fs",
+        "module A\nlet r = x - -2147483648\n",
+        [ "let r = {x - -2147483648}" ],
+        []
+        "SubtractedInt32Limit.fs",
+        "module A\nlet r = x-2147483648\n",
+        [ "let r = {x - 2147483648}" ],
+        [
+            "SubtractedInt32Limit.fs(2,11): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "SpacedSubtractedInt32Limit.fs",
+        "module A\nlet r = x - 2147483648\n",
+        [ "let r = {x - 2147483648}" ],
+        [
+            "SpacedSubtractedInt32Limit.fs(2,13): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "SpacedSignInt32Limit.fs",
+        "module A\nlet r = f - 2147483648\n",
+        [ "let r = {f - 2147483648}" ],
+        [
+            "SpacedSignInt32Limit.fs(2,13): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "SpacedSignInt32LimitHead.fs",
+        "module A\nlet r = - 2147483648\n",
+        [ "let r = ~-2147483648" ],
+        [
+            "SpacedSignInt32LimitHead.fs(2,11): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "SignedParenthesizedInt32Limit.fs",
+        "module A\nlet r = -(2147483648)\n",
+        [ "let r = ~-(2147483648)" ],
+        [
+            "SignedParenthesizedInt32Limit.fs(2,11): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "SubtractedInt32LimitArgument.fs",
+        "module A\nlet r = f x-2147483648\n",
+        [ "let r = {[f x] - 2147483648}" ],
+        [
+            "SubtractedInt32LimitArgument.fs(2,13): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "DereferencedInt32Limit.fs",
+        "module A\nlet r = f !2147483648\n",
+        [ "let r = [f ~!2147483648]" ],
+        [
+            "DereferencedInt32Limit.fs(2,12): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "Int32LimitArguments.fs",
+        "module A\nlet r = f 2147483648 2147483648\n",
+        [ "let r = [[f 2147483648] 2147483648]" ],
+        [
+            "Int32LimitArguments.fs(2,11): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+            "Int32LimitArguments.fs(2,22): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "Int32LimitInfixOperand.fs",
+        "module A\nlet r = 1 + 2147483648\n",
+        [ "let r = {1 + 2147483648}" ],
+        [
+            "Int32LimitInfixOperand.fs(2,13): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "Int32LimitConditionalBranch.fs",
+        "module A\nlet r c = if c then 2147483648 else 1\n",
+        [ "let r c = if c then 2147483648 else 1" ],
+        [
+            "Int32LimitConditionalBranch.fs(2,21): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "Int32LimitTupleItem.fs",
+        "module A\nlet r = 2147483648, 1\n",
+        [ "let r = 2147483648, 1" ],
+        [
+            "Int32LimitTupleItem.fs(2,9): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "PlusInt32LimitHead.fs",
+        "module A\nlet r = +2147483648\n",
+        [ "let r = +2147483648" ],
+        [
+            "PlusInt32LimitHead.fs(2,9): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "PlusInt32AboveLimit.fs",
+        "module A\nlet r = f +2147483649\n",
+        [ "let r = [f +2147483649]" ],
+        [
+            "PlusInt32AboveLimit.fs(2,12): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "PlusSByteAboveLimit.fs",
+        "module A\nlet r = f +129y\n",
+        [ "let r = [f +129y]" ],
+        [
+            "PlusSByteAboveLimit.fs(2,12): error FS1142: This number is outside the allowable range for 8-bit signed integers"
+        ]
+        "SignedDecimalLimit.fs",
+        "module A\nlet r = f -79228162514264337593543950335M\n",
+        [ "let r = [f -79228162514264337593543950335M]" ],
+        []
+        "SignedNativeIntLimit.fs",
+        "module A\nlet r = f -9223372036854775808n\n",
+        [ "let r = [f -9223372036854775808n]" ],
+        []
+        "SignedUInt32LowerLAboveLimit.fs",
+        "module A\nlet r = f -4294967296ul\n",
+        [ "let r = [f ~-4294967296ul]" ],
+        [
+            "SignedUInt32LowerLAboveLimit.fs(2,12): error FS1148: This number is outside the allowable range for 32-bit unsigned integers"
+        ]
+        "InvalidLiteralSuffixUpperLF.fs",
+        "module A\nlet r = f 1LF\n",
+        [ "let r = [f 1LF]" ],
+        [
+            "InvalidLiteralSuffixUpperLF.fs(2,11): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "InvalidFloatSuffixL.fs",
+        "module A\nlet r = f 1.5L\n",
+        [ "let r = [f 1.5L]" ],
+        [
+            "InvalidFloatSuffixL.fs(2,11): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "InvalidHexBignumSuffix.fs",
+        "module A\nlet r = f 0x1FI\n",
+        [ "let r = [f 0x1FI]" ],
+        [
+            "InvalidHexBignumSuffix.fs(2,11): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "InvalidTrailingUnderscore.fs",
+        "module A\nlet r = f 1_\n",
+        [ "let r = [f 1_]" ],
+        [
+            "InvalidTrailingUnderscore.fs(2,11): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "InvalidBinaryDigitTwo.fs",
+        "module A\nlet r = f 0b2\n",
+        [ "let r = [f 0b2]" ],
+        [
+            "InvalidBinaryDigitTwo.fs(2,11): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "InvalidFractionUnderscore.fs",
+        "module A\nlet r = f 1._0\n",
+        [ "let r = [f 1._0]" ],
+        [
+            "InvalidFractionUnderscore.fs(2,11): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "InvalidExponentUnderscore.fs",
+        "module A\nlet r = f 1e_5\n",
+        [ "let r = [f 1e_5]" ],
+        [
+            "InvalidExponentUnderscore.fs(2,11): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "Int32LimitPattern.fs",
+        "module A\nlet r x =\n    match x with\n    | 2147483648 -> 1\n    | _ -> 2\n",
+        [ "let r x = match x with | 2147483648 -> 1 | _ -> 2" ],
+        [
+            "Int32LimitPattern.fs(4,7): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+    ]
+
+    let private numericLiteralDotCases = [
+        "SignedHexWithFraction.fs",
+        "module A\nlet y = f -0x1.0\n",
+        [ "SignedHexWithFraction.fs(2,15): error FS0599: Missing qualification after '.'" ]
+        "HexLiteralDotFraction.fs",
+        "module A\nlet r = f 0x1.0\n",
+        [ "HexLiteralDotFraction.fs(2,14): error FS0599: Missing qualification after '.'" ]
+        "HexLiteralMemberAccess.fs", "module A\nlet r = f 0x1.A\n", []
+        "UnsignedLiteralDotFraction.fs",
+        "module A\nlet r = f 1u.0\n",
+        [ "UnsignedLiteralDotFraction.fs(2,13): error FS0599: Missing qualification after '.'" ]
+        "FloatLiteralMemberAccess.fs", "module A\nlet r = f 1.5.A\n", []
+        "SByteLiteralMemberAccess.fs", "module A\nlet r = f 1y.A\n", []
+        "ExponentLiteralDotFraction.fs",
+        "module A\nlet r = f 1e5.0\n",
+        [ "ExponentLiteralDotFraction.fs(2,14): error FS0599: Missing qualification after '.'" ]
+        "TrailingUnderscoreDotFraction.fs",
+        "module A\nlet r = f 1_.0\n",
+        [
+            "TrailingUnderscoreDotFraction.fs(2,11): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+            "TrailingUnderscoreDotFraction.fs(2,13): error FS0599: Missing qualification after '.'"
+        ]
+    ]
+
     let private unreadableSignedLiteralCases = [
         "SignedHexBignumSuffix.fs",
         "module A\nlet y = f -0x1FI\n",
         [
             "SignedHexBignumSuffix.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
         ]
-        "SignedHexWithFraction.fs",
-        "module A\nlet y = f -0x1.0\n",
-        [ "SignedHexWithFraction.fs(2,15): error FS0599: Missing qualification after '.'" ]
         "SignedLiteralSuffixLs.fs",
         "module A\nlet y = f -1ls\n",
         [
@@ -7000,20 +7420,46 @@ let items = [ origin.X; 1 ]
                             (oracleLines logicalPath result)
             ]
 
-            testList "a signed literal the parser cannot read stays explicit" [
+            testList "a signed literal with an unreadable suffix reports the Oracle diagnostics" [
                 for logicalPath, text, oracle in unreadableSignedLiteralCases ->
                     testCase logicalPath
                     <| fun _ ->
-                        let result = parse logicalPath text
-
-                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                        Expect.sequenceEqual
+                            (lexicalAndParserLines logicalPath text)
                             oracle
-                            result.Diagnostics
-                            (oracleLines logicalPath result)
+                            "The lexer and parser diagnostics match the Compatibility Oracle"
             ]
 
-            testList "a signed literal that is not a valid numeric literal stays explicit" [
-                for logicalPath, text, oracle in invalidSignedLiteralCases ->
+            testList
+                "a signed literal that is not a valid numeric literal reports the Oracle diagnostics"
+                [
+                    for logicalPath, text, oracle in invalidSignedLiteralCases ->
+                        testCase logicalPath
+                        <| fun _ ->
+                            Expect.sequenceEqual
+                                (lexicalAndParserLines logicalPath text)
+                                oracle
+                                "The lexer and parser diagnostics match the Compatibility Oracle"
+                ]
+
+            testList "a numeric literal reports the Oracle form and range diagnostics" [
+                for logicalPath, text, expectedDeclarations, oracle in numericLiteralCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        Expect.sequenceEqual
+                            (lexicalAndParserLines logicalPath text)
+                            oracle
+                            "The lexer and parser diagnostics match the Compatibility Oracle"
+
+                        Expect.sequenceEqual
+                            ((Seq.exactlyOne (parse logicalPath text).File.Contents).Declarations
+                             |> Seq.map declarationShape)
+                            expectedDeclarations
+                            "The declarations with a numeric literal"
+            ]
+
+            testList "a '.' after a numeric literal the parser does not model stays explicit" [
+                for logicalPath, text, oracle in numericLiteralDotCases ->
                     testCase logicalPath
                     <| fun _ ->
                         let result = parse logicalPath text
@@ -7021,7 +7467,7 @@ let items = [ origin.X; 1 ]
                         SyntaxDiagnosticText.expectExplicitlyUnsupported
                             oracle
                             result.Diagnostics
-                            (oracleLines logicalPath result)
+                            (lexicalAndParserLines logicalPath text)
             ]
 
             testList "an adjacent sign is a prefix operator and a spaced sign is subtraction" [

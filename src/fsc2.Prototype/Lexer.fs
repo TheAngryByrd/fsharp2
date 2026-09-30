@@ -53,16 +53,6 @@ type internal LexerResult = {
 
 module internal Lexer =
 
-    let private numericLiteralPattern =
-        Text.RegularExpressions.Regex(
-            "^(?:(?:0[xX][0-9a-fA-F][0-9a-fA-F_]*|0[oO][0-7][0-7_]*|0[bB][01][01_]*)(?:y|uy|s|us|l|u|ul|uL|UL|L|n|un|lf|LF)?"
-            + "|[0-9][0-9_]*(?:y|uy|s|us|l|u|ul|uL|UL|L|n|un|I|Q|R|Z|N|G|M|m)?"
-            + "|[0-9][0-9_]*(?:\\.[0-9_]*)?(?:[eE][+-]?[0-9][0-9_]*)?(?:f|F|m|M)?)$",
-            Text.RegularExpressions.RegexOptions.CultureInvariant
-        )
-
-    let private isValidNumericLiteral (literal: string) = numericLiteralPattern.IsMatch literal
-
     let private keywords =
         set [
             "and"
@@ -846,41 +836,68 @@ module internal Lexer =
                     && "xXoObB".IndexOf(text[offset])
                        >= 0
 
-                while offset < text.Length
-                      && (Char.IsLetterOrDigit text[offset]
-                          || text[offset] = '_'
-                          || (text[offset] = '.'
-                              && not (
-                                  offset + 1 < text.Length
-                                  && text[offset + 1] = '.'
-                              ))
-                          || ((text[offset] = '+'
-                               || text[offset] = '-')
-                              && not isRadixLiteral
-                              && (text[offset - 1] = 'e'
-                                  || text[offset - 1] = 'E')
-                              && offset + 1 < text.Length
-                              && Char.IsDigit text[offset + 1])) do
-                    offset <- offset + 1
+                let mutable letters = 0
+                let mutable fraction = false
+                let mutable scanning = true
+
+                // FCS reads a '.' into a numeric literal only after a decimal digit, and only once before any letter.
+                while scanning
+                      && offset < text.Length do
+                    let character = text[offset]
+                    let previous = text[offset - 1]
+
+                    if
+                        Char.IsLetterOrDigit character
+                        || character = '_'
+                    then
+                        if Char.IsLetter character then
+                            letters <-
+                                letters
+                                + 1
+
+                        offset <- offset + 1
+                    elif
+                        character = '.'
+                        && not isRadixLiteral
+                        && not fraction
+                        && letters = 0
+                        && Char.IsDigit previous
+                        && not (
+                            offset + 1 < text.Length
+                            && text[offset + 1] = '.'
+                        )
+                    then
+                        fraction <- true
+                        offset <- offset + 1
+                    elif
+                        (character = '+'
+                         || character = '-')
+                        && not isRadixLiteral
+                        && letters = 1
+                        && (previous = 'e'
+                            || previous = 'E')
+                        && offset + 1 < text.Length
+                        && Char.IsDigit text[offset + 1]
+                    then
+                        offset <- offset + 1
+                    else
+                        scanning <- false
 
                 addToken LexicalTokenKind.NumericLiteral startOffset offset
 
-                if
-                    not (
-                        isValidNumericLiteral (
-                            text.Substring(
-                                startOffset,
-                                offset
-                                - startOffset
-                            )
-                        )
-                    )
-                then
+                match NumericLiteral.tryParse (slice startOffset offset) with
+                | None ->
                     addDiagnostic
                         "FS1156"
                         "This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
                         startOffset
                         offset
+                | Some literal ->
+                    match literal.Range with
+                    | NumericLiteralRange.Outside error ->
+                        addDiagnostic error.Code error.Message startOffset offset
+                    | NumericLiteralRange.Fits
+                    | NumericLiteralRange.FitsOnlyAfterMinus _ -> ()
             elif isIdentifierStart current then
                 offset <- offset + 1
 
