@@ -145,6 +145,7 @@ module internal Layout =
         let tokens = ResizeArray<LayoutToken>()
         let diagnostics = ResizeArray<SourceLexicalDiagnostic>(directives.Diagnostics)
         let mutable indents = [ 0 ]
+        let mutable blockLines = [ false, false ]
         let mutable openers: SourcePosition list = []
         let mutable previousSignificantStart: SourcePosition option = None
         let mutable previousLastToken: LexicalToken option = None
@@ -246,10 +247,19 @@ module internal Layout =
             let mutable lineBlockColumns = []
             let mutable lineFirstClauseLimit = None
             let mutable lineWithMatch = None
+            let mutable lineHasArrow = false
+            let mutable lastPopped = None
 
             for index = 0 to lineTokens.Length
                              - 1 do
                 let token = lineTokens[index]
+
+                if
+                    delimiterDepth = 0
+                    && token.Kind = LexicalTokenKind.Operator
+                    && token.Text = "->"
+                then
+                    lineHasArrow <- true
 
                 if
                     delimiterDepth = 0
@@ -337,6 +347,12 @@ module internal Layout =
                     + 1
 
                 let startsInfix = isInfixToken lineTokens[0] (Array.tryItem 1 lineTokens)
+
+                let startsBar =
+                    lineTokens[0].Kind = LexicalTokenKind.Operator
+                    && lineTokens[0].Text = "|"
+
+                let lineBlockLine = startsBar, lineHasArrow
                 let continuesIf = continuesConstruct lineTokens[0]
 
                 if continuesIf then
@@ -346,7 +362,9 @@ module internal Layout =
                               | saved :: _ -> (openConstruct lineTokens[0] column saved).IsSome
                               | [] -> false
                           ) do
+                        lastPopped <- Some(indents.Head, blockLines.Head)
                         indents <- indents.Tail
+                        blockLines <- blockLines.Tail
 
                         match openers with
                         | _ :: tail -> openers <- tail
@@ -402,6 +420,10 @@ module internal Layout =
                         indentation
                         :: indents
 
+                    blockLines <-
+                        lineBlockLine
+                        :: blockLines
+
                     openers <-
                         previousSignificantStart
                         |> Option.defaultValue {
@@ -435,6 +457,10 @@ module internal Layout =
                             @ itemBlockColumns
                         | None -> lineBlockColumns
 
+                    blockLines <-
+                        lineBlockLine
+                        :: blockLines.Tail
+
                     event
                         LayoutTokenKind.Separator
                         line
@@ -452,7 +478,9 @@ module internal Layout =
 
                     while indents.Head > indentation
                           && not (continuesBlock indents.Head) do
+                        lastPopped <- Some(indents.Head, blockLines.Head)
                         indents <- indents.Tail
+                        blockLines <- blockLines.Tail
 
                         match openers with
                         | _ :: tail -> openers <- tail
@@ -503,6 +531,19 @@ module internal Layout =
                     elif
                         indentation
                         <> indents.Head
+                        && not (
+                            startsBar
+                            && fst blockLines.Head
+                            && match lastPopped with
+                               | Some(poppedIndent, (poppedBar, poppedArrow)) ->
+                                   if poppedBar then
+                                       indentation
+                                       <> poppedIndent
+                                          - 1
+                                   else
+                                       not poppedArrow
+                               | None -> false
+                        )
                     then
                         let position = {
                             Offset =

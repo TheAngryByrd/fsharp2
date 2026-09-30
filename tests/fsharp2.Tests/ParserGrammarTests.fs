@@ -1526,6 +1526,14 @@ module ParserGrammarTests =
     ]
 
     let private delimitedLineCases = [
+        "LambdaBodyAtLaterBlockLine.fs",
+        "module A\nlet f () =\n    ignore 0\n    List.iter (fun x ->\n    ignore x) [ 1 ]\n",
+        [ "let f () = seq[[ignore 0]; [[List.iter (fun x -> [ignore x])] [1]]]" ],
+        [ "seq(3,5--5,20)" ]
+        "LambdaBodyAtModuleExpressionColumn.fs",
+        "List.iter (fun x ->\nignore x) [ 1 ]\n",
+        [ "expr [[List.iter (fun x -> [ignore x])] [1]]" ],
+        []
         "ParenLines.fs",
         "module A\nlet f () =\n    (\n        ignore 1\n        2\n    )\n",
         [ "let f () = (seq[[ignore 1]; 2])" ],
@@ -1894,12 +1902,20 @@ module ParserGrammarTests =
         "AssignValueLeftOfTarget.fs",
         "module A\nlet mutable x = 0\nlet f () =\n    (x <-\n    1)\n",
         []
-        "LambdaBodyAtLaterBlockLine.fs",
-        "module A\nlet f () =\n    ignore 0\n    List.iter (fun x ->\n    ignore x) [ 1 ]\n",
-        []
     ]
 
     let private delimitedLineInventedCases = [
+        "LambdaBodyNestedModuleLetAtLet.fs",
+        "module A\nmodule M =\n    let f xs =\n        List.iter (fun x ->\n    ignore x) xs\n",
+        [
+            "LambdaBodyNestedModuleLetAtLet.fs(5,5): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "LambdaBodyNestedModuleLetAtLet.fs(4,20): error FS0611: Missing function body"
+            "LambdaBodyNestedModuleLetAtLet.fs(5,5): error FS0010: Unexpected identifier in expression"
+        ],
+        [
+            "LambdaBodyNestedModuleLetAtLet.fs(5,13): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
+            "LambdaBodyNestedModuleLetAtLet.fs(6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
         "LambdaBodyAtBindingColumn.fs",
         "module A\nlet f () =\n    g (fun x ->\nx)\n",
         [
@@ -1909,12 +1925,6 @@ module ParserGrammarTests =
         ],
         [
             "LambdaBodyAtBindingColumn.fs(4,2): error FS0010: Unexpected symbol ')' in definition. Expected incomplete structured construct at or before this point or other token."
-        ]
-        "LambdaBodyAtModuleExpressionColumn.fs",
-        "List.iter (fun x ->\nignore x) [ 1 ]\n",
-        [],
-        [
-            "LambdaBodyAtModuleExpressionColumn.fs(2,9): error FS0010: Unexpected symbol ')' in implementation file"
         ]
     ]
 
@@ -3467,6 +3477,620 @@ let f a b =
         ]
     ]
 
+    let private clauseBarLayoutCases = [
+        "ClauseBarG04.fs",
+        "module A\nlet f a b =\n    match a with\n    | 0 -> match b with\n             | 0 -> b\n           | y -> y\n",
+        []
+        "ClauseBarG07.fs",
+        "module A\nlet f a b =\n    match a with\n    | 0 ->\n        match b with\n        | 0 -> b\n      | y -> y\n    | x -> x\n",
+        []
+        "ClauseBarD14.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | y -> x + y\n      | z -> z\n",
+        []
+        "ClauseBarLeft1.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 -> 1\n       | y -> y\n",
+        [ "FS0058(7,8)" ]
+        "ClauseBarLeft2.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 -> 1\n      | y -> y\n",
+        []
+        "ClauseBarLeft3.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 -> 1\n     | y -> y\n",
+        []
+        "ClauseBarLeft4AtOuter.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 -> 1\n    | y -> y\n",
+        []
+        "ClauseBarTopLeft1.fs",
+        "module A\nlet f b =\n    match b with\n      | 0 -> 1\n     | y -> y\n",
+        [ "FS0058(5,6)" ]
+        "ClauseBarTopLeft2.fs",
+        "module A\nlet f b =\n    match b with\n      | 0 -> 1\n    | y -> y\n",
+        []
+        "ClauseBarTopDeeperLeft2.fs",
+        "module A\nlet f b =\n    match b with\n        | 0 -> 1\n      | y -> y\n",
+        [ "FS0058(5,7)" ]
+        "ClauseBarTopDeeperLeft1.fs",
+        "module A\nlet f b =\n    match b with\n        | 0 -> 1\n       | y -> y\n",
+        [ "FS0058(5,8)" ]
+        "ClauseBarNobarLeft2.fs",
+        "module A\nlet f b =\n    match b with\n      0 -> 1\n    | y -> y\n",
+        []
+        "ClauseBarNobarLeft2Deeper.fs",
+        "module A\nlet f b =\n    match b with\n        0 -> 1\n      | y -> y\n",
+        [ "FS0058(5,7)" ]
+        "ClauseBarNobarLeft1.fs",
+        "module A\nlet f b =\n    match b with\n        0 -> 1\n       | y -> y\n",
+        [ "FS0058(5,8)" ]
+        "ClauseBarInnerSameLineLeft2.fs",
+        "module A\nlet f a b =\n    match a with\n    | 0 -> match b with\n           | 0 -> b\n         | y -> y\n",
+        []
+        "ClauseBarInnerSameLineLeft1.fs",
+        "module A\nlet f a b =\n    match a with\n    | 0 -> match b with\n           | 0 -> b\n          | y -> y\n",
+        [ "FS0058(6,11)" ]
+        "ClauseBarInnerSameLineAtMatch.fs",
+        "module A\nlet f a b =\n    match a with\n    | 0 -> match b with\n             | 0 -> b\n           | y -> y\n    | x -> x\n",
+        []
+        "ClauseBarG07OuterAfter.fs",
+        "module A\nlet f a b =\n    match a with\n    | 0 ->\n        match b with\n          | 0 -> b\n        | y -> y\n    | x -> x\n",
+        []
+        "ClauseBarTwoLeft2.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 -> 1\n      | 1 -> 2\n      | y -> y\n",
+        []
+        "ClauseBarBodyBlockBarPlus1.fs",
+        "module A\nlet f x =\n    match x with\n    | 1 ->\n        2\n     | _ -> 3\n",
+        []
+        "ClauseBarBodyBlockBarPlus2.fs",
+        "module A\nlet f x =\n    match x with\n    | 1 ->\n        2\n      | _ -> 3\n",
+        []
+        "ClauseBarBodyBlockBarPlus3.fs",
+        "module A\nlet f x =\n    match x with\n    | 1 ->\n        2\n       | _ -> 3\n",
+        []
+        "ClauseBarInnerBodyDeeperLeft2.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 ->\n            1\n      | y -> y\n",
+        []
+        "ClauseBarInnerBodyDeeperLeft1.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 ->\n            1\n       | y -> y\n",
+        [ "FS0058(8,8)" ]
+        "ClauseBarTopBodyBlockBetween.fs",
+        "module A\nlet f b =\n    match b with\n    | 0 ->\n        g 1\n      | y -> y\n",
+        []
+        "ClauseBarNobarInnerLeft2.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        0 -> 1\n      | y -> y\n",
+        [ "FS0058(7,7)" ]
+        "ClauseBarNobarInnerLeft1.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        0 -> 1\n       | y -> y\n",
+        [ "FS0058(7,8)" ]
+        "ClauseBarInnerBarsIndentedLeft1.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n          | 0 -> 1\n         | y -> y\n",
+        [ "FS0058(7,10)" ]
+        "ClauseBarInnerBarsIndentedLeft2.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n          | 0 -> 1\n        | y -> y\n",
+        []
+        "ClauseBarIfBodyBarBetween.fs",
+        "module A\nlet f c x =\n    match x with\n    | 1 ->\n        if c then 2 else 3\n      | _ -> 4\n",
+        []
+        "ClauseBarThreeLevels.fs",
+        "module A\nlet f a b c =\n    match a with\n    | x ->\n        match b with\n        | y ->\n            match c with\n            | z -> z\n          | w -> w\n    | v -> v\n",
+        []
+    ]
+
+    let private clauseBarCases = [
+        "ClauseBarG04.fs",
+        "module A\nlet f a b =\n    match a with\n    | 0 -> match b with\n             | 0 -> b\n           | y -> y\n",
+        [ "let f a b = match a with | 0 -> match b with | 0 -> b | y -> y" ],
+        [
+            "match(3,5--6,20)2"
+            "match(4,12--5,22)1"
+        ]
+        "ClauseBarG07.fs",
+        "module A\nlet f a b =\n    match a with\n    | 0 ->\n        match b with\n        | 0 -> b\n      | y -> y\n    | x -> x\n",
+        [ "let f a b = match a with | 0 -> match b with | 0 -> b | y -> y | x -> x" ],
+        [
+            "match(3,5--8,13)3"
+            "match(5,9--6,17)1"
+        ]
+        "ClauseBarD14.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | y -> x + y\n      | z -> z\n",
+        [ "let f a b = match a with | x -> match b with | y -> {x + y} | z -> z" ],
+        [
+            "+(6,16--6,21)"
+            "match(3,5--7,15)2"
+            "match(5,9--6,21)1"
+        ]
+        "ClauseBarLeft2.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 -> 1\n      | y -> y\n",
+        [ "let f a b = match a with | x -> match b with | 0 -> 1 | y -> y" ],
+        [
+            "match(3,5--7,15)2"
+            "match(5,9--6,17)1"
+        ]
+        "ClauseBarLeft3.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 -> 1\n     | y -> y\n",
+        [ "let f a b = match a with | x -> match b with | 0 -> 1 | y -> y" ],
+        [
+            "match(3,5--7,14)2"
+            "match(5,9--6,17)1"
+        ]
+        "ClauseBarLeft4AtOuter.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 -> 1\n    | y -> y\n",
+        [ "let f a b = match a with | x -> match b with | 0 -> 1 | y -> y" ],
+        [
+            "match(3,5--7,13)2"
+            "match(5,9--6,17)1"
+        ]
+        "ClauseBarInnerSameLineLeft2.fs",
+        "module A\nlet f a b =\n    match a with\n    | 0 -> match b with\n           | 0 -> b\n         | y -> y\n",
+        [ "let f a b = match a with | 0 -> match b with | 0 -> b | y -> y" ],
+        [
+            "match(3,5--6,18)2"
+            "match(4,12--5,20)1"
+        ]
+        "ClauseBarInnerSameLineAtMatch.fs",
+        "module A\nlet f a b =\n    match a with\n    | 0 -> match b with\n             | 0 -> b\n           | y -> y\n    | x -> x\n",
+        [ "let f a b = match a with | 0 -> match b with | 0 -> b | y -> y | x -> x" ],
+        [
+            "match(3,5--7,13)3"
+            "match(4,12--5,22)1"
+        ]
+        "ClauseBarTwoLeft2.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 -> 1\n      | 1 -> 2\n      | y -> y\n",
+        [ "let f a b = match a with | x -> match b with | 0 -> 1 | 1 -> 2 | y -> y" ],
+        [
+            "match(3,5--8,15)3"
+            "match(5,9--6,17)1"
+        ]
+        "ClauseBarBodyBlockBarPlus1.fs",
+        "module A\nlet f x =\n    match x with\n    | 1 ->\n        2\n     | _ -> 3\n",
+        [ "let f x = match x with | 1 -> 2 | _ -> 3" ],
+        [ "match(3,5--6,14)2" ]
+        "ClauseBarBodyBlockBarPlus2.fs",
+        "module A\nlet f x =\n    match x with\n    | 1 ->\n        2\n      | _ -> 3\n",
+        [ "let f x = match x with | 1 -> 2 | _ -> 3" ],
+        [ "match(3,5--6,15)2" ]
+        "ClauseBarBodyBlockBarPlus3.fs",
+        "module A\nlet f x =\n    match x with\n    | 1 ->\n        2\n       | _ -> 3\n",
+        [ "let f x = match x with | 1 -> 2 | _ -> 3" ],
+        [ "match(3,5--6,16)2" ]
+        "ClauseBarInnerBodyDeeperLeft2.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 ->\n            1\n      | y -> y\n",
+        [ "let f a b = match a with | x -> match b with | 0 -> 1 | y -> y" ],
+        [
+            "match(3,5--8,15)2"
+            "match(5,9--7,14)1"
+        ]
+        "ClauseBarTopBodyBlockBetween.fs",
+        "module A\nlet f b =\n    match b with\n    | 0 ->\n        g 1\n      | y -> y\n",
+        [ "let f b = match b with | 0 -> [g 1] | y -> y" ],
+        [
+            "app(5,9--5,12)"
+            "match(3,5--6,15)2"
+        ]
+        "ClauseBarIfBodyBarBetween.fs",
+        "module A\nlet f c x =\n    match x with\n    | 1 ->\n        if c then 2 else 3\n      | _ -> 4\n",
+        [ "let f c x = match x with | 1 -> if c then 2 else 3 | _ -> 4" ],
+        [
+            "if(5,9--5,27)E"
+            "match(3,5--6,15)2"
+        ]
+        "ClauseBarThreeLevels.fs",
+        "module A\nlet f a b c =\n    match a with\n    | x ->\n        match b with\n        | y ->\n            match c with\n            | z -> z\n          | w -> w\n    | v -> v\n",
+        [
+            "let f a b c = match a with | x -> match b with | y -> match c with | z -> z | w -> w | v -> v"
+        ],
+        [
+            "match(3,5--10,13)2"
+            "match(5,9--9,19)2"
+            "match(7,13--8,21)1"
+        ]
+    ]
+
+    let private clauseBarExplicitCases = [
+        "ClauseBarLeft1.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 -> 1\n       | y -> y\n",
+        [
+            "ClauseBarLeft1.fs(7,8): error FS0058: The '|' tokens separating rules of this pattern match are misaligned by one column. Consider realigning your code or using further indentation."
+        ]
+        "ClauseBarTopLeft1.fs",
+        "module A\nlet f b =\n    match b with\n      | 0 -> 1\n     | y -> y\n",
+        [
+            "ClauseBarTopLeft1.fs(5,6): error FS0058: The '|' tokens separating rules of this pattern match are misaligned by one column. Consider realigning your code or using further indentation."
+            "ClauseBarTopLeft1.fs(5,6): error FS0010: Unexpected symbol '|' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "ClauseBarTopLeft2.fs",
+        "module A\nlet f b =\n    match b with\n      | 0 -> 1\n    | y -> y\n",
+        [
+            "ClauseBarTopLeft2.fs(5,5): error FS0010: Unexpected symbol '|' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "ClauseBarTopDeeperLeft2.fs",
+        "module A\nlet f b =\n    match b with\n        | 0 -> 1\n      | y -> y\n",
+        [
+            "ClauseBarTopDeeperLeft2.fs(5,7): error FS0010: Unexpected symbol '|' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "ClauseBarTopDeeperLeft1.fs",
+        "module A\nlet f b =\n    match b with\n        | 0 -> 1\n       | y -> y\n",
+        [
+            "ClauseBarTopDeeperLeft1.fs(5,8): error FS0058: The '|' tokens separating rules of this pattern match are misaligned by one column. Consider realigning your code or using further indentation."
+            "ClauseBarTopDeeperLeft1.fs(5,8): error FS0010: Unexpected symbol '|' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "ClauseBarNobarLeft2.fs",
+        "module A\nlet f b =\n    match b with\n      0 -> 1\n    | y -> y\n",
+        []
+        "ClauseBarNobarLeft2Deeper.fs",
+        "module A\nlet f b =\n    match b with\n        0 -> 1\n      | y -> y\n",
+        []
+        "ClauseBarNobarLeft1.fs",
+        "module A\nlet f b =\n    match b with\n        0 -> 1\n       | y -> y\n",
+        []
+        "ClauseBarInnerSameLineLeft1.fs",
+        "module A\nlet f a b =\n    match a with\n    | 0 -> match b with\n           | 0 -> b\n          | y -> y\n",
+        [
+            "ClauseBarInnerSameLineLeft1.fs(6,11): error FS0058: The '|' tokens separating rules of this pattern match are misaligned by one column. Consider realigning your code or using further indentation."
+        ]
+        "ClauseBarG07OuterAfter.fs",
+        "module A\nlet f a b =\n    match a with\n    | 0 ->\n        match b with\n          | 0 -> b\n        | y -> y\n    | x -> x\n",
+        []
+        "ClauseBarInnerBodyDeeperLeft1.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 ->\n            1\n       | y -> y\n",
+        [
+            "ClauseBarInnerBodyDeeperLeft1.fs(8,8): error FS0058: The '|' tokens separating rules of this pattern match are misaligned by one column. Consider realigning your code or using further indentation."
+        ]
+        "ClauseBarNobarInnerLeft2.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        0 -> 1\n      | y -> y\n",
+        []
+        "ClauseBarNobarInnerLeft1.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        0 -> 1\n       | y -> y\n",
+        []
+        "ClauseBarInnerBarsIndentedLeft1.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n          | 0 -> 1\n         | y -> y\n",
+        [
+            "ClauseBarInnerBarsIndentedLeft1.fs(7,10): error FS0058: The '|' tokens separating rules of this pattern match are misaligned by one column. Consider realigning your code or using further indentation."
+        ]
+        "ClauseBarInnerBarsIndentedLeft2.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n          | 0 -> 1\n        | y -> y\n",
+        []
+    ]
+
+    let private lambdaBodyCases = [
+        "LambdaBodyX08.fs",
+        "module A\nlet f g =\n    g (fun x ->\n        x)\n",
+        [ "let f g = [g (fun x -> x)]" ],
+        [ "app(3,5--4,11)" ]
+        "LambdaBodyX09.fs",
+        "module A\nlet f xs =\n    xs |> List.map (fun x ->\n        x + 1)\n",
+        [ "let f xs = {xs |> [List.map (fun x -> {x + 1})]}" ],
+        [
+            "|>(3,5--4,15)"
+            "+(4,9--4,14)"
+            "app(3,11--4,15)"
+        ]
+        "LambdaBodyX17.fs",
+        "module A\nlet f g =\n    g (fun x ->\n  x)\n",
+        [ "let f g = [g (fun x -> x)]" ],
+        [ "app(3,5--4,5)" ]
+        "LambdaBodyLaterLineAtBlock.fs",
+        "module A\nlet f xs =\n    ignore 0\n    List.iter (fun x ->\n    ignore x) xs\n",
+        [ "let f xs = seq[[ignore 0]; [[List.iter (fun x -> [ignore x])] xs]]" ],
+        [
+            "seq(3,5--5,17)"
+            "app(3,5--3,13)"
+            "app(4,5--5,17)"
+            "app(4,5--5,14)"
+            "app(5,5--5,13)"
+        ]
+        "LambdaBodyLaterLineLeftOfBlock.fs",
+        "module A\nlet f xs =\n    ignore 0\n    List.iter (fun x ->\n  ignore x) xs\n",
+        [ "let f xs = seq[[ignore 0]; [[List.iter (fun x -> [ignore x])] xs]]" ],
+        [
+            "seq(3,5--5,15)"
+            "app(3,5--3,13)"
+            "app(4,5--5,15)"
+            "app(4,5--5,12)"
+            "app(5,3--5,11)"
+        ]
+        "LambdaBodyLaterLineTwoBodyLines.fs",
+        "module A\nlet f xs =\n    ignore 0\n    List.iter (fun x ->\n    ignore x\n    ignore 2) xs\n",
+        [ "let f xs = seq[[ignore 0]; [[List.iter (fun x -> seq[[ignore x]; [ignore 2]])] xs]]" ],
+        [
+            "seq(3,5--6,17)"
+            "seq(5,5--6,13)"
+            "app(3,5--3,13)"
+            "app(4,5--6,17)"
+            "app(4,5--6,14)"
+            "app(5,5--5,13)"
+            "app(6,5--6,13)"
+        ]
+        "LambdaBodyLaterLineThenItem.fs",
+        "module A\nlet f xs =\n    ignore 0\n    List.iter (fun x ->\n    ignore x) xs\n    ignore 3\n",
+        [ "let f xs = seq[[ignore 0]; seq[[[List.iter (fun x -> [ignore x])] xs]; [ignore 3]]]" ],
+        [
+            "seq(3,5--6,13)"
+            "seq(4,5--6,13)"
+            "app(3,5--3,13)"
+            "app(4,5--5,17)"
+            "app(4,5--5,14)"
+            "app(5,5--5,13)"
+            "app(6,5--6,13)"
+        ]
+        "LambdaBodyLocalBodyLine.fs",
+        "module A\nlet f xs =\n    let y = 1\n    List.iter (fun x ->\n    ignore (x + y)) xs\n",
+        [ "let f xs = let y = 1 in [[List.iter (fun x -> [ignore ({x + y})])] xs]" ],
+        [
+            "let(3,5--5,23)"
+            "+(5,13--5,18)"
+            "app(4,5--5,23)"
+            "app(4,5--5,20)"
+            "app(5,5--5,19)"
+        ]
+        "LambdaBodyNestedLocalBodyLine.fs",
+        "module A\nlet f xs =\n    let a = 1\n    let b = 2\n    List.iter (fun x ->\n    ignore (x + a + b)) xs\n",
+        [
+            "let f xs = let a = 1 in let b = 2 in [[List.iter (fun x -> [ignore ({{x + a} + b})])] xs]"
+        ],
+        [
+            "let(3,5--6,27)"
+            "let(4,5--6,27)"
+            "+(6,13--6,22)"
+            "+(6,13--6,18)"
+            "app(5,5--6,27)"
+            "app(5,5--6,24)"
+            "app(6,5--6,23)"
+        ]
+        "LambdaBodyThenBlockLine.fs",
+        "module A\nlet f c xs =\n    if c then\n        ignore 0\n        List.iter (fun x ->\n        ignore x) xs\n",
+        [ "let f c xs = if c then seq[[ignore 0]; [[List.iter (fun x -> [ignore x])] xs]]" ],
+        [
+            "seq(4,9--6,21)"
+            "app(4,9--4,17)"
+            "app(5,9--6,21)"
+            "app(5,9--6,18)"
+            "app(6,9--6,17)"
+            "if(3,5--6,21)-"
+        ]
+        "LambdaBodyThenBlockLeft.fs",
+        "module A\nlet f c xs =\n    if c then\n        List.iter (fun x ->\n      ignore x) xs\n",
+        [ "let f c xs = if c then [[List.iter (fun x -> [ignore x])] xs]" ],
+        [
+            "app(4,9--5,19)"
+            "app(4,9--5,16)"
+            "app(5,7--5,15)"
+            "if(3,5--5,19)-"
+        ]
+        "LambdaBodyClauseBlockLine.fs",
+        "module A\nlet f v xs =\n    match v with\n    | _ ->\n        ignore 0\n        List.iter (fun x ->\n        ignore x) xs\n",
+        [
+            "let f v xs = match v with | _ -> seq[[ignore 0]; [[List.iter (fun x -> [ignore x])] xs]]"
+        ],
+        [
+            "seq(5,9--7,21)"
+            "app(5,9--5,17)"
+            "app(6,9--7,21)"
+            "app(6,9--7,18)"
+            "app(7,9--7,17)"
+            "match(3,5--7,21)1"
+        ]
+        "LambdaBodyClauseBlockLeft.fs",
+        "module A\nlet f v xs =\n    match v with\n    | _ ->\n        List.iter (fun x ->\n      ignore x) xs\n",
+        [ "let f v xs = match v with | _ -> [[List.iter (fun x -> [ignore x])] xs]" ],
+        [
+            "app(5,9--6,19)"
+            "app(5,9--6,16)"
+            "app(6,7--6,15)"
+            "match(3,5--6,19)1"
+        ]
+        "LambdaBodyClauseBlockAtBar.fs",
+        "module A\nlet f v xs =\n    match v with\n    | _ ->\n        List.iter (fun x ->\n    ignore x) xs\n",
+        [ "let f v xs = match v with | _ -> [[List.iter (fun x -> [ignore x])] xs]" ],
+        [
+            "app(5,9--6,17)"
+            "app(5,9--6,14)"
+            "app(6,5--6,13)"
+            "match(3,5--6,17)1"
+        ]
+        "LambdaBodyElseBlockLeft.fs",
+        "module A\nlet f c xs =\n    if c then ()\n    else\n        List.iter (fun x ->\n      ignore x) xs\n",
+        [ "let f c xs = if c then () else [[List.iter (fun x -> [ignore x])] xs]" ],
+        [
+            "app(5,9--6,19)"
+            "app(5,9--6,16)"
+            "app(6,7--6,15)"
+            "if(3,5--6,19)E"
+        ]
+        "LambdaBodyElseBlockAtIf.fs",
+        "module A\nlet f c xs =\n    if c then ()\n    else\n        List.iter (fun x ->\n    ignore x) xs\n",
+        [ "let f c xs = if c then () else [[List.iter (fun x -> [ignore x])] xs]" ],
+        [
+            "app(5,9--6,17)"
+            "app(5,9--6,14)"
+            "app(6,5--6,13)"
+            "if(3,5--6,17)E"
+        ]
+        "LambdaBodyNestedLambdaAtBlock.fs",
+        "module A\nlet f xs ys =\n    List.iter (fun x ->\n    List.iter (fun y ->\n    ignore (x + y)) ys) xs\n",
+        [
+            "let f xs ys = [[List.iter (fun x -> [[List.iter (fun y -> [ignore ({x + y})])] ys])] xs]"
+        ],
+        [
+            "+(5,13--5,18)"
+            "app(3,5--5,27)"
+            "app(3,5--5,24)"
+            "app(4,5--5,23)"
+            "app(4,5--5,20)"
+            "app(5,5--5,19)"
+        ]
+        "LambdaBodyNestedLambdaLeft.fs",
+        "module A\nlet f xs ys =\n    List.iter (fun x ->\n      List.iter (fun y ->\n    ignore (x + y)) ys) xs\n",
+        [
+            "let f xs ys = [[List.iter (fun x -> [[List.iter (fun y -> [ignore ({x + y})])] ys])] xs]"
+        ],
+        [
+            "+(5,13--5,18)"
+            "app(3,5--5,27)"
+            "app(3,5--5,24)"
+            "app(4,7--5,23)"
+            "app(4,7--5,20)"
+            "app(5,5--5,19)"
+        ]
+        "LambdaBodyModuleExpression.fs",
+        "module A\nList.iter (fun x ->\n ignore x) [ 1 ]\n",
+        [ "expr [[List.iter (fun x -> [ignore x])] [1]]" ],
+        [
+            "app(2,1--3,17)"
+            "app(2,1--3,11)"
+            "app(3,2--3,10)"
+        ]
+        "LambdaBodyModuleDo.fs",
+        "module A\ndo\n    List.iter (fun x ->\n    ignore x) [ 1 ]\n",
+        [ "do [[List.iter (fun x -> [ignore x])] [1]]" ],
+        [
+            "app(3,5--4,20)"
+            "app(3,5--4,14)"
+            "app(4,5--4,13)"
+        ]
+        "LambdaBodyMemberBodyRightOfMember.fs",
+        "module A\ntype T() =\n    member _.M xs =\n        List.iter (fun x ->\n     ignore x) xs\n",
+        [ "type T() = member _.M xs = [[List.iter (fun x -> [ignore x])] xs]" ],
+        [
+            "app(4,9--5,18)"
+            "app(4,9--5,15)"
+            "app(5,6--5,14)"
+        ]
+        "LambdaBodyMemberBlockLine.fs",
+        "module A\ntype T() =\n    member _.M xs =\n        ignore 0\n        List.iter (fun x ->\n        ignore x) xs\n",
+        [ "type T() = member _.M xs = seq[[ignore 0]; [[List.iter (fun x -> [ignore x])] xs]]" ],
+        [
+            "seq(4,9--6,21)"
+            "app(4,9--4,17)"
+            "app(5,9--6,21)"
+            "app(5,9--6,18)"
+            "app(6,9--6,17)"
+        ]
+        "LambdaBodyNestedModuleLet.fs",
+        "module A\nmodule M =\n    let f xs =\n        ignore 0\n        List.iter (fun x ->\n        ignore x) xs\n",
+        [ "module M = [let f xs = seq[[ignore 0]; [[List.iter (fun x -> [ignore x])] xs]]]" ],
+        []
+        "LambdaBodyFunSameLineBodyLeft.fs",
+        "module A\nlet g = fun x ->\n    x + 1\n",
+        [ "let g = fun x -> {x + 1}" ],
+        [ "+(3,5--3,10)" ]
+        "LambdaBodyFunThenLine.fs",
+        "module A\nlet f xs =\n    List.iter (fun x ->\n    ignore x\n    ) xs\n",
+        [ "let f xs = [[List.iter (fun x -> [ignore x])] xs]" ],
+        [
+            "app(3,5--5,9)"
+            "app(3,5--5,6)"
+            "app(4,5--4,13)"
+        ]
+        "LambdaBodyBodyInfixLine.fs",
+        "module A\nlet f g =\n    ignore 0\n    g (fun x ->\n    x\n    + 1)\n",
+        [ "let f g = seq[[ignore 0]; [g (fun x -> {x + 1})]]" ],
+        [
+            "seq(3,5--6,9)"
+            "+(5,5--6,8)"
+            "app(3,5--3,13)"
+            "app(4,5--6,9)"
+        ]
+        "LambdaBodyBodyMatch.fs",
+        "module A\nlet f g =\n    ignore 0\n    g (fun x ->\n    match x with\n    | y -> y)\n",
+        [ "let f g = seq[[ignore 0]; [g (fun x -> match x with | y -> y)]]" ],
+        [
+            "seq(3,5--6,14)"
+            "app(3,5--3,13)"
+            "app(4,5--6,14)"
+            "match(5,5--6,13)1"
+        ]
+        "LambdaBodyBodyIf.fs",
+        "module A\nlet f g c =\n    ignore 0\n    g (fun x ->\n    if c then x else 0)\n",
+        [ "let f g c = seq[[ignore 0]; [g (fun x -> if c then x else 0)]]" ],
+        [
+            "seq(3,5--5,24)"
+            "app(3,5--3,13)"
+            "app(4,5--5,24)"
+        ]
+        "LambdaBodyThenSameLineLeftOfThen.fs",
+        "module A\nlet f c xs =\n    if c then List.iter (fun x ->\n      ignore x) xs\n",
+        [ "let f c xs = if c then [[List.iter (fun x -> [ignore x])] xs]" ],
+        [
+            "app(3,15--4,19)"
+            "app(3,15--4,16)"
+            "app(4,7--4,15)"
+            "if(3,5--4,19)-"
+        ]
+        "LambdaBodyNestedIfInnerLeft.fs",
+        "module A\nlet f c d xs =\n    if c then\n        if d then\n            List.iter (fun x ->\n          ignore x) xs\n",
+        [ "let f c d xs = if c then if d then [[List.iter (fun x -> [ignore x])] xs]" ],
+        [
+            "app(5,13--6,23)"
+            "app(5,13--6,20)"
+            "app(6,11--6,19)"
+            "if(3,5--6,23)-"
+            "if(4,9--6,23)-"
+        ]
+    ]
+
+    let private lambdaBodyExplicitCases = [
+        "LambdaBodyLaterLineAtLet.fs",
+        "module A\nlet f xs =\n    ignore 0\n    List.iter (fun x ->\nignore x) xs\n",
+        [
+            "LambdaBodyLaterLineAtLet.fs(5,1): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (2:1). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "LambdaBodyLaterLineAtLet.fs(4,16): error FS0611: Missing function body"
+            "LambdaBodyLaterLineAtLet.fs(5,1): error FS0010: Unexpected identifier in expression"
+        ]
+        "LambdaBodyLocalValueAtLet.fs",
+        "module A\nlet f xs =\n    let g = List.iter (fun x ->\n    ignore x)\n    g xs\n",
+        [
+            "LambdaBodyLocalValueAtLet.fs(4,5): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "LambdaBodyLocalValueAtLet.fs(3,24): error FS0611: Missing function body"
+            "LambdaBodyLocalValueAtLet.fs(4,5): error FS0010: Unexpected identifier in expression"
+        ]
+        "LambdaBodyLocalValueRightOfLet.fs",
+        "module A\nlet f xs =\n    let g = List.iter (fun x ->\n     ignore x)\n    g xs\n",
+        []
+        "LambdaBodyThenBlockAtIf.fs",
+        "module A\nlet f c xs =\n    if c then\n        List.iter (fun x ->\n    ignore x) xs\n",
+        [
+            "LambdaBodyThenBlockAtIf.fs(5,5): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "LambdaBodyThenBlockAtIf.fs(4,20): error FS0611: Missing function body"
+            "LambdaBodyThenBlockAtIf.fs(5,5): error FS0010: Unexpected identifier in expression"
+        ]
+        "LambdaBodyClauseInLetValueLeftOfMatch.fs",
+        "module A\nlet f v xs =\n    let r =\n        match v with\n        | _ ->\n            List.iter (fun x ->\n      ignore x) xs\n    r\n",
+        [
+            "LambdaBodyClauseInLetValueLeftOfMatch.fs(7,7): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (4:9). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "LambdaBodyClauseInLetValueLeftOfMatch.fs(6,24): error FS0611: Missing function body"
+            "LambdaBodyClauseInLetValueLeftOfMatch.fs(7,7): error FS0010: Unexpected identifier in expression"
+        ]
+        "LambdaBodyClauseInLetValueAtLet.fs",
+        "module A\nlet f v xs =\n    let r =\n        match v with\n        | _ ->\n            List.iter (fun x ->\n    ignore x) xs\n    r\n",
+        [
+            "LambdaBodyClauseInLetValueAtLet.fs(7,5): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (4:9). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "LambdaBodyClauseInLetValueAtLet.fs(6,24): error FS0611: Missing function body"
+            "LambdaBodyClauseInLetValueAtLet.fs(7,5): error FS0010: Unexpected identifier in expression"
+        ]
+        "LambdaBodyMemberBodyAtMember.fs",
+        "module A\ntype T() =\n    member _.M xs =\n        List.iter (fun x ->\n    ignore x) xs\n",
+        [
+            "LambdaBodyMemberBodyAtMember.fs(5,5): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "LambdaBodyMemberBodyAtMember.fs(4,20): error FS0611: Missing function body"
+            "LambdaBodyMemberBodyAtMember.fs(5,5): error FS0010: Unexpected identifier in expression"
+        ]
+        "LambdaBodyFunValueBodyLeft.fs", "module A\nlet f =\n    fun x ->\n    x + 1\n", []
+        "LambdaBodyPipeBackFun.fs",
+        "module A\nlet f xs =\n    xs |> List.iter <| fun x ->\n    ignore x\n",
+        []
+        "LambdaBodyBodyQuote.fs",
+        "module A\nlet f g =\n    ignore 0\n    g (fun x ->\n    <@ x @>)\n",
+        []
+        "LambdaBodyBodyTypeapp.fs",
+        "module A\nlet f g =\n    ignore 0\n    g (fun x ->\n    id<int> x)\n",
+        []
+        "LambdaBodyNestedIfAtInnerIf.fs",
+        "module A\nlet f c d xs =\n    if c then\n        if d then\n            List.iter (fun x ->\n        ignore x) xs\n",
+        [
+            "LambdaBodyNestedIfAtInnerIf.fs(6,9): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (4:9). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "LambdaBodyNestedIfAtInnerIf.fs(5,24): error FS0611: Missing function body"
+            "LambdaBodyNestedIfAtInnerIf.fs(6,9): error FS0010: Unexpected identifier in expression"
+        ]
+    ]
+
     [<Tests>]
     let tests =
         testList "Issue29.ParserGrammar" [
@@ -4122,6 +4746,106 @@ let items = [ origin.X; 1 ]
 
             testList "a match line that the parser does not model stays explicit" [
                 for logicalPath, text, oracle in matchLineExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testList
+                "the layout reports FS0058 for a clause bar between two block columns only where the Oracle does"
+                [
+                    for logicalPath, text, expected in clauseBarLayoutCases ->
+                        testCase logicalPath
+                        <| fun _ ->
+                            let language =
+                                LanguageVersion.normalize (Some "10.0")
+                                |> Result.defaultWith failtest
+
+                            let document =
+                                SourceSnapshot.Create(
+                                    StableIdentity.create logicalPath,
+                                    logicalPath,
+                                    text,
+                                    "content"
+                                )
+                                |> LexicalPipeline.prepare language Array.empty
+
+                            Expect.sequenceEqual
+                                (document.Diagnostics
+                                 |> Seq.map (fun diagnostic ->
+                                     $"{diagnostic.Code}({diagnostic.Range.Start.Line},{diagnostic.Range.Start.Column})"
+                                 ))
+                                expected
+                                "The layout diagnostics"
+                ]
+
+            testList "a clause bar left of an inner match belongs to the outer match" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in clauseBarCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with clause bars"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect (fun body ->
+                                 infixRanges body
+                                 @ applicationRanges body
+                                 @ conditionalRanges body
+                                 @ matchRanges body
+                             ))
+                            expectedRanges
+                            "The match ranges and the clause count of each match"
+            ]
+
+            testList "a clause bar that the parser does not model stays explicit" [
+                for logicalPath, text, oracle in clauseBarExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testList "a lambda body can undent to the enclosing let, member, if, else, or match" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in lambdaBodyCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with lambda bodies"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect (fun body ->
+                                 infixRanges body
+                                 @ applicationRanges body
+                                 @ conditionalRanges body
+                                 @ matchRanges body
+                             ))
+                            expectedRanges
+                            "The infix, application, conditional, and match ranges, and the clause count of each match"
+            ]
+
+            testList "a lambda body that the parser does not model stays explicit" [
+                for logicalPath, text, oracle in lambdaBodyExplicitCases ->
                     testCase logicalPath
                     <| fun _ ->
                         let result = parse logicalPath text

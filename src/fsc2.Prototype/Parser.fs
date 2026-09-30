@@ -664,12 +664,9 @@ module internal Parser =
         && token.Range.Start.Line > context.Offside.Line
         && token.Range.Start.Column < context.Offside.Column
 
-    let private withinDelimiters state (outside: Frame) parse =
+    let private withinDelimiters state parse =
         let wasInDelimiters = state.InDelimiters
         let limit = state.UndentationLimit
-
-        if not wasInDelimiters then
-            state.UndentationLimit <- outside.Offside.Column
 
         state.InDelimiters <- true
 
@@ -679,9 +676,9 @@ module internal Parser =
             state.InDelimiters <- wasInDelimiters
             state.UndentationLimit <- limit
 
-    let private withUndentationLimit state (anchor: Frame) parse =
+    let private withUndentationColumn state column parse =
         let limit = state.UndentationLimit
-        state.UndentationLimit <- max limit anchor.Offside.Column
+        state.UndentationLimit <- max limit column
 
         try
             parse ()
@@ -1906,7 +1903,6 @@ module internal Parser =
                     if canStartExpression cursor.Current then
                         withinDelimiters
                             state
-                            context
                             (fun () -> parseExpression state (frameAt FrameKind.Bracket openToken))
                     else
                         missingExpression cursor.Current
@@ -1973,7 +1969,6 @@ module internal Parser =
                 let inner =
                     withinDelimiters
                         state
-                        context
                         (fun () ->
                             let reported = state.Diagnostics.Count
 
@@ -2236,9 +2231,9 @@ module internal Parser =
                 cursor.Advance()
                 |> ignore
 
-                withUndentationLimit
+                withUndentationColumn
                     state
-                    bindingContext
+                    bindingContext.Offside.Column
                     (fun () -> parseBranch state bindingContext None)
             else
                 reportUnsupported state cursor.Current "a local binding"
@@ -2389,18 +2384,19 @@ module internal Parser =
             let thenToken = cursor.Advance()
 
             let thenBranch =
-                withUndentationLimit
+                withUndentationColumn
                     state
-                    (frameAt FrameKind.Then thenToken)
+                    ifToken.Range.Start.Column
                     (fun () -> parseBranch state context None)
 
             let elseBranch =
                 if continues "else" then
                     let elseToken = cursor.Advance()
 
-                    withUndentationLimit
+                    withUndentationColumn
                         state
-                        (frameAt FrameKind.Else elseToken)
+                        (elseToken.Range.Start.Column
+                         - 1)
                         (fun () -> parseBranch state context None)
                     |> Some
                 elif continues "elif" then
@@ -2472,6 +2468,7 @@ module internal Parser =
                 |> ignore
 
             let mutable clausesColumn = None
+            let mutable leadingBar = false
             let mutable more = true
 
             // The Oracle reports FS0058 for a first clause on a later line left of 'match'.
@@ -2495,6 +2492,8 @@ module internal Parser =
                 let start = cursor.Current
 
                 if clausesColumn.IsNone then
+                    leadingBar <- bar.IsSome
+
                     clausesColumn <-
                         bar
                         |> Option.defaultValue start
@@ -2569,9 +2568,10 @@ module internal Parser =
                                     (frameAt FrameKind.SeqBlock body)
                                     (Some RecoveryPoint.ClauseResult)
                             else
-                                withUndentationLimit
+                                withUndentationColumn
                                     state
-                                    clauseContext
+                                    (matchToken.Range.Start.Column
+                                     - 1)
                                     (fun () ->
                                         parseBranch
                                             state
@@ -2601,7 +2601,29 @@ module internal Parser =
                                        >= column
                                    ))
 
+                        let next =
+                            let mutable offset = 0
+
+                            while cursor.Peek(offset).Kind
+                                  <> LayoutTokenKind.SourceToken do
+                                offset <- offset + 1
+
+                            cursor.Peek offset
+
+                        // The Oracle reports FS0058 for a bar one column left of bars that start the clauses.
+                        let misaligned =
+                            leadingBar
+                            && isOperator "|" next
+                            && next.Range.Start.Line > cursor.LastEnd.Line
+                            && clausesColumn
+                               |> Option.exists (fun column -> next.Range.Start.Column = column - 1)
+
                         if reportedSince state reported then
+                            more <- false
+                        elif misaligned then
+                            if not (reportedAt state next) then
+                                reportUnsupported state next "a match clause"
+
                             more <- false
                         elif
                             ownsBar cursor.Current
@@ -2703,7 +2725,6 @@ module internal Parser =
 
         withinDelimiters
             state
-            context
             (fun () ->
                 while not closed
                       && not failed do
@@ -2751,7 +2772,6 @@ module internal Parser =
 
         withinDelimiters
             state
-            context
             (fun () ->
                 while not closed
                       && not failed do
@@ -3020,7 +3040,7 @@ module internal Parser =
         else
             reportUnmarked state code message range
 
-    let private parseBinding state context attributes =
+    let private parseBindingIn state context attributes =
         let cursor = state.Cursor
         let reported = state.Diagnostics.Count
         let mutable recovered = false
@@ -3161,6 +3181,13 @@ module internal Parser =
 
     let private letAndMessage =
         "The declaration form 'let ... and ...' for non-recursive bindings is not used in F# code. Consider using a sequence of 'let' bindings"
+
+    // 15.1.10.1: a lambda body in a binding value must start right of the binding keyword.
+    let private parseBinding state (context: Frame) attributes =
+        withUndentationColumn
+            state
+            context.Offside.Column
+            (fun () -> parseBindingIn state context attributes)
 
     let private parseLet state attributes =
         let cursor = state.Cursor
@@ -3922,7 +3949,12 @@ module internal Parser =
                         |> ignore
 
                         let reported = state.Diagnostics.Count
-                        let body = parseBranch state context None
+
+                        let body =
+                            withUndentationColumn
+                                state
+                                context.Offside.Column
+                                (fun () -> parseBranch state context None)
 
                         members.Add {
                             Attributes = attributes
