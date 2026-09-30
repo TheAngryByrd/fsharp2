@@ -4691,6 +4691,14 @@ let f a b =
             "app(4,10--5,11)"
             "app(4,10--5,9)"
         ]
+        "UndentedItemCloseInfixLineCloseRight.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map (fun x ->\n        x)\n  |> ignore\n",
+        [ "let f xs = {{xs |> [List.map (fun x -> x)]} |> ignore}" ],
+        [
+            "|>(3,5--6,12)"
+            "|>(3,5--5,11)"
+            "app(4,8--5,11)"
+        ]
         "UndentedItemCloseRootletThenDecl.fs",
         "module A\nlet y = g (fun x ->\n x)\nlet z = 1\n",
         [
@@ -4746,6 +4754,78 @@ let f a b =
         "module A\ndo g (fun x ->\n x) 2\n",
         [
             "UndentedItemCloseDoValue.fs(3,5): error FS0010: Unexpected integer literal in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "UndentedItemCloseInfixLine.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map (fun x ->\n  x)\n  |> ignore\n",
+        [
+            "UndentedItemCloseInfixLine.fs(6,3): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemCloseInfixLine.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "UndentedItemCloseInfixLineColumnTwo.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map (fun x ->\n  x)\n |> ignore\n",
+        [
+            "UndentedItemCloseInfixLineColumnTwo.fs(6,2): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemCloseInfixLineColumnTwo.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "UndentedItemCloseInfixLineRightOfClose.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map (fun x ->\n  x)\n   |> ignore\n",
+        [
+            "UndentedItemCloseInfixLineRightOfClose.fs(6,4): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemCloseInfixLineRightOfClose.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "UndentedItemCloseInfixLineRightOfItem.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map (fun x ->\n  x)\n     |> ignore\n",
+        [
+            "UndentedItemCloseInfixLineRightOfItem.fs(6,6): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemCloseInfixLineRightOfItem.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "UndentedItemCloseInfixLineTwice.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map (fun x ->\n  x)\n  |> ignore\n    |> ignore\n",
+        [
+            "UndentedItemCloseInfixLineTwice.fs(6,3): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemCloseInfixLineTwice.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "UndentedItemCloseInfixLinePlus.fs",
+        "module A\nlet f x =\n    x\n    + g (fun y ->\n  y)\n  + 1\n",
+        [
+            "UndentedItemCloseInfixLinePlus.fs(6,3): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemCloseInfixLinePlus.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "UndentedItemCloseInfixLineComma.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map (fun x ->\n  x)\n  , 1\n",
+        [
+            "UndentedItemCloseInfixLineComma.fs(6,3): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemCloseInfixLineComma.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "UndentedItemCloseInfixLineCons.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map (fun x ->\n  x)\n  :: ys\n",
+        [
+            "UndentedItemCloseInfixLineCons.fs(6,3): error FS0010: Unexpected symbol '::' in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemCloseInfixLineCons.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "UndentedItemCloseInfixLineList.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map [\n  1]\n  |> ignore\n",
+        [
+            "UndentedItemCloseInfixLineList.fs(6,3): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemCloseInfixLineList.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "UndentedItemCloseInfixLineRootlet.fs",
+        "module A\nlet y = g (fun x ->\n  x)\n |> h\n",
+        [
+            "UndentedItemCloseInfixLineRootlet.fs(4,2): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemCloseInfixLineRootlet.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "UndentedItemCloseInfixLineLocalLet.fs",
+        "module A\nlet f xs =\n    let y =\n        xs\n        |> List.map (fun x ->\n      x)\n      |> ignore\n    y\n",
+        [
+            "UndentedItemCloseInfixLineLocalLet.fs(7,7): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemCloseInfixLineLocalLet.fs(3,5): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+            "UndentedItemCloseInfixLineLocalLet.fs(3,5): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+        ]
+        "UndentedItemCloseInfixLineMember.fs",
+        "module A\ntype T() =\n    member _.M xs =\n        xs\n        |> List.map (fun x ->\n      x)\n      |> ignore\n",
+        [
+            "UndentedItemCloseInfixLineMember.fs(7,7): error FS0010: Unexpected infix operator in member definition"
         ]
     ]
 

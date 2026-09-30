@@ -2411,7 +2411,7 @@ module internal Parser =
         else
             parseBranchStart state context point
 
-    // The Oracle ends the block when a delimiter closes left of the block item that opened it, so a later token of the block is an error.
+    // The Oracle ends the block when a delimiter closes left of the block item that opened it, so a later token of the block or an infix line is an error.
     and private reportAfterUndentedClose
         state
         (context: Frame)
@@ -2436,19 +2436,20 @@ module internal Parser =
                     let token = cursor.Peek 1
 
                     if Some token.Range.Start.Column = itemColumn then
-                        Some(true, token)
+                        Some(true, token, cursor.Peek 2)
                     else
-                        Some(false, token)
-                | LayoutTokenKind.BeginBlock -> Some(false, cursor.Peek 1)
+                        Some(false, token, cursor.Peek 2)
+                | LayoutTokenKind.BeginBlock -> Some(false, cursor.Peek 1, cursor.Peek 2)
                 | LayoutTokenKind.SourceToken when not (isEndOfFile cursor.Current) ->
-                    Some(false, cursor.Current)
+                    Some(false, cursor.Current, cursor.Peek 1)
                 | _ -> None
 
             match next with
-            | Some(sameItemColumn, token) when
+            | Some(sameItemColumn, token, following) when
                 not (reportedAt state token)
                 && (sameItemColumn
-                    || not (isOffside context token))
+                    || not (isOffside context token)
+                    || isLayoutInfix token following)
                 ->
                 reportUnsupported
                     state
