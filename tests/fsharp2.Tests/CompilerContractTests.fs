@@ -1728,14 +1728,22 @@ let main _ =
                 ]
 
             testList
-                "an integer literal outside the prototype range fails with a diagnostic, not an exception"
+                "a numeric literal that the prototype front end cannot read fails with a diagnostic, not an exception"
                 [
-                    for name, text in
+                    for name, text, message in
                         [
                             "at the 32-bit limit (Oracle FS1147)",
-                            "module Program\nlet answer () = 2147483648\n"
+                            "module Program\nlet answer () = 2147483648\n",
+                            "integer literal outside the 32-bit range"
                             "with a 64-bit suffix (Oracle accepts)",
-                            "module Program\nlet answer () = 2147483648L\n"
+                            "module Program\nlet answer () = 2147483648L\n",
+                            "numeric literal other than a decimal integer"
+                            "with a radix prefix (Oracle accepts)",
+                            "module Program\nlet answer () = 0x1\n",
+                            "numeric literal other than a decimal integer"
+                            "before member access",
+                            "module Program\nlet answer () = 0x1.A\n",
+                            "numeric literal other than a decimal integer"
                         ] ->
                         testCase name
                         <| fun _ ->
@@ -1744,7 +1752,7 @@ let main _ =
                             Expect.equal
                                 result.Outcome
                                 CompilationOutcome.Failed
-                                "The prototype front end reads only 32-bit integer literals"
+                                "The prototype front end reads only decimal 32-bit integer literals"
 
                             Expect.sequenceEqual
                                 (result.Diagnostics
@@ -1760,7 +1768,7 @@ let main _ =
                                 [
                                     "FSC2P1001",
                                     DiagnosticStage.Compilation CompilationPhase.Syntax,
-                                    "integer literal outside the 32-bit range",
+                                    message,
                                     Some(2, 17)
                                 ]
                                 "The literal gets an explicit prototype diagnostic"

@@ -476,26 +476,39 @@ module internal Frontend =
                       && Char.IsDigit(text.[offset]) do
                     advance ()
 
-                match
-                    Int32.TryParse(
-                        text.Substring(
-                            first,
-                            offset
-                            - first
-                        ),
-                        Globalization.NumberStyles.None,
-                        Globalization.CultureInfo.InvariantCulture
-                    )
-                with
-                | true, value -> add (Integer value) start
-                | false, _ ->
+                let continuesLiteral =
+                    offset < text.Length
+                    && (Char.IsLetter(text.[offset])
+                        || text.[offset] = '_'
+                        || text.[offset] = '.'
+                           && offset + 1 < text.Length
+                           && Char.IsLetterOrDigit(text.[offset + 1]))
+
+                let failAt message =
                     tokenizationError <-
                         Some(
                             prototypeDiagnostic
                                 source.Path
                                 { Start = start; End = position () }
-                                "integer literal outside the 32-bit range"
+                                message
                         )
+
+                if continuesLiteral then
+                    failAt "numeric literal other than a decimal integer"
+                else
+                    match
+                        Int32.TryParse(
+                            text.Substring(
+                                first,
+                                offset
+                                - first
+                            ),
+                            Globalization.NumberStyles.None,
+                            Globalization.CultureInfo.InvariantCulture
+                        )
+                    with
+                    | true, value -> add (Integer value) start
+                    | false, _ -> failAt "integer literal outside the 32-bit range"
             elif current = '"' then
                 let start = position ()
                 advance ()
