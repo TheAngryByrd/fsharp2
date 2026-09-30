@@ -486,7 +486,6 @@ module ParserTests =
 
     let private unsupportedCases = [
         "TypeApplication.fs", "module Program\nlet y = f<int> x\n", []
-        "PrefixMinus.fs", "module Program\nlet y = f -1\n", []
         "ModuleThenNamespace.fs",
         "module Program\nlet x = 1\nnamespace N\nlet y = 2\n",
         [

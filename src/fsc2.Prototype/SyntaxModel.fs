@@ -143,6 +143,7 @@ type internal SyntaxExpression =
     | Tuple of ImmutableArray<SyntaxExpression> * SourceRange
     | Application of SyntaxExpression * SyntaxExpression * SourceRange
     | Infix of SyntaxIdentifier * SyntaxExpression * SyntaxExpression * SourceRange
+    | Prefix of operator: SyntaxIdentifier * operand: SyntaxExpression * SourceRange
     | If of SyntaxExpression * SyntaxExpression * SyntaxExpression option * SourceRange
     | Match of SyntaxExpression * ImmutableArray<SyntaxMatchClause> * SourceRange
     | Lambda of ImmutableArray<SyntaxPattern> * SyntaxExpression * SourceRange
@@ -168,6 +169,7 @@ type internal SyntaxExpression =
         | Tuple(_, range)
         | Application(_, _, range)
         | Infix(_, _, _, range)
+        | Prefix(_, _, range)
         | If(_, _, _, range)
         | Match(_, _, range)
         | Lambda(_, _, range)

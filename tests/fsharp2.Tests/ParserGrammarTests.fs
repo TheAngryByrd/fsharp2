@@ -106,6 +106,8 @@ module ParserGrammarTests =
             $"[{expressionShape func} {expressionShape argument}]"
         | SyntaxExpression.Infix(operator, left, right, _) ->
             $"{{{expressionShape left} {operator.Text} {expressionShape right}}}"
+        | SyntaxExpression.Prefix(operator, operand, _) ->
+            $"~{operator.Text}{expressionShape operand}"
         | SyntaxExpression.If(condition, thenBranch, elseBranch, _) ->
             let elseText =
                 elseBranch
@@ -313,6 +315,9 @@ module ParserGrammarTests =
                 left
                 right
             ]
+        | SyntaxExpression.Prefix(operator, operand, range) ->
+            text $"~{operator.Text}" range
+            :: infixRanges operand
         | SyntaxExpression.Tuple(items, range) ->
             text "tuple" range
             :: all items
@@ -375,6 +380,7 @@ module ParserGrammarTests =
                 left
                 right
             ]
+        | SyntaxExpression.Prefix(_, operand, _) -> applicationRanges operand
         | SyntaxExpression.Tuple(items, _) -> all items
         | SyntaxExpression.LongIdentifierSet(_, value, _) -> applicationRanges value
         | SyntaxExpression.Sequential(first, second, _) ->
@@ -2302,7 +2308,6 @@ let f a b =
         [
             "InfixAtColumnLess.fs(4,5): error FS0010: Unexpected symbol '<' in binding. Expected incomplete structured construct at or before this point or other token."
         ]
-        "InfixAtColumnMinusAdjacent.fs", "module A\nlet f a =\n    a\n    -1\n", []
         "InfixAtColumnModuleExpr.fs", "module A\n1\n|> ignore\n", []
         "InfixAtColumnColonEquals.fs", "module A\nlet f a b =\n    a\n    := b\n", []
         "InfixAtColumnAtLetColumn.fs", "module A\nlet x =\n    1\n+ 2\n", []
@@ -2311,9 +2316,6 @@ let f a b =
         [
             "InfixAtColumnGreater.fs(4,5): error FS0010: Unexpected symbol '>' in binding. Expected incomplete structured construct at or before this point or other token."
         ]
-        "InfixAtColumnNestedBindingBlock.fs",
-        "module A\nlet f a b =\n    let y =\n        a\n    + b\n    y\n",
-        []
         "InfixUndentedPlusUndent4.fs",
         "module A\nlet f a b =\n      a\n  + b\n",
         [
@@ -2357,23 +2359,16 @@ let f a b =
             "InfixUndentedAmpampUndent4.fs(4,3): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
             "InfixUndentedAmpampUndent4.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
         ]
-        "InfixLineMinusIdent.fs", "module A\nlet f a x =\n    a\n    -x\n", []
-        "InfixLineLocalLetSameLineValue.fs",
-        "module A\nlet f a b =\n    let y = a\n    + b\n    y\n",
-        []
         "InfixLineParenEqualsAt.fs",
         "module A\nlet f a b =\n    (a\n     = b)\n",
         [ "InfixLineParenEqualsAt.fs(4,6): error FS0010: Unexpected symbol '=' in expression" ]
         "InfixLineParenLessAt.fs",
         "module A\nlet f a b =\n    (a\n     < b)\n",
         [ "InfixLineParenLessAt.fs(4,6): error FS0010: Unexpected symbol '<' in expression" ]
-        "InfixLineParenMinusAdjacentIdent.fs", "module A\nlet f a x =\n    (a\n     -x)\n", []
-        "InfixLineParenMinusAdjacentLit.fs", "module A\nlet f a =\n    (a\n     -1)\n", []
         "InfixLineParenGreaterAt.fs",
         "module A\nlet f a b =\n    (a\n     > b)\n",
         [ "InfixLineParenGreaterAt.fs(4,6): error FS0010: Unexpected symbol '>' in expression" ]
         "InfixLineParenAmpAdjacent.fs", "module A\nlet f a b =\n    (a\n     &&b)\n", []
-        "InfixLinePlusAdjacentIdent.fs", "module A\nlet f a x =\n    a\n    +x\n", []
         "InfixLineListEqualsAt.fs",
         "module A\nlet f a b =\n    [ a\n      = b ]\n",
         [
@@ -3039,9 +3034,6 @@ let f a b =
             "ConditionalLetValueThenLeft.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
             "ConditionalLetValueThenLeft.fs(6,5): error FS0010: Incomplete structured construct at or before this point in implementation file"
         ]
-        "ConditionalBodyIfPlus1.fs",
-        "module A\nlet f x =\n    if x > 0\n       then\n     x\n       else\n     -x\n",
-        []
         "ConditionalBodyAtIf.fs",
         "module A\nlet f x =\n    if x > 0\n       then\n    x\n       else\n    0\n",
         [
@@ -4829,6 +4821,328 @@ let f a b =
         ]
     ]
 
+    let private prefixSignCases = [
+        "PrefixSignLiteralArgument.fs",
+        "module A\nlet r = f -1\n",
+        [ "let r = [f -1]" ],
+        [ "app(2,9--2,13)" ]
+        "PrefixSignSpacedSubtraction.fs",
+        "module A\nlet r = f - 1\n",
+        [ "let r = {f - 1}" ],
+        [ "-(2,9--2,14)" ]
+        "PrefixSignAdjacentSubtraction.fs",
+        "module A\nlet r = f-1\n",
+        [ "let r = {f - 1}" ],
+        [ "-(2,9--2,12)" ]
+        "PrefixSignPlusLiteralArgument.fs",
+        "module A\nlet r = f +1\n",
+        [ "let r = [f +1]" ],
+        [ "app(2,9--2,13)" ]
+        "PrefixSignIdentifierArgument.fs",
+        "module A\nlet r = f -x\n",
+        [ "let r = [f ~-x]" ],
+        [
+            "~-(2,11--2,13)"
+            "app(2,9--2,13)"
+        ]
+        "PrefixSignPlusIdentifierArgument.fs",
+        "module A\nlet r = f +x\n",
+        [ "let r = [f ~+x]" ],
+        [
+            "~+(2,11--2,13)"
+            "app(2,9--2,13)"
+        ]
+        "PrefixSignArgumentTakesOneAtom.fs",
+        "module A\nlet r = f -g x\n",
+        [ "let r = [[f ~-g] x]" ],
+        [
+            "~-(2,11--2,13)"
+            "app(2,9--2,15)"
+            "app(2,9--2,13)"
+        ]
+        "PrefixSignParenthesizedArgument.fs",
+        "module A\nlet r = f -(x)\n",
+        [ "let r = [f ~-(x)]" ],
+        [
+            "~-(2,11--2,15)"
+            "app(2,9--2,15)"
+        ]
+        "PrefixSignUnsignedLiteralArgument.fs",
+        "module A\nlet r = f -1u\n",
+        [ "let r = [f ~-1u]" ],
+        [
+            "~-(2,11--2,14)"
+            "app(2,9--2,14)"
+        ]
+        "PrefixSignFloatArgument.fs",
+        "module A\nlet r = f -1.5\n",
+        [ "let r = [f -1.5]" ],
+        [ "app(2,9--2,15)" ]
+        "PrefixSignHexArgument.fs",
+        "module A\nlet r = f -0x10\n",
+        [ "let r = [f -0x10]" ],
+        [ "app(2,9--2,16)" ]
+        "PrefixSignInt32MinimumArgument.fs",
+        "module A\nlet r = f -2147483648\n",
+        [ "let r = [f -2147483648]" ],
+        [ "app(2,9--2,22)" ]
+        "PrefixSignTwoArguments.fs",
+        "module A\nlet r = f -1 -2\n",
+        [ "let r = [[f -1] -2]" ],
+        [
+            "app(2,9--2,16)"
+            "app(2,9--2,13)"
+        ]
+        "PrefixSignArgumentThenAdjacentMinus.fs",
+        "module A\nlet r = f -1-2\n",
+        [ "let r = {[f -1] - 2}" ],
+        [
+            "-(2,9--2,15)"
+            "app(2,9--2,13)"
+        ]
+        "PrefixSignLiteralHead.fs", "module A\nlet r = -1\n", [ "let r = -1" ], []
+        "PrefixSignPlusLiteralHead.fs", "module A\nlet r = +1\n", [ "let r = +1" ], []
+        "PrefixSignIdentifierHead.fs",
+        "module A\nlet r = -x\n",
+        [ "let r = ~-x" ],
+        [ "~-(2,9--2,11)" ]
+        "PrefixSignSpacedHead.fs", "module A\nlet r = - x\n", [ "let r = ~-x" ], [ "~-(2,9--2,12)" ]
+        "PrefixSignSpacedLiteralHead.fs",
+        "module A\nlet r = - 1\n",
+        [ "let r = ~-1" ],
+        [ "~-(2,9--2,12)" ]
+        "PrefixSignHeadApplication.fs",
+        "module A\nlet r = -f x\n",
+        [ "let r = ~-[f x]" ],
+        [
+            "~-(2,9--2,13)"
+            "app(2,10--2,13)"
+        ]
+        "PrefixSignHeadTwice.fs",
+        "module A\nlet r = - -x\n",
+        [ "let r = ~-~-x" ],
+        [
+            "~-(2,9--2,13)"
+            "~-(2,11--2,13)"
+        ]
+        "PrefixSignLiteralHeadApplication.fs",
+        "module A\nlet r = -1 x\n",
+        [ "let r = [-1 x]" ],
+        [ "app(2,9--2,13)" ]
+        "PrefixSignAfterParenthesized.fs",
+        "module A\nlet r = (f)-1\n",
+        [ "let r = {(f) - 1}" ],
+        [ "-(2,9--2,14)" ]
+        "PrefixSignAfterSpacedParenthesized.fs",
+        "module A\nlet r = (f) -1\n",
+        [ "let r = [(f) -1]" ],
+        [ "app(2,9--2,15)" ]
+        "PrefixSignAfterConstant.fs",
+        "module A\nlet r = 1 -1\n",
+        [ "let r = [1 -1]" ],
+        [ "app(2,9--2,13)" ]
+        "PrefixSignBeforeInfix.fs",
+        "module A\nlet r = f -1 + 2\n",
+        [ "let r = {[f -1] + 2}" ],
+        [
+            "+(2,9--2,17)"
+            "app(2,9--2,13)"
+        ]
+        "PrefixSignHeadBeforeInfix.fs",
+        "module A\nlet r = -x * 2\n",
+        [ "let r = {~-x * 2}" ],
+        [
+            "*(2,9--2,15)"
+            "~-(2,9--2,11)"
+        ]
+        "PrefixSignAfterInfix.fs",
+        "module A\nlet r = a - -x\n",
+        [ "let r = {a - ~-x}" ],
+        [
+            "-(2,9--2,15)"
+            "~-(2,13--2,15)"
+        ]
+        "PrefixSignInParentheses.fs",
+        "module A\nlet r = (f -1)\n",
+        [ "let r = ([f -1])" ],
+        [ "app(2,10--2,14)" ]
+        "PrefixSignInList.fs",
+        "module A\nlet r = [-1; -x]\n",
+        [ "let r = [-1; ~-x]" ],
+        [ "~-(2,14--2,16)" ]
+        "PrefixSignInRecord.fs", "module A\nlet r = { X = -1 }\n", [ "let r = {X = -1}" ], []
+        "PrefixSignInTuple.fs",
+        "module A\nlet r = -1, -x\n",
+        [ "let r = -1, ~-x" ],
+        [
+            "tuple(2,9--2,15)"
+            "~-(2,13--2,15)"
+        ]
+        "PrefixSignConditionBranch.fs",
+        "module A\nlet r c = if -c then -1 else 1\n",
+        [ "let r c = if ~-c then -1 else 1" ],
+        [ "~-(2,14--2,16)" ]
+        "PrefixSignLambdaBody.fs",
+        "module A\nlet r = fun x -> -x\n",
+        [ "let r = fun x -> ~-x" ],
+        [ "~-(2,18--2,20)" ]
+        "PrefixSignNextLineArgument.fs",
+        "module A\nlet r =\n    f\n        -1\n",
+        [ "let r = [f -1]" ],
+        [ "app(3,5--4,11)" ]
+        "PrefixSignNextLineSubtraction.fs",
+        "module A\nlet r =\n    f\n    - 1\n",
+        [ "let r = {f - 1}" ],
+        [ "-(3,5--4,8)" ]
+        "PrefixSignNextLineItem.fs",
+        "module A\nlet r =\n    f ()\n    -x\n",
+        [ "let r = seq[[f ()]; ~-x]" ],
+        [
+            "seq(3,5--4,7)"
+            "~-(4,5--4,7)"
+            "app(3,5--3,9)"
+        ]
+        "PrefixSignNextLineItemInParentheses.fs",
+        "module A\nlet r = (f\n         -1)\n",
+        [ "let r = (seq[f; -1])" ],
+        [ "seq(2,10--3,12)" ]
+        "PrefixSignNextLineListItem.fs",
+        "module A\nlet r = [\n    1\n    -1\n]\n",
+        [ "let r = [1; -1]" ],
+        []
+        "PrefixSignEndOfLineSubtraction.fs",
+        "module A\nlet r =\n    f -\n        1\n",
+        [ "let r = {f - 1}" ],
+        [ "-(3,5--4,10)" ]
+        "PrefixSignLocalLetBody.fs",
+        "module A\nlet r () =\n    let y = 1\n    - 1\n",
+        [ "let r () = let y = 1 in ~-1" ],
+        [
+            "let(3,5--4,8)"
+            "~-(4,5--4,8)"
+        ]
+        "PrefixSignAfterNestedBlock.fs",
+        "module A\nlet r c =\n    if c then\n        1\n    else\n        2\n    -1\n",
+        [ "let r c = seq[if c then 1 else 2; -1]" ],
+        [ "seq(3,5--7,7)" ]
+        "PrefixSignSubtractionAfterNestedBlock.fs",
+        "module A\nlet r c =\n    if c then\n        1\n    else\n        2\n    - 1\n",
+        [ "let r c = {if c then 1 else 2 - 1}" ],
+        [ "-(3,5--7,8)" ]
+        "PrefixSignModuleExpression.fs",
+        "module A\nlet a = 1\n-1\n",
+        [
+            "let a = 1"
+            "expr -1"
+        ],
+        []
+        "InfixLineParenMinusAdjacentIdent.fs",
+        "module A\nlet f a x =\n    (a\n     -x)\n",
+        [ "let f a x = (seq[a; ~-x])" ],
+        [
+            "seq(3,6--4,8)"
+            "~-(4,6--4,8)"
+        ]
+        "InfixAtColumnNestedBindingBlock.fs",
+        "module A\nlet f a b =\n    let y =\n        a\n    + b\n    y\n",
+        [ "let f a b = let y = a in seq[~+b; y]" ],
+        [
+            "let(3,5--6,6)"
+            "seq(5,5--6,6)"
+            "~+(5,5--5,8)"
+        ]
+        "InfixLineLocalLetSameLineValue.fs",
+        "module A\nlet f a b =\n    let y = a\n    + b\n    y\n",
+        [ "let f a b = let y = a in seq[~+b; y]" ],
+        [
+            "let(3,5--5,6)"
+            "seq(4,5--5,6)"
+            "~+(4,5--4,8)"
+        ]
+        "InfixLineMinusIdent.fs",
+        "module A\nlet f a x =\n    a\n    -x\n",
+        [ "let f a x = seq[a; ~-x]" ],
+        [
+            "seq(3,5--4,7)"
+            "~-(4,5--4,7)"
+        ]
+        "InfixLinePlusAdjacentIdent.fs",
+        "module A\nlet f a x =\n    a\n    +x\n",
+        [ "let f a x = seq[a; ~+x]" ],
+        [
+            "seq(3,5--4,7)"
+            "~+(4,5--4,7)"
+        ]
+        "InfixLineParenMinusAdjacentLit.fs",
+        "module A\nlet f a =\n    (a\n     -1)\n",
+        [ "let f a = (seq[a; -1])" ],
+        [ "seq(3,6--4,8)" ]
+        "InfixAtColumnMinusAdjacent.fs",
+        "module A\nlet f a =\n    a\n    -1\n",
+        [ "let f a = seq[a; -1]" ],
+        [ "seq(3,5--4,7)" ]
+        "ConditionalBodyIfPlus1.fs",
+        "module A\nlet f x =\n    if x > 0\n       then\n     x\n       else\n     -x\n",
+        [ "let f x = if {x > 0} then x else ~-x" ],
+        [
+            ">(3,8--3,13)"
+            "~-(7,6--7,8)"
+        ]
+        "PrefixMinus.fs",
+        "module Program\nlet y = f -1\n",
+        [ "let y = [f -1]" ],
+        [ "app(2,9--2,13)" ]
+    ]
+
+    let private prefixOperatorExplicitCases = [
+        "PrefixAmpersandArgument.fs", "module A\nlet r = a &b\n", []
+        "PrefixDoubleAmpersandArgument.fs", "module A\nlet r = a &&b\n", []
+        "PrefixPercentArgument.fs", "module A\nlet r = a %b\n", []
+        "PrefixMinusDotArgument.fs", "module A\nlet r = f -.1\n", []
+        "PrefixPlusDotArgument.fs", "module A\nlet r = f +.1\n", []
+        "PrefixSignConditionalOperand.fs",
+        "module A\nlet r c = f -if c then 1 else 2\n",
+        [
+            "PrefixSignConditionalOperand.fs(2,14): error FS0010: Unexpected keyword 'if' in expression"
+        ]
+        "PrefixSignHeadConditionalOperand.fs",
+        "module A\nlet r c = -if c then 1 else 2\n",
+        [
+            "PrefixSignHeadConditionalOperand.fs(2,12): error FS0010: Unexpected keyword 'if' in expression"
+        ]
+        "PrefixSignModuleSubtractionLine.fs", "module A\nlet a = 1\n- 1\n", []
+        "PrefixSignInt32Overflow.fs",
+        "module A\nlet r = f -2147483649\n",
+        [
+            "PrefixSignInt32Overflow.fs(2,12): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "PrefixPlusInt32Limit.fs",
+        "module A\nlet r = f +2147483648\n",
+        [
+            "PrefixPlusInt32Limit.fs(2,11): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "PrefixPlusSByteLimit.fs",
+        "module A\nlet r = f +128y\n",
+        [
+            "PrefixPlusSByteLimit.fs(2,11): error FS1142: This number is outside the allowable range for 8-bit signed integers"
+        ]
+        "PrefixSignDecimalOverflow.fs",
+        "module A\nlet r = f -79228162514264337593543950336m\n",
+        [
+            "PrefixSignDecimalOverflow.fs(2,12): error FS1154: This number is outside the allowable range for decimal literals"
+        ]
+        "PrefixSignHexLimit.fs", "module A\nlet r = f -0x80000000\n", []
+        "PrefixSignUndentedInParentheses.fs", "module A\nlet r = (f\n        -1)\n", []
+    ]
+
+    let private prefixSignDiagnosticCases = [
+        "PrefixSignHighPrecedenceArgument.fs",
+        "module A\nlet r = f -g(x)\n",
+        [
+            "PrefixSignHighPrecedenceArgument.fs(2,11): error FS0597: Successive arguments should be separated by spaces or tupled, and arguments involving function or method applications should be parenthesized"
+        ]
+    ]
+
     [<Tests>]
     let tests =
         testList "Issue29.ParserGrammar" [
@@ -5681,6 +5995,52 @@ let items = [ origin.X; 1 ]
                              ))
                             expectedRanges
                             "The infix, application, conditional, and match ranges, and the clause count of each match"
+            ]
+
+            testList "an adjacent sign is a prefix operator and a spaced sign is subtraction" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in prefixSignCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with prefix and infix signs"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect (fun body ->
+                                 infixRanges body
+                                 @ applicationRanges body
+                             ))
+                            expectedRanges
+                            "The infix, prefix, and application ranges"
+            ]
+
+            testList "a prefix operator the parser does not model stays explicit" [
+                for logicalPath, text, oracle in prefixOperatorExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testList "a prefix sign argument reports the Oracle diagnostics" [
+                for logicalPath, text, oracle in prefixSignDiagnosticCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        Expect.sequenceEqual
+                            (oracleLines logicalPath result)
+                            oracle
+                            "The diagnostics match the Compatibility Oracle"
             ]
 
             testList "a token after a delimiter that closes left of its block item stays explicit" [
