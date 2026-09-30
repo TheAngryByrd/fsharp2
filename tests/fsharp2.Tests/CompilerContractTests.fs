@@ -1430,6 +1430,48 @@ let main _ =
                     ]
                     "The invalid argument is a source-phase error at the Oracle position"
 
+            testCase "an outer clause bar between two match columns gets no layout FS0058"
+            <| fun _ ->
+                let result =
+                    compile
+                        "namespace N\n\nopen System\n\ntype H() =\n    static member Run(a: int, b: int) : int =\n        match a with\n        | x ->\n            match b with\n            | y -> x + y\n          | z -> z\n"
+
+                Expect.isFalse
+                    (result.Diagnostics
+                     |> Seq.exists (fun diagnostic -> diagnostic.Code = "FS0058"))
+                    "The Compatibility Oracle accepts the bar as a clause of the outer match"
+
+                if result.Outcome = CompilationOutcome.Succeeded then
+                    let run =
+                        (Assembly.Load(bytes (Seq.exactlyOne result.Artifacts).Bytes))
+                            .GetType("N.H", true)
+                            .GetMethod("Run")
+
+                    Expect.sequenceEqual
+                        ([
+                            0, 0
+                            1, 2
+                            2, 1
+                         ]
+                         |> List.map (fun (a, b) ->
+                             run.Invoke(
+                                 null,
+                                 [|
+                                     box a
+                                     box b
+                                 |]
+                             )
+                             :?> int
+                         ))
+                        [
+                            0
+                            3
+                            3
+                        ]
+                        "The Compatibility Oracle program returns 0, 3, and 3"
+                else
+                    Expect.isEmpty result.Artifacts "A failed compilation publishes no artifacts"
+
             testList
                 "a first clause left of its match after a with at a line end fails and emits no assembly"
                 [

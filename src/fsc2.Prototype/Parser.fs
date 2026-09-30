@@ -2472,6 +2472,7 @@ module internal Parser =
                 |> ignore
 
             let mutable clausesColumn = None
+            let mutable leadingBar = false
             let mutable more = true
 
             // The Oracle reports FS0058 for a first clause on a later line left of 'match'.
@@ -2495,6 +2496,8 @@ module internal Parser =
                 let start = cursor.Current
 
                 if clausesColumn.IsNone then
+                    leadingBar <- bar.IsSome
+
                     clausesColumn <-
                         bar
                         |> Option.defaultValue start
@@ -2601,7 +2604,29 @@ module internal Parser =
                                        >= column
                                    ))
 
+                        let next =
+                            let mutable offset = 0
+
+                            while cursor.Peek(offset).Kind
+                                  <> LayoutTokenKind.SourceToken do
+                                offset <- offset + 1
+
+                            cursor.Peek offset
+
+                        // The Oracle reports FS0058 for a bar one column left of bars that start the clauses.
+                        let misaligned =
+                            leadingBar
+                            && isOperator "|" next
+                            && next.Range.Start.Line > cursor.LastEnd.Line
+                            && clausesColumn
+                               |> Option.exists (fun column -> next.Range.Start.Column = column - 1)
+
                         if reportedSince state reported then
+                            more <- false
+                        elif misaligned then
+                            if not (reportedAt state next) then
+                                reportUnsupported state next "a match clause"
+
                             more <- false
                         elif
                             ownsBar cursor.Current

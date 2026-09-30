@@ -3467,6 +3467,278 @@ let f a b =
         ]
     ]
 
+    let private clauseBarLayoutCases = [
+        "ClauseBarG04.fs",
+        "module A\nlet f a b =\n    match a with\n    | 0 -> match b with\n             | 0 -> b\n           | y -> y\n",
+        []
+        "ClauseBarG07.fs",
+        "module A\nlet f a b =\n    match a with\n    | 0 ->\n        match b with\n        | 0 -> b\n      | y -> y\n    | x -> x\n",
+        []
+        "ClauseBarD14.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | y -> x + y\n      | z -> z\n",
+        []
+        "ClauseBarLeft1.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 -> 1\n       | y -> y\n",
+        [ "FS0058(7,8)" ]
+        "ClauseBarLeft2.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 -> 1\n      | y -> y\n",
+        []
+        "ClauseBarLeft3.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 -> 1\n     | y -> y\n",
+        []
+        "ClauseBarLeft4AtOuter.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 -> 1\n    | y -> y\n",
+        []
+        "ClauseBarTopLeft1.fs",
+        "module A\nlet f b =\n    match b with\n      | 0 -> 1\n     | y -> y\n",
+        [ "FS0058(5,6)" ]
+        "ClauseBarTopLeft2.fs",
+        "module A\nlet f b =\n    match b with\n      | 0 -> 1\n    | y -> y\n",
+        []
+        "ClauseBarTopDeeperLeft2.fs",
+        "module A\nlet f b =\n    match b with\n        | 0 -> 1\n      | y -> y\n",
+        [ "FS0058(5,7)" ]
+        "ClauseBarTopDeeperLeft1.fs",
+        "module A\nlet f b =\n    match b with\n        | 0 -> 1\n       | y -> y\n",
+        [ "FS0058(5,8)" ]
+        "ClauseBarNobarLeft2.fs",
+        "module A\nlet f b =\n    match b with\n      0 -> 1\n    | y -> y\n",
+        []
+        "ClauseBarNobarLeft2Deeper.fs",
+        "module A\nlet f b =\n    match b with\n        0 -> 1\n      | y -> y\n",
+        [ "FS0058(5,7)" ]
+        "ClauseBarNobarLeft1.fs",
+        "module A\nlet f b =\n    match b with\n        0 -> 1\n       | y -> y\n",
+        [ "FS0058(5,8)" ]
+        "ClauseBarInnerSameLineLeft2.fs",
+        "module A\nlet f a b =\n    match a with\n    | 0 -> match b with\n           | 0 -> b\n         | y -> y\n",
+        []
+        "ClauseBarInnerSameLineLeft1.fs",
+        "module A\nlet f a b =\n    match a with\n    | 0 -> match b with\n           | 0 -> b\n          | y -> y\n",
+        [ "FS0058(6,11)" ]
+        "ClauseBarInnerSameLineAtMatch.fs",
+        "module A\nlet f a b =\n    match a with\n    | 0 -> match b with\n             | 0 -> b\n           | y -> y\n    | x -> x\n",
+        []
+        "ClauseBarG07OuterAfter.fs",
+        "module A\nlet f a b =\n    match a with\n    | 0 ->\n        match b with\n          | 0 -> b\n        | y -> y\n    | x -> x\n",
+        []
+        "ClauseBarTwoLeft2.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 -> 1\n      | 1 -> 2\n      | y -> y\n",
+        []
+        "ClauseBarBodyBlockBarPlus1.fs",
+        "module A\nlet f x =\n    match x with\n    | 1 ->\n        2\n     | _ -> 3\n",
+        []
+        "ClauseBarBodyBlockBarPlus2.fs",
+        "module A\nlet f x =\n    match x with\n    | 1 ->\n        2\n      | _ -> 3\n",
+        []
+        "ClauseBarBodyBlockBarPlus3.fs",
+        "module A\nlet f x =\n    match x with\n    | 1 ->\n        2\n       | _ -> 3\n",
+        []
+        "ClauseBarInnerBodyDeeperLeft2.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 ->\n            1\n      | y -> y\n",
+        []
+        "ClauseBarInnerBodyDeeperLeft1.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 ->\n            1\n       | y -> y\n",
+        [ "FS0058(8,8)" ]
+        "ClauseBarTopBodyBlockBetween.fs",
+        "module A\nlet f b =\n    match b with\n    | 0 ->\n        g 1\n      | y -> y\n",
+        []
+        "ClauseBarNobarInnerLeft2.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        0 -> 1\n      | y -> y\n",
+        [ "FS0058(7,7)" ]
+        "ClauseBarNobarInnerLeft1.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        0 -> 1\n       | y -> y\n",
+        [ "FS0058(7,8)" ]
+        "ClauseBarInnerBarsIndentedLeft1.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n          | 0 -> 1\n         | y -> y\n",
+        [ "FS0058(7,10)" ]
+        "ClauseBarInnerBarsIndentedLeft2.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n          | 0 -> 1\n        | y -> y\n",
+        []
+        "ClauseBarIfBodyBarBetween.fs",
+        "module A\nlet f c x =\n    match x with\n    | 1 ->\n        if c then 2 else 3\n      | _ -> 4\n",
+        []
+        "ClauseBarThreeLevels.fs",
+        "module A\nlet f a b c =\n    match a with\n    | x ->\n        match b with\n        | y ->\n            match c with\n            | z -> z\n          | w -> w\n    | v -> v\n",
+        []
+    ]
+
+    let private clauseBarCases = [
+        "ClauseBarG04.fs",
+        "module A\nlet f a b =\n    match a with\n    | 0 -> match b with\n             | 0 -> b\n           | y -> y\n",
+        [ "let f a b = match a with | 0 -> match b with | 0 -> b | y -> y" ],
+        [
+            "match(3,5--6,20)2"
+            "match(4,12--5,22)1"
+        ]
+        "ClauseBarG07.fs",
+        "module A\nlet f a b =\n    match a with\n    | 0 ->\n        match b with\n        | 0 -> b\n      | y -> y\n    | x -> x\n",
+        [ "let f a b = match a with | 0 -> match b with | 0 -> b | y -> y | x -> x" ],
+        [
+            "match(3,5--8,13)3"
+            "match(5,9--6,17)1"
+        ]
+        "ClauseBarD14.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | y -> x + y\n      | z -> z\n",
+        [ "let f a b = match a with | x -> match b with | y -> {x + y} | z -> z" ],
+        [
+            "+(6,16--6,21)"
+            "match(3,5--7,15)2"
+            "match(5,9--6,21)1"
+        ]
+        "ClauseBarLeft2.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 -> 1\n      | y -> y\n",
+        [ "let f a b = match a with | x -> match b with | 0 -> 1 | y -> y" ],
+        [
+            "match(3,5--7,15)2"
+            "match(5,9--6,17)1"
+        ]
+        "ClauseBarLeft3.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 -> 1\n     | y -> y\n",
+        [ "let f a b = match a with | x -> match b with | 0 -> 1 | y -> y" ],
+        [
+            "match(3,5--7,14)2"
+            "match(5,9--6,17)1"
+        ]
+        "ClauseBarLeft4AtOuter.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 -> 1\n    | y -> y\n",
+        [ "let f a b = match a with | x -> match b with | 0 -> 1 | y -> y" ],
+        [
+            "match(3,5--7,13)2"
+            "match(5,9--6,17)1"
+        ]
+        "ClauseBarInnerSameLineLeft2.fs",
+        "module A\nlet f a b =\n    match a with\n    | 0 -> match b with\n           | 0 -> b\n         | y -> y\n",
+        [ "let f a b = match a with | 0 -> match b with | 0 -> b | y -> y" ],
+        [
+            "match(3,5--6,18)2"
+            "match(4,12--5,20)1"
+        ]
+        "ClauseBarInnerSameLineAtMatch.fs",
+        "module A\nlet f a b =\n    match a with\n    | 0 -> match b with\n             | 0 -> b\n           | y -> y\n    | x -> x\n",
+        [ "let f a b = match a with | 0 -> match b with | 0 -> b | y -> y | x -> x" ],
+        [
+            "match(3,5--7,13)3"
+            "match(4,12--5,22)1"
+        ]
+        "ClauseBarTwoLeft2.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 -> 1\n      | 1 -> 2\n      | y -> y\n",
+        [ "let f a b = match a with | x -> match b with | 0 -> 1 | 1 -> 2 | y -> y" ],
+        [
+            "match(3,5--8,15)3"
+            "match(5,9--6,17)1"
+        ]
+        "ClauseBarBodyBlockBarPlus1.fs",
+        "module A\nlet f x =\n    match x with\n    | 1 ->\n        2\n     | _ -> 3\n",
+        [ "let f x = match x with | 1 -> 2 | _ -> 3" ],
+        [ "match(3,5--6,14)2" ]
+        "ClauseBarBodyBlockBarPlus2.fs",
+        "module A\nlet f x =\n    match x with\n    | 1 ->\n        2\n      | _ -> 3\n",
+        [ "let f x = match x with | 1 -> 2 | _ -> 3" ],
+        [ "match(3,5--6,15)2" ]
+        "ClauseBarBodyBlockBarPlus3.fs",
+        "module A\nlet f x =\n    match x with\n    | 1 ->\n        2\n       | _ -> 3\n",
+        [ "let f x = match x with | 1 -> 2 | _ -> 3" ],
+        [ "match(3,5--6,16)2" ]
+        "ClauseBarInnerBodyDeeperLeft2.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 ->\n            1\n      | y -> y\n",
+        [ "let f a b = match a with | x -> match b with | 0 -> 1 | y -> y" ],
+        [
+            "match(3,5--8,15)2"
+            "match(5,9--7,14)1"
+        ]
+        "ClauseBarTopBodyBlockBetween.fs",
+        "module A\nlet f b =\n    match b with\n    | 0 ->\n        g 1\n      | y -> y\n",
+        [ "let f b = match b with | 0 -> [g 1] | y -> y" ],
+        [
+            "app(5,9--5,12)"
+            "match(3,5--6,15)2"
+        ]
+        "ClauseBarIfBodyBarBetween.fs",
+        "module A\nlet f c x =\n    match x with\n    | 1 ->\n        if c then 2 else 3\n      | _ -> 4\n",
+        [ "let f c x = match x with | 1 -> if c then 2 else 3 | _ -> 4" ],
+        [
+            "if(5,9--5,27)E"
+            "match(3,5--6,15)2"
+        ]
+        "ClauseBarThreeLevels.fs",
+        "module A\nlet f a b c =\n    match a with\n    | x ->\n        match b with\n        | y ->\n            match c with\n            | z -> z\n          | w -> w\n    | v -> v\n",
+        [
+            "let f a b c = match a with | x -> match b with | y -> match c with | z -> z | w -> w | v -> v"
+        ],
+        [
+            "match(3,5--10,13)2"
+            "match(5,9--9,19)2"
+            "match(7,13--8,21)1"
+        ]
+    ]
+
+    let private clauseBarExplicitCases = [
+        "ClauseBarLeft1.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 -> 1\n       | y -> y\n",
+        [
+            "ClauseBarLeft1.fs(7,8): error FS0058: The '|' tokens separating rules of this pattern match are misaligned by one column. Consider realigning your code or using further indentation."
+        ]
+        "ClauseBarTopLeft1.fs",
+        "module A\nlet f b =\n    match b with\n      | 0 -> 1\n     | y -> y\n",
+        [
+            "ClauseBarTopLeft1.fs(5,6): error FS0058: The '|' tokens separating rules of this pattern match are misaligned by one column. Consider realigning your code or using further indentation."
+            "ClauseBarTopLeft1.fs(5,6): error FS0010: Unexpected symbol '|' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "ClauseBarTopLeft2.fs",
+        "module A\nlet f b =\n    match b with\n      | 0 -> 1\n    | y -> y\n",
+        [
+            "ClauseBarTopLeft2.fs(5,5): error FS0010: Unexpected symbol '|' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "ClauseBarTopDeeperLeft2.fs",
+        "module A\nlet f b =\n    match b with\n        | 0 -> 1\n      | y -> y\n",
+        [
+            "ClauseBarTopDeeperLeft2.fs(5,7): error FS0010: Unexpected symbol '|' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "ClauseBarTopDeeperLeft1.fs",
+        "module A\nlet f b =\n    match b with\n        | 0 -> 1\n       | y -> y\n",
+        [
+            "ClauseBarTopDeeperLeft1.fs(5,8): error FS0058: The '|' tokens separating rules of this pattern match are misaligned by one column. Consider realigning your code or using further indentation."
+            "ClauseBarTopDeeperLeft1.fs(5,8): error FS0010: Unexpected symbol '|' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "ClauseBarNobarLeft2.fs",
+        "module A\nlet f b =\n    match b with\n      0 -> 1\n    | y -> y\n",
+        []
+        "ClauseBarNobarLeft2Deeper.fs",
+        "module A\nlet f b =\n    match b with\n        0 -> 1\n      | y -> y\n",
+        []
+        "ClauseBarNobarLeft1.fs",
+        "module A\nlet f b =\n    match b with\n        0 -> 1\n       | y -> y\n",
+        []
+        "ClauseBarInnerSameLineLeft1.fs",
+        "module A\nlet f a b =\n    match a with\n    | 0 -> match b with\n           | 0 -> b\n          | y -> y\n",
+        [
+            "ClauseBarInnerSameLineLeft1.fs(6,11): error FS0058: The '|' tokens separating rules of this pattern match are misaligned by one column. Consider realigning your code or using further indentation."
+        ]
+        "ClauseBarG07OuterAfter.fs",
+        "module A\nlet f a b =\n    match a with\n    | 0 ->\n        match b with\n          | 0 -> b\n        | y -> y\n    | x -> x\n",
+        []
+        "ClauseBarInnerBodyDeeperLeft1.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        | 0 ->\n            1\n       | y -> y\n",
+        [
+            "ClauseBarInnerBodyDeeperLeft1.fs(8,8): error FS0058: The '|' tokens separating rules of this pattern match are misaligned by one column. Consider realigning your code or using further indentation."
+        ]
+        "ClauseBarNobarInnerLeft2.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        0 -> 1\n      | y -> y\n",
+        []
+        "ClauseBarNobarInnerLeft1.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n        0 -> 1\n       | y -> y\n",
+        []
+        "ClauseBarInnerBarsIndentedLeft1.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n          | 0 -> 1\n         | y -> y\n",
+        [
+            "ClauseBarInnerBarsIndentedLeft1.fs(7,10): error FS0058: The '|' tokens separating rules of this pattern match are misaligned by one column. Consider realigning your code or using further indentation."
+        ]
+        "ClauseBarInnerBarsIndentedLeft2.fs",
+        "module A\nlet f a b =\n    match a with\n    | x ->\n        match b with\n          | 0 -> 1\n        | y -> y\n",
+        []
+    ]
+
     [<Tests>]
     let tests =
         testList "Issue29.ParserGrammar" [
@@ -4122,6 +4394,70 @@ let items = [ origin.X; 1 ]
 
             testList "a match line that the parser does not model stays explicit" [
                 for logicalPath, text, oracle in matchLineExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testList
+                "the layout reports FS0058 for a clause bar between two block columns only where the Oracle does"
+                [
+                    for logicalPath, text, expected in clauseBarLayoutCases ->
+                        testCase logicalPath
+                        <| fun _ ->
+                            let language =
+                                LanguageVersion.normalize (Some "10.0")
+                                |> Result.defaultWith failtest
+
+                            let document =
+                                SourceSnapshot.Create(
+                                    StableIdentity.create logicalPath,
+                                    logicalPath,
+                                    text,
+                                    "content"
+                                )
+                                |> LexicalPipeline.prepare language Array.empty
+
+                            Expect.sequenceEqual
+                                (document.Diagnostics
+                                 |> Seq.map (fun diagnostic ->
+                                     $"{diagnostic.Code}({diagnostic.Range.Start.Line},{diagnostic.Range.Start.Column})"
+                                 ))
+                                expected
+                                "The layout diagnostics"
+                ]
+
+            testList "a clause bar left of an inner match belongs to the outer match" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in clauseBarCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with clause bars"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect (fun body ->
+                                 infixRanges body
+                                 @ applicationRanges body
+                                 @ conditionalRanges body
+                                 @ matchRanges body
+                             ))
+                            expectedRanges
+                            "The match ranges and the clause count of each match"
+            ]
+
+            testList "a clause bar that the parser does not model stays explicit" [
+                for logicalPath, text, oracle in clauseBarExplicitCases ->
                     testCase logicalPath
                     <| fun _ ->
                         let result = parse logicalPath text
