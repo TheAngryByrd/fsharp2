@@ -476,16 +476,26 @@ module internal Frontend =
                       && Char.IsDigit(text.[offset]) do
                     advance ()
 
-                let value =
-                    Int32.Parse(
+                match
+                    Int32.TryParse(
                         text.Substring(
                             first,
                             offset
                             - first
-                        )
+                        ),
+                        Globalization.NumberStyles.None,
+                        Globalization.CultureInfo.InvariantCulture
                     )
-
-                add (Integer value) start
+                with
+                | true, value -> add (Integer value) start
+                | false, _ ->
+                    tokenizationError <-
+                        Some(
+                            prototypeDiagnostic
+                                source.Path
+                                { Start = start; End = position () }
+                                "integer literal outside the 32-bit range"
+                        )
             elif current = '"' then
                 let start = position ()
                 advance ()
