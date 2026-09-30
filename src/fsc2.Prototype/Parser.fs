@@ -1082,7 +1082,7 @@ module internal Parser =
             ]
             |> List.forall (fun suffix -> not (text.EndsWith(suffix, StringComparison.Ordinal))))
 
-    // The lexer does not check literal ranges, and the Oracle reports FS1142 to FS1154 for a literal outside its range.
+    // The lexer does not check literal ranges or digits, and the Oracle reports FS1142 to FS1156 for such a literal.
     let private fitsWithSign (sign: LayoutToken) (literal: LayoutToken) =
         let text = (tokenText literal).Replace("_", "")
 
@@ -1139,22 +1139,38 @@ module internal Parser =
                 | 'n' -> 64, withoutSuffix
                 | _ -> 32, text
 
-            let magnitude =
+            let digitValues =
                 (if radix = 10 then digits else digits.Substring 2)
-                |> Seq.fold
-                    (fun (value: Numerics.BigInteger) digit ->
-                        value
-                        * Numerics.BigInteger radix
-                        + Numerics.BigInteger(Convert.ToInt32(string digit, 16))
-                    )
-                    Numerics.BigInteger.Zero
+                |> Seq.map (fun digit -> "0123456789abcdef".IndexOf(Char.ToLowerInvariant digit))
+                |> Seq.toList
 
-            let limit = Numerics.BigInteger.Pow(Numerics.BigInteger 2, bits - 1)
+            if
+                digitValues.IsEmpty
+                || digitValues
+                   |> List.exists (fun value ->
+                       value < 0
+                       || value
+                          >= radix
+                   )
+            then
+                false
+            else
+                let magnitude =
+                    digitValues
+                    |> List.fold
+                        (fun (value: Numerics.BigInteger) digit ->
+                            value
+                            * Numerics.BigInteger radix
+                            + Numerics.BigInteger digit
+                        )
+                        Numerics.BigInteger.Zero
 
-            magnitude < limit
-            || radix = 10
-               && isOperator "-" sign
-               && magnitude = limit
+                let limit = Numerics.BigInteger.Pow(Numerics.BigInteger 2, bits - 1)
+
+                magnitude < limit
+                || radix = 10
+                   && isOperator "-" sign
+                   && magnitude = limit
 
     let private isSignedLiteral (cursor: Cursor) =
         isSign cursor.Current
@@ -2401,7 +2417,10 @@ module internal Parser =
             let literal = cursor.Advance()
 
             if not (fitsWithSign token literal) then
-                reportUnsupported state literal "a signed literal at the limit of its type"
+                reportUnsupported
+                    state
+                    literal
+                    "a signed literal that is outside its range or not readable"
 
             SyntaxExpression.Constant(
                 SyntaxConstant.Numeric(

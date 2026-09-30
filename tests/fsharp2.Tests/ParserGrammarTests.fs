@@ -5804,6 +5804,67 @@ let f a b =
         ]
     ]
 
+    let private unreadableSignedLiteralCases = [
+        "SignedHexBignumSuffix.fs",
+        "module A\nlet y = f -0x1FI\n",
+        [
+            "SignedHexBignumSuffix.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedHexWithFraction.fs",
+        "module A\nlet y = f -0x1.0\n",
+        [ "SignedHexWithFraction.fs(2,15): error FS0599: Missing qualification after '.'" ]
+        "SignedLiteralSuffixLs.fs",
+        "module A\nlet y = f -1ls\n",
+        [
+            "SignedLiteralSuffixLs.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedHexDecimalSuffix.fs",
+        "module A\nlet y = f -0x1M\n",
+        [
+            "SignedHexDecimalSuffix.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedBinaryBignumSuffix.fs",
+        "module A\nlet y = f -0b1I\n",
+        [
+            "SignedBinaryBignumSuffix.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedOctalBignumSuffix.fs",
+        "module A\nlet y = f -0o7N\n",
+        [
+            "SignedOctalBignumSuffix.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedLiteralSuffixLsAgain.fs",
+        "module A\nlet y = f -1ls\n",
+        [
+            "SignedLiteralSuffixLsAgain.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedHexBignumHead.fs",
+        "module A\nlet y = -0x1FI\n",
+        [
+            "SignedHexBignumHead.fs(2,10): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedLiteralSuffixXy.fs",
+        "module A\nlet y = f -1xy\n",
+        [
+            "SignedLiteralSuffixXy.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedHexLowerDecimalSuffix.fs",
+        "module A\nlet y = f -0x1Fm\n",
+        [
+            "SignedHexLowerDecimalSuffix.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedHexSuffixG.fs",
+        "module A\nlet y = f -0x1G\n",
+        [
+            "SignedHexSuffixG.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedHexSuffixQInList.fs",
+        "module A\nlet y = [ -0x1Q ]\n",
+        [
+            "SignedHexSuffixQInList.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+    ]
+
     [<Tests>]
     let tests =
         testList "Issue29.ParserGrammar" [
@@ -6797,6 +6858,18 @@ let items = [ origin.X; 1 ]
 
             testList "an argument line left of a lambda, match, or conditional body stays explicit" [
                 for logicalPath, text, oracle in bodyArgumentLineCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testList "a signed literal the parser cannot read stays explicit" [
+                for logicalPath, text, oracle in unreadableSignedLiteralCases ->
                     testCase logicalPath
                     <| fun _ ->
                         let result = parse logicalPath text
