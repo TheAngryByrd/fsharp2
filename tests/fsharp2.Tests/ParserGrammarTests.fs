@@ -90,6 +90,12 @@ module ParserGrammarTests =
         |> String.concat " "
         |> sprintf "%s%s" mutability
 
+    let private prefixText (operator: SyntaxPrefixOperator) =
+        match operator with
+        | SyntaxPrefixOperator.Negate _ -> "~-"
+        | SyntaxPrefixOperator.Plus _ -> "~+"
+        | SyntaxPrefixOperator.Dereference _ -> "~!"
+
     let rec private expressionShape expression =
         match expression with
         | SyntaxExpression.Constant(SyntaxConstant.Numeric text, _)
@@ -107,7 +113,7 @@ module ParserGrammarTests =
         | SyntaxExpression.Infix(operator, left, right, _) ->
             $"{{{expressionShape left} {operator.Text} {expressionShape right}}}"
         | SyntaxExpression.Prefix(operator, operand, _) ->
-            $"~{operator.Text}{expressionShape operand}"
+            $"{prefixText operator}{expressionShape operand}"
         | SyntaxExpression.If(condition, thenBranch, elseBranch, _) ->
             let elseText =
                 elseBranch
@@ -316,7 +322,7 @@ module ParserGrammarTests =
                 right
             ]
         | SyntaxExpression.Prefix(operator, operand, range) ->
-            text $"~{operator.Text}" range
+            text (prefixText operator) range
             :: infixRanges operand
         | SyntaxExpression.Tuple(items, range) ->
             text "tuple" range

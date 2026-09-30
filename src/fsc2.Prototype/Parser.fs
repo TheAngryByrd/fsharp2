@@ -1052,6 +1052,13 @@ module internal Parser =
 
     let private isDereference = isOperator "!"
 
+    let private prefixOperator (token: LayoutToken) =
+        match sourceKind token, tokenText token with
+        | Some LexicalTokenKind.Operator, "-" -> Some(SyntaxPrefixOperator.Negate token.Range)
+        | Some LexicalTokenKind.Operator, "+" -> Some(SyntaxPrefixOperator.Plus token.Range)
+        | Some LexicalTokenKind.Operator, "!" -> Some(SyntaxPrefixOperator.Dereference token.Range)
+        | _ -> None
+
     // FCS lexes an identifier or keyword with '!' after it as one token, such as 'do!' or the reserved 'f!'.
     let private startsDereference (cursor: Cursor) =
         isDereference cursor.Current
@@ -2155,13 +2162,17 @@ module internal Parser =
                     reportUnsupported state cursor.Current "an operand of a prefix operator"
                     missingExpression cursor.Current
 
-            SyntaxExpression.Prefix(
-                identifier operatorToken,
-                operand,
-                span operatorToken.Range operand.Range
-            )
+            prefixExpression state operatorToken operand
         else
             parseApplicationFromAtom state context
+
+    and private prefixExpression state (operatorToken: LayoutToken) operand =
+        match prefixOperator operatorToken with
+        | Some operator ->
+            SyntaxExpression.Prefix(operator, operand, span operatorToken.Range operand.Range)
+        | None ->
+            reportUnsupported state operatorToken "a prefix operator"
+            missingExpression operatorToken
 
     and private parseApplicationFromAtom state context =
         let cursor = state.Cursor
@@ -2243,11 +2254,7 @@ module internal Parser =
                 reportUnsupported state cursor.Current "an operand of a prefix operator"
                 missingExpression cursor.Current
 
-        SyntaxExpression.Prefix(
-            identifier operatorToken,
-            operand,
-            span operatorToken.Range operand.Range
-        )
+        prefixExpression state operatorToken operand
 
     // FCS 'argExpr': a prefix operator in an argument applies to one atomic expression.
     and private parsePrefixArgument state context =
@@ -2261,11 +2268,7 @@ module internal Parser =
                 reportUnsupported state cursor.Current "an operand of a prefix operator"
                 missingExpression cursor.Current
 
-        SyntaxExpression.Prefix(
-            identifier operatorToken,
-            operand,
-            span operatorToken.Range operand.Range
-        )
+        prefixExpression state operatorToken operand
 
     and private parseArgument state context prefixRange =
         match parseAtom state context with
