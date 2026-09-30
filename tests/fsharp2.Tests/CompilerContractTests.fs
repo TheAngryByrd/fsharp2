@@ -1430,6 +1430,51 @@ let main _ =
                     ]
                     "The invalid argument is a source-phase error at the Oracle position"
 
+            testList
+                "a first clause left of its match after a with at a line end fails and emits no assembly"
+                [
+                    for name, source, line, column in
+                        [
+                            "inner with line, bar at the outer clause column",
+                            "namespace N\n\nopen System\n\ntype H() =\n    static member Run(a: int, b: int) : int =\n        match a with\n        | x ->\n            match\n                b\n              with\n        | y -> y\n",
+                            12,
+                            9
+                            "inner with at a line end, bar at the outer clause column",
+                            "namespace N\n\ntype H() =\n    static member Run(a: int, b: int) : int =\n        match a with\n        | x -> match b with\n        | y -> y\n",
+                            7,
+                            9
+                            "inner with at a line end, bar between the match columns",
+                            "namespace N\n\ntype H() =\n    static member Run(a: int, b: int) : int =\n        match a with\n        | x -> match b with\n             | y -> y\n",
+                            7,
+                            14
+                        ] ->
+                        testCase name
+                        <| fun _ ->
+                            let result = compile source
+
+                            Expect.notEqual
+                                result.Outcome
+                                CompilationOutcome.Succeeded
+                                "The Compatibility Oracle rejects the clause bar with FS0058"
+
+                            Expect.isEmpty
+                                result.Artifacts
+                                "A failed compilation publishes no artifacts"
+
+                            Expect.equal
+                                (result.Diagnostics
+                                 |> Seq.map (fun diagnostic ->
+                                     diagnostic.Code,
+                                     diagnostic.Range
+                                     |> Option.map (fun range ->
+                                         range.Start.Line, range.Start.Column
+                                     )
+                                 )
+                                 |> Seq.tryHead)
+                                (Some("FS0058", Some(line, column)))
+                                "The first diagnostic is FS0058 at the Compatibility Oracle position"
+                ]
+
             testCase "a second with after a match fails and emits no assembly"
             <| fun _ ->
                 let result =

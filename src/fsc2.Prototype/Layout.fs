@@ -104,6 +104,16 @@ module internal Layout =
             item
             :: withoutLastMatch rest
 
+    let rec private innermostMatch column items =
+        match items with
+        | [] -> None
+        | ItemColumn.Match matchColumn :: _ when
+            matchColumn
+            <= column
+            ->
+            Some matchColumn
+        | _ :: rest -> innermostMatch column rest
+
     let private clears startsInfix column item =
         match item with
         | ItemColumn.Opened blockColumn ->
@@ -140,6 +150,7 @@ module internal Layout =
         let mutable previousLastToken: LexicalToken option = None
         let mutable itemBlockColumns: ItemColumn list = []
         let mutable savedItemColumns: ItemColumn list list = []
+        let mutable firstClauseLimit: int option = None
         let mutable delimiterDepth = 0
         let mutable order = int64 diagnostics.Count
 
@@ -233,6 +244,8 @@ module internal Layout =
                 |> Seq.toArray
 
             let mutable lineBlockColumns = []
+            let mutable lineFirstClauseLimit = None
+            let mutable lineWithMatch = None
 
             for index = 0 to lineTokens.Length
                              - 1 do
@@ -242,6 +255,9 @@ module internal Layout =
                     delimiterDepth = 0
                     && isKeywordText "with" token
                 then
+                    if index + 1 = lineTokens.Length then
+                        lineFirstClauseLimit <- innermostMatch Int32.MaxValue lineBlockColumns
+
                     lineBlockColumns <- withoutLastMatch lineBlockColumns
 
                 if
@@ -351,7 +367,8 @@ module internal Layout =
 
                 let conditional =
                     if continuesIf then
-                        openConstruct lineTokens[0] column itemBlockColumns
+                        (lineWithMatch <- innermostMatch column itemBlockColumns
+                         openConstruct lineTokens[0] column itemBlockColumns)
                     else
                         None
 
@@ -456,7 +473,8 @@ module internal Layout =
 
                     let conditional =
                         if continuesIf then
-                            openConstruct lineTokens[0] column itemBlockColumns
+                            (lineWithMatch <- innermostMatch column itemBlockColumns
+                             openConstruct lineTokens[0] column itemBlockColumns)
                         else
                             None
 
@@ -517,6 +535,38 @@ module internal Layout =
                 lineTokens.Length > 0
                 && not isDirectiveLine
             then
+                let start = lineTokens[0].Range.Start
+
+                // The Oracle reports FS0058 for a first clause on the line after 'with' when the clause is left of 'match'.
+                match firstClauseLimit with
+                | Some limit when
+                    depthBefore = 0
+                    && start.Column < limit
+                    && not (
+                        diagnostics
+                        |> Seq.exists (fun diagnostic -> diagnostic.Range.Start = start)
+                    )
+                    ->
+                    diagnostics.Add {
+                        Code = "FS0058"
+                        Message = "Unexpected syntax or possible incorrect indentation."
+                        Range = { Start = start; End = start }
+                        Order = order
+                        Severity = DiagnosticSeverity.Error
+                    }
+
+                    order <- order + 1L
+                | _ -> ()
+
+                firstClauseLimit <-
+                    if
+                        lineTokens.Length = 1
+                        && isKeywordText "with" lineTokens[0]
+                    then
+                        lineWithMatch
+                    else
+                        lineFirstClauseLimit
+
                 if
                     depthBefore > 0
                     || delimiterDepth > 0
