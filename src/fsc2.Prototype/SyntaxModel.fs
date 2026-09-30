@@ -171,6 +171,10 @@ type internal SyntaxExpression =
         body: SyntaxExpression *
         SourceRange
     | LongIdentifierSet of LongIdentifier * value: SyntaxExpression * SourceRange
+    | Upcast of SyntaxExpression * targetType: SyntaxType * SourceRange
+    | Downcast of SyntaxExpression * targetType: SyntaxType * SourceRange
+    | TypeTest of SyntaxExpression * targetType: SyntaxType * SourceRange
+    | DotGet of SyntaxExpression * members: LongIdentifier * SourceRange
     | Missing of MissingSyntax
 
     member this.Range =
@@ -191,7 +195,11 @@ type internal SyntaxExpression =
         | BracketApplication(_, _, range)
         | Sequential(_, _, range)
         | LetOrUse(_, _, _, _, range)
-        | LongIdentifierSet(_, _, range) -> range
+        | LongIdentifierSet(_, _, range)
+        | Upcast(_, _, range)
+        | Downcast(_, _, range)
+        | TypeTest(_, _, range)
+        | DotGet(_, _, range) -> range
         | Missing missing -> missing.Range
 
 and internal SyntaxMatchClause = {

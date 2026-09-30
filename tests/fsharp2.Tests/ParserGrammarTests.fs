@@ -202,6 +202,13 @@ module ParserGrammarTests =
             $"{keywordText}{recursive} {bindingHead binding} = {expressionShape binding.Body} in {expressionShape body}"
         | SyntaxExpression.LongIdentifierSet(name, value, _) ->
             $"{{{name.Text} <- {expressionShape value}}}"
+        | SyntaxExpression.Upcast(target, targetType, _) ->
+            $"{{{expressionShape target} :> {typeShape targetType}}}"
+        | SyntaxExpression.Downcast(target, targetType, _) ->
+            $"{{{expressionShape target} :?> {typeShape targetType}}}"
+        | SyntaxExpression.TypeTest(target, targetType, _) ->
+            $"{{{expressionShape target} :? {typeShape targetType}}}"
+        | SyntaxExpression.DotGet(target, members, _) -> $"{expressionShape target}.{members.Text}"
         | SyntaxExpression.Missing _ -> "<missing>"
 
     let private memberShape (value: SyntaxMember) =
@@ -402,6 +409,18 @@ module ParserGrammarTests =
             )
         | SyntaxExpression.Lambda(_, body, _) -> infixRanges body
         | SyntaxExpression.List(items, _) -> all items
+        | SyntaxExpression.Upcast(target, _, range) ->
+            text ":>" range
+            :: infixRanges target
+        | SyntaxExpression.Downcast(target, _, range) ->
+            text ":?>" range
+            :: infixRanges target
+        | SyntaxExpression.TypeTest(target, _, range) ->
+            text ":?" range
+            :: infixRanges target
+        | SyntaxExpression.DotGet(target, _, range) ->
+            text "dot" range
+            :: infixRanges target
         | _ -> []
 
     let rec private applicationRanges expression =
@@ -454,6 +473,10 @@ module ParserGrammarTests =
             )
         | SyntaxExpression.Lambda(_, body, _) -> applicationRanges body
         | SyntaxExpression.List(items, _) -> all items
+        | SyntaxExpression.Upcast(target, _, _)
+        | SyntaxExpression.Downcast(target, _, _)
+        | SyntaxExpression.TypeTest(target, _, _)
+        | SyntaxExpression.DotGet(target, _, _) -> applicationRanges target
         | _ -> []
 
     let rec private conditionalRanges expression =
@@ -6348,25 +6371,472 @@ let f a b =
     let private numericLiteralDotCases = [
         "SignedHexWithFraction.fs",
         "module A\nlet y = f -0x1.0\n",
+        [ "let y = [[f -0x1] 0]" ],
         [ "SignedHexWithFraction.fs(2,15): error FS0599: Missing qualification after '.'" ]
         "HexLiteralDotFraction.fs",
         "module A\nlet r = f 0x1.0\n",
+        [ "let r = [[f 0x1] 0]" ],
         [ "HexLiteralDotFraction.fs(2,14): error FS0599: Missing qualification after '.'" ]
-        "HexLiteralMemberAccess.fs", "module A\nlet r = f 0x1.A\n", []
+        "HexLiteralMemberAccess.fs", "module A\nlet r = f 0x1.A\n", [ "let r = [f 0x1.A]" ], []
         "UnsignedLiteralDotFraction.fs",
         "module A\nlet r = f 1u.0\n",
+        [ "let r = [[f 1u] 0]" ],
         [ "UnsignedLiteralDotFraction.fs(2,13): error FS0599: Missing qualification after '.'" ]
-        "FloatLiteralMemberAccess.fs", "module A\nlet r = f 1.5.A\n", []
-        "SByteLiteralMemberAccess.fs", "module A\nlet r = f 1y.A\n", []
+        "FloatLiteralMemberAccess.fs", "module A\nlet r = f 1.5.A\n", [ "let r = [f 1.5.A]" ], []
+        "SByteLiteralMemberAccess.fs", "module A\nlet r = f 1y.A\n", [ "let r = [f 1y.A]" ], []
         "ExponentLiteralDotFraction.fs",
         "module A\nlet r = f 1e5.0\n",
+        [ "let r = [[f 1e5] 0]" ],
         [ "ExponentLiteralDotFraction.fs(2,14): error FS0599: Missing qualification after '.'" ]
         "TrailingUnderscoreDotFraction.fs",
         "module A\nlet r = f 1_.0\n",
+        [ "let r = [[f 1_] 0]" ],
         [
             "TrailingUnderscoreDotFraction.fs(2,11): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
             "TrailingUnderscoreDotFraction.fs(2,13): error FS0599: Missing qualification after '.'"
         ]
+    ]
+
+    let private castAndMemberAccessCases = [
+        "Upcast.fs", "module A\nlet r = x :> T\n", [ "let r = {x :> T}" ], [ ":>(2,9--2,15)" ]
+        "UpcastApplication.fs",
+        "module A\nlet r = f x :> T\n",
+        [ "let r = {[f x] :> T}" ],
+        [
+            ":>(2,9--2,17)"
+            "app(2,9--2,12)"
+        ]
+        "UpcastChain.fs",
+        "module A\nlet r = x :> T :> U\n",
+        [ "let r = {{x :> T} :> U}" ],
+        [
+            ":>(2,9--2,20)"
+            ":>(2,9--2,15)"
+        ]
+        "UpcastAfterComparison.fs",
+        "module A\nlet r = a = b :> T\n",
+        [ "let r = {{a = b} :> T}" ],
+        [
+            ":>(2,9--2,19)"
+            "=(2,9--2,14)"
+        ]
+        "UpcastBelowAnd.fs",
+        "module A\nlet r = a && b :> T\n",
+        [ "let r = {a && {b :> T}}" ],
+        [
+            "&&(2,9--2,20)"
+            ":>(2,14--2,20)"
+        ]
+        "UpcastAfterAddition.fs",
+        "module A\nlet r = a + b :> T\n",
+        [ "let r = {{a + b} :> T}" ],
+        [
+            ":>(2,9--2,19)"
+            "+(2,9--2,14)"
+        ]
+        "UpcastAfterCons.fs",
+        "module A\nlet r = a :: x :> T\n",
+        [ "let r = {{a :: x} :> T}" ],
+        [
+            ":>(2,9--2,20)"
+            "::(2,9--2,15)"
+        ]
+        "UpcastAfterPipeLeft.fs",
+        "module A\nlet r = f <| x :> T\n",
+        [ "let r = {{f <| x} :> T}" ],
+        [
+            ":>(2,9--2,20)"
+            "<|(2,9--2,15)"
+        ]
+        "UpcastAfterLessThan.fs",
+        "module A\nlet r = x < z :> T\n",
+        [ "let r = {{x < z} :> T}" ],
+        [
+            ":>(2,9--2,19)"
+            "<(2,9--2,14)"
+        ]
+        "UpcastOfNegation.fs",
+        "module A\nlet r = -x :> T\n",
+        [ "let r = {~-x :> T}" ],
+        [
+            ":>(2,9--2,16)"
+            "~-(2,9--2,11)"
+        ]
+        "UpcastTupleItem.fs",
+        "module A\nlet r = x :> T, y\n",
+        [ "let r = {x :> T}, y" ],
+        [
+            "tuple(2,9--2,18)"
+            ":>(2,9--2,15)"
+        ]
+        "UpcastComparisonOperand.fs",
+        "module A\nlet r = x :> T = y\n",
+        [ "let r = {{x :> T} = y}" ],
+        [
+            "=(2,9--2,19)"
+            ":>(2,9--2,15)"
+        ]
+        "UpcastAdditionOperand.fs",
+        "module A\nlet r = x :> T + 1\n",
+        [ "let r = {{x :> T} + 1}" ],
+        [
+            "+(2,9--2,19)"
+            ":>(2,9--2,15)"
+        ]
+        "UpcastConsOperand.fs",
+        "module A\nlet r = x :> T :: z\n",
+        [ "let r = {{x :> T} :: z}" ],
+        [
+            "::(2,9--2,20)"
+            ":>(2,9--2,15)"
+        ]
+        "UpcastAssignedByColonEquals.fs",
+        "module A\nlet r = x := a :> T\n",
+        [ "let r = {x := {a :> T}}" ],
+        [
+            ":=(2,9--2,20)"
+            ":>(2,14--2,20)"
+        ]
+        "UpcastAssignedByArrow.fs",
+        "module A\nlet r = z <- x :> T\n",
+        [ "let r = {z <- {x :> T}}" ],
+        [
+            "set(2,9--2,20)"
+            ":>(2,14--2,20)"
+        ]
+        "UpcastPostfixTypeApplication.fs",
+        "module A\nlet r = x :> int list\n",
+        [ "let r = {x :> int list}" ],
+        [ ":>(2,9--2,22)" ]
+        "UpcastParenthesizedFunctionType.fs",
+        "module A\nlet r = x :> (int -> int)\n",
+        [ "let r = {x :> (int -> int)}" ],
+        [ ":>(2,9--2,26)" ]
+        "UpcastTupleType.fs",
+        "module A\nlet r = x :> int * int\n",
+        [ "let r = {x :> (int * int)}" ],
+        [ ":>(2,9--2,23)" ]
+        "UpcastFunctionType.fs",
+        "module A\nlet r = x :> T -> U\n",
+        [ "let r = {x :> (T -> U)}" ],
+        [ ":>(2,9--2,20)" ]
+        "UpcastQualifiedType.fs",
+        "module A\nlet r = x :> A.B\n",
+        [ "let r = {x :> A.B}" ],
+        [ ":>(2,9--2,17)" ]
+        "UpcastTypeArguments.fs",
+        "module A\nlet r = x :> T<int>\n",
+        [ "let r = {x :> T<int>}" ],
+        [ ":>(2,9--2,20)" ]
+        "UpcastArrayType.fs",
+        "module A\nlet r = x :> T[]\n",
+        [ "let r = {x :> T[]}" ],
+        [ ":>(2,9--2,17)" ]
+        "UpcastWithoutSpaces.fs",
+        "module A\nlet r = x:>T\n",
+        [ "let r = {x :> T}" ],
+        [ ":>(2,9--2,13)" ]
+        "UpcastInParentheses.fs",
+        "module A\nlet r = f (x :> T)\n",
+        [ "let r = [f ({x :> T})]" ],
+        [
+            ":>(2,12--2,18)"
+            "app(2,9--2,19)"
+        ]
+        "UpcastInList.fs",
+        "module A\nlet r = [x :> T; y]\n",
+        [ "let r = [{x :> T}; y]" ],
+        [ ":>(2,10--2,16)" ]
+        "UpcastInRecord.fs", "module A\nlet r = { A = x :> T }\n", [ "let r = {A = {x :> T}}" ], []
+        "UpcastLambdaBody.fs",
+        "module A\nlet r = fun x -> x :> T\n",
+        [ "let r = fun x -> {x :> T}" ],
+        [ ":>(2,18--2,24)" ]
+        "UpcastClauseResult.fs",
+        "module A\nlet r = match x with\n        | A -> x :> T\n        | B -> z\n",
+        [ "let r = match x with | A -> {x :> T} | B -> z" ],
+        [ ":>(3,16--3,22)" ]
+        "Downcast.fs", "module A\nlet r = x :?> T\n", [ "let r = {x :?> T}" ], [ ":?>(2,9--2,16)" ]
+        "DowncastChain.fs",
+        "module A\nlet r = x :?> T :?> U\n",
+        [ "let r = {{x :?> T} :?> U}" ],
+        [
+            ":?>(2,9--2,22)"
+            ":?>(2,9--2,16)"
+        ]
+        "DowncastAfterUpcast.fs",
+        "module A\nlet r = x :> T :?> U\n",
+        [ "let r = {{x :> T} :?> U}" ],
+        [
+            ":?>(2,9--2,21)"
+            ":>(2,9--2,15)"
+        ]
+        "TypeTest.fs", "module A\nlet r = x :? T\n", [ "let r = {x :? T}" ], [ ":?(2,9--2,15)" ]
+        "TypeTestChain.fs",
+        "module A\nlet r = x :? T :? U\n",
+        [ "let r = {{x :? T} :? U}" ],
+        [
+            ":?(2,9--2,20)"
+            ":?(2,9--2,15)"
+        ]
+        "TypeTestAboveComparison.fs",
+        "module A\nlet r = a = b :? T\n",
+        [ "let r = {a = {b :? T}}" ],
+        [
+            "=(2,9--2,19)"
+            ":?(2,13--2,19)"
+        ]
+        "TypeTestBelowAddition.fs",
+        "module A\nlet r = a + b :? T\n",
+        [ "let r = {{a + b} :? T}" ],
+        [
+            ":?(2,9--2,19)"
+            "+(2,9--2,14)"
+        ]
+        "TypeTestAboveCons.fs",
+        "module A\nlet r = a :: x :? T\n",
+        [ "let r = {a :: {x :? T}}" ],
+        [
+            "::(2,9--2,20)"
+            ":?(2,14--2,20)"
+        ]
+        "TypeTestAfterPipeLeft.fs",
+        "module A\nlet r = f <| x :? T\n",
+        [ "let r = {f <| {x :? T}}" ],
+        [
+            "<|(2,9--2,20)"
+            ":?(2,14--2,20)"
+        ]
+        "TypeTestAfterUpcast.fs",
+        "module A\nlet r = x :> T :? U\n",
+        [ "let r = {{x :> T} :? U}" ],
+        [
+            ":?(2,9--2,20)"
+            ":>(2,9--2,15)"
+        ]
+        "TypeTestConditionThenDowncast.fs",
+        "module A\nlet r = if x :? T then x :?> T else y\n",
+        [ "let r = if {x :? T} then {x :?> T} else y" ],
+        [
+            ":?(2,12--2,18)"
+            ":?>(2,24--2,31)"
+        ]
+        "TypeTestMatchInput.fs",
+        "module A\nlet r = match x :? T with\n        | true -> 1\n        | _ -> 2\n",
+        [ "let r = match {x :? T} with | Boolean true -> 1 | _ -> 2" ],
+        [ ":?(2,15--2,21)" ]
+        "MemberAccessOnParentheses.fs",
+        "module A\nlet r = (x).A\n",
+        [ "let r = (x).A" ],
+        [ "dot(2,9--2,14)" ]
+        "MemberAccessLongIdentifier.fs",
+        "module A\nlet r = (x).A.B\n",
+        [ "let r = (x).A.B" ],
+        [ "dot(2,9--2,16)" ]
+        "MemberAccessOnHighPrecedenceApplication.fs",
+        "module A\nlet r = f(x).A\n",
+        [ "let r = [f (x)].A" ],
+        [
+            "dot(2,9--2,15)"
+            "app(2,9--2,13)"
+        ]
+        "MemberAccessInArgument.fs",
+        "module A\nlet r = f (x).A\n",
+        [ "let r = [f (x).A]" ],
+        [
+            "dot(2,11--2,16)"
+            "app(2,9--2,16)"
+        ]
+        "MemberAccessOnString.fs",
+        "module A\nlet r = \"s\".Length\n",
+        [ "let r = \"s\".Length" ],
+        [ "dot(2,9--2,19)" ]
+        "MemberAccessOnList.fs",
+        "module A\nlet r = [1].Head\n",
+        [ "let r = [1].Head" ],
+        [ "dot(2,9--2,17)" ]
+        "MemberAccessOnFloat.fs",
+        "module A\nlet r = 1.5.A\n",
+        [ "let r = 1.5.A" ],
+        [ "dot(2,9--2,14)" ]
+        "MemberAccessOnHexLiteral.fs",
+        "module A\nlet r = 0x1.A\n",
+        [ "let r = 0x1.A" ],
+        [ "dot(2,9--2,14)" ]
+        "MemberAccessOnRecord.fs",
+        "module A\nlet r = { A = 1 }.A\n",
+        [ "let r = {A = 1}.A" ],
+        [ "dot(2,9--2,20)" ]
+        "MemberAccessOnBoolean.fs",
+        "module A\nlet r = true.A\n",
+        [ "let r = Boolean true.A" ],
+        [ "dot(2,9--2,15)" ]
+        "MemberAccessOnCharacter.fs",
+        "module A\nlet r = 'c'.A\n",
+        [ "let r = Character \"'c'\".A" ],
+        [ "dot(2,9--2,14)" ]
+        "MemberAccessEscapedName.fs",
+        "module A\nlet r = (x).``A B``\n",
+        [ "let r = (x).``A B``" ],
+        [ "dot(2,9--2,20)" ]
+        "MemberAccessApplied.fs",
+        "module A\nlet r = (x).A(1)\n",
+        [ "let r = [(x).A (1)]" ],
+        [
+            "dot(2,9--2,14)"
+            "app(2,9--2,17)"
+        ]
+        "MemberAccessAppliedWithSpace.fs",
+        "module A\nlet r = (x).A (1)\n",
+        [ "let r = [(x).A (1)]" ],
+        [
+            "dot(2,9--2,14)"
+            "app(2,9--2,18)"
+        ]
+        "MemberAccessWithArgument.fs",
+        "module A\nlet r = (x).A x\n",
+        [ "let r = [(x).A x]" ],
+        [
+            "dot(2,9--2,14)"
+            "app(2,9--2,16)"
+        ]
+        "MemberAccessNegated.fs",
+        "module A\nlet r = -(x).A\n",
+        [ "let r = ~-(x).A" ],
+        [
+            "~-(2,9--2,15)"
+            "dot(2,10--2,15)"
+        ]
+        "MemberAccessDereferenced.fs",
+        "module A\nlet r = !(x).A\n",
+        [ "let r = ~!(x).A" ],
+        [
+            "~!(2,9--2,15)"
+            "dot(2,10--2,15)"
+        ]
+        "MemberAccessAdditionOperand.fs",
+        "module A\nlet r = (x).A + 1\n",
+        [ "let r = {(x).A + 1}" ],
+        [
+            "+(2,9--2,18)"
+            "dot(2,9--2,14)"
+        ]
+        "MemberAccessArguments.fs",
+        "module A\nlet r = f (x).A (y).B\n",
+        [ "let r = [[f (x).A] (y).B]" ],
+        [
+            "dot(2,11--2,16)"
+            "dot(2,17--2,22)"
+            "app(2,9--2,22)"
+            "app(2,9--2,16)"
+        ]
+        "MemberAccessAfterMethodCall.fs",
+        "module A\nlet r = x.A(1).B\n",
+        [ "let r = [x.A (1)].B" ],
+        [
+            "dot(2,9--2,17)"
+            "app(2,9--2,15)"
+        ]
+        "MemberAccessChainOfMethodCalls.fs",
+        "module A\nlet r = x.A(1).B(2).C\n",
+        [ "let r = [[x.A (1)].B (2)].C" ],
+        [
+            "dot(2,9--2,22)"
+            "dot(2,9--2,17)"
+            "app(2,9--2,20)"
+            "app(2,9--2,15)"
+        ]
+        "MemberAccessOnIndex.fs",
+        "module A\nlet r = x[0].A\n",
+        [ "let r = x[0].A" ],
+        [ "dot(2,9--2,15)" ]
+        "MemberAccessIndexed.fs",
+        "module A\nlet r = (x).A[0].B\n",
+        [ "let r = (x).A[0].B" ],
+        [ "dot(2,9--2,19)" ]
+        "MemberAccessUpcast.fs",
+        "module A\nlet r = (x).A :> T\n",
+        [ "let r = {(x).A :> T}" ],
+        [
+            ":>(2,9--2,19)"
+            "dot(2,9--2,14)"
+        ]
+        "MemberAccessInArgumentLongIdentifier.fs",
+        "module A\nlet r = f (x).A.B\n",
+        [ "let r = [f (x).A.B]" ],
+        [
+            "dot(2,11--2,18)"
+            "app(2,9--2,18)"
+        ]
+        "MemberAccessStringArgument.fs",
+        "module A\nlet r = f \"s\".Length\n",
+        [ "let r = [f \"s\".Length]" ],
+        [
+            "dot(2,11--2,21)"
+            "app(2,9--2,21)"
+        ]
+    ]
+
+    let private castAndMemberAccessExplicitCases = [
+        "UpcastLineAtBlockColumn.fs", "module A\nlet r =\n    x\n    :> T\n", []
+        "UpcastLineIndented.fs", "module A\nlet r =\n    x\n        :> T\n", []
+        "UpcastTypeOnNextLine.fs", "module A\nlet r =\n    x :>\n        T\n", []
+        "TypeTestLineAtBlockColumn.fs",
+        "module A\nlet r =\n    x\n    :? T\n",
+        [
+            "TypeTestLineAtBlockColumn.fs(4,5): error FS0010: Unexpected symbol ':?' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "UpcastConstantType.fs", "module A\nlet r = x :> 1\n", []
+        "UpcastFlexibleType.fs", "module A\nlet r = x :> #seq<int>\n", []
+        "UpcastTypeBeforeAppend.fs",
+        "module A\nlet r = x :> T @ z\n",
+        [
+            "UpcastTypeBeforeAppend.fs(2,18): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "UpcastTypeBeforeCaret.fs",
+        "module A\nlet r = x :> T ^ z\n",
+        [
+            "UpcastTypeBeforeCaret.fs(2,18): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "UpcastTypeBeforeAdjacentSign.fs",
+        "module A\nlet r = x :> T -1\n",
+        [
+            "UpcastTypeBeforeAdjacentSign.fs(2,16): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "TypeTestGuardBeforeArrow.fs",
+        "module A\nlet r =\n    match x with\n    | A when y :? T -> 1\n    | _ -> 2\n",
+        [
+            "TypeTestGuardBeforeArrow.fs(5,5): error FS0010: Incomplete structured construct at or before this point in pattern matching. Expected '->' or other token."
+        ]
+        "MemberAccessDotSpaceName.fs", "module A\nlet r = (x). A\n", []
+        "MemberAccessSpaceDot.fs", "module A\nlet r = (x) .A\n", []
+        "MemberAccessNextLine.fs", "module A\nlet r =\n    (x)\n        .A\n", []
+        "MemberAccessAfterSecondApplication.fs", "module A\nlet r = f(x)(y).A\n", []
+        "MemberAccessAfterParenthesizedApplication.fs", "module A\nlet r = (x)(y).A\n", []
+        "MemberAccessArgumentApplied.fs",
+        "module A\nlet r = f (x).A(1)\n",
+        [
+            "MemberAccessArgumentApplied.fs(2,11): error FS0597: Successive arguments should be separated by spaces or tupled, and arguments involving function or method applications should be parenthesized"
+        ]
+        "MemberAccessAssignment.fs", "module A\nlet r = (x).A.B <- 1\n", []
+        "MemberAccessTypeApplication.fs", "module A\nlet r = (x).A<int>\n", []
+    ]
+
+    let private memberAccessDiagnosticCases = [
+        "MemberAccessOnIdentifierArgumentApplication.fs",
+        "module A\nlet r = f x(1).A\n",
+        [ "let r = [f [x (1)].A]" ],
+        [
+            "MemberAccessOnIdentifierArgumentApplication.fs(2,11): error FS0597: Successive arguments should be separated by spaces or tupled, and arguments involving function or method applications should be parenthesized"
+        ]
+        "MemberAccessMissingName.fs",
+        "module A\nlet r = (x).\n",
+        [ "let r = (x)" ],
+        [ "MemberAccessMissingName.fs(2,12): error FS0599: Missing qualification after '.'" ]
+        "MemberAccessNumericName.fs",
+        "module A\nlet r = (x).1\n",
+        [ "let r = [(x) 1]" ],
+        [ "MemberAccessNumericName.fs(2,12): error FS0599: Missing qualification after '.'" ]
     ]
 
     let private unreadableSignedLiteralCases = [
@@ -7571,8 +8041,52 @@ let items = [ origin.X; 1 ]
                             "The declarations with a numeric literal"
             ]
 
-            testList "a '.' after a numeric literal the parser does not model stays explicit" [
-                for logicalPath, text, oracle in numericLiteralDotCases ->
+            testList "a '.' after a numeric literal reads member access or reports FS0599" [
+                for logicalPath, text, expectedDeclarations, oracle in numericLiteralDotCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        Expect.sequenceEqual
+                            (lexicalAndParserLines logicalPath text)
+                            oracle
+                            "The lexer and parser diagnostics match the Compatibility Oracle"
+
+                        Expect.sequenceEqual
+                            ((Seq.exactlyOne (parse logicalPath text).File.Contents).Declarations
+                             |> Seq.map declarationShape)
+                            expectedDeclarations
+                            "The declarations with a '.' after a numeric literal"
+            ]
+
+            testList "':>', ':?>', ':?', and member access read the FCS tree" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in
+                    castAndMemberAccessCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            (lexicalAndParserLines logicalPath text)
+                            []
+                            "The Compatibility Oracle reports no diagnostics"
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with casts, type tests, and member access"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect (fun body ->
+                                 infixRanges body
+                                 @ applicationRanges body
+                             ))
+                            expectedRanges
+                            "The infix, cast, member access, and application ranges"
+            ]
+
+            testList "a cast or member access form the parser does not model stays explicit" [
+                for logicalPath, text, oracle in castAndMemberAccessExplicitCases ->
                     testCase logicalPath
                     <| fun _ ->
                         let result = parse logicalPath text
@@ -7581,6 +8095,22 @@ let items = [ origin.X; 1 ]
                             oracle
                             result.Diagnostics
                             (lexicalAndParserLines logicalPath text)
+            ]
+
+            testList "member access reports the Oracle diagnostics" [
+                for logicalPath, text, expectedDeclarations, oracle in memberAccessDiagnosticCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        Expect.sequenceEqual
+                            (lexicalAndParserLines logicalPath text)
+                            oracle
+                            "The lexer and parser diagnostics match the Compatibility Oracle"
+
+                        Expect.sequenceEqual
+                            ((Seq.exactlyOne (parse logicalPath text).File.Contents).Declarations
+                             |> Seq.map declarationShape)
+                            expectedDeclarations
+                            "The declarations with member access"
             ]
 
             testList "an adjacent sign is a prefix operator and a spaced sign is subtraction" [

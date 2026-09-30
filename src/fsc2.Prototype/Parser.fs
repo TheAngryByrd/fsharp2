@@ -987,7 +987,7 @@ module internal Parser =
         | "&&" -> Some(2, false)
         | "::" -> Some(6, true)
         | "!=" -> Some(4, false)
-        | _ when text.StartsWith("**", StringComparison.Ordinal) -> Some(9, true)
+        | _ when text.StartsWith("**", StringComparison.Ordinal) -> Some(10, true)
         // The FCS lexer ignores leading '.' characters for the precedence, so '.||' and '.&&' are comparison operators.
         | _ when text.StartsWith('.') ->
             let rest = text.TrimStart '.'
@@ -1019,10 +1019,10 @@ module internal Parser =
             | '^'
             | '@' -> Some(5, true)
             | '+'
-            | '-' -> Some(7, false)
+            | '-' -> Some(8, false)
             | '*'
             | '/'
-            | '%' -> Some(8, false)
+            | '%' -> Some(9, false)
             | _ -> None
 
     let private infixPrecedence (token: LayoutToken) =
@@ -1031,6 +1031,35 @@ module internal Parser =
             || isKeyword "or" token
         then
             operatorPrecedence (tokenText token)
+        else
+            None
+
+    // FCS 'declExpr': ':>' and ':?>' bind between '&&' and the comparison operators, and ':?' binds between '::' and '+'.
+    let private castOperator (token: LayoutToken) =
+        if isKind LexicalTokenKind.Operator token then
+            match tokenText token with
+            | ":>" ->
+                Some(
+                    3,
+                    (fun target targetType range ->
+                        SyntaxExpression.Upcast(target, targetType, range)
+                    )
+                )
+            | ":?>" ->
+                Some(
+                    3,
+                    (fun target targetType range ->
+                        SyntaxExpression.Downcast(target, targetType, range)
+                    )
+                )
+            | ":?" ->
+                Some(
+                    7,
+                    (fun target targetType range ->
+                        SyntaxExpression.TypeTest(target, targetType, range)
+                    )
+                )
+            | _ -> None
         else
             None
 
@@ -1092,6 +1121,76 @@ module internal Parser =
         | Some(NumericLiteralRange.FitsOnlyAfterMinus error) ->
             report state error.Code error.Message range
         | _ -> ()
+
+    // FCS reads a token after the target type of a cast as part of the type, or reports FS0010, unless the token is in this set.
+    let private endsCastType (cursor: Cursor) =
+        let token = cursor.Current
+        let text = tokenText token
+
+        token.Kind
+        <> LayoutTokenKind.SourceToken
+        || isEndOfFile token
+        || token.Range.Start.Line > cursor.LastEnd.Line
+        || [
+            ")"
+            "]"
+            "}"
+            ","
+            ";"
+           ]
+           |> List.exists (fun delimiter -> isDelimiter delimiter token)
+        || [
+            "then"
+            "else"
+            "elif"
+            "with"
+            "do"
+            "in"
+            "to"
+            "downto"
+           ]
+           |> List.exists (fun keyword -> isKeyword keyword token)
+        || isOperator ":=" token
+        || (castOperator token).IsSome
+        || (infixPrecedence token).IsSome
+           && not (
+               text = "<"
+               || text.StartsWith("<@", StringComparison.Ordinal)
+               || text.StartsWith('^')
+               || text.StartsWith('@')
+               || text.StartsWith('/')
+               || text.StartsWith('*')
+                  && not (text.StartsWith("**", StringComparison.Ordinal))
+           )
+           && not (
+               isSign token
+               && precedesWithoutSpace token (cursor.Peek 1)
+               && token.Range.Start.Offset
+                  <> cursor.LastEnd.Offset
+           )
+
+    let private startsMemberAccess (cursor: Cursor) =
+        let dot = cursor.Current
+        let name = cursor.Peek 1
+
+        isOperator "." dot
+        && dot.Range.Start.Offset = cursor.LastEnd.Offset
+        && isIdentifier name
+        && tokenText name
+           <> "_"
+        && name.Range.Start.Offset = dot.Range.End.Offset
+
+    let private lacksQualification (cursor: Cursor) =
+        let dot = cursor.Current
+        let next = cursor.Peek 1
+
+        isOperator "." dot
+        && dot.Range.Start.Offset = cursor.LastEnd.Offset
+        && (next.Kind
+            <> LayoutTokenKind.SourceToken
+            || isEndOfFile next
+            || isKind LexicalTokenKind.NumericLiteral next
+               && next.Range.Start.Offset = dot.Range.End.Offset)
 
     let private isSignedLiteral (cursor: Cursor) =
         isSign cursor.Current
@@ -1978,8 +2077,15 @@ module internal Parser =
         let mutable stop = false
 
         while not stop do
-            match infixPrecedence cursor.Current with
-            | Some(precedence, rightAssociative) when
+            match infixPrecedence cursor.Current, castOperator cursor.Current with
+            | _, Some(precedence, cast) when
+                precedence
+                >= minimum
+                && cursor.Current.Range.Start.Line = cursor.LastEnd.Line
+                && not (reportedAt state cursor.Current)
+                ->
+                left <- parseCast state context cast left
+            | Some(precedence, rightAssociative), _ when
                 precedence
                 >= minimum
                 && not (isOffsideInfix state context cursor.Current (cursor.Peek 1))
@@ -2001,6 +2107,30 @@ module internal Parser =
             | _ -> stop <- true
 
         left
+
+    and private parseCast state context cast (target: SyntaxExpression) =
+        let cursor = state.Cursor
+        let operatorToken = cursor.Advance()
+
+        let targetType =
+            if cursor.Current.Range.Start.Line > operatorToken.Range.Start.Line then
+                reportUnsupported state cursor.Current "a type on the line after a cast operator"
+                missingType cursor.Current
+            else
+                parseTypeOperand
+                    state
+                    context
+                    (fun _ -> None)
+                    TypeGap.UnexpectedToken
+                    (fun () -> parseType state context (fun _ -> None))
+
+        if
+            not (endsCastType cursor)
+            && not (reportedAt state cursor.Current)
+        then
+            reportUnsupported state cursor.Current "a token after the target type of a cast"
+
+        cast target targetType (span target.Range targetType.Range)
 
     and private parseInfixOperator state =
         let cursor = state.Cursor
@@ -2202,22 +2332,67 @@ module internal Parser =
         prefixExpression state operatorToken operand
 
     and private parseArgument state context prefixRange =
-        match parseAtom state context with
-        | SyntaxExpression.Identifier _ as name ->
-            let argument = parsePostfix state context 1 name
+        let argument =
+            match parseAtom state context with
+            | SyntaxExpression.Identifier _ as name -> parsePostfix state context 1 name
+            | argument -> parseMemberAccess state argument
 
-            match argument with
-            | SyntaxExpression.Application(_, _, range) ->
-                report
-                    state
-                    successiveArgumentsCode
-                    "Successive arguments should be separated by spaces or tupled, and arguments involving function or method applications should be parenthesized"
-                    (prefixRange
-                     |> Option.defaultValue range)
-            | _ -> ()
+        match argument with
+        | SyntaxExpression.Application(_, _, range)
+        | SyntaxExpression.DotGet(SyntaxExpression.Application(_, _, range), _, _) ->
+            report
+                state
+                successiveArgumentsCode
+                "Successive arguments should be separated by spaces or tupled, and arguments involving function or method applications should be parenthesized"
+                (prefixRange
+                 |> Option.defaultValue range)
+        | _ -> ()
 
-            argument
-        | argument -> argument
+        match argument with
+        | SyntaxExpression.DotGet _ when
+            isAdjacentStep state state.Cursor.Current
+            && not (reportedAt state state.Cursor.Current)
+            ->
+            reportUnsupported
+                state
+                state.Cursor.Current
+                "an application after member access in an argument"
+        | _ -> ()
+
+        argument
+
+    // FCS 'atomicExpr': '.' after an atomic expression reads a long identifier (DotGet).
+    and private parseMemberAccess state (target: SyntaxExpression) =
+        let cursor = state.Cursor
+
+        if startsMemberAccess cursor then
+            let parts = ImmutableArray.CreateBuilder<SyntaxIdentifier>()
+
+            while startsMemberAccess cursor do
+                cursor.Advance()
+                |> ignore
+
+                parts.Add(identifier (cursor.Advance()))
+
+            let parts = parts.ToImmutable()
+
+            let members = {
+                Parts = parts
+                Range =
+                    span
+                        parts[0].Range
+                        parts[parts.Length
+                              - 1]
+                            .Range
+            }
+
+            SyntaxExpression.DotGet(target, members, span target.Range members.Range)
+        elif lacksQualification cursor then
+            let dot = cursor.Advance()
+            report state "FS0599" "Missing qualification after '.'" dot.Range
+            target
+        else
+            target
 
     and private isAdjacentStep state (token: LayoutToken) =
         token.Kind = LayoutTokenKind.SourceToken
@@ -2230,49 +2405,80 @@ module internal Parser =
         let mutable result = target
         let mutable steps = 0
         let mutable more = true
+        let mutable stepsSinceAccess = 0
+        let mutable accessible = true
 
         while more
-              && steps < maximumSteps
-              && isAdjacentStep state cursor.Current do
-            steps <- steps + 1
-
-            if isDelimiter "(" cursor.Current then
-                let argument = parseAtom state context
-
-                result <-
-                    SyntaxExpression.Application(result, argument, span result.Range argument.Range)
+              && (startsMemberAccess cursor
+                  || lacksQualification cursor
+                  || steps < maximumSteps
+                     && isAdjacentStep state cursor.Current) do
+            if
+                startsMemberAccess cursor
+                || lacksQualification cursor
+            then
+                if accessible then
+                    result <- parseMemberAccess state result
+                    stepsSinceAccess <- 0
+                else
+                    // FCS reads a second application, or an application of a parenthesized head, as a new argument that takes the '.'.
+                    reportUnsupported state cursor.Current "member access after an application"
+                    more <- false
             else
-                let openToken = cursor.Advance()
+                accessible <-
+                    stepsSinceAccess = 0
+                    && (result.IsIdentifier
+                        || result.IsDotGet)
 
-                let index =
-                    if canStartExpression cursor.Current then
-                        withinDelimiters
-                            state
-                            (fun () -> parseExpression state (frameAt FrameKind.Bracket openToken))
-                    else
-                        missingExpression cursor.Current
+                stepsSinceAccess <-
+                    stepsSinceAccess
+                    + 1
 
-                if isDelimiter "]" cursor.Current then
-                    let close = cursor.Advance()
+                steps <- steps + 1
+
+                if isDelimiter "(" cursor.Current then
+                    let argument = parseAtom state context
 
                     result <-
-                        SyntaxExpression.BracketApplication(
+                        SyntaxExpression.Application(
                             result,
-                            index,
-                            span result.Range close.Range
+                            argument,
+                            span result.Range argument.Range
                         )
                 else
-                    if not (reportedAt state cursor.Current) then
-                        reportUnsupported state cursor.Current "an index expression"
+                    let openToken = cursor.Advance()
 
-                    result <-
-                        SyntaxExpression.BracketApplication(
-                            result,
-                            index,
-                            span result.Range (emptyAt cursor.LastEnd)
-                        )
+                    let index =
+                        if canStartExpression cursor.Current then
+                            withinDelimiters
+                                state
+                                (fun () ->
+                                    parseExpression state (frameAt FrameKind.Bracket openToken)
+                                )
+                        else
+                            missingExpression cursor.Current
 
-                    more <- false
+                    if isDelimiter "]" cursor.Current then
+                        let close = cursor.Advance()
+
+                        result <-
+                            SyntaxExpression.BracketApplication(
+                                result,
+                                index,
+                                span result.Range close.Range
+                            )
+                    else
+                        if not (reportedAt state cursor.Current) then
+                            reportUnsupported state cursor.Current "an index expression"
+
+                        result <-
+                            SyntaxExpression.BracketApplication(
+                                result,
+                                index,
+                                span result.Range (emptyAt cursor.LastEnd)
+                            )
+
+                        more <- false
 
         result
 
@@ -2959,8 +3165,9 @@ module internal Parser =
                             None
 
                     if not (isOperator "->" cursor.Current) then
-                        reportUnexpected state RecoveryPoint.ClauseArrow "a match clause"
-                        |> ignore
+                        if not (reportedAt state cursor.Current) then
+                            reportUnexpected state RecoveryPoint.ClauseArrow "a match clause"
+                            |> ignore
 
                         more <- false
                     else
