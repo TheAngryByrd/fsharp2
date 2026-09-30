@@ -1017,13 +1017,6 @@ module ParserGrammarTests =
     ]
 
     let private blockOffsideExplicitCases = [
-        "BlockOffsideBinding.fs",
-        "module A\nlet f =\n    g\n  1\n",
-        [
-            "BlockOffsideBinding.fs(4,3): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
-            "BlockOffsideBinding.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
-        ],
-        "BlockOffsideBinding.fs(4,3)"
         "BlockOffsideBeforeRoot.fs",
         "module A\nlet f =\n    g\n  1\nlet h = 2\n",
         [
@@ -1032,25 +1025,6 @@ module ParserGrammarTests =
             "BlockOffsideBeforeRoot.fs(6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
         ],
         "BlockOffsideBeforeRoot.fs(4,3)"
-        "BlockOffsideNestedBinding.fs",
-        "module A\nmodule M =\n    let f =\n        g\n      1\n",
-        [
-            "BlockOffsideNestedBinding.fs(5,7): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
-            "BlockOffsideNestedBinding.fs(3,5): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
-        ],
-        "BlockOffsideNestedBinding.fs(5,7)"
-        "BlockOffsideDo.fs",
-        "module A\ndo\n    ignore\n  1\n",
-        [
-            "BlockOffsideDo.fs(4,3): error FS0010: Unexpected integer literal in definition. Expected incomplete structured construct at or before this point or other token."
-        ],
-        "BlockOffsideDo.fs(4,3)"
-        "BlockOffsideNestedDo.fs",
-        "module A\nmodule M =\n    do\n        ignore\n      1\n",
-        [
-            "BlockOffsideNestedDo.fs(5,7): error FS0010: Unexpected integer literal in definition. Expected incomplete structured construct at or before this point or other token."
-        ],
-        "BlockOffsideNestedDo.fs(5,7)"
     ]
 
     // The Compatibility Oracle reports no parse diagnostic for each text. The ranges are the FCS 43.10.101 LetOrUse and Sequential ranges, with 1-based columns.
@@ -2704,12 +2678,6 @@ let f a b =
     ]
 
     let private continuationLineExplicitCases = [
-        "ContinuationLineLeftAfterTrue.fs",
-        "module A\nlet f () =\n    g true\n   2\n",
-        [
-            "ContinuationLineLeftAfterTrue.fs(4,4): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
-            "ContinuationLineLeftAfterTrue.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
-        ]
         "ContinuationLineBetweenAfterTrue.fs",
         "module A\nlet f () =\n    let y = g true\n          2\n    y\n",
         [
@@ -4440,6 +4408,210 @@ let f a b =
         ]
     ]
 
+    let private bindingOffsideCases = [
+        "BlockOffsideBinding.fs",
+        "module A\nlet f =\n    g\n  1\n",
+        [
+            "BlockOffsideBinding.fs(4,3): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BlockOffsideBinding.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "BlockOffsideNestedBinding.fs",
+        "module A\nmodule M =\n    let f =\n        g\n      1\n",
+        [
+            "BlockOffsideNestedBinding.fs(5,7): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BlockOffsideNestedBinding.fs(3,5): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "BlockOffsideDo.fs",
+        "module A\ndo\n    ignore\n  1\n",
+        [
+            "BlockOffsideDo.fs(4,3): error FS0010: Unexpected integer literal in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "BlockOffsideNestedDo.fs",
+        "module A\nmodule M =\n    do\n        ignore\n      1\n",
+        [
+            "BlockOffsideNestedDo.fs(5,7): error FS0010: Unexpected integer literal in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "ContinuationLineLeftAfterTrue.fs",
+        "module A\nlet f () =\n    g true\n   2\n",
+        [
+            "ContinuationLineLeftAfterTrue.fs(4,4): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "ContinuationLineLeftAfterTrue.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "BindingOffsideX25.fs", "module A\nlet f () =\n    let x =\n      1\n    x\n", []
+        "BindingOffsideRBind.fs",
+        "module A\nlet f =\n    g\n  1\n",
+        [
+            "BindingOffsideRBind.fs(4,3): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BindingOffsideRBind.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "BindingOffsideRNbind.fs",
+        "module A\nmodule M =\n    let f =\n        g\n      1\n",
+        [
+            "BindingOffsideRNbind.fs(5,7): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BindingOffsideRNbind.fs(3,5): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "BindingOffsideRDo.fs",
+        "module A\ndo\n    ignore\n  1\n",
+        [
+            "BindingOffsideRDo.fs(4,3): error FS0010: Unexpected integer literal in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "BindingOffsideRNdo.fs",
+        "module A\nmodule M =\n    do\n        ignore\n      1\n",
+        [
+            "BindingOffsideRNdo.fs(5,7): error FS0010: Unexpected integer literal in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "BindingOffsideIdent.fs",
+        "module A\nlet f =\n    g\n  x\n",
+        [
+            "BindingOffsideIdent.fs(4,3): error FS0010: Unexpected identifier in binding. Expected incomplete structured construct at or before this point or other token."
+            "BindingOffsideIdent.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "BindingOffsidePlus.fs", "module A\nlet f =\n    g\n  + 1\n", []
+        "BindingOffsidePipe.fs", "module A\nlet f =\n    g\n  |> ignore\n", []
+        "BindingOffsideString.fs",
+        "module A\nlet f =\n    g\n  \"s\"\n",
+        [
+            "BindingOffsideString.fs(4,3): error FS0010: Unexpected string literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BindingOffsideString.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "BindingOffsideMinus.fs", "module A\nlet f =\n    g\n  - 1\n", []
+        "BindingOffsideAmpamp.fs", "module A\nlet f =\n    g\n  && true\n", []
+        "BindingOffsideFloat.fs",
+        "module A\nlet f =\n    g\n  1.0\n",
+        [
+            "BindingOffsideFloat.fs(4,3): error FS0010: Unexpected floating point literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BindingOffsideFloat.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "BindingOffsideTwoLinesAfter.fs",
+        "module A\nlet f =\n    g\n  1\n  2\n",
+        [
+            "BindingOffsideTwoLinesAfter.fs(4,3): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BindingOffsideTwoLinesAfter.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "BindingOffsideBlockAfter.fs",
+        "module A\nlet f =\n    g\n  1\n    2\n",
+        [
+            "BindingOffsideBlockAfter.fs(4,3): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BindingOffsideBlockAfter.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "BindingOffsideLetRec.fs",
+        "module A\nlet rec f =\n    g\n  1\n",
+        [
+            "BindingOffsideLetRec.fs(4,3): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BindingOffsideLetRec.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "BindingOffsideLetParams.fs",
+        "module A\nlet f x =\n    g x\n  1\n",
+        [
+            "BindingOffsideLetParams.fs(4,3): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BindingOffsideLetParams.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "BindingOffsideAtLetPlus1.fs",
+        "module A\nlet f =\n    g\n 1\n",
+        [
+            "BindingOffsideAtLetPlus1.fs(4,2): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BindingOffsideAtLetPlus1.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "BindingOffsideSequentialThenOffside.fs",
+        "module A\nlet f =\n    ignore 0\n    g\n  1\n",
+        [
+            "BindingOffsideSequentialThenOffside.fs(5,3): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BindingOffsideSequentialThenOffside.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "BindingOffsideAttributeLet.fs",
+        "module A\n[<Literal>]\nlet f =\n    1\n  2\n",
+        [
+            "BindingOffsideAttributeLet.fs(5,3): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BindingOffsideAttributeLet.fs(3,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "BindingOffsideNamespace.fs",
+        "namespace N\nmodule M =\n    let f =\n        g\n      1\n",
+        [
+            "BindingOffsideNamespace.fs(5,7): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BindingOffsideNamespace.fs(3,5): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+    ]
+
+    let private bindingOffsideExplicitCases = [
+        "BindingOffsideRBindlater.fs",
+        "module A\nlet f =\n    g\n  1\nlet h = 2\n",
+        [
+            "BindingOffsideRBindlater.fs(4,3): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BindingOffsideRBindlater.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+            "BindingOffsideRBindlater.fs(6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+        "BindingOffsideKeywordIf.fs",
+        "module A\nlet f =\n    g\n  if true then 1 else 2\n",
+        [
+            "BindingOffsideKeywordIf.fs(4,3): error FS0010: Unexpected keyword 'if' in binding. Expected incomplete structured construct at or before this point or other token."
+            "BindingOffsideKeywordIf.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+            "BindingOffsideKeywordIf.fs(5,1): error FS0010: Incomplete structured construct at or before this point in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "BindingOffsideParen.fs",
+        "module A\nlet f =\n    g\n  (1)\n",
+        [
+            "BindingOffsideParen.fs(4,3): error FS0010: Unexpected symbol '(' in binding. Expected incomplete structured construct at or before this point or other token."
+            "BindingOffsideParen.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+            "BindingOffsideParen.fs(5,1): error FS0010: Incomplete structured construct at or before this point in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "BindingOffsideLongIdent.fs",
+        "module A\nlet f =\n    g\n  List.empty\n",
+        [
+            "BindingOffsideLongIdent.fs(4,3): error FS0010: Unexpected identifier in binding. Expected incomplete structured construct at or before this point or other token."
+            "BindingOffsideLongIdent.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+            "BindingOffsideLongIdent.fs(5,1): error FS0010: Incomplete structured construct at or before this point in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "BindingOffsideDeclAfterTwo.fs",
+        "module A\nlet f =\n    g\n  1\nlet h = 2\nlet i = 3\n",
+        [
+            "BindingOffsideDeclAfterTwo.fs(4,3): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BindingOffsideDeclAfterTwo.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+            "BindingOffsideDeclAfterTwo.fs(6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+        "BindingOffsideDoThenDecl.fs",
+        "module A\ndo\n    ignore\n  1\nlet h = 2\n",
+        [
+            "BindingOffsideDoThenDecl.fs(4,3): error FS0010: Unexpected integer literal in definition. Expected incomplete structured construct at or before this point or other token."
+            "BindingOffsideDoThenDecl.fs(6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+        "BindingOffsideNestedThenDecl.fs",
+        "module A\nmodule M =\n    let f =\n        g\n      1\n    let h = 2\n",
+        [
+            "BindingOffsideNestedThenDecl.fs(5,7): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BindingOffsideNestedThenDecl.fs(3,5): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+            "BindingOffsideNestedThenDecl.fs(7,1): error FS0010: Incomplete structured construct at or before this point in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "BindingOffsideNestedThenRoot.fs",
+        "module A\nmodule M =\n    let f =\n        g\n      1\nlet h = 2\n",
+        [
+            "BindingOffsideNestedThenRoot.fs(5,7): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BindingOffsideNestedThenRoot.fs(3,5): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "BindingOffsideLocalLet.fs",
+        "module A\nlet f () =\n    let y = g 1\n          2\n    y\n",
+        [
+            "BindingOffsideLocalLet.fs(4,11): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BindingOffsideLocalLet.fs(3,5): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "BindingOffsideLocalLetBlock.fs",
+        "module A\nlet f () =\n    let y =\n        g\n      1\n    y\n",
+        [
+            "BindingOffsideLocalLetBlock.fs(5,7): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BindingOffsideLocalLetBlock.fs(3,5): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "BindingOffsideMember.fs",
+        "module A\ntype T() =\n    member _.M =\n        g\n      1\n",
+        [
+            "BindingOffsideMember.fs(5,7): error FS0010: Unexpected integer literal in member definition"
+        ]
+        "BindingOffsideLetValueSameLine.fs",
+        "module A\nlet f = g\n  1\n",
+        [
+            "BindingOffsideLetValueSameLine.fs(3,3): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "BindingOffsideLetValueSameLine.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+    ]
+
     [<Tests>]
     let tests =
         testList "Issue29.ParserGrammar" [
@@ -5240,6 +5412,34 @@ let items = [ origin.X; 1 ]
                             result.Diagnostics
                             (oracleLines logicalPath result)
             ]
+
+            testList
+                "a line between a binding or do column and its block column reports the Oracle diagnostics"
+                [
+                    for logicalPath, text, oracle in bindingOffsideCases ->
+                        testCase logicalPath
+                        <| fun _ ->
+                            let result = parse logicalPath text
+
+                            Expect.sequenceEqual
+                                (oracleLines logicalPath result)
+                                oracle
+                                "The diagnostics must match the Compatibility Oracle"
+                ]
+
+            testList
+                "a line between a binding or do column and its block column that the parser does not model stays explicit"
+                [
+                    for logicalPath, text, oracle in bindingOffsideExplicitCases ->
+                        testCase logicalPath
+                        <| fun _ ->
+                            let result = parse logicalPath text
+
+                            SyntaxDiagnosticText.expectExplicitlyUnsupported
+                                oracle
+                                result.Diagnostics
+                                (oracleLines logicalPath result)
+                ]
 
             testCase
                 "an else or a clause bar left of the inner construct inside a delimiter belongs to the outer construct"

@@ -294,6 +294,8 @@ module internal Parser =
 
     let private offsideCode = "FS0058"
 
+    let private incompleteValueCode = "FS3118"
+
     let private typeArgumentSpaceCode = "FS1190"
 
     let private isRecoveryCode code =
@@ -351,6 +353,7 @@ module internal Parser =
                 |> Seq.filter (fun diagnostic ->
                     diagnostic.Code = unsupportedCode
                     || diagnostic.Code = offsideCode
+                    || diagnostic.Code = incompleteValueCode
                 )
                 |> Seq.toArray
 
@@ -3113,6 +3116,77 @@ module internal Parser =
         else
             reportUnmarked state code message range
 
+    // The Oracle reports FS0010 for a line between a 'let' or 'do' column and its block column. The token class name and the later recovery are known only for a single-token line with nothing after it that belongs to the declaration list.
+    let private offsideDeclarationToken state (context: Frame) =
+        let cursor = state.Cursor
+        let token = cursor.Current
+
+        let nextSource offset =
+            let mutable index = offset
+
+            while cursor.Peek(index).Kind
+                  <> LayoutTokenKind.SourceToken do
+                index <- index + 1
+
+            index
+
+        let description =
+            match token.Token with
+            | Some source when source.Kind = LexicalTokenKind.NumericLiteral ->
+                if Seq.forall Char.IsAsciiDigit source.Text then
+                    Some "integer literal"
+                elif
+                    source.Text
+                    |> Seq.forall (fun character ->
+                        Char.IsAsciiDigit character
+                        || character = '.'
+                    )
+                    && source.Text.Contains '.'
+                    && Char.IsAsciiDigit
+                        source.Text[source.Text.Length
+                                    - 1]
+                then
+                    Some "floating point literal"
+                else
+                    None
+            | Some source when
+                source.Kind = LexicalTokenKind.StringLiteral
+                && source.Text.StartsWith("\"", StringComparison.Ordinal)
+                && not (source.Text.StartsWith("\"\"\"", StringComparison.Ordinal))
+                ->
+                Some "string literal"
+            | Some source when
+                source.Kind = LexicalTokenKind.Identifier
+                && source.Text
+                   <> "_"
+                ->
+                Some "identifier"
+            | _ -> None
+
+        let rec restBelongs offset =
+            let next = cursor.Peek offset
+
+            isEndOfFile next
+            || next.Range.Start.Column > context.Offside.Column
+               && restBelongs (nextSource (offset + 1))
+
+        match description with
+        | Some description when
+            token.Kind = LayoutTokenKind.SourceToken
+            && token.Range.Start.Line > cursor.LastEnd.Line
+            && token.Range.Start.Column > context.Offside.Column
+            && (let next = cursor.Peek(nextSource 1)
+
+                isEndOfFile next
+                || next.Range.Start.Line > token.Range.Start.Line)
+            && restBelongs (nextSource 1)
+            ->
+            Some description
+        | _ -> None
+
+    let private incompleteValueMessage =
+        "Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+
     let private parseBindingIn state context attributes =
         let cursor = state.Cursor
         let reported = state.Diagnostics.Count
@@ -3220,13 +3294,38 @@ module internal Parser =
                 else
                     parseBody context
 
-        if
+        let offsideLine =
+            if
+                not recovered
+                && not (endsBinding context cursor.Current)
+                && not (reportedSince state reported)
+                && context.Kind = FrameKind.Let
+            then
+                offsideDeclarationToken state context
+            else
+                None
+
+        match offsideLine with
+        | Some description ->
+            report
+                state
+                "FS0010"
+                $"Unexpected {description} in binding. Expected incomplete structured construct at or before this point or other token."
+                cursor.Current.Range
+
+            recovered <- true
+            skipped <- skipUntil state context
+        | None when
             not recovered
             && not (endsBinding context cursor.Current)
-        then
+            ->
             recover (Some RecoveryPoint.BindingEnd)
+        | None -> ()
 
         keepFirstDiagnosticSince state reported
+
+        if offsideLine.IsSome then
+            report state incompleteValueCode incompleteValueMessage context.StartToken
 
         {
             Attributes = attributes
@@ -3371,6 +3470,19 @@ module internal Parser =
                 if cursor.Current.Kind = LayoutTokenKind.EndBlock then
                     cursor.Advance()
                     |> ignore
+
+                if not (reportedSince state reported) then
+                    match offsideDeclarationToken state context with
+                    | Some description ->
+                        report
+                            state
+                            "FS0010"
+                            $"Unexpected {description} in definition. Expected incomplete structured construct at or before this point or other token."
+                            cursor.Current.Range
+
+                        skipUntil state context
+                        |> ignore
+                    | None -> ()
 
                 body
             elif
