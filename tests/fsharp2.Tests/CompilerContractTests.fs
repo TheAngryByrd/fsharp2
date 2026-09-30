@@ -1430,6 +1430,67 @@ let main _ =
                     ]
                     "The invalid argument is a source-phase error at the Oracle position"
 
+            testCase "a nested if with a second else fails and emits no assembly"
+            <| fun _ ->
+                let result =
+                    compile
+                        "namespace N\n\ntype H() =\n    static member Run(a: bool, b: bool) : int =\n        if a then\n            if b then 1\n          else 3\n        else 4\n"
+
+                Expect.notEqual
+                    result.Outcome
+                    CompilationOutcome.Succeeded
+                    "The Compatibility Oracle rejects the second else with FS0010 at (8,9)"
+
+                Expect.isEmpty result.Artifacts "A failed compilation publishes no artifacts"
+
+            testCase "an else line right of the if column compiles with the Oracle results"
+            <| fun _ ->
+                let result =
+                    compile
+                        "namespace N\n\ntype H() =\n    static member Run(a: bool, b: bool) : int =\n        if a then\n            1\n           else 2\n"
+
+                let diagnostics =
+                    result.Diagnostics
+                    |> Seq.map (fun diagnostic -> $"{diagnostic.Code}: {diagnostic.Message}")
+                    |> String.concat Environment.NewLine
+
+                Expect.equal
+                    result.Outcome
+                    CompilationOutcome.Succeeded
+                    $"The Compatibility Oracle accepts the else line. Diagnostics:{Environment.NewLine}{diagnostics}"
+
+                let assembly =
+                    result.Artifacts
+                    |> Seq.exactlyOne
+                    |> fun artifact -> Assembly.Load(bytes artifact.Bytes)
+
+                let run = assembly.GetType("N.H", true).GetMethod("Run")
+
+                Expect.sequenceEqual
+                    ([
+                        true, true
+                        true, false
+                        false, true
+                        false, false
+                     ]
+                     |> List.map (fun (a, b) ->
+                         run.Invoke(
+                             null,
+                             [|
+                                 box a
+                                 box b
+                             |]
+                         )
+                         :?> int
+                     ))
+                    [
+                        1
+                        1
+                        2
+                        2
+                    ]
+                    "The Compatibility Oracle program returns 1, 1, 2, and 2"
+
             testCase
                 "an undented infix line is an unsupported syntax diagnostic, not a layout error"
             <| fun _ ->
