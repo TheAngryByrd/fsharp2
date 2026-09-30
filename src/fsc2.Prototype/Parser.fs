@@ -1066,10 +1066,7 @@ module internal Parser =
         && not (
             cursor.Current.Range.Start.Offset = cursor.LastEnd.Offset
             && cursor.PreviousSource
-               |> Option.exists (fun token ->
-                   isIdentifier token
-                   || isKind LexicalTokenKind.Keyword token
-               )
+               |> Option.exists (isKind LexicalTokenKind.Keyword)
         )
 
     let private precedesWithoutSpace (token: LayoutToken) (next: LayoutToken) =
@@ -2175,7 +2172,7 @@ module internal Parser =
         reportBangAfterOperand state
         prefixExpression state operatorToken operand
 
-    // The lexer splits 'x!=' into 'x' and '!=', and FCS reads 'x!' as one reserved token (FS1141).
+    // FCS reads a keyword and an adjacent '!' as one reserved token (FS1141). The lexer reads an identifier and its '!' as one token.
     and private reportBangAfterOperand state =
         let cursor = state.Cursor
 

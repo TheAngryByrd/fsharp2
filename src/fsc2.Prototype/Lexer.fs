@@ -907,13 +907,22 @@ module internal Lexer =
 
                 let value = slice startOffset offset
 
-                addToken
-                    (if keywords.Contains value then
-                         LexicalTokenKind.Keyword
-                     else
-                         LexicalTokenKind.Identifier)
-                    startOffset
-                    offset
+                if keywords.Contains value then
+                    addToken LexicalTokenKind.Keyword startOffset offset
+                elif
+                    offset < text.Length
+                    && text[offset] = '!'
+                then
+                    offset <- offset + 1
+                    addToken LexicalTokenKind.Identifier startOffset offset
+
+                    addDiagnostic
+                        "FS1141"
+                        "Identifiers followed by '!' are reserved for future use"
+                        startOffset
+                        offset
+                else
+                    addToken LexicalTokenKind.Identifier startOffset offset
             elif
                 current = '\u0000'
                 || current = '\uFFFD'

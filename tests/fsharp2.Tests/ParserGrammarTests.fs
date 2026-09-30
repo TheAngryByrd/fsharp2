@@ -5779,12 +5779,110 @@ let f a b =
         [ "!=(2,9--2,14)" ]
     ]
 
-    let private dereferenceExplicitCases = [
+    let private reservedBangIdentifierCases = [
         "DereferenceAfterIdentifier.fs",
         "module A\nlet r = f!x\n",
+        [ "let r = [f! x]" ],
         [
             "DereferenceAfterIdentifier.fs(2,9): error FS1141: Identifiers followed by '!' are reserved for future use"
         ]
+        "DereferenceOperandBeforeBangEquals.fs",
+        "module A\nlet y = !x!=y\n",
+        [ "let y = {~!x! = y}" ],
+        [
+            "DereferenceOperandBeforeBangEquals.fs(2,10): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "IdentifierBang.fs",
+        "module A\nlet r = x!\n",
+        [ "let r = x!" ],
+        [
+            "IdentifierBang.fs(2,9): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "IdentifierBangEquals.fs",
+        "module A\nlet r = x!=y\n",
+        [ "let r = {x! = y}" ],
+        [
+            "IdentifierBangEquals.fs(2,9): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "IdentifierBangEqualsArgument.fs",
+        "module A\nlet r = f x!=y\n",
+        [ "let r = {[f x!] = y}" ],
+        [
+            "IdentifierBangEqualsArgument.fs(2,11): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "IdentifierBangEqualsInParentheses.fs",
+        "module A\nlet r = (x!=y)\n",
+        [ "let r = ({x! = y})" ],
+        [
+            "IdentifierBangEqualsInParentheses.fs(2,10): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "IdentifierBangArgument.fs",
+        "module A\nlet r = f x!\n",
+        [ "let r = [f x!]" ],
+        [
+            "IdentifierBangArgument.fs(2,11): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "IdentifierBangMemberAccess.fs",
+        "module A\nlet r = x!.A\n",
+        [ "let r = x!.A" ],
+        [
+            "IdentifierBangMemberAccess.fs(2,9): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "QualifiedIdentifierBang.fs",
+        "module A\nlet r = A.B!\n",
+        [ "let r = A.B!" ],
+        [
+            "QualifiedIdentifierBang.fs(2,11): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "IdentifierBangApplication.fs",
+        "module A\nlet r = x!y\n",
+        [ "let r = [x! y]" ],
+        [
+            "IdentifierBangApplication.fs(2,9): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "PrimedIdentifierBang.fs",
+        "module A\nlet r = x'!\n",
+        [ "let r = x'!" ],
+        [
+            "PrimedIdentifierBang.fs(2,9): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "UnderscoreBang.fs",
+        "module A\nlet r = _!\n",
+        [ "let r = _!" ],
+        [
+            "UnderscoreBang.fs(2,9): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "IdentifierBangInList.fs",
+        "module A\nlet r = [x!]\n",
+        [ "let r = [x!]" ],
+        [
+            "IdentifierBangInList.fs(2,10): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "IdentifierBangBinding.fs",
+        "module A\nlet x! = 1\n",
+        [ "let x! = 1" ],
+        [
+            "IdentifierBangBinding.fs(2,5): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "IdentifierBangParameter.fs",
+        "module A\nlet f x! = 1\n",
+        [ "let f x! = 1" ],
+        [
+            "IdentifierBangParameter.fs(2,7): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "EscapedIdentifierBeforeDereference.fs",
+        "module A\nlet r = ``x``!y\n",
+        [ "let r = [``x`` ~!y]" ],
+        []
+        "IdentifierBangPattern.fs",
+        "module A\nlet r x =\n    match x with\n    | x! -> 1\n",
+        [ "let r x = match x with | x! -> 1" ],
+        [
+            "IdentifierBangPattern.fs(4,7): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+    ]
+
+    let private dereferenceExplicitCases = [
         "DoBangKeyword.fs", "module A\ndo! x\n", []
         "MatchBangKeyword.fs", "module A\nlet r () =\n    match! x with\n    | _ -> 1\n", []
         "IfFollowedByBang.fs",
@@ -5799,11 +5897,6 @@ let f a b =
         "module A\nlet r c = !if c then x else y\n",
         [
             "DereferenceConditionalOperand.fs(2,12): error FS0010: Unexpected keyword 'if' in expression"
-        ]
-        "DereferenceOperandBeforeBangEquals.fs",
-        "module A\nlet y = !x!=y\n",
-        [
-            "DereferenceOperandBeforeBangEquals.fs(2,10): error FS1141: Identifiers followed by '!' are reserved for future use"
         ]
     ]
 
@@ -7395,6 +7488,26 @@ let items = [ origin.X; 1 ]
                             expectedRanges
                             "The infix, prefix, and application ranges"
             ]
+
+            testList
+                "an identifier followed by '!' is one reserved token, and an escaped identifier is not (Oracle FS1141)"
+                [
+                    for logicalPath, text, expectedDeclarations, oracle in
+                        reservedBangIdentifierCases ->
+                        testCase logicalPath
+                        <| fun _ ->
+                            Expect.sequenceEqual
+                                (lexicalAndParserLines logicalPath text)
+                                oracle
+                                "The lexer and parser diagnostics match the Compatibility Oracle"
+
+                            Expect.sequenceEqual
+                                ((Seq.exactlyOne (parse logicalPath text).File.Contents)
+                                    .Declarations
+                                 |> Seq.map declarationShape)
+                                expectedDeclarations
+                                "The declarations with a reserved identifier"
+                ]
 
             testList "a '!' form the parser does not model stays explicit" [
                 for logicalPath, text, oracle in dereferenceExplicitCases ->
