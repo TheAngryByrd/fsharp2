@@ -2303,6 +2303,48 @@ let f a b =
     ]
 
     let private continuationLineCases = [
+        "ContinuationLineAfterTrue.fs",
+        "module A\nlet f () =\n    g 1 true\n        2\n",
+        [ "let f () = [[[g 1] Boolean true] 2]" ],
+        [
+            "app(3,5--4,10)"
+            "app(3,5--3,13)"
+            "app(3,5--3,8)"
+        ]
+        "ContinuationLineAfterFalse.fs",
+        "module A\nlet f () =\n    g false\n      2\n",
+        [ "let f () = [[g Boolean false] 2]" ],
+        [
+            "app(3,5--4,8)"
+            "app(3,5--3,12)"
+        ]
+        "ContinuationLineAfterTrueArgument.fs",
+        "module A\nlet f () =\n    g true 1\n      2\n",
+        [ "let f () = [[[g Boolean true] 1] 2]" ],
+        [
+            "app(3,5--4,8)"
+            "app(3,5--3,13)"
+            "app(3,5--3,11)"
+        ]
+        "ContinuationLinePipeAfterTrue.fs",
+        "module A\nlet f () =\n    g true\n        |> ignore\n",
+        [ "let f () = {[g Boolean true] |> ignore}" ],
+        [
+            "|>(3,5--4,18)"
+            "app(3,5--3,11)"
+        ]
+        "ContinuationLineLocalAfterTrue.fs",
+        "module A\nlet f () =\n    let y = g true\n              2\n    y\n",
+        [ "let f () = let y = [[g Boolean true] 2] in y" ],
+        [
+            "let(3,5--5,6)"
+            "app(3,13--4,16)"
+            "app(3,13--3,19)"
+        ]
+        "ContinuationLineTrailingAndAfterTrue.fs",
+        "module A\nlet f () =\n    true &&\n      false\n",
+        [ "let f () = {Boolean true && Boolean false}" ],
+        [ "&&(3,5--4,12)" ]
         "ContinuationLineModuleExpression.fs",
         "module Continued\nx\n    1\n",
         [ "expr [x 1]" ],
@@ -2556,6 +2598,25 @@ let f a b =
     ]
 
     let private continuationLineExplicitCases = [
+        "ContinuationLineLeftAfterTrue.fs",
+        "module A\nlet f () =\n    g true\n   2\n",
+        [
+            "ContinuationLineLeftAfterTrue.fs(4,4): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "ContinuationLineLeftAfterTrue.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "ContinuationLineBetweenAfterTrue.fs",
+        "module A\nlet f () =\n    let y = g true\n          2\n    y\n",
+        [
+            "ContinuationLineBetweenAfterTrue.fs(4,11): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "ContinuationLineBetweenAfterTrue.fs(3,5): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "ContinuationLineAfterNull.fs", "module A\nlet f () =\n    g null\n      2\n", []
+        "ContinuationLineQuotationAfterTrue.fs",
+        "module A\nlet f () =\n    g true <@ 1 @>\n        2\n",
+        []
+        "ContinuationLineTypeApplicationAfterTrue.fs",
+        "module A\nlet f () =\n    g true id<int>\n        2\n",
+        []
         "ContinuationLineParenOpensBlockLine.fs",
         "module A\nlet f () =\n    ignore (\n        1)\n    2\n",
         []

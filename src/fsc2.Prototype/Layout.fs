@@ -60,6 +60,12 @@ module internal Layout =
 
     let private opensBlockAfter (token: LexicalToken) =
         token.Kind = LexicalTokenKind.Keyword
+        && token.Text
+           <> "true"
+        && token.Text
+           <> "false"
+        && token.Text
+           <> "null"
         || token.Kind = LexicalTokenKind.Operator
            && (token.Text = "="
                || token.Text = "->"
