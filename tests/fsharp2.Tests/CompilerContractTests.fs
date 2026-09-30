@@ -1430,6 +1430,110 @@ let main _ =
                     ]
                     "The invalid argument is a source-phase error at the Oracle position"
 
+            testList
+                "a first clause left of its match after a with at a line end fails and emits no assembly"
+                [
+                    for name, source, line, column in
+                        [
+                            "inner with line, bar at the outer clause column",
+                            "namespace N\n\nopen System\n\ntype H() =\n    static member Run(a: int, b: int) : int =\n        match a with\n        | x ->\n            match\n                b\n              with\n        | y -> y\n",
+                            12,
+                            9
+                            "inner with at a line end, bar at the outer clause column",
+                            "namespace N\n\ntype H() =\n    static member Run(a: int, b: int) : int =\n        match a with\n        | x -> match b with\n        | y -> y\n",
+                            7,
+                            9
+                            "inner with at a line end, bar between the match columns",
+                            "namespace N\n\ntype H() =\n    static member Run(a: int, b: int) : int =\n        match a with\n        | x -> match b with\n             | y -> y\n",
+                            7,
+                            14
+                        ] ->
+                        testCase name
+                        <| fun _ ->
+                            let result = compile source
+
+                            Expect.notEqual
+                                result.Outcome
+                                CompilationOutcome.Succeeded
+                                "The Compatibility Oracle rejects the clause bar with FS0058"
+
+                            Expect.isEmpty
+                                result.Artifacts
+                                "A failed compilation publishes no artifacts"
+
+                            Expect.equal
+                                (result.Diagnostics
+                                 |> Seq.map (fun diagnostic ->
+                                     diagnostic.Code,
+                                     diagnostic.Range
+                                     |> Option.map (fun range ->
+                                         range.Start.Line, range.Start.Column
+                                     )
+                                 )
+                                 |> Seq.tryHead)
+                                (Some("FS0058", Some(line, column)))
+                                "The first diagnostic is FS0058 at the Compatibility Oracle position"
+                ]
+
+            testCase "a second with after a match fails and emits no assembly"
+            <| fun _ ->
+                let result =
+                    compile
+                        "namespace N\n\ntype H() =\n    static member Run(a: int, b: int) : int =\n        match\n            a\n          with\n          | _ -> 1\n          with _ -> 2\n"
+
+                Expect.notEqual
+                    result.Outcome
+                    CompilationOutcome.Succeeded
+                    "The Compatibility Oracle rejects the second with with FS0058 and FS0010 at (9,11)"
+
+                Expect.isEmpty result.Artifacts "A failed compilation publishes no artifacts"
+
+            testCase "a with line between the match and its input compiles with the Oracle results"
+            <| fun _ ->
+                let result =
+                    compile
+                        "namespace N\n\ntype H() =\n    static member Run(a: int, b: int) : int =\n        match\n            a\n          with\n        | _ -> 1\n"
+
+                let diagnostics =
+                    result.Diagnostics
+                    |> Seq.map (fun diagnostic -> $"{diagnostic.Code}: {diagnostic.Message}")
+                    |> String.concat Environment.NewLine
+
+                Expect.equal
+                    result.Outcome
+                    CompilationOutcome.Succeeded
+                    $"The Compatibility Oracle accepts the with line. Diagnostics:{Environment.NewLine}{diagnostics}"
+
+                let assembly =
+                    result.Artifacts
+                    |> Seq.exactlyOne
+                    |> fun artifact -> Assembly.Load(bytes artifact.Bytes)
+
+                let run = assembly.GetType("N.H", true).GetMethod("Run")
+
+                Expect.sequenceEqual
+                    ([
+                        0, 0
+                        1, 2
+                        2, 1
+                     ]
+                     |> List.map (fun (a, b) ->
+                         run.Invoke(
+                             null,
+                             [|
+                                 box a
+                                 box b
+                             |]
+                         )
+                         :?> int
+                     ))
+                    [
+                        1
+                        1
+                        1
+                    ]
+                    "The Compatibility Oracle program returns 1 for each input"
+
             testCase "a nested if with a second else fails and emits no assembly"
             <| fun _ ->
                 let result =

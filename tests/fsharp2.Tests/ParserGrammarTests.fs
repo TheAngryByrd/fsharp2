@@ -456,6 +456,55 @@ module ParserGrammarTests =
         | SyntaxExpression.List(items, _) -> all items
         | _ -> []
 
+    let rec private matchRanges expression =
+        let all expressions =
+            expressions
+            |> Seq.collect matchRanges
+            |> Seq.toList
+
+        match expression with
+        | SyntaxExpression.Match(input, clauses, range) ->
+            let startLine, startColumn, endLine, endColumn = position range
+
+            $"match({startLine},{startColumn}--{endLine},{endColumn}){clauses.Length}"
+            :: matchRanges input
+            @ all (
+                clauses
+                |> Seq.map _.Result
+            )
+        | SyntaxExpression.If(condition, thenBranch, elseBranch, _) ->
+            all (
+                [
+                    condition
+                    thenBranch
+                ]
+                @ Option.toList elseBranch
+            )
+        | SyntaxExpression.Infix(_, left, right, _) ->
+            all [
+                left
+                right
+            ]
+        | SyntaxExpression.Application(func, argument, _) ->
+            all [
+                func
+                argument
+            ]
+        | SyntaxExpression.Sequential(first, second, _) ->
+            all [
+                first
+                second
+            ]
+        | SyntaxExpression.LetOrUse(_, _, binding, body, _) ->
+            all [
+                binding.Body
+                body
+            ]
+        | SyntaxExpression.Parenthesized(inner, _) -> matchRanges inner
+        | SyntaxExpression.Lambda(_, body, _) -> matchRanges body
+        | SyntaxExpression.List(items, _) -> all items
+        | _ -> []
+
     let private declarationBodies (declarations: ImplementationDeclaration seq) =
         declarations
         |> Seq.collect (fun declaration ->
@@ -1803,9 +1852,6 @@ module ParserGrammarTests =
         [
             "LambdaBodyOffsideArgument.fs(5,7): error FS0010: Unexpected integer literal in expression"
         ]
-        "NestedMatchAtClauseColumn.fs",
-        "module A\nlet f a b =\n    (match a with\n     | 1 ->\n     match b with\n     | 2 -> 3\n     | _ -> 4)\n",
-        []
         "ElseLeftOfParenContent.fs", "module A\nlet f a =\n    g (if a then 1\n  else 2)\n", []
         "ThenBranchLeftOfIf.fs",
         "module A\nlet f c =\n    (if c then\n  1\n     else 2)\n",
@@ -2686,7 +2732,6 @@ let f a b =
         "ContinuationLineLocalLetSameLineAt.fs",
         "module A\nlet f () =\n    let y = g 1\n            2\n    y\n",
         []
-        "ContinuationLineWithLine.fs", "module A\nlet f x =\n    match x\n      with _ -> 1\n", []
         "ContinuationLineClauseResultArgLeft.fs",
         "module A\nlet f x =\n    match x with\n    | _ -> g 1\n           2\n",
         []
@@ -3053,6 +3098,373 @@ let f a b =
         "ConditionalThenElseSemicolon.fs",
         "module A\nlet f c =\n    if c\n    then 1; 2\n    else 3\n",
         []
+    ]
+
+    let private matchLineCases = [
+        "MatchNestedAtClauseColumnInParentheses.fs",
+        "module A\nlet f a b =\n    (match a with\n     | 1 ->\n     match b with\n     | 2 -> 3\n     | _ -> 4)\n",
+        [ "let f a b = (match a with | 1 -> match b with | 2 -> 3 | _ -> 4)" ],
+        [
+            "match(3,6--7,14)1"
+            "match(5,6--7,14)2"
+        ]
+        "MatchWithLineWithClause.fs",
+        "module A\nlet f x =\n    match x\n      with _ -> 1\n",
+        [ "let f x = match x with | _ -> 1" ],
+        [ "match(3,5--4,18)1" ]
+        "MatchWithAligned.fs",
+        "module A\nlet f x =\n    match x\n    with\n    | _ -> 1\n",
+        [ "let f x = match x with | _ -> 1" ],
+        [ "match(3,5--5,13)1" ]
+        "MatchWithAlignedClauseSame.fs",
+        "module A\nlet f x =\n    match x\n    with _ -> 1\n",
+        [ "let f x = match x with | _ -> 1" ],
+        [ "match(3,5--4,16)1" ]
+        "MatchWithAlignedTwoClauses.fs",
+        "module A\nlet f x =\n    match x\n    with\n    | 1 -> 2\n    | _ -> 3\n",
+        [ "let f x = match x with | 1 -> 2 | _ -> 3" ],
+        [ "match(3,5--6,13)2" ]
+        "MatchWithIndented.fs",
+        "module A\nlet f x =\n    match x\n      with\n      | _ -> 1\n",
+        [ "let f x = match x with | _ -> 1" ],
+        [ "match(3,5--5,15)1" ]
+        "MatchWithIndentedBarsLeft.fs",
+        "module A\nlet f x =\n    match x\n      with\n    | _ -> 1\n",
+        [ "let f x = match x with | _ -> 1" ],
+        [ "match(3,5--5,13)1" ]
+        "MatchWithRightOfInput.fs",
+        "module A\nlet f x =\n    match x\n          with\n          | _ -> 1\n",
+        [ "let f x = match x with | _ -> 1" ],
+        [ "match(3,5--5,19)1" ]
+        "MatchWithAlignedItemAfter.fs",
+        "module A\nlet f x =\n    match x\n    with\n    | _ -> ignore 1\n    ignore 2\n",
+        [ "let f x = seq[match x with | _ -> [ignore 1]; [ignore 2]]" ],
+        [
+            "seq(3,5--6,13)"
+            "app(5,12--5,20)"
+            "app(6,5--6,13)"
+            "match(3,5--5,20)1"
+        ]
+        "MatchWithInLetValue.fs",
+        "module A\nlet f x =\n    let y =\n        match x\n        with\n        | _ -> 1\n    y\n",
+        [ "let f x = let y = match x with | _ -> 1 in y" ],
+        [
+            "let(3,5--7,6)"
+            "match(4,9--6,17)1"
+        ]
+        "MatchBarsAligned.fs",
+        "module A\nlet f x =\n    match x with\n    | 1 -> 2\n    | _ -> 3\n",
+        [ "let f x = match x with | 1 -> 2 | _ -> 3" ],
+        [ "match(3,5--5,13)2" ]
+        "MatchBarsIndented.fs",
+        "module A\nlet f x =\n    match x with\n      | 1 -> 2\n      | _ -> 3\n",
+        [ "let f x = match x with | 1 -> 2 | _ -> 3" ],
+        [ "match(3,5--5,15)2" ]
+        "MatchBarBetween.fs",
+        "module A\nlet f x =\n    match x with\n    | 1 ->\n        2\n      | _ -> 3\n",
+        [ "let f x = match x with | 1 -> 2 | _ -> 3" ],
+        [ "match(3,5--6,15)2" ]
+        "MatchLastBodyAtMatch.fs",
+        "module A\nlet f x =\n    match x with\n    | 1 -> 2\n    | _ ->\n    3\n",
+        [ "let f x = match x with | 1 -> 2 | _ -> 3" ],
+        [ "match(3,5--6,6)2" ]
+        "MatchFirstBodyAtMatch.fs",
+        "module A\nlet f x =\n    match x with\n    | 1 ->\n    2\n    | _ -> 3\n",
+        [ "let f x = match x with | 1 -> 2 | _ -> 3" ],
+        [ "match(3,5--6,13)2" ]
+        "MatchLastBodyTwoItems.fs",
+        "module A\nlet f x =\n    match x with\n    | _ ->\n    ignore 1\n    2\n",
+        [ "let f x = match x with | _ -> seq[[ignore 1]; 2]" ],
+        [
+            "seq(5,5--6,6)"
+            "app(5,5--5,13)"
+            "match(3,5--6,6)1"
+        ]
+        "MatchLastBodyAtBarIndented.fs",
+        "module A\nlet f x =\n    match x with\n      | _ ->\n      3\n",
+        [ "let f x = match x with | _ -> 3" ],
+        [ "match(3,5--5,8)1" ]
+        "MatchLastBodyLet.fs",
+        "module A\nlet f x =\n    match x with\n    | _ ->\n    let y = 1\n    y\n",
+        [ "let f x = match x with | _ -> let y = 1 in y" ],
+        [
+            "let(5,5--6,6)"
+            "match(3,5--6,6)1"
+        ]
+        "MatchLastBodyInLetValue.fs",
+        "module A\nlet f x =\n    let y =\n        match x with\n        | _ ->\n        3\n    y\n",
+        [ "let f x = let y = match x with | _ -> 3 in y" ],
+        [
+            "let(3,5--7,6)"
+            "match(4,9--6,10)1"
+        ]
+        "MatchLastBodyAtMatchMidLine.fs",
+        "module A\nlet f x =\n    let y = match x with\n            | _ ->\n            3\n    y\n",
+        [ "let f x = let y = match x with | _ -> 3 in y" ],
+        [
+            "let(3,5--6,6)"
+            "match(3,13--5,14)1"
+        ]
+        "MatchLastBodyAfterGuard.fs",
+        "module A\nlet f x =\n    match x with\n    | y when y > 0 ->\n    y\n",
+        [ "let f x = match x with | y when {y > 0} -> y" ],
+        [ "match(3,5--5,6)1" ]
+        "MatchNestedSameLineOuterBar.fs",
+        "module A\nlet f x y =\n    match x with\n    | 1 -> match y with | 2 -> 3 | _ -> 4\n    | _ -> 5\n",
+        [ "let f x y = match x with | 1 -> match y with | 2 -> 3 | _ -> 4 | _ -> 5" ],
+        [
+            "match(3,5--5,13)2"
+            "match(4,12--4,42)2"
+        ]
+        "MatchNestedBlockOuterBar.fs",
+        "module A\nlet f x y =\n    match x with\n    | 1 ->\n        match y with\n        | 2 -> 3\n        | _ -> 4\n    | _ -> 5\n",
+        [ "let f x y = match x with | 1 -> match y with | 2 -> 3 | _ -> 4 | _ -> 5" ],
+        [
+            "match(3,5--8,13)2"
+            "match(5,9--7,17)2"
+        ]
+        "MatchNestedSameLineNextBar.fs",
+        "module A\nlet f x y =\n    match x with\n    | 1 -> match y with\n           | 2 -> 3\n    | _ -> 5\n",
+        [ "let f x y = match x with | 1 -> match y with | 2 -> 3 | _ -> 5" ],
+        [
+            "match(3,5--6,13)2"
+            "match(4,12--5,20)1"
+        ]
+        "MatchNestedInnerBarAtInner.fs",
+        "module A\nlet f x y =\n    match x with\n    | 1 -> match y with\n           | 2 -> 3\n           | _ -> 4\n    | _ -> 5\n",
+        [ "let f x y = match x with | 1 -> match y with | 2 -> 3 | _ -> 4 | _ -> 5" ],
+        [
+            "match(3,5--7,13)2"
+            "match(4,12--6,20)2"
+        ]
+        "MatchNestedBarBetween.fs",
+        "module A\nlet f x y =\n    match x with\n    | 1 -> match y with\n           | 2 -> 3\n         | _ -> 4\n",
+        [ "let f x y = match x with | 1 -> match y with | 2 -> 3 | _ -> 4" ],
+        [
+            "match(3,5--6,18)2"
+            "match(4,12--5,20)1"
+        ]
+        "MatchNestedLastBodyAtInner.fs",
+        "module A\nlet f x y =\n    match x with\n    | 1 ->\n        match y with\n        | _ ->\n        3\n    | _ -> 5\n",
+        [ "let f x y = match x with | 1 -> match y with | _ -> 3 | _ -> 5" ],
+        [
+            "match(3,5--8,13)2"
+            "match(5,9--7,10)1"
+        ]
+        "MatchNestedLastBodyAtOuter.fs",
+        "module A\nlet f x y =\n    match x with\n    | 1 -> 2\n    | _ ->\n    match y with\n    | _ -> 3\n",
+        [ "let f x y = match x with | 1 -> 2 | _ -> match y with | _ -> 3" ],
+        [
+            "match(3,5--7,13)2"
+            "match(6,5--7,13)1"
+        ]
+        "MatchNestedInParenOuterBar.fs",
+        "module A\nlet f x y =\n    (match x with\n     | 1 -> match y with | 2 -> 3 | _ -> 4\n     | _ -> 5)\n",
+        [ "let f x y = (match x with | 1 -> match y with | 2 -> 3 | _ -> 4 | _ -> 5)" ],
+        [
+            "match(3,6--5,14)2"
+            "match(4,13--4,43)2"
+        ]
+        "MatchLambdaMatchOuterBar.fs",
+        "module A\nlet f x =\n    match x with\n    | 1 -> fun y -> match y with | 2 -> 3 | _ -> 4\n    | _ -> fun _ -> 5\n",
+        [
+            "let f x = match x with | 1 -> fun y -> match y with | 2 -> 3 | _ -> 4 | _ -> fun _ -> 5"
+        ],
+        [
+            "match(3,5--5,22)2"
+            "match(4,21--4,51)2"
+        ]
+        "MatchIfInClauseOuterBar.fs",
+        "module A\nlet f c x =\n    match x with\n    | 1 -> if c then 2 else 3\n    | _ -> 4\n",
+        [ "let f c x = match x with | 1 -> if c then 2 else 3 | _ -> 4" ],
+        [
+            "if(4,12--4,30)E"
+            "match(3,5--5,13)2"
+        ]
+        "MatchMatchInIfThen.fs",
+        "module A\nlet f c x =\n    if c then\n        match x with\n        | _ -> 1\n    else 2\n",
+        [ "let f c x = if c then match x with | _ -> 1 else 2" ],
+        [
+            "if(3,5--6,11)E"
+            "match(4,9--5,17)1"
+        ]
+        "MatchMatchInIfSameLine.fs",
+        "module A\nlet f c x =\n    if c then match x with | _ -> 1\n    else 2\n",
+        [ "let f c x = if c then match x with | _ -> 1 else 2" ],
+        [
+            "if(3,5--4,11)E"
+            "match(3,15--3,36)1"
+        ]
+        "MatchMatchInLambda.fs",
+        "module A\nlet f xs =\n    List.map (fun x ->\n        match x with\n        | _ -> 1) xs\n",
+        [ "let f xs = [[List.map (fun x -> match x with | _ -> 1)] xs]" ],
+        [
+            "app(3,5--5,21)"
+            "app(3,5--5,18)"
+            "match(4,9--5,17)1"
+        ]
+        "MatchMatchInParenWithAligned.fs",
+        "module A\nlet f x =\n    (match x\n     with\n     | _ -> 1)\n",
+        [ "let f x = (match x with | _ -> 1)" ],
+        [ "match(3,6--5,14)1" ]
+        "MatchMatchInParenLastBody.fs",
+        "module A\nlet f x =\n    (match x with\n     | _ ->\n     3)\n",
+        [ "let f x = (match x with | _ -> 3)" ],
+        [ "match(3,6--5,7)1" ]
+        "MatchMatchInList.fs",
+        "module A\nlet f x =\n    [ match x with\n      | _ -> 1 ]\n",
+        [ "let f x = [match x with | _ -> 1]" ],
+        [ "match(3,7--4,15)1" ]
+        "MatchMatchInParenBars.fs",
+        "module A\nlet f x =\n    (match x with\n     | 1 -> 2\n     | _ -> 3)\n",
+        [ "let f x = (match x with | 1 -> 2 | _ -> 3)" ],
+        [ "match(3,6--5,14)2" ]
+        "MatchIfInClauseElse.fs",
+        "module A\nlet f c x =\n    match x with\n    | _ ->\n        if c then 1\n        else 2\n",
+        [ "let f c x = match x with | _ -> if c then 1 else 2" ],
+        [
+            "if(5,9--6,15)E"
+            "match(3,5--6,15)1"
+        ]
+        "MatchMatchAfterPipe.fs",
+        "module A\nlet f x =\n    x\n    |> fun y ->\n        match y with\n        | _ -> 1\n",
+        [ "let f x = {x |> fun y -> match y with | _ -> 1}" ],
+        [
+            "|>(3,5--6,17)"
+            "match(5,9--6,17)1"
+        ]
+        "MatchClausePipeLine.fs",
+        "module A\nlet f x =\n    match x with\n    | _ -> 1\n    |> ignore\n",
+        [ "let f x = {match x with | _ -> 1 |> ignore}" ],
+        [
+            "|>(3,5--5,14)"
+            "match(3,5--4,13)1"
+        ]
+        "MatchClauseInfixLine.fs",
+        "module A\nlet f x =\n    match x with\n    | _ -> 1\n           + 2\n",
+        [ "let f x = match x with | _ -> {1 + 2}" ],
+        [
+            "+(4,12--5,15)"
+            "match(3,5--5,15)1"
+        ]
+        "MatchClauseArgLine.fs",
+        "module A\nlet f x =\n    match x with\n    | _ -> g 1\n             2\n",
+        [ "let f x = match x with | _ -> [[g 1] 2]" ],
+        [
+            "app(4,12--5,15)"
+            "app(4,12--4,15)"
+            "match(3,5--5,15)1"
+        ]
+        "MatchWithThenBarOnLine.fs",
+        "module A\nlet f x =\n    match x\n    with | _ -> 1\n",
+        [ "let f x = match x with | _ -> 1" ],
+        [ "match(3,5--4,18)1" ]
+        "MatchMatchInputNextLine.fs",
+        "module A\nlet f x =\n    match\n        x\n    with\n    | _ -> 1\n",
+        [ "let f x = match x with | _ -> 1" ],
+        [ "match(3,5--6,13)1" ]
+        "MatchMatchInputTwoLines.fs",
+        "module A\nlet f x y =\n    match x\n          y with\n    | _ -> 1\n",
+        [ "let f x y = match [x y] with | _ -> 1" ],
+        [
+            "app(3,11--4,12)"
+            "match(3,5--5,13)1"
+        ]
+        "MatchBarLeftOfMidMatch.fs",
+        "module A\nlet f x =\n    let y = match x with\n            | 1 -> 2\n            | _ -> 3\n    y\n",
+        [ "let f x = let y = match x with | 1 -> 2 | _ -> 3 in y" ],
+        [
+            "let(3,5--6,6)"
+            "match(3,13--5,21)2"
+        ]
+        "MatchWithLeftOfMidMatch.fs",
+        "module A\nlet f x =\n    let y = match x\n            with _ -> 1\n    y\n",
+        [ "let f x = let y = match x with | _ -> 1 in y" ],
+        [
+            "let(3,5--5,6)"
+            "match(3,13--4,24)1"
+        ]
+        "MatchNestedBlockBodyAtInnerThenOuter.fs",
+        "module A\nlet f x y =\n    match x with\n    | 1 ->\n        match y with\n        | 2 -> 3\n        | _ ->\n        4\n    | _ -> 5\n",
+        [ "let f x y = match x with | 1 -> match y with | 2 -> 3 | _ -> 4 | _ -> 5" ],
+        [
+            "match(3,5--9,13)2"
+            "match(5,9--8,10)2"
+        ]
+        "MatchWithLineThenBlockBarBetween.fs",
+        "module A\nlet f x =\n    match x\n      with\n        | 1 -> 2\n        | _ -> 3\n",
+        [ "let f x = match x with | 1 -> 2 | _ -> 3" ],
+        [ "match(3,5--6,17)2" ]
+    ]
+
+    let private matchLineExplicitCases = [
+        "MatchWithIndentedSameClause.fs",
+        "module A\nlet f x =\n    match x\n      with _ -> 1\n         | _ -> 2\n",
+        []
+        "MatchWithLeftOfMatch.fs",
+        "module A\nlet f x =\n    match x\n  with\n    | _ -> 1\n",
+        [
+            "MatchWithLeftOfMatch.fs(4,3): error FS0010: Incomplete structured construct at or before this point in expression. Expected 'with' or other token."
+            "MatchWithLeftOfMatch.fs(4,3): error FS0010: Unexpected keyword 'with' in binding. Expected incomplete structured construct at or before this point or other token."
+            "MatchWithLeftOfMatch.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+            "MatchWithLeftOfMatch.fs(6,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+        "MatchBarLeftOfMatch.fs",
+        "module A\nlet f x =\n    match x with\n      | 1 -> 2\n    | _ -> 3\n",
+        [
+            "MatchBarLeftOfMatch.fs(5,5): error FS0010: Unexpected symbol '|' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "MatchBarLeftOfFirst.fs",
+        "module A\nlet f x =\n    match x with\n      | 1 -> 2\n     | _ -> 3\n",
+        [
+            "MatchBarLeftOfFirst.fs(5,6): error FS0058: The '|' tokens separating rules of this pattern match are misaligned by one column. Consider realigning your code or using further indentation."
+            "MatchBarLeftOfFirst.fs(5,6): error FS0010: Unexpected symbol '|' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "MatchFirstNoBarThenBar.fs",
+        "module A\nlet f x =\n    match x with\n    1 -> 2\n    | _ -> 3\n",
+        []
+        "MatchLastBodyLeft.fs",
+        "module A\nlet f x =\n    match x with\n    | _ ->\n   3\n",
+        [
+            "MatchLastBodyLeft.fs(5,4): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "MatchLastBodyLeft.fs(5,4): error FS0010: Incomplete structured construct at or before this point in pattern matching"
+            "MatchLastBodyLeft.fs(5,4): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "MatchLastBodyLeft.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "MatchLastBodyBetween.fs",
+        "module A\nlet f x =\n    match x with\n      | _ ->\n     3\n",
+        []
+        "MatchMatchInElse.fs",
+        "module A\nlet f c x =\n    if c then 1\n    else\n    match x with\n    | _ -> 2\n",
+        []
+        "MatchFunction.fs", "module A\nlet f =\n    function\n    | _ -> 1\n", []
+        "MatchTryWith.fs", "module A\nlet f () =\n    try\n        1\n    with _ -> 2\n", []
+        "MatchTryWithBars.fs",
+        "module A\nlet f () =\n    try\n        1\n    with\n    | _ -> 2\n",
+        []
+        "MatchMatchInTry.fs",
+        "module A\nlet f x =\n    try\n        match x with\n        | _ -> 1\n    with _ -> 2\n",
+        []
+        "MatchRecordWithLine.fs", "module A\nlet f r =\n    { r\n      with A = 1 }\n", []
+        "MatchMatchBang.fs", "module A\nlet f x =\n    match x\n    with\n    | _ -> <@ 1 @>\n", []
+        "MatchClauseTypeapp.fs",
+        "module A\nlet f x =\n    match x\n    with\n    | _ -> id<int> 1\n",
+        []
+        "MatchSecondWith.fs",
+        "module A\nlet f x =\n    match x\n    with\n    | _ -> 1\n    with _ -> 2\n",
+        [
+            "MatchSecondWith.fs(6,5): error FS0010: Unexpected keyword 'with' in binding. Expected incomplete structured construct at or before this point or other token."
+            "MatchSecondWith.fs(7,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+        "MatchBarsLeftOfMidMatch.fs",
+        "module A\nlet f x =\n    let y = match x with\n        | 1 -> 2\n        | _ -> 3\n    y\n",
+        [
+            "MatchBarsLeftOfMidMatch.fs(4,9): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:13). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "MatchBarsLeftOfMidMatch.fs(4,9): error FS0010: Incomplete structured construct at or before this point in expression"
+            "MatchBarsLeftOfMidMatch.fs(4,9): error FS0010: Unexpected symbol '|' in binding. Expected incomplete structured construct at or before this point or other token."
+            "MatchBarsLeftOfMidMatch.fs(3,5): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+            "MatchBarsLeftOfMidMatch.fs(3,5): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+        ]
     ]
 
     [<Tests>]
@@ -3674,6 +4086,42 @@ let items = [ origin.X; 1 ]
 
             testList "a conditional line that the parser does not model stays explicit" [
                 for logicalPath, text, oracle in conditionalLineExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testList "with, clause bars, and clause results can align with match" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in matchLineCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with match lines"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect (fun body ->
+                                 infixRanges body
+                                 @ applicationRanges body
+                                 @ conditionalRanges body
+                                 @ matchRanges body
+                             ))
+                            expectedRanges
+                            "The infix, application, conditional, and match ranges, and the clause count of each match"
+            ]
+
+            testList "a match line that the parser does not model stays explicit" [
+                for logicalPath, text, oracle in matchLineExplicitCases ->
                     testCase logicalPath
                     <| fun _ ->
                         let result = parse logicalPath text

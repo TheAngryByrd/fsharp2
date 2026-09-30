@@ -2429,28 +2429,61 @@ module internal Parser =
     and private parseMatch state context =
         let cursor = state.Cursor
         let matchToken = cursor.Advance()
-        let input = parseExpression state context
+
+        let input =
+            if cursor.Current.Kind = LayoutTokenKind.BeginBlock then
+                parseBranch state context None
+            else
+                parseExpression state context
+
         let clauses = ImmutableArray.CreateBuilder<SyntaxMatchClause>()
 
-        if not (isKeyword "with" cursor.Current) then
+        // 15.1.9: 'with' can align with 'match'.
+        if
+            cursor.Current.Kind = LayoutTokenKind.Separator
+            && isKeyword "with" (cursor.Peek 1)
+            && (cursor.Peek 1).Range.Start.Column = matchToken.Range.Start.Column
+        then
+            cursor.Advance()
+            |> ignore
+
+        if
+            not (isKeyword "with" cursor.Current)
+            || cursor.Current.Range.Start.Column < matchToken.Range.Start.Column
+        then
             reportUnexpected state RecoveryPoint.MatchWith "a match expression"
             |> ignore
         else
-            cursor.Advance()
-            |> ignore
+            let withToken = cursor.Advance()
 
             let startsClause () =
                 (cursor.Current.Kind = LayoutTokenKind.BeginBlock
                  || cursor.Current.Kind = LayoutTokenKind.Separator)
                 && isOperator "|" (cursor.Peek 1)
 
-            let closesBlock = cursor.Current.Kind = LayoutTokenKind.BeginBlock
+            let mutable openedBlocks =
+                if cursor.Current.Kind = LayoutTokenKind.BeginBlock then
+                    1
+                else
+                    0
 
             if startsClause () then
                 cursor.Advance()
                 |> ignore
 
+            let mutable clausesColumn = None
             let mutable more = true
+
+            // The Oracle reports FS0058 for a first clause on a later line left of 'match'.
+            if
+                cursor.Current.Kind = LayoutTokenKind.SourceToken
+                && cursor.Current.Range.Start.Line > withToken.Range.Start.Line
+                && cursor.Current.Range.Start.Column < matchToken.Range.Start.Column
+            then
+                if not (reportedAt state cursor.Current) then
+                    reportUnsupported state cursor.Current "a match clause"
+
+                more <- false
 
             while more do
                 let bar =
@@ -2460,6 +2493,12 @@ module internal Parser =
                         None
 
                 let start = cursor.Current
+
+                if clausesColumn.IsNone then
+                    clausesColumn <-
+                        bar
+                        |> Option.defaultValue start
+                        |> fun token -> Some token.Range.Start.Column
 
                 let clauseContext =
                     bar
@@ -2499,16 +2538,46 @@ module internal Parser =
 
                         let reported = state.Diagnostics.Count
 
+                        let arrowLine = cursor.LastEnd.Line
+
+                        let body =
+                            if cursor.Current.Kind = LayoutTokenKind.Separator then
+                                cursor.Peek 1
+                            else
+                                cursor.Current
+
+                        // 15.1.9: a clause result on a later line can align with 'match'.
+                        let alignsWithMatch =
+                            body.Kind = LayoutTokenKind.SourceToken
+                            && body.Range.Start.Line > arrowLine
+                            && body.Range.Start.Column
+                               >= matchToken.Range.Start.Column
+                            && body.Range.Start.Column
+                               <= clauseContext.Offside.Column
+                            && (cursor.Current.Kind = LayoutTokenKind.Separator
+                                || state.InDelimiters)
+                            && startsBlockItem body
+
                         let result =
-                            withUndentationLimit
-                                state
-                                clauseContext
-                                (fun () ->
-                                    parseBranch
-                                        state
-                                        clauseContext
-                                        (Some RecoveryPoint.ClauseResult)
-                                )
+                            if alignsWithMatch then
+                                if cursor.Current.Kind = LayoutTokenKind.Separator then
+                                    cursor.Advance()
+                                    |> ignore
+
+                                parseBlockItems
+                                    state
+                                    (frameAt FrameKind.SeqBlock body)
+                                    (Some RecoveryPoint.ClauseResult)
+                            else
+                                withUndentationLimit
+                                    state
+                                    clauseContext
+                                    (fun () ->
+                                        parseBranch
+                                            state
+                                            clauseContext
+                                            (Some RecoveryPoint.ClauseResult)
+                                    )
 
                         clauses.Add {
                             Pattern = pattern
@@ -2522,26 +2591,44 @@ module internal Parser =
                                     (emptyAt cursor.LastEnd)
                         }
 
+                        // A bar on a later line left of the first clause belongs to an enclosing construct.
+                        let ownsBar (token: LayoutToken) =
+                            isOperator "|" token
+                            && (token.Range.Start.Line = cursor.LastEnd.Line
+                                || clausesColumn
+                                   |> Option.forall (fun column ->
+                                       token.Range.Start.Column
+                                       >= column
+                                   ))
+
                         if reportedSince state reported then
                             more <- false
                         elif
-                            isOperator "|" cursor.Current
+                            ownsBar cursor.Current
                             && not (isLeftOfBlock state context cursor.Current)
                         then
                             ()
                         elif
-                            cursor.Current.Kind = LayoutTokenKind.Separator
-                            && isOperator "|" (cursor.Peek 1)
+                            (cursor.Current.Kind = LayoutTokenKind.Separator
+                             || cursor.Current.Kind = LayoutTokenKind.BeginBlock)
+                            && ownsBar (cursor.Peek 1)
                         then
+                            if cursor.Current.Kind = LayoutTokenKind.BeginBlock then
+                                openedBlocks <-
+                                    openedBlocks
+                                    + 1
+
                             cursor.Advance()
                             |> ignore
                         else
                             more <- false
 
-            if
-                closesBlock
-                && cursor.Current.Kind = LayoutTokenKind.EndBlock
-            then
+            while openedBlocks > 0
+                  && cursor.Current.Kind = LayoutTokenKind.EndBlock do
+                openedBlocks <-
+                    openedBlocks
+                    - 1
+
                 cursor.Advance()
                 |> ignore
 

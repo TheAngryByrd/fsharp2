@@ -77,6 +77,7 @@ module internal Layout =
     type private ItemColumn =
         | Opened of int
         | Conditional of int
+        | Match of int
 
     let private isKeywordText text (token: LexicalToken) =
         token.Kind = LexicalTokenKind.Keyword
@@ -91,6 +92,28 @@ module internal Layout =
         || isKeywordText "elif" token
         || isKeywordText "else" token
 
+    let private continuesConstruct (token: LexicalToken) =
+        continuesConditional token
+        || isKeywordText "with" token
+
+    let rec private withoutLastMatch items =
+        match items with
+        | [] -> []
+        | ItemColumn.Match _ :: rest -> rest
+        | item :: rest ->
+            item
+            :: withoutLastMatch rest
+
+    let rec private innermostMatch column items =
+        match items with
+        | [] -> None
+        | ItemColumn.Match matchColumn :: _ when
+            matchColumn
+            <= column
+            ->
+            Some matchColumn
+        | _ :: rest -> innermostMatch column rest
+
     let private clears startsInfix column item =
         match item with
         | ItemColumn.Opened blockColumn ->
@@ -98,17 +121,25 @@ module internal Layout =
             || startsInfix
                && column = blockColumn
         | ItemColumn.Conditional ifColumn -> column > ifColumn
+        | ItemColumn.Match matchColumn -> column > matchColumn
 
-    // FCS closes the contexts after an 'if' at 'then', 'elif', or 'else', and an 'if' stays open until a token is left of it.
-    let rec private openConditional column items =
+    // FCS closes the contexts after an 'if' at 'then', 'elif', or 'else', and after a 'match' at 'with'. An 'if' or a 'match' stays open until a token is left of it.
+    let rec private openConstruct (keyword: LexicalToken) column items =
         match items with
         | [] -> None
         | ItemColumn.Conditional ifColumn :: _ when
-            ifColumn
-            <= column
+            continuesConditional keyword
+            && ifColumn
+               <= column
             ->
             Some items
-        | _ :: rest -> openConditional column rest
+        | ItemColumn.Match matchColumn :: rest when
+            isKeywordText "with" keyword
+            && matchColumn
+               <= column
+            ->
+            Some rest
+        | _ :: rest -> openConstruct keyword column rest
 
     let apply (source: DecodedSource) (directives: DirectiveResult) (lexed: LexerResult) =
         let tokens = ResizeArray<LayoutToken>()
@@ -119,6 +150,7 @@ module internal Layout =
         let mutable previousLastToken: LexicalToken option = None
         let mutable itemBlockColumns: ItemColumn list = []
         let mutable savedItemColumns: ItemColumn list list = []
+        let mutable firstClauseLimit: int option = None
         let mutable delimiterDepth = 0
         let mutable order = int64 diagnostics.Count
 
@@ -212,6 +244,8 @@ module internal Layout =
                 |> Seq.toArray
 
             let mutable lineBlockColumns = []
+            let mutable lineFirstClauseLimit = None
+            let mutable lineWithMatch = None
 
             for index = 0 to lineTokens.Length
                              - 1 do
@@ -219,10 +253,26 @@ module internal Layout =
 
                 if
                     delimiterDepth = 0
+                    && isKeywordText "with" token
+                then
+                    if index + 1 = lineTokens.Length then
+                        lineFirstClauseLimit <- innermostMatch Int32.MaxValue lineBlockColumns
+
+                    lineBlockColumns <- withoutLastMatch lineBlockColumns
+
+                if
+                    delimiterDepth = 0
                     && startsConditional token
                 then
                     lineBlockColumns <-
                         ItemColumn.Conditional token.Range.Start.Column
+                        :: lineBlockColumns
+                elif
+                    delimiterDepth = 0
+                    && isKeywordText "match" token
+                then
+                    lineBlockColumns <-
+                        ItemColumn.Match token.Range.Start.Column
                         :: lineBlockColumns
                 elif
                     delimiterDepth = 0
@@ -287,13 +337,13 @@ module internal Layout =
                     + 1
 
                 let startsInfix = isInfixToken lineTokens[0] (Array.tryItem 1 lineTokens)
-                let continuesIf = continuesConditional lineTokens[0]
+                let continuesIf = continuesConstruct lineTokens[0]
 
                 if continuesIf then
-                    while (openConditional column itemBlockColumns).IsNone
+                    while (openConstruct lineTokens[0] column itemBlockColumns).IsNone
                           && (
                               match savedItemColumns with
-                              | saved :: _ -> (openConditional column saved).IsSome
+                              | saved :: _ -> (openConstruct lineTokens[0] column saved).IsSome
                               | [] -> false
                           ) do
                         indents <- indents.Tail
@@ -317,7 +367,8 @@ module internal Layout =
 
                 let conditional =
                     if continuesIf then
-                        openConditional column itemBlockColumns
+                        (lineWithMatch <- innermostMatch column itemBlockColumns
+                         openConstruct lineTokens[0] column itemBlockColumns)
                     else
                         None
 
@@ -422,7 +473,8 @@ module internal Layout =
 
                     let conditional =
                         if continuesIf then
-                            openConditional column itemBlockColumns
+                            (lineWithMatch <- innermostMatch column itemBlockColumns
+                             openConstruct lineTokens[0] column itemBlockColumns)
                         else
                             None
 
@@ -483,6 +535,38 @@ module internal Layout =
                 lineTokens.Length > 0
                 && not isDirectiveLine
             then
+                let start = lineTokens[0].Range.Start
+
+                // The Oracle reports FS0058 for a first clause on the line after 'with' when the clause is left of 'match'.
+                match firstClauseLimit with
+                | Some limit when
+                    depthBefore = 0
+                    && start.Column < limit
+                    && not (
+                        diagnostics
+                        |> Seq.exists (fun diagnostic -> diagnostic.Range.Start = start)
+                    )
+                    ->
+                    diagnostics.Add {
+                        Code = "FS0058"
+                        Message = "Unexpected syntax or possible incorrect indentation."
+                        Range = { Start = start; End = start }
+                        Order = order
+                        Severity = DiagnosticSeverity.Error
+                    }
+
+                    order <- order + 1L
+                | _ -> ()
+
+                firstClauseLimit <-
+                    if
+                        lineTokens.Length = 1
+                        && isKeywordText "with" lineTokens[0]
+                    then
+                        lineWithMatch
+                    else
+                        lineFirstClauseLimit
+
                 if
                     depthBefore > 0
                     || delimiterDepth > 0
