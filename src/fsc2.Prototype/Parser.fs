@@ -701,6 +701,7 @@ module internal Parser =
         | Open
         | Val
         | Type
+        | CastType
         | RecordField
         | UnionCase
         | Member
@@ -915,7 +916,11 @@ module internal Parser =
         || isEndOfFile token
         || isOffside context token
 
-    let private longIdentifierWith state (onTrailingDot: LayoutToken -> unit) =
+    let private longIdentifierUntil
+        state
+        (stops: LayoutToken -> bool)
+        (onTrailingDot: LayoutToken -> unit)
+        =
         let cursor = state.Cursor
         let parts = ImmutableArray.CreateBuilder<SyntaxIdentifier>()
         let mutable stop = false
@@ -923,7 +928,8 @@ module internal Parser =
         parts.Add(identifier (cursor.Advance()))
 
         while not stop
-              && isOperator "." cursor.Current do
+              && isOperator "." cursor.Current
+              && not (stops cursor.Current) do
             let dot = cursor.Advance()
 
             if
@@ -947,6 +953,9 @@ module internal Parser =
                           - 1]
                         .Range
         }
+
+    let private longIdentifierWith state onTrailingDot =
+        longIdentifierUntil state (fun _ -> false) onTrailingDot
 
     let private unsupportedTrailingDot state (_: LayoutToken) =
         reportUnsupported state state.Cursor.Current "a long identifier"
@@ -1123,14 +1132,10 @@ module internal Parser =
         | _ -> ()
 
     // FCS reads a token after the target type of a cast as part of the type, or reports FS0010, unless the token is in this set.
-    let private endsCastType (cursor: Cursor) =
-        let token = cursor.Current
+    let private endsCastTypeAt (token: LayoutToken) (next: LayoutToken) (lastEnd: SourcePosition) =
         let text = tokenText token
 
-        token.Kind
-        <> LayoutTokenKind.SourceToken
-        || isEndOfFile token
-        || token.Range.Start.Line > cursor.LastEnd.Line
+        isEndOfFile token
         || [
             ")"
             "]"
@@ -1164,10 +1169,47 @@ module internal Parser =
            )
            && not (
                isSign token
-               && precedesWithoutSpace token (cursor.Peek 1)
+               && precedesWithoutSpace token next
                && token.Range.Start.Offset
-                  <> cursor.LastEnd.Offset
+                  <> lastEnd.Offset
            )
+
+    // FCS continues the target type of a cast on a later line with an operator that can extend a type, also at the block column.
+    let private continuesCastTypeOnLaterLine (token: LayoutToken) =
+        let text = tokenText token
+
+        isKind LexicalTokenKind.Operator token
+        && [
+            "*"
+            "/"
+            "%"
+            "^"
+            "@"
+            "."
+            "<"
+            "->"
+            ":"
+           ]
+           |> List.exists (fun prefix -> text.StartsWith(prefix, StringComparison.Ordinal))
+
+    let private castTypeEnd context (cursor: Cursor) =
+        let offset, _ = nextSource cursor
+        let token = cursor.Peek offset
+        let next = cursor.Peek(offset + 1)
+
+        if
+            offset = 0
+            && token.Range.Start.Line = cursor.LastEnd.Line
+        then
+            token, endsCastTypeAt token next cursor.LastEnd
+        else
+            token,
+            isEndOfFile token
+            || not (continuesCastTypeOnLaterLine token)
+               && (isOffside context token
+                   || offset > 0
+                      && not (isKind LexicalTokenKind.Operator token)
+                   || endsCastTypeAt token next cursor.LastEnd)
 
     let private startsMemberAccess (cursor: Cursor) =
         let dot = cursor.Current
@@ -1402,7 +1444,8 @@ module internal Parser =
                      && not (isOperator ":" (cursor.Peek 1))))
                 && not (isOffside context cursor.Current)
                 ->
-                let typeConstructor = parseTypeConstructor state (unsupportedTrailingDot state)
+                let typeConstructor =
+                    parseTypeConstructor state context (unsupportedTrailingDot state)
 
                 result <-
                     SyntaxType.Application(
@@ -1463,7 +1506,7 @@ module internal Parser =
         else
             parseTypeName state context (unsupportedTrailingDot state)
 
-    and private parseTypeConstructor state onTrailingDot =
+    and private parseTypeConstructor state context onTrailingDot =
         let cursor = state.Cursor
 
         if isKeyword "global" cursor.Current then
@@ -1477,7 +1520,7 @@ module internal Parser =
                     && tokenText cursor.Current
                        <> "_"
                 then
-                    let name = longIdentifierWith state onTrailingDot
+                    let name = longIdentifierUntil state (isOffside context) onTrailingDot
 
                     SyntaxType.GlobalLongIdentifier(
                         globalToken.Range,
@@ -1495,10 +1538,10 @@ module internal Parser =
             else
                 SyntaxType.GlobalLongIdentifier(globalToken.Range, None, globalToken.Range)
         else
-            SyntaxType.LongIdentifier(longIdentifierWith state onTrailingDot)
+            SyntaxType.LongIdentifier(longIdentifierUntil state (isOffside context) onTrailingDot)
 
     and private parseTypeName state context onTrailingDot =
-        match parseTypeConstructor state onTrailingDot with
+        match parseTypeConstructor state context onTrailingDot with
         | SyntaxType.LongIdentifier name ->
             parseTypeArguments state context (SyntaxTypeName.LongIdentifier name)
         | SyntaxType.GlobalLongIdentifier(globalKeyword, Some name, range) ->
@@ -1511,7 +1554,10 @@ module internal Parser =
     and private parseTypeArguments state context (name: SyntaxTypeName) =
         let cursor = state.Cursor
 
-        if isOperator "<" cursor.Current then
+        if
+            isOperator "<" cursor.Current
+            && not (isOffside context cursor.Current)
+        then
             let openToken = cursor.Advance()
 
             let arguments = ImmutableArray.CreateBuilder<SyntaxType>()
@@ -2112,6 +2158,18 @@ module internal Parser =
         let cursor = state.Cursor
         let operatorToken = cursor.Advance()
 
+        // Every token on a later line is offside of this frame, so the type parser stops at the end of the line.
+        let typeContext = {
+            Kind = FrameKind.CastType
+            StartToken = {
+                operatorToken.Range with
+                    Start = {
+                        operatorToken.Range.Start with
+                            Column = Int32.MaxValue
+                    }
+            }
+        }
+
         let targetType =
             if cursor.Current.Range.Start.Line > operatorToken.Range.Start.Line then
                 reportUnsupported state cursor.Current "a type on the line after a cast operator"
@@ -2119,16 +2177,18 @@ module internal Parser =
             else
                 parseTypeOperand
                     state
-                    context
+                    typeContext
                     (fun _ -> None)
                     TypeGap.UnexpectedToken
-                    (fun () -> parseType state context (fun _ -> None))
+                    (fun () -> parseType state typeContext (fun _ -> None))
+
+        let endToken, ends = castTypeEnd context cursor
 
         if
-            not (endsCastType cursor)
-            && not (reportedAt state cursor.Current)
+            not ends
+            && not (reportedAt state endToken)
         then
-            reportUnsupported state cursor.Current "a token after the target type of a cast"
+            reportUnsupported state endToken "a token after the target type of a cast"
 
         cast target targetType (span target.Range targetType.Range)
 
