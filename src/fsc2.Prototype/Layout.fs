@@ -73,6 +73,43 @@ module internal Layout =
                || token.Text = "|"
                || token.Text = ":")
 
+    [<RequireQualifiedAccess>]
+    type private ItemColumn =
+        | Opened of int
+        | Conditional of int
+
+    let private isKeywordText text (token: LexicalToken) =
+        token.Kind = LexicalTokenKind.Keyword
+        && token.Text = text
+
+    let private startsConditional (token: LexicalToken) =
+        isKeywordText "if" token
+        || isKeywordText "elif" token
+
+    let private continuesConditional (token: LexicalToken) =
+        isKeywordText "then" token
+        || isKeywordText "elif" token
+        || isKeywordText "else" token
+
+    let private clears startsInfix column item =
+        match item with
+        | ItemColumn.Opened blockColumn ->
+            column > blockColumn
+            || startsInfix
+               && column = blockColumn
+        | ItemColumn.Conditional ifColumn -> column > ifColumn
+
+    // FCS closes the contexts after an 'if' at 'then', 'elif', or 'else', and an 'if' stays open until a token is left of it.
+    let rec private openConditional column items =
+        match items with
+        | [] -> None
+        | ItemColumn.Conditional ifColumn :: _ when
+            ifColumn
+            <= column
+            ->
+            Some items
+        | _ :: rest -> openConditional column rest
+
     let apply (source: DecodedSource) (directives: DirectiveResult) (lexed: LexerResult) =
         let tokens = ResizeArray<LayoutToken>()
         let diagnostics = ResizeArray<SourceLexicalDiagnostic>(directives.Diagnostics)
@@ -80,7 +117,8 @@ module internal Layout =
         let mutable openers: SourcePosition list = []
         let mutable previousSignificantStart: SourcePosition option = None
         let mutable previousLastToken: LexicalToken option = None
-        let mutable itemBlockColumns: int list = []
+        let mutable itemBlockColumns: ItemColumn list = []
+        let mutable savedItemColumns: ItemColumn list list = []
         let mutable delimiterDepth = 0
         let mutable order = int64 diagnostics.Count
 
@@ -181,13 +219,20 @@ module internal Layout =
 
                 if
                     delimiterDepth = 0
+                    && startsConditional token
+                then
+                    lineBlockColumns <-
+                        ItemColumn.Conditional token.Range.Start.Column
+                        :: lineBlockColumns
+                elif
+                    delimiterDepth = 0
                     && index + 1 < lineTokens.Length
                     && opensBlockAfter token
                     && token.Text
                        <> "<-"
                 then
                     lineBlockColumns <-
-                        lineTokens[index + 1].Range.Start.Column
+                        ItemColumn.Opened lineTokens[index + 1].Range.Start.Column
                         :: lineBlockColumns
 
                 if token.Kind = LexicalTokenKind.Delimiter then
@@ -242,22 +287,64 @@ module internal Layout =
                     + 1
 
                 let startsInfix = isInfixToken lineTokens[0] (Array.tryItem 1 lineTokens)
+                let continuesIf = continuesConditional lineTokens[0]
+
+                if continuesIf then
+                    while (openConditional column itemBlockColumns).IsNone
+                          && (
+                              match savedItemColumns with
+                              | saved :: _ -> (openConditional column saved).IsSome
+                              | [] -> false
+                          ) do
+                        indents <- indents.Tail
+
+                        match openers with
+                        | _ :: tail -> openers <- tail
+                        | [] -> ()
+
+                        match savedItemColumns with
+                        | saved :: tail ->
+                            itemBlockColumns <- saved
+                            savedItemColumns <- tail
+                        | [] -> itemBlockColumns <- []
+
+                        event
+                            LayoutTokenKind.EndBlock
+                            line
+                            column
+                            (startOffset
+                             + charIndex)
+
+                let conditional =
+                    if continuesIf then
+                        openConditional column itemBlockColumns
+                    else
+                        None
 
                 // FCS starts an offside context only after a token that opens a block, at the next token on that line.
                 let continuesItem =
                     previousLastToken
                     |> Option.exists (fun token -> not (opensBlockAfter token))
                     && itemBlockColumns
-                       |> List.forall (fun blockColumn -> column > blockColumn)
+                       |> List.forall (clears startsInfix column)
 
-                if
+                match conditional with
+                | Some items when indentation > indents.Head ->
+                    itemBlockColumns <-
+                        lineBlockColumns
+                        @ items
+                | _ when
                     indentation > indents.Head
                     && continuesItem
-                then
+                    ->
                     itemBlockColumns <-
                         lineBlockColumns
                         @ itemBlockColumns
-                elif indentation > indents.Head then
+                | _ when indentation > indents.Head ->
+                    savedItemColumns <-
+                        itemBlockColumns
+                        :: savedItemColumns
+
                     itemBlockColumns <- lineBlockColumns
 
                     indents <-
@@ -283,16 +370,19 @@ module internal Layout =
                         column
                         (startOffset
                          + charIndex)
-                elif
+                | _ when
                     indentation = indents.Head
                     && indentation > 0
-                then
+                    ->
                     itemBlockColumns <-
-                        if startsInfix then
+                        match conditional with
+                        | Some items ->
+                            lineBlockColumns
+                            @ items
+                        | None when startsInfix ->
                             lineBlockColumns
                             @ itemBlockColumns
-                        else
-                            lineBlockColumns
+                        | None -> lineBlockColumns
 
                     event
                         LayoutTokenKind.Separator
@@ -300,16 +390,7 @@ module internal Layout =
                         column
                         (startOffset
                          + charIndex)
-                else
-                    itemBlockColumns <-
-                        if startsInfix then
-                            lineBlockColumns
-                            @ itemBlockColumns
-                        else
-                            lineBlockColumns
-
-                    let closedOpeners = ResizeArray<SourcePosition>()
-
+                | _ ->
                     // 15.1.9: an infix token can be left of a block column by its length plus one.
                     let continuesBlock column =
                         startsInfix
@@ -323,10 +404,14 @@ module internal Layout =
                         indents <- indents.Tail
 
                         match openers with
-                        | opener :: tail ->
-                            closedOpeners.Add opener
-                            openers <- tail
+                        | _ :: tail -> openers <- tail
                         | [] -> ()
+
+                        match savedItemColumns with
+                        | saved :: tail ->
+                            itemBlockColumns <- saved
+                            savedItemColumns <- tail
+                        | [] -> itemBlockColumns <- []
 
                         event
                             LayoutTokenKind.EndBlock
@@ -335,7 +420,28 @@ module internal Layout =
                             (startOffset
                              + charIndex)
 
-                    if indents.Head > indentation then
+                    let conditional =
+                        if continuesIf then
+                            openConditional column itemBlockColumns
+                        else
+                            None
+
+                    itemBlockColumns <-
+                        match conditional with
+                        | Some items ->
+                            lineBlockColumns
+                            @ items
+                        | None when startsInfix ->
+                            lineBlockColumns
+                            @ itemBlockColumns
+                        | None -> lineBlockColumns
+
+                    if
+                        conditional.IsSome
+                        && indentation > indents.Head
+                    then
+                        ()
+                    elif indents.Head > indentation then
                         event
                             LayoutTokenKind.Separator
                             line

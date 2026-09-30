@@ -406,6 +406,56 @@ module ParserGrammarTests =
         | SyntaxExpression.List(items, _) -> all items
         | _ -> []
 
+    let rec private conditionalRanges expression =
+        let all expressions =
+            expressions
+            |> Seq.collect conditionalRanges
+            |> Seq.toList
+
+        match expression with
+        | SyntaxExpression.If(condition, thenBranch, elseBranch, range) ->
+            let startLine, startColumn, endLine, endColumn = position range
+
+            let elseMark = if elseBranch.IsSome then "E" else "-"
+
+            $"if({startLine},{startColumn}--{endLine},{endColumn}){elseMark}"
+            :: all (
+                [
+                    condition
+                    thenBranch
+                ]
+                @ Option.toList elseBranch
+            )
+        | SyntaxExpression.Infix(_, left, right, _) ->
+            all [
+                left
+                right
+            ]
+        | SyntaxExpression.Application(func, argument, _) ->
+            all [
+                func
+                argument
+            ]
+        | SyntaxExpression.Sequential(first, second, _) ->
+            all [
+                first
+                second
+            ]
+        | SyntaxExpression.LetOrUse(_, _, binding, body, _) ->
+            all [
+                binding.Body
+                body
+            ]
+        | SyntaxExpression.Parenthesized(inner, _) -> conditionalRanges inner
+        | SyntaxExpression.Match(input, clauses, _) ->
+            conditionalRanges input
+            @ all (
+                clauses
+                |> Seq.map _.Result
+            )
+        | SyntaxExpression.List(items, _) -> all items
+        | _ -> []
+
     let private declarationBodies (declarations: ImplementationDeclaration seq) =
         declarations
         |> Seq.collect (fun declaration ->
@@ -2636,15 +2686,6 @@ let f a b =
         "ContinuationLineLocalLetSameLineAt.fs",
         "module A\nlet f () =\n    let y = g 1\n            2\n    y\n",
         []
-        "ContinuationLineThenLine.fs",
-        "module A\nlet f c =\n    if c\n      then 1\n      else 2\n",
-        []
-        "ContinuationLineElseLine.fs",
-        "module A\nlet f c =\n    if c then 1\n             else 2\n",
-        []
-        "ContinuationLineElseLineLeft.fs",
-        "module A\nlet f c =\n    if c then 1\n      else 2\n",
-        []
         "ContinuationLineWithLine.fs", "module A\nlet f x =\n    match x\n      with _ -> 1\n", []
         "ContinuationLineClauseResultArgLeft.fs",
         "module A\nlet f x =\n    match x with\n    | _ -> g 1\n           2\n",
@@ -2676,6 +2717,342 @@ let f a b =
             "ContinuationDeclarationExprAfterDecl.fs(3,3): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
             "ContinuationDeclarationExprAfterDecl.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
         ]
+    ]
+
+    let private conditionalLineCases = [
+        "ConditionalThenElseAligned.fs",
+        "module A\nlet f c =\n    if c\n    then 1\n    else 2\n",
+        [ "let f c = if c then 1 else 2" ],
+        [ "if(3,5--5,11)E" ]
+        "ConditionalThenAlignedNoElse.fs",
+        "module A\nlet f c =\n    if c\n    then ignore 1\n",
+        [ "let f c = if c then [ignore 1]" ],
+        [
+            "app(4,10--4,18)"
+            "if(3,5--4,18)-"
+        ]
+        "ConditionalThenAlignedBodyNext.fs",
+        "module A\nlet f c =\n    if c\n    then\n        1\n    else\n        2\n",
+        [ "let f c = if c then 1 else 2" ],
+        [ "if(3,5--7,10)E" ]
+        "ConditionalThenAlignedElif.fs",
+        "module A\nlet f a b =\n    if a\n    then 1\n    elif b\n    then 2\n    else 3\n",
+        [ "let f a b = if a then 1 else if b then 2 else 3" ],
+        [
+            "if(3,5--7,11)E"
+            "if(5,5--7,11)E"
+        ]
+        "ConditionalThenAlignedThenItem.fs",
+        "module A\nlet f c =\n    if c\n    then ignore 1\n    ignore 2\n",
+        [ "let f c = seq[if c then [ignore 1]; [ignore 2]]" ],
+        [
+            "seq(3,5--5,13)"
+            "app(4,10--4,18)"
+            "app(5,5--5,13)"
+            "if(3,5--4,18)-"
+        ]
+        "ConditionalThenAlignedLocal.fs",
+        "module A\nlet f c =\n    let y =\n        if c\n        then 1\n        else 2\n    y\n",
+        [ "let f c = let y = if c then 1 else 2 in y" ],
+        [
+            "let(3,5--7,6)"
+            "if(4,9--6,15)E"
+        ]
+        "ConditionalThenAlignedClause.fs",
+        "module A\nlet f x c =\n    match x with\n    | _ ->\n        if c\n        then 1\n        else 2\n",
+        [ "let f x c = match x with | _ -> if c then 1 else 2" ],
+        [ "if(5,9--7,15)E" ]
+        "ConditionalThenAlignedModuleLet.fs",
+        "module A\nlet x =\n    if true\n    then 1\n    else 2\n",
+        [ "let x = if Boolean true then 1 else 2" ],
+        [ "if(3,5--5,11)E" ]
+        "ConditionalLetValueIfAligned.fs",
+        "module A\nlet f c =\n    let y = if c\n            then 1\n            else 2\n    y\n",
+        [ "let f c = let y = if c then 1 else 2 in y" ],
+        [
+            "let(3,5--6,6)"
+            "if(3,13--5,19)E"
+        ]
+        "ConditionalCondNext.fs",
+        "module A\nlet f () =\n    if\n     true\n    then 1\n    else 2\n",
+        [ "let f () = if Boolean true then 1 else 2" ],
+        [ "if(3,5--6,11)E" ]
+        "ConditionalCondNextDeep.fs",
+        "module A\nlet f c =\n    if\n        c\n    then 1\n    else 2\n",
+        [ "let f c = if c then 1 else 2" ],
+        [ "if(3,5--6,11)E" ]
+        "ConditionalCondTwoLines.fs",
+        "module A\nlet f a b =\n    if a\n       && b then 1\n    else 2\n",
+        [ "let f a b = if {a && b} then 1 else 2" ],
+        [
+            "&&(3,8--4,12)"
+            "if(3,5--5,11)E"
+        ]
+        "ConditionalCondTwoLinesLeft.fs",
+        "module A\nlet f a b =\n    if a\n     && b then 1\n    else 2\n",
+        [ "let f a b = if {a && b} then 1 else 2" ],
+        [
+            "&&(3,8--4,10)"
+            "if(3,5--5,11)E"
+        ]
+        "ConditionalCondArgBetween.fs",
+        "module A\nlet f () =\n    if g 1\n      2 then 1\n    else 2\n",
+        [ "let f () = if [[g 1] 2] then 1 else 2" ],
+        [
+            "app(3,8--4,8)"
+            "app(3,8--3,11)"
+            "if(3,5--5,11)E"
+        ]
+        "ConditionalCondAfterAnd.fs",
+        "module A\nlet f a b =\n    if a &&\n      b then 1\n    else 2\n",
+        [ "let f a b = if {a && b} then 1 else 2" ],
+        [
+            "&&(3,8--4,8)"
+            "if(3,5--5,11)E"
+        ]
+        "ConditionalThenElseIndented.fs",
+        "module A\nlet f c =\n    if c\n      then 1\n      else 2\n",
+        [ "let f c = if c then 1 else 2" ],
+        [ "if(3,5--5,13)E" ]
+        "ConditionalElseIndented.fs",
+        "module A\nlet f c =\n    if c then 1\n      else 2\n",
+        [ "let f c = if c then 1 else 2" ],
+        [ "if(3,5--4,13)E" ]
+        "ConditionalElseRightOfThen.fs",
+        "module A\nlet f c =\n    if c then 1\n             else 2\n",
+        [ "let f c = if c then 1 else 2" ],
+        [ "if(3,5--4,20)E" ]
+        "ConditionalThenIndentedBodyNext.fs",
+        "module A\nlet f c =\n    if c\n      then\n        1\n      else\n        2\n",
+        [ "let f c = if c then 1 else 2" ],
+        [ "if(3,5--7,10)E" ]
+        "ConditionalThenIndentedNoElse.fs",
+        "module A\nlet f c =\n    if c\n      then ignore 1\n    ignore 2\n",
+        [ "let f c = seq[if c then [ignore 1]; [ignore 2]]" ],
+        [
+            "seq(3,5--5,13)"
+            "app(4,12--4,20)"
+            "app(5,5--5,13)"
+            "if(3,5--4,20)-"
+        ]
+        "ConditionalElifIndented.fs",
+        "module A\nlet f a b =\n    if a then 1\n      elif b then 2\n      else 3\n",
+        [ "let f a b = if a then 1 else if b then 2 else 3" ],
+        [
+            "if(3,5--5,13)E"
+            "if(4,7--5,13)E"
+        ]
+        "ConditionalThenRightOfCond.fs",
+        "module A\nlet f c =\n    if c\n         then 1\n         else 2\n",
+        [ "let f c = if c then 1 else 2" ],
+        [ "if(3,5--5,16)E" ]
+        "ConditionalBodyIfPlus2.fs",
+        "module A\nlet f x =\n    if x > 0\n       then\n      x\n       else\n      0\n",
+        [ "let f x = if {x > 0} then x else 0" ],
+        [
+            ">(3,8--3,13)"
+            "if(3,5--7,8)E"
+        ]
+        "ConditionalElseBodyIfPlus1.fs",
+        "module A\nlet f c =\n    if c then 1\n    else\n     2\n",
+        [ "let f c = if c then 1 else 2" ],
+        [ "if(3,5--5,7)E" ]
+        "ConditionalThenBodyIfPlus1Aligned.fs",
+        "module A\nlet f c =\n    if c then\n     1\n    else 2\n",
+        [ "let f c = if c then 1 else 2" ],
+        [ "if(3,5--5,11)E" ]
+        "ConditionalNestedElseOuter.fs",
+        "module A\nlet f a b =\n    if a then if b then 1\n              else 2\n",
+        [ "let f a b = if a then if b then 1 else 2" ],
+        [
+            "if(3,5--4,21)-"
+            "if(3,15--4,21)E"
+        ]
+        "ConditionalNestedElseLeftInner.fs",
+        "module A\nlet f a b =\n    if a then if b then ignore 1\n      else ignore 2\n",
+        [ "let f a b = if a then if b then [ignore 1] else [ignore 2]" ],
+        [
+            "app(3,25--3,33)"
+            "app(4,12--4,20)"
+            "if(3,5--4,20)E"
+            "if(3,15--3,33)-"
+        ]
+        "ConditionalNestedElseAtInner.fs",
+        "module A\nlet f a b =\n    if a then if b then 1\n              else 2\n    else 3\n",
+        [ "let f a b = if a then if b then 1 else 2 else 3" ],
+        [
+            "if(3,5--5,11)E"
+            "if(3,15--4,21)E"
+        ]
+        "ConditionalNestedBlockElse.fs",
+        "module A\nlet f a b =\n    if a then\n        if b then 1\n        else 2\n    else 3\n",
+        [ "let f a b = if a then if b then 1 else 2 else 3" ],
+        [
+            "if(3,5--6,11)E"
+            "if(4,9--5,15)E"
+        ]
+        "ConditionalNestedBlockElseOuter.fs",
+        "module A\nlet f a b =\n    if a then\n        if b then ignore 1\n    else ignore 2\n",
+        [ "let f a b = if a then if b then [ignore 1] else [ignore 2]" ],
+        [
+            "app(4,19--4,27)"
+            "app(5,10--5,18)"
+            "if(3,5--5,18)E"
+            "if(4,9--4,27)-"
+        ]
+        "ConditionalNestedElseBetween.fs",
+        "module A\nlet f a b =\n    if a then if b then ignore 1\n            else ignore 2\n",
+        [ "let f a b = if a then if b then [ignore 1] else [ignore 2]" ],
+        [
+            "app(3,25--3,33)"
+            "app(4,18--4,26)"
+            "if(3,5--4,26)E"
+            "if(3,15--3,33)-"
+        ]
+        "ConditionalParenThenAligned.fs",
+        "module A\nlet f c =\n    (if c\n     then 1\n     else 2)\n",
+        [ "let f c = (if c then 1 else 2)" ],
+        [ "if(3,6--5,12)E" ]
+        "ConditionalParenThenIndented.fs",
+        "module A\nlet f c =\n    (if c\n       then 1\n       else 2)\n",
+        [ "let f c = (if c then 1 else 2)" ],
+        [ "if(3,6--5,14)E" ]
+        "ConditionalParenCondNext.fs",
+        "module A\nlet f c =\n    (if\n       c\n     then 1\n     else 2)\n",
+        [ "let f c = (if c then 1 else 2)" ],
+        [ "if(3,6--6,12)E" ]
+        "ConditionalListIfAligned.fs",
+        "module A\nlet f c =\n    [ if c\n      then 1\n      else 2 ]\n",
+        [ "let f c = [if c then 1 else 2]" ],
+        [ "if(3,7--5,13)E" ]
+        "ConditionalCondLess.fs",
+        "module A\nlet f a b =\n    if a < b\n    then 1\n    else 2\n",
+        [ "let f a b = if {a < b} then 1 else 2" ],
+        [
+            "<(3,8--3,13)"
+            "if(3,5--5,11)E"
+        ]
+        "ConditionalCondGreaterLine.fs",
+        "module A\nlet f a b =\n    if a\n       > b then 1\n    else 2\n",
+        [ "let f a b = if {a > b} then 1 else 2" ],
+        [
+            ">(3,8--4,11)"
+            "if(3,5--5,11)E"
+        ]
+        "ConditionalThenPipeLine.fs",
+        "module A\nlet f c =\n    if c\n    then 1\n    else 2\n    |> ignore\n",
+        [ "let f c = {if c then 1 else 2 |> ignore}" ],
+        [
+            "|>(3,5--6,14)"
+            "if(3,5--5,11)E"
+        ]
+        "ConditionalThenInfixLine.fs",
+        "module A\nlet f c =\n    if c\n    then 1\n         + 2\n    else 3\n",
+        [ "let f c = if c then {1 + 2} else 3" ],
+        [
+            "+(4,10--5,13)"
+            "if(3,5--6,11)E"
+        ]
+        "ConditionalThenArgLine.fs",
+        "module A\nlet f c =\n    if c\n    then g 1\n           2\n    else 3\n",
+        [ "let f c = if c then [[g 1] 2] else 3" ],
+        [
+            "app(4,10--5,13)"
+            "app(4,10--4,13)"
+            "if(3,5--6,11)E"
+        ]
+        "ConditionalCondAppLine.fs",
+        "module A\nlet f () =\n    if g 1\n         2 then 1\n    else 2\n",
+        [ "let f () = if [[g 1] 2] then 1 else 2" ],
+        [
+            "app(3,8--4,11)"
+            "app(3,8--3,11)"
+            "if(3,5--5,11)E"
+        ]
+        "ConditionalThenTrueArg.fs",
+        "module A\nlet f c =\n    if c\n    then g true\n           2\n    else 3\n",
+        [ "let f c = if c then [[g Boolean true] 2] else 3" ],
+        [
+            "app(4,10--5,13)"
+            "app(4,10--4,16)"
+            "if(3,5--6,11)E"
+        ]
+        "ConditionalThenAlignedNested.fs",
+        "module A\nlet f a b =\n    if a\n    then\n        if b\n        then 1\n        else 2\n    else 3\n",
+        [ "let f a b = if a then if b then 1 else 2 else 3" ],
+        [
+            "if(3,5--8,11)E"
+            "if(5,9--7,15)E"
+        ]
+        "ConditionalDoIfAligned.fs",
+        "module A\ndo\n    if true\n    then ignore 1\n",
+        [ "do if Boolean true then [ignore 1]" ],
+        [
+            "app(4,10--4,18)"
+            "if(3,5--4,18)-"
+        ]
+    ]
+
+    let private conditionalLineExplicitCases = [
+        "ConditionalCondNextThenSame.fs",
+        "module A\nlet f c =\n    if\n        c then 1\n    else 2\n",
+        []
+        "ConditionalCondNextAtIf.fs",
+        "module A\nlet f c =\n    if\n    c\n    then 1\n    else 2\n",
+        [
+            "ConditionalCondNextAtIf.fs(3,8): error FS0010: Incomplete structured construct at or before this point in expression"
+            "ConditionalCondNextAtIf.fs(3,5): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "ConditionalCondNextAtIf.fs(5,12): error FS0010: Incomplete structured construct at or before this point in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "ConditionalLetValueThenLeft.fs",
+        "module A\nlet f c =\n    let y = if c\n          then 1\n          else 2\n    y\n",
+        [
+            "ConditionalLetValueThenLeft.fs(4,11): error FS0010: Incomplete structured construct at or before this point in expression"
+            "ConditionalLetValueThenLeft.fs(3,13): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "ConditionalLetValueThenLeft.fs(4,11): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+            "ConditionalLetValueThenLeft.fs(3,5): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+            "ConditionalLetValueThenLeft.fs(3,5): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+            "ConditionalLetValueThenLeft.fs(5,11): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "ConditionalLetValueThenLeft.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+            "ConditionalLetValueThenLeft.fs(6,5): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+        "ConditionalBodyIfPlus1.fs",
+        "module A\nlet f x =\n    if x > 0\n       then\n     x\n       else\n     -x\n",
+        []
+        "ConditionalBodyAtIf.fs",
+        "module A\nlet f x =\n    if x > 0\n       then\n    x\n       else\n    0\n",
+        [
+            "ConditionalBodyAtIf.fs(5,5): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "ConditionalBodyAtIf.fs(5,5): error FS3524: Expecting expression"
+            "ConditionalBodyAtIf.fs(6,8): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "ConditionalThenBodyAtIf.fs",
+        "module A\nlet f c =\n    if c then\n    1\n    else 2\n",
+        [
+            "ConditionalThenBodyAtIf.fs(4,5): error FS0058: Unexpected syntax or possible incorrect indentation: this token is offside of context started at position (3:5). Try indenting this further.\nTo continue using non-conforming indentation, pass the '--strict-indentation-' flag to the compiler, or set the language version to F# 7."
+            "ConditionalThenBodyAtIf.fs(4,5): error FS3524: Expecting expression"
+            "ConditionalThenBodyAtIf.fs(5,5): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "ConditionalNestedSameLineElse.fs",
+        "module A\nlet f a b =\n    if a then if b then 1 else 2 else 3\n",
+        [
+            "ConditionalNestedSameLineElse.fs(3,34): error FS0010: Unexpected keyword 'else' in expression. Expected incomplete structured construct at or before this point or other token."
+            "ConditionalNestedSameLineElse.fs(4,1): error FS0010: Incomplete structured construct at or before this point in binding. Expected incomplete structured construct at or before this point or other token."
+            "ConditionalNestedSameLineElse.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+            "ConditionalNestedSameLineElse.fs(4,1): error FS0010: Incomplete structured construct at or before this point in implementation file"
+        ]
+        "ConditionalThenQuote.fs",
+        "module A\nlet f c =\n    if c\n    then <@ 1 @>\n    else <@ 2 @>\n",
+        []
+        "ConditionalCondTypeapp.fs",
+        "module A\nlet f () =\n    if id<int> 1 = 1\n    then 1\n    else 2\n",
+        []
+        "ConditionalCondQuote.fs",
+        "module A\nlet f () =\n    if g <@ 1 @>\n    then 1\n    else 2\n",
+        []
+        "ConditionalThenElseSemicolon.fs",
+        "module A\nlet f c =\n    if c\n    then 1; 2\n    else 3\n",
+        []
     ]
 
     [<Tests>]
@@ -3262,6 +3639,41 @@ let items = [ origin.X; 1 ]
 
             testList "a more indented line that the parser does not model stays explicit" [
                 for logicalPath, text, oracle in continuationLineExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testList "then, elif, and else lines belong to the innermost open if" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in conditionalLineCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with conditional lines"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect (fun body ->
+                                 infixRanges body
+                                 @ applicationRanges body
+                                 @ conditionalRanges body
+                             ))
+                            expectedRanges
+                            "The infix, application, and conditional ranges, and the else of each conditional"
+            ]
+
+            testList "a conditional line that the parser does not model stays explicit" [
+                for logicalPath, text, oracle in conditionalLineExplicitCases ->
                     testCase logicalPath
                     <| fun _ ->
                         let result = parse logicalPath text
