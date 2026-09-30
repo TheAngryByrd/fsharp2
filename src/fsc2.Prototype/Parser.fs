@@ -43,6 +43,33 @@ module internal Parser =
 
             found
 
+        member _.LineStartColumn line =
+            let mutable position =
+                min
+                    index
+                    (tokens.Length
+                     - 1)
+
+            let mutable column = None
+
+            while position
+                  >= 0
+                  && tokens[position].Range.Start.Line
+                     >= line do
+                let token = tokens[position]
+
+                if
+                    token.Kind = LayoutTokenKind.SourceToken
+                    && token.Range.Start.Line = line
+                then
+                    column <- Some token.Range.Start.Column
+
+                position <-
+                    position
+                    - 1
+
+            column
+
         member this.Peek offset =
             if offset = 0 then
                 this.Current
@@ -267,6 +294,8 @@ module internal Parser =
 
     let private offsideCode = "FS0058"
 
+    let private incompleteValueCode = "FS3118"
+
     let private typeArgumentSpaceCode = "FS1190"
 
     let private isRecoveryCode code =
@@ -324,6 +353,7 @@ module internal Parser =
                 |> Seq.filter (fun diagnostic ->
                     diagnostic.Code = unsupportedCode
                     || diagnostic.Code = offsideCode
+                    || diagnostic.Code = incompleteValueCode
                 )
                 |> Seq.toArray
 
@@ -1965,6 +1995,7 @@ module internal Parser =
                 SyntaxExpression.Constant(SyntaxConstant.Unit, span token.Range close.Range)
             else
                 let contentContext = frameAt FrameKind.Paren cursor.Current
+                let reportedBefore = state.Diagnostics.Count
 
                 let inner =
                     withinDelimiters
@@ -1986,6 +2017,7 @@ module internal Parser =
 
                 if isDelimiter ")" cursor.Current then
                     let close = cursor.Advance()
+                    reportAfterUndentedClose state context token close reportedBefore
                     SyntaxExpression.Parenthesized(inner, span token.Range close.Range)
                 else
                     if not (reportedAt state cursor.Current) then
@@ -2334,15 +2366,57 @@ module internal Parser =
         else
             parseBranchStart state context point
 
+    // The Oracle ends the block when a delimiter closes left of the column of the line that opened it, so a later token of the block is an error.
+    and private reportAfterUndentedClose
+        state
+        (context: Frame)
+        (openToken: LayoutToken)
+        (close: LayoutToken)
+        reported
+        =
+        let cursor = state.Cursor
+
+        if
+            not state.InDelimiters
+            && not (reportedSince state reported)
+            && close.Range.Start.Line > openToken.Range.Start.Line
+            && cursor.LineStartColumn openToken.Range.Start.Line
+               |> Option.exists (fun column -> close.Range.Start.Column < column)
+        then
+            let next =
+                match cursor.Current.Kind with
+                | LayoutTokenKind.Separator
+                | LayoutTokenKind.BeginBlock -> Some(cursor.Peek 1)
+                | LayoutTokenKind.SourceToken when not (isEndOfFile cursor.Current) ->
+                    Some cursor.Current
+                | _ -> None
+
+            match next with
+            | Some token when
+                not (reportedAt state token)
+                && not (isOffside context token)
+                ->
+                reportUnsupported
+                    state
+                    token
+                    "a token after a delimiter that closes left of its block"
+            | _ -> ()
+
     and private parseIf state context =
         let cursor = state.Cursor
         let ifToken = cursor.Advance()
 
+        // 15.1.10.1: a lambda body in the condition must start right of 'if'.
         let condition =
-            if cursor.Current.Kind = LayoutTokenKind.BeginBlock then
-                parseBranch state context None
-            else
-                parseExpression state context
+            withUndentationColumn
+                state
+                ifToken.Range.Start.Column
+                (fun () ->
+                    if cursor.Current.Kind = LayoutTokenKind.BeginBlock then
+                        parseBranch state context None
+                    else
+                        parseExpression state context
+                )
 
         let continuation () =
             if cursor.Current.Kind = LayoutTokenKind.Separator then
@@ -2718,6 +2792,7 @@ module internal Parser =
     and private parseList state context =
         let cursor = state.Cursor
         let openToken = cursor.Advance()
+        let reportedBefore = state.Diagnostics.Count
         let items = ImmutableArray.CreateBuilder<SyntaxExpression>()
         let elementContext = frameAt FrameKind.Bracket cursor.Current
         let mutable closed = isDelimiter "]" cursor.Current
@@ -2753,6 +2828,7 @@ module internal Parser =
 
         if closed then
             let close = cursor.Advance()
+            reportAfterUndentedClose state context openToken close reportedBefore
             SyntaxExpression.List(items.ToImmutable(), span openToken.Range close.Range)
         else
             if not (reportedAt state cursor.Current) then
@@ -3040,6 +3116,77 @@ module internal Parser =
         else
             reportUnmarked state code message range
 
+    // The Oracle reports FS0010 for a line between a 'let' or 'do' column and its block column. The token class name and the later recovery are known only for a single-token line with nothing after it that belongs to the declaration list.
+    let private offsideDeclarationToken state (context: Frame) =
+        let cursor = state.Cursor
+        let token = cursor.Current
+
+        let nextSource offset =
+            let mutable index = offset
+
+            while cursor.Peek(index).Kind
+                  <> LayoutTokenKind.SourceToken do
+                index <- index + 1
+
+            index
+
+        let description =
+            match token.Token with
+            | Some source when source.Kind = LexicalTokenKind.NumericLiteral ->
+                if Seq.forall Char.IsAsciiDigit source.Text then
+                    Some "integer literal"
+                elif
+                    source.Text
+                    |> Seq.forall (fun character ->
+                        Char.IsAsciiDigit character
+                        || character = '.'
+                    )
+                    && source.Text.Contains '.'
+                    && Char.IsAsciiDigit
+                        source.Text[source.Text.Length
+                                    - 1]
+                then
+                    Some "floating point literal"
+                else
+                    None
+            | Some source when
+                source.Kind = LexicalTokenKind.StringLiteral
+                && source.Text.StartsWith("\"", StringComparison.Ordinal)
+                && not (source.Text.StartsWith("\"\"\"", StringComparison.Ordinal))
+                ->
+                Some "string literal"
+            | Some source when
+                source.Kind = LexicalTokenKind.Identifier
+                && source.Text
+                   <> "_"
+                ->
+                Some "identifier"
+            | _ -> None
+
+        let rec restBelongs offset =
+            let next = cursor.Peek offset
+
+            isEndOfFile next
+            || next.Range.Start.Column > context.Offside.Column
+               && restBelongs (nextSource (offset + 1))
+
+        match description with
+        | Some description when
+            token.Kind = LayoutTokenKind.SourceToken
+            && token.Range.Start.Line > cursor.LastEnd.Line
+            && token.Range.Start.Column > context.Offside.Column
+            && (let next = cursor.Peek(nextSource 1)
+
+                isEndOfFile next
+                || next.Range.Start.Line > token.Range.Start.Line)
+            && restBelongs (nextSource 1)
+            ->
+            Some description
+        | _ -> None
+
+    let private incompleteValueMessage =
+        "Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+
     let private parseBindingIn state context attributes =
         let cursor = state.Cursor
         let reported = state.Diagnostics.Count
@@ -3147,13 +3294,38 @@ module internal Parser =
                 else
                     parseBody context
 
-        if
+        let offsideLine =
+            if
+                not recovered
+                && not (endsBinding context cursor.Current)
+                && not (reportedSince state reported)
+                && context.Kind = FrameKind.Let
+            then
+                offsideDeclarationToken state context
+            else
+                None
+
+        match offsideLine with
+        | Some description ->
+            report
+                state
+                "FS0010"
+                $"Unexpected {description} in binding. Expected incomplete structured construct at or before this point or other token."
+                cursor.Current.Range
+
+            recovered <- true
+            skipped <- skipUntil state context
+        | None when
             not recovered
             && not (endsBinding context cursor.Current)
-        then
+            ->
             recover (Some RecoveryPoint.BindingEnd)
+        | None -> ()
 
         keepFirstDiagnosticSince state reported
+
+        if offsideLine.IsSome then
+            report state incompleteValueCode incompleteValueMessage context.StartToken
 
         {
             Attributes = attributes
@@ -3298,6 +3470,19 @@ module internal Parser =
                 if cursor.Current.Kind = LayoutTokenKind.EndBlock then
                     cursor.Advance()
                     |> ignore
+
+                if not (reportedSince state reported) then
+                    match offsideDeclarationToken state context with
+                    | Some description ->
+                        report
+                            state
+                            "FS0010"
+                            $"Unexpected {description} in definition. Expected incomplete structured construct at or before this point or other token."
+                            cursor.Current.Range
+
+                        skipUntil state context
+                        |> ignore
+                    | None -> ()
 
                 body
             elif
