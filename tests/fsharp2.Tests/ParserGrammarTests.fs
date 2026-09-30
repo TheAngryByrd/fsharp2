@@ -5091,6 +5091,21 @@ let f a b =
         "module Program\nlet y = f -1\n",
         [ "let y = [f -1]" ],
         [ "app(2,9--2,13)" ]
+        "PrefixSignLineAtLocalBodyColumn.fs",
+        "module A\nlet f a =\n    let g =\n        a\n    -1\n    g\n",
+        [ "let f a = let g = a in seq[-1; g]" ],
+        [
+            "let(3,5--6,6)"
+            "seq(5,5--6,6)"
+        ]
+        "SpacedSignLineAtLocalBodyColumn.fs",
+        "module A\nlet f a =\n    let g =\n        a\n    + 1\n    g\n",
+        [ "let f a = let g = a in seq[~+1; g]" ],
+        [
+            "let(3,5--6,6)"
+            "seq(5,5--6,6)"
+            "~+(5,5--5,8)"
+        ]
     ]
 
     let private prefixOperatorExplicitCases = [
@@ -5132,6 +5147,23 @@ let f a b =
         ]
         "PrefixSignHexLimit.fs", "module A\nlet r = f -0x80000000\n", []
         "PrefixSignUndentedInParentheses.fs", "module A\nlet r = (f\n        -1)\n", []
+        "SpacedSignLineLeftOfLocalValue.fs",
+        "module A\nlet f a =\n    let g =\n        a\n   + 1\n    g\n",
+        []
+        "SpacedSignLineLeftOfLocalValueAlone.fs",
+        "module A\nlet f a =\n    let g =\n        a\n   + 1\n",
+        []
+        "SpacedSignLineLeftOfNestedLocalValue.fs",
+        "module A\nlet f a =\n    let g =\n        let h = a\n       + 1\n        h\n    g\n",
+        []
+        "PrefixSignLineLeftOfLocalValue.fs",
+        "module A\nlet f a =\n    let g =\n        a\n   -1\n    g\n",
+        [
+            "PrefixSignLineLeftOfLocalValue.fs(3,5): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+            "PrefixSignLineLeftOfLocalValue.fs(5,4): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "PrefixSignLineLeftOfLocalValue.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "SpacedSignLineLeftOfBlockThenItem.fs", "module A\nlet f a =\n    a\n   + 1\n    g\n", []
     ]
 
     let private prefixArgumentDiagnosticCases = [

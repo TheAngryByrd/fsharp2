@@ -2465,9 +2465,16 @@ module internal Parser =
     and private continuesBlock state column =
         let cursor = state.Cursor
 
+        let next = cursor.Peek 1
+
+        // FCS starts a new block at a sign line left of the block column, so the lines after it continue that line.
         if
             cursor.Current.Kind = LayoutTokenKind.Separator
-            && startsBlockItem (cursor.Peek 1)
+            && startsBlockItem next
+            && not (
+                isSign next
+                && next.Range.Start.Column < column
+            )
         then
             cursor.Advance()
             |> ignore
