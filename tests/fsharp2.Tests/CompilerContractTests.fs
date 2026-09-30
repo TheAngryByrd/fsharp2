@@ -1430,6 +1430,33 @@ let main _ =
                     ]
                     "The invalid argument is a source-phase error at the Oracle position"
 
+            testCase
+                "an undented infix line is an unsupported syntax diagnostic, not a layout error"
+            <| fun _ ->
+                let result = compile "module Program\nlet f a b =\n      a\n    + b\n"
+
+                Expect.equal
+                    result.Outcome
+                    CompilationOutcome.Failed
+                    "The prototype front end does not compile an infix line"
+
+                Expect.sequenceEqual
+                    (result.Diagnostics
+                     |> Seq.map (fun diagnostic ->
+                         diagnostic.Code,
+                         diagnostic.Stage,
+                         diagnostic.Message,
+                         diagnostic.Range
+                         |> Option.map (fun range -> range.Start.Line, range.Start.Column)
+                     ))
+                    [
+                        "FSC2P1001",
+                        DiagnosticStage.Compilation CompilationPhase.Syntax,
+                        "unsupported token",
+                        Some(4, 5)
+                    ]
+                    "The Compatibility Oracle accepts the line, so the layout reports no FS0058"
+
             testCase "lexical errors are reported in source order"
             <| fun _ ->
                 let result = compile "module Program\nlet answer () = 12abc\n#nowarn \"abc\"\n"

@@ -542,6 +542,8 @@ module ParserTests =
     ]
 
     let private unsupportedSignatureCases = [
+        "ValueArrowNextLine.fsi", "module A\nval f : int\n      -> int\n", []
+        "ValueNamedArrowNextLine.fsi", "module A\nval f : x: int\n          -> int\n", []
         "NestedModuleSig.fsi",
         valueRecovery
         + "module Inner =\n    val b: )\n",

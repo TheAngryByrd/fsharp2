@@ -355,6 +355,57 @@ module ParserGrammarTests =
         | SyntaxExpression.List(items, _) -> all items
         | _ -> []
 
+    let rec private applicationRanges expression =
+        let all expressions =
+            expressions
+            |> Seq.collect applicationRanges
+            |> Seq.toList
+
+        match expression with
+        | SyntaxExpression.Application(func, argument, range) ->
+            let startLine, startColumn, endLine, endColumn = position range
+
+            $"app({startLine},{startColumn}--{endLine},{endColumn})"
+            :: all [
+                func
+                argument
+            ]
+        | SyntaxExpression.Infix(_, left, right, _) ->
+            all [
+                left
+                right
+            ]
+        | SyntaxExpression.Tuple(items, _) -> all items
+        | SyntaxExpression.LongIdentifierSet(_, value, _) -> applicationRanges value
+        | SyntaxExpression.Sequential(first, second, _) ->
+            all [
+                first
+                second
+            ]
+        | SyntaxExpression.LetOrUse(_, _, binding, body, _) ->
+            all [
+                binding.Body
+                body
+            ]
+        | SyntaxExpression.Parenthesized(inner, _) -> applicationRanges inner
+        | SyntaxExpression.If(condition, thenBranch, elseBranch, _) ->
+            all (
+                [
+                    condition
+                    thenBranch
+                ]
+                @ Option.toList elseBranch
+            )
+        | SyntaxExpression.Match(input, clauses, _) ->
+            applicationRanges input
+            @ all (
+                clauses
+                |> Seq.map _.Result
+            )
+        | SyntaxExpression.Lambda(_, body, _) -> applicationRanges body
+        | SyntaxExpression.List(items, _) -> all items
+        | _ -> []
+
     let private declarationBodies (declarations: ImplementationDeclaration seq) =
         declarations
         |> Seq.collect (fun declaration ->
@@ -1348,7 +1399,6 @@ module ParserGrammarTests =
             "AssignMissingBeforeRoot.fs(4,1): error FS3524: Expecting expression"
         ]
         "AssignValueNextLine.fs", "module A\nlet f () =\n    x <- \n    1\n", []
-        "AssignOperatorNextLine.fs", "module A\nlet f () =\n    x\n        <- 1\n", []
         "AssignOperatorSameColumn.fs",
         "module A\nlet f () =\n    x\n    <- 1\n",
         [
@@ -2127,6 +2177,41 @@ module ParserGrammarTests =
     ]
 
     let private infixLineExplicitCases = [
+        "QuotationThenLine.fs", "module A\nlet f () =\n    g 1 <@ 2 @>\n        3\n", []
+        "UntypedQuotationThenLine.fs", "module A\nlet f () =\n    g <@@ 2 @@>\n        3\n", []
+        "UntypedQuotationArgumentThenLine.fs",
+        "module A\nlet f () =\n    g 1 <@@ 2 @@>\n        3\n",
+        []
+        "QuotationThenArgument.fs", "module A\nlet f () =\n    g <@ 1 @> 2\n", []
+        "QuotationCloseNextLine.fs", "module A\nlet f () =\n    g 1 <@ 2\n           @>\n", []
+        "QuotationInParentheses.fs", "module A\nlet f () =\n    g (<@ 2 @>)\n        3\n", []
+        "InfixAtColumnQuestionQuestion.fs",
+        "module A
+let f a b =
+    a
+    ?? b
+",
+        [
+            "InfixAtColumnQuestionQuestion.fs(4,5): error FS0010: Unexpected symbol '??' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "InfixUndentedQuestionQuestion.fs",
+        "module A
+let f a b =
+      a
+    ?? b
+",
+        [
+            "InfixUndentedQuestionQuestion.fs(4,5): error FS0010: Unexpected symbol '??' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "InfixLineParenQuestionQuestion.fs",
+        "module A
+let f a b =
+    (a
+     ?? b)
+",
+        [
+            "InfixLineParenQuestionQuestion.fs(4,6): error FS0010: Unexpected symbol '??' in expression"
+        ]
         "InfixAtColumnEquals.fs",
         "module A\nlet f a b =\n    a\n    = b\n",
         [
@@ -2209,14 +2294,326 @@ module ParserGrammarTests =
         [ "InfixLineParenGreaterAt.fs(4,6): error FS0010: Unexpected symbol '>' in expression" ]
         "InfixLineParenAmpAdjacent.fs", "module A\nlet f a b =\n    (a\n     &&b)\n", []
         "InfixLinePlusAdjacentIdent.fs", "module A\nlet f a x =\n    a\n    +x\n", []
-        "InfixLineUndentThenMoreIndented.fs",
-        "module A\nlet f a b c =\n      a\n    + b\n        c\n",
-        []
         "InfixLineListEqualsAt.fs",
         "module A\nlet f a b =\n    [ a\n      = b ]\n",
         [
             "InfixLineListEqualsAt.fs(4,7): error FS0010: Unexpected symbol '=' in expression. Expected ']' or other token."
             "InfixLineListEqualsAt.fs(3,5): error FS0598: Unmatched '['"
+        ]
+    ]
+
+    let private continuationLineCases = [
+        "ContinuationLineModuleExpression.fs",
+        "module Continued\nx\n    1\n",
+        [ "expr [x 1]" ],
+        [ "app(2,1--3,6)" ]
+        "ContinuationLineAssignOperator.fs",
+        "module A\nlet f () =\n    x\n        <- 1\n",
+        [ "let f () = {x <- 1}" ],
+        [ "set(3,5--4,13)" ]
+        "ContinuationLineAfterUndentedInfix.fs",
+        "module A\nlet f a b c =\n      a\n    + b\n        c\n",
+        [ "let f a b c = {a + [b c]}" ],
+        [
+            "+(3,7--5,10)"
+            "app(4,7--5,10)"
+        ]
+        "ContinuationDeclarationUnionBarRightOfFirstCase.fs",
+        "module M\ntype U = A\n          | B\n",
+        [ "type U = | A | B" ],
+        []
+        "ContinuationLineArgNext.fs",
+        "module A\nlet f () =\n    g 1\n      2\n",
+        [ "let f () = [[g 1] 2]" ],
+        [
+            "app(3,5--4,8)"
+            "app(3,5--3,8)"
+        ]
+        "ContinuationLineHeadThenArgs.fs",
+        "module A\nlet f () =\n    ignore\n        1\n    2\n",
+        [ "let f () = seq[[ignore 1]; 2]" ],
+        [
+            "seq(3,5--5,6)"
+            "app(3,5--4,10)"
+        ]
+        "ContinuationLineTwoArgLines.fs",
+        "module A\nlet f () =\n    g 1\n      2\n      3\n",
+        [ "let f () = [[[g 1] 2] 3]" ],
+        [
+            "app(3,5--5,8)"
+            "app(3,5--4,8)"
+            "app(3,5--3,8)"
+        ]
+        "ContinuationLineArgLinesStair.fs",
+        "module A\nlet f () =\n    g 1\n      2\n        3\n",
+        [ "let f () = [[[g 1] 2] 3]" ],
+        [
+            "app(3,5--5,10)"
+            "app(3,5--4,8)"
+            "app(3,5--3,8)"
+        ]
+        "ContinuationLineArgThenItem.fs",
+        "module A\nlet f () =\n    g 1\n      2\n    ignore 3\n",
+        [ "let f () = seq[[[g 1] 2]; [ignore 3]]" ],
+        [
+            "seq(3,5--5,13)"
+            "app(3,5--4,8)"
+            "app(3,5--3,8)"
+            "app(5,5--5,13)"
+        ]
+        "ContinuationLineArgBetween.fs",
+        "module A\nlet f () =\n    g 1\n        2\n      3\n",
+        [ "let f () = [[[g 1] 2] 3]" ],
+        [
+            "app(3,5--5,8)"
+            "app(3,5--4,10)"
+            "app(3,5--3,8)"
+        ]
+        "ContinuationLineArgAtColPlus1.fs",
+        "module A\nlet f () =\n    g 1\n     2\n",
+        [ "let f () = [[g 1] 2]" ],
+        [
+            "app(3,5--4,7)"
+            "app(3,5--3,8)"
+        ]
+        "ContinuationLineModuleExpr.fs",
+        "module A\nprintfn \"%d %d\"\n  1\n  2\n",
+        [ "expr [[[printfn \"%d %d\"] 1] 2]" ],
+        [
+            "app(2,1--4,4)"
+            "app(2,1--3,4)"
+            "app(2,1--2,16)"
+        ]
+        "ContinuationLineSameLineBody.fs",
+        "module A\nlet f () = g 1\n              2\n",
+        [ "let f () = [[g 1] 2]" ],
+        [
+            "app(2,12--3,16)"
+            "app(2,12--2,15)"
+        ]
+        "ContinuationLineLocalLetSameLine.fs",
+        "module A\nlet f () =\n    let y = g 1\n              2\n    y\n",
+        [ "let f () = let y = [[g 1] 2] in y" ],
+        [
+            "let(3,5--5,6)"
+            "app(3,13--4,16)"
+            "app(3,13--3,16)"
+        ]
+        "ContinuationLineInfixEnd.fs",
+        "module A\nlet f a b =\n    a +\n      b\n",
+        [ "let f a b = {a + b}" ],
+        [ "+(3,5--4,8)" ]
+        "ContinuationLinePipeEnd.fs",
+        "module A\nlet f xs =\n    xs |>\n      List.rev\n",
+        [ "let f xs = {xs |> List.rev}" ],
+        [ "|>(3,5--4,15)" ]
+        "ContinuationLineClauseResultArg.fs",
+        "module A\nlet f x =\n    match x with\n    | _ -> g 1\n             2\n",
+        [ "let f x = match x with | _ -> [[g 1] 2]" ],
+        [
+            "app(4,12--5,15)"
+            "app(4,12--4,15)"
+        ]
+        "ContinuationLineThenSameLineArg.fs",
+        "module A\nlet f c =\n    if c then g 1\n                2\n    else 3\n",
+        [ "let f c = if c then [[g 1] 2] else 3" ],
+        [
+            "app(3,15--4,18)"
+            "app(3,15--3,18)"
+        ]
+        "ContinuationLineLambdaSameLine.fs",
+        "module A\nlet f () =\n    fun x -> g x\n                 2\n",
+        [ "let f () = fun x -> [[g x] 2]" ],
+        [
+            "app(3,14--4,19)"
+            "app(3,14--3,17)"
+        ]
+        "ContinuationLineArgParen.fs",
+        "module A\nlet f () =\n    g 1\n      (2)\n",
+        [ "let f () = [[g 1] (2)]" ],
+        [
+            "app(3,5--4,10)"
+            "app(3,5--3,8)"
+        ]
+        "ContinuationLineArgList.fs",
+        "module A\nlet f () =\n    g 1\n      [ 2 ]\n",
+        [ "let f () = [[g 1] [2]]" ],
+        [
+            "app(3,5--4,12)"
+            "app(3,5--3,8)"
+        ]
+        "ContinuationLineArgLambda.fs",
+        "module A\nlet f xs =\n    List.map\n      (fun x -> x)\n      xs\n",
+        [ "let f xs = [[List.map (fun x -> x)] xs]" ],
+        [
+            "app(3,5--5,9)"
+            "app(3,5--4,19)"
+        ]
+        "ContinuationLineInfixThenArg.fs",
+        "module A\nlet f a b =\n    a + g\n          b\n",
+        [ "let f a b = {a + [g b]}" ],
+        [
+            "+(3,5--4,12)"
+            "app(3,9--4,12)"
+        ]
+        "ContinuationLineAssignArg.fs",
+        "module A\nlet mutable x = 0\nlet f () =\n    x <- g\n      1\n",
+        [
+            "let mutable x = 0"
+            "let f () = {x <- [g 1]}"
+        ],
+        [
+            "set(4,5--5,8)"
+            "app(4,10--5,8)"
+        ]
+        "ContinuationLineAssignArgRight.fs",
+        "module A\nlet mutable x = 0\nlet f () =\n    x <- g\n          1\n",
+        [
+            "let mutable x = 0"
+            "let f () = {x <- [g 1]}"
+        ],
+        [
+            "set(4,5--5,12)"
+            "app(4,10--5,12)"
+        ]
+        "ContinuationLineDoArg.fs",
+        "module A\ndo\n    g 1\n      2\n",
+        [ "do [[g 1] 2]" ],
+        [
+            "app(3,5--4,8)"
+            "app(3,5--3,8)"
+        ]
+        "ContinuationLineModuleLetArg.fs",
+        "module A\nlet x =\n    g 1\n      2\n",
+        [ "let x = [[g 1] 2]" ],
+        [
+            "app(3,5--4,8)"
+            "app(3,5--3,8)"
+        ]
+        "ContinuationLineTupleLine.fs",
+        "module A\nlet f a b =\n    a,\n      b\n",
+        [ "let f a b = a, b" ],
+        [ "tuple(3,5--4,8)" ]
+        "ContinuationLineArgIf.fs",
+        "module A\nlet f c =\n    g 1\n      (if c then 2 else 3)\n",
+        [ "let f c = [[g 1] (if c then 2 else 3)]" ],
+        [
+            "app(3,5--4,27)"
+            "app(3,5--3,8)"
+        ]
+        "ContinuationLineArgIdentDot.fs",
+        "module A\nlet f () =\n    g 1\n      x.Y\n",
+        [ "let f () = [[g 1] x.Y]" ],
+        [
+            "app(3,5--4,10)"
+            "app(3,5--3,8)"
+        ]
+        "ContinuationLineArgString.fs",
+        "module A\nlet f () =\n    printfn \"%d\"\n      1\n",
+        [ "let f () = [[printfn \"%d\"] 1]" ],
+        [
+            "app(3,5--4,8)"
+            "app(3,5--3,17)"
+        ]
+        "ContinuationDeclarationTypeAbbrev.fs",
+        "module A\ntype T =\n    int\n      list\n",
+        [ "type T = int list" ],
+        []
+        "ContinuationDeclarationRecordField.fs",
+        "module A\ntype R =\n    { A: int\n      B: int }\n",
+        [ "type R = { A: int; B: int }" ],
+        []
+        "ContinuationDeclarationMemberBodyArg.fs",
+        "module A\ntype T() =\n    member _.M () = g 1\n                      2\n",
+        [ "type T() = member _.M () = [[g 1] 2]" ],
+        [
+            "app(3,21--4,24)"
+            "app(3,21--3,24)"
+        ]
+        "ContinuationDeclarationMemberNext.fs",
+        "module A\ntype T() =\n    member _.M () =\n        g 1\n          2\n",
+        [ "type T() = member _.M () = [[g 1] 2]" ],
+        [
+            "app(4,9--5,12)"
+            "app(4,9--4,12)"
+        ]
+        "ContinuationDeclarationNestedModuleArg.fs",
+        "module A\nmodule M =\n    let x =\n        g 1\n          2\n",
+        [ "module M = [let x = [[g 1] 2]]" ],
+        []
+        "ContinuationDeclarationAttrThenLet.fs",
+        "module A\n[<Literal>]\nlet x = 1\n",
+        [ "let x = 1" ],
+        []
+        "ContinuationDeclarationUnionCaseNext.fs",
+        "module A\ntype U =\n    | A\n        of int\n",
+        [ "type U = | A of int" ],
+        []
+        "ContinuationDeclarationLetHeadNext.fs",
+        "module A\nlet f\n      x = x\n",
+        [ "let f x = x" ],
+        []
+    ]
+
+    let private continuationLineExplicitCases = [
+        "ContinuationLineParenOpensBlockLine.fs",
+        "module A\nlet f () =\n    ignore (\n        1)\n    2\n",
+        []
+        "ContinuationLineSameLineBodyLeft.fs",
+        "module A\nlet f () = g 1\n    2\n",
+        [
+            "ContinuationLineSameLineBodyLeft.fs(3,5): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "ContinuationLineSameLineBodyLeft.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "ContinuationLineSameLineBodyAt.fs", "module A\nlet f () = g 1\n           2\n", []
+        "ContinuationLineLocalLetSameLineLeft.fs",
+        "module A\nlet f () =\n    let y = g 1\n          2\n    y\n",
+        [
+            "ContinuationLineLocalLetSameLineLeft.fs(4,11): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "ContinuationLineLocalLetSameLineLeft.fs(3,5): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "ContinuationLineLocalLetSameLineAt.fs",
+        "module A\nlet f () =\n    let y = g 1\n            2\n    y\n",
+        []
+        "ContinuationLineThenLine.fs",
+        "module A\nlet f c =\n    if c\n      then 1\n      else 2\n",
+        []
+        "ContinuationLineElseLine.fs",
+        "module A\nlet f c =\n    if c then 1\n             else 2\n",
+        []
+        "ContinuationLineElseLineLeft.fs",
+        "module A\nlet f c =\n    if c then 1\n      else 2\n",
+        []
+        "ContinuationLineWithLine.fs", "module A\nlet f x =\n    match x\n      with _ -> 1\n", []
+        "ContinuationLineClauseResultArgLeft.fs",
+        "module A\nlet f x =\n    match x with\n    | _ -> g 1\n           2\n",
+        []
+        "ContinuationLineLambdaSameLineLeft.fs",
+        "module A\nlet f () =\n    fun x -> g x\n       2\n",
+        [
+            "ContinuationLineLambdaSameLineLeft.fs(4,8): error FS0010: Unexpected integer literal in lambda expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "ContinuationLineEqualityEnd.fs", "module A\nlet f a b =\n    a =\n      b\n", []
+        "ContinuationLineArgLetKeyword.fs",
+        "module A\nlet f () =\n    g 1\n      let y = 2 in y\n",
+        [
+            "ContinuationLineArgLetKeyword.fs(4,7): error FS0010: Unexpected keyword 'let' or 'use' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "ContinuationDeclarationUnionOf.fs",
+        "module A\ntype U =\n    | A of int *\n        int\n",
+        []
+        "ContinuationDeclarationMemberBodyArgLeft.fs",
+        "module A\ntype T() =\n    member _.M () = g 1\n        2\n",
+        [
+            "ContinuationDeclarationMemberBodyArgLeft.fs(4,9): error FS0010: Unexpected integer literal in member definition"
+        ]
+        "ContinuationDeclarationOpenLine.fs", "module A\nopen System\n  .Text\n", []
+        "ContinuationDeclarationLetEqualsNext.fs", "module A\nlet f x\n    = x\n", []
+        "ContinuationDeclarationExprAfterDecl.fs",
+        "module A\nlet x = 1\n  + 2\n",
+        [
+            "ContinuationDeclarationExprAfterDecl.fs(3,3): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+            "ContinuationDeclarationExprAfterDecl.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
         ]
     ]
 
@@ -2361,21 +2758,6 @@ module Nested =
                         16, 1, 17, 8
                     ]
                     "Top-level expression declaration ranges"
-
-            testCase "a top-level expression continued on an indented line stays explicit"
-            <| fun _ ->
-                let result =
-                    parse
-                        "Continued.fs"
-                        "module Continued
-x
-    1
-"
-
-                SyntaxDiagnosticText.expectExplicitlyUnsupported
-                    []
-                    result.Diagnostics
-                    (oracleLines "Continued.fs" result)
 
             testCase
                 "record, union, class, and abbreviation type definitions keep their structure and ranges"
@@ -2785,6 +3167,40 @@ let items = [ origin.X; 1 ]
 
             testList "an infix line that the parser does not model stays explicit" [
                 for logicalPath, text, oracle in infixLineExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testList "an argument on a more indented line continues the application" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in continuationLineCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with a continuation line"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect (fun body ->
+                                 infixRanges body
+                                 @ applicationRanges body
+                             ))
+                            expectedRanges
+                            "The infix, tuple, assignment, local binding, sequential, and application ranges"
+            ]
+
+            testList "a more indented line that the parser does not model stays explicit" [
+                for logicalPath, text, oracle in continuationLineExplicitCases ->
                     testCase logicalPath
                     <| fun _ ->
                         let result = parse logicalPath text

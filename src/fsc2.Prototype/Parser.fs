@@ -879,7 +879,11 @@ module internal Parser =
         | "|"
         | "."
         | ".."
-        | ":" -> None
+        | ":"
+        | "<@"
+        | "<@@"
+        | "@>"
+        | "@@>" -> None
         | "||" -> Some(1, false)
         | "&"
         | "&&" -> Some(2, false)
