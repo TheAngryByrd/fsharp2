@@ -58,12 +58,23 @@ module internal Layout =
                 >= 0
         | _ -> false
 
+    let private opensBlockAfter (token: LexicalToken) =
+        token.Kind = LexicalTokenKind.Keyword
+        || token.Kind = LexicalTokenKind.Operator
+           && (token.Text = "="
+               || token.Text = "->"
+               || token.Text = "<-"
+               || token.Text = "|"
+               || token.Text = ":")
+
     let apply (source: DecodedSource) (directives: DirectiveResult) (lexed: LexerResult) =
         let tokens = ResizeArray<LayoutToken>()
         let diagnostics = ResizeArray<SourceLexicalDiagnostic>(directives.Diagnostics)
         let mutable indents = [ 0 ]
         let mutable openers: SourcePosition list = []
         let mutable previousSignificantStart: SourcePosition option = None
+        let mutable previousLastToken: LexicalToken option = None
+        let mutable itemBlockColumns: int list = []
         let mutable delimiterDepth = 0
         let mutable order = int64 diagnostics.Count
 
@@ -156,7 +167,23 @@ module internal Layout =
                 )
                 |> Seq.toArray
 
-            for token in lineTokens do
+            let mutable lineBlockColumns = []
+
+            for index = 0 to lineTokens.Length
+                             - 1 do
+                let token = lineTokens[index]
+
+                if
+                    delimiterDepth = 0
+                    && index + 1 < lineTokens.Length
+                    && opensBlockAfter token
+                    && token.Text
+                       <> "<-"
+                then
+                    lineBlockColumns <-
+                        lineTokens[index + 1].Range.Start.Column
+                        :: lineBlockColumns
+
                 if token.Kind = LexicalTokenKind.Delimiter then
                     if
                         token.Text.Length > 0
@@ -208,7 +235,25 @@ module internal Layout =
                     charIndex
                     + 1
 
-                if indentation > indents.Head then
+                let startsInfix = isInfixToken lineTokens[0] (Array.tryItem 1 lineTokens)
+
+                // FCS starts an offside context only after a token that opens a block, at the next token on that line.
+                let continuesItem =
+                    previousLastToken
+                    |> Option.exists (fun token -> not (opensBlockAfter token))
+                    && itemBlockColumns
+                       |> List.forall (fun blockColumn -> column > blockColumn)
+
+                if
+                    indentation > indents.Head
+                    && continuesItem
+                then
+                    itemBlockColumns <-
+                        lineBlockColumns
+                        @ itemBlockColumns
+                elif indentation > indents.Head then
+                    itemBlockColumns <- lineBlockColumns
+
                     indents <-
                         indentation
                         :: indents
@@ -236,6 +281,13 @@ module internal Layout =
                     indentation = indents.Head
                     && indentation > 0
                 then
+                    itemBlockColumns <-
+                        if startsInfix then
+                            lineBlockColumns
+                            @ itemBlockColumns
+                        else
+                            lineBlockColumns
+
                     event
                         LayoutTokenKind.Separator
                         line
@@ -243,11 +295,18 @@ module internal Layout =
                         (startOffset
                          + charIndex)
                 else
+                    itemBlockColumns <-
+                        if startsInfix then
+                            lineBlockColumns
+                            @ itemBlockColumns
+                        else
+                            lineBlockColumns
+
                     let closedOpeners = ResizeArray<SourcePosition>()
 
                     // 15.1.9: an infix token can be left of a block column by its length plus one.
                     let continuesBlock column =
-                        isInfixToken lineTokens[0] (Array.tryItem 1 lineTokens)
+                        startsInfix
                         && indentation
                            + lineTokens[0].Text.Length
                            + 1
@@ -307,6 +366,20 @@ module internal Layout =
                         Line = line
                         Column = column
                     }
+
+            if
+                lineTokens.Length > 0
+                && not isDirectiveLine
+            then
+                if
+                    depthBefore > 0
+                    || delimiterDepth > 0
+                then
+                    itemBlockColumns <-
+                        lineBlockColumns
+                        @ itemBlockColumns
+
+                previousLastToken <- Array.tryLast lineTokens
 
         let eof = SourceMap.positionAt source.Map source.Text.Length
 

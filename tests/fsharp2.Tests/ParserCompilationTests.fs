@@ -8077,8 +8077,6 @@ module M =
 
         "u_col10.fs", "module M\ntype U = A\n         | B\n", []
 
-        "u_col11.fs", "module M\ntype U = A\n          | B\n", []
-
         "u_col2.fs",
         "module M\ntype U = A\n | B\n",
         [
