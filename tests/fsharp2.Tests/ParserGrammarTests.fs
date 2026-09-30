@@ -90,6 +90,12 @@ module ParserGrammarTests =
         |> String.concat " "
         |> sprintf "%s%s" mutability
 
+    let private prefixText (operator: SyntaxPrefixOperator) =
+        match operator with
+        | SyntaxPrefixOperator.Negate _ -> "~-"
+        | SyntaxPrefixOperator.Plus _ -> "~+"
+        | SyntaxPrefixOperator.Dereference _ -> "~!"
+
     let rec private expressionShape expression =
         match expression with
         | SyntaxExpression.Constant(SyntaxConstant.Numeric text, _)
@@ -106,6 +112,8 @@ module ParserGrammarTests =
             $"[{expressionShape func} {expressionShape argument}]"
         | SyntaxExpression.Infix(operator, left, right, _) ->
             $"{{{expressionShape left} {operator.Text} {expressionShape right}}}"
+        | SyntaxExpression.Prefix(operator, operand, _) ->
+            $"{prefixText operator}{expressionShape operand}"
         | SyntaxExpression.If(condition, thenBranch, elseBranch, _) ->
             let elseText =
                 elseBranch
@@ -313,6 +321,9 @@ module ParserGrammarTests =
                 left
                 right
             ]
+        | SyntaxExpression.Prefix(operator, operand, range) ->
+            text (prefixText operator) range
+            :: infixRanges operand
         | SyntaxExpression.Tuple(items, range) ->
             text "tuple" range
             :: all items
@@ -375,6 +386,7 @@ module ParserGrammarTests =
                 left
                 right
             ]
+        | SyntaxExpression.Prefix(_, operand, _) -> applicationRanges operand
         | SyntaxExpression.Tuple(items, _) -> all items
         | SyntaxExpression.LongIdentifierSet(_, value, _) -> applicationRanges value
         | SyntaxExpression.Sequential(first, second, _) ->
@@ -2302,18 +2314,13 @@ let f a b =
         [
             "InfixAtColumnLess.fs(4,5): error FS0010: Unexpected symbol '<' in binding. Expected incomplete structured construct at or before this point or other token."
         ]
-        "InfixAtColumnMinusAdjacent.fs", "module A\nlet f a =\n    a\n    -1\n", []
         "InfixAtColumnModuleExpr.fs", "module A\n1\n|> ignore\n", []
-        "InfixAtColumnColonEquals.fs", "module A\nlet f a b =\n    a\n    := b\n", []
         "InfixAtColumnAtLetColumn.fs", "module A\nlet x =\n    1\n+ 2\n", []
         "InfixAtColumnGreater.fs",
         "module A\nlet f a b =\n    a\n    > b\n",
         [
             "InfixAtColumnGreater.fs(4,5): error FS0010: Unexpected symbol '>' in binding. Expected incomplete structured construct at or before this point or other token."
         ]
-        "InfixAtColumnNestedBindingBlock.fs",
-        "module A\nlet f a b =\n    let y =\n        a\n    + b\n    y\n",
-        []
         "InfixUndentedPlusUndent4.fs",
         "module A\nlet f a b =\n      a\n  + b\n",
         [
@@ -2357,23 +2364,16 @@ let f a b =
             "InfixUndentedAmpampUndent4.fs(4,3): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
             "InfixUndentedAmpampUndent4.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
         ]
-        "InfixLineMinusIdent.fs", "module A\nlet f a x =\n    a\n    -x\n", []
-        "InfixLineLocalLetSameLineValue.fs",
-        "module A\nlet f a b =\n    let y = a\n    + b\n    y\n",
-        []
         "InfixLineParenEqualsAt.fs",
         "module A\nlet f a b =\n    (a\n     = b)\n",
         [ "InfixLineParenEqualsAt.fs(4,6): error FS0010: Unexpected symbol '=' in expression" ]
         "InfixLineParenLessAt.fs",
         "module A\nlet f a b =\n    (a\n     < b)\n",
         [ "InfixLineParenLessAt.fs(4,6): error FS0010: Unexpected symbol '<' in expression" ]
-        "InfixLineParenMinusAdjacentIdent.fs", "module A\nlet f a x =\n    (a\n     -x)\n", []
-        "InfixLineParenMinusAdjacentLit.fs", "module A\nlet f a =\n    (a\n     -1)\n", []
         "InfixLineParenGreaterAt.fs",
         "module A\nlet f a b =\n    (a\n     > b)\n",
         [ "InfixLineParenGreaterAt.fs(4,6): error FS0010: Unexpected symbol '>' in expression" ]
         "InfixLineParenAmpAdjacent.fs", "module A\nlet f a b =\n    (a\n     &&b)\n", []
-        "InfixLinePlusAdjacentIdent.fs", "module A\nlet f a x =\n    a\n    +x\n", []
         "InfixLineListEqualsAt.fs",
         "module A\nlet f a b =\n    [ a\n      = b ]\n",
         [
@@ -3039,9 +3039,6 @@ let f a b =
             "ConditionalLetValueThenLeft.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
             "ConditionalLetValueThenLeft.fs(6,5): error FS0010: Incomplete structured construct at or before this point in implementation file"
         ]
-        "ConditionalBodyIfPlus1.fs",
-        "module A\nlet f x =\n    if x > 0\n       then\n     x\n       else\n     -x\n",
-        []
         "ConditionalBodyAtIf.fs",
         "module A\nlet f x =\n    if x > 0\n       then\n    x\n       else\n    0\n",
         [
@@ -4691,6 +4688,14 @@ let f a b =
             "app(4,10--5,11)"
             "app(4,10--5,9)"
         ]
+        "UndentedItemCloseInfixLineCloseRight.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map (fun x ->\n        x)\n  |> ignore\n",
+        [ "let f xs = {{xs |> [List.map (fun x -> x)]} |> ignore}" ],
+        [
+            "|>(3,5--6,12)"
+            "|>(3,5--5,11)"
+            "app(4,8--5,11)"
+        ]
         "UndentedItemCloseRootletThenDecl.fs",
         "module A\nlet y = g (fun x ->\n x)\nlet z = 1\n",
         [
@@ -4746,6 +4751,1249 @@ let f a b =
         "module A\ndo g (fun x ->\n x) 2\n",
         [
             "UndentedItemCloseDoValue.fs(3,5): error FS0010: Unexpected integer literal in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "UndentedItemCloseInfixLine.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map (fun x ->\n  x)\n  |> ignore\n",
+        [
+            "UndentedItemCloseInfixLine.fs(6,3): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemCloseInfixLine.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "UndentedItemCloseInfixLineColumnTwo.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map (fun x ->\n  x)\n |> ignore\n",
+        [
+            "UndentedItemCloseInfixLineColumnTwo.fs(6,2): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemCloseInfixLineColumnTwo.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "UndentedItemCloseInfixLineRightOfClose.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map (fun x ->\n  x)\n   |> ignore\n",
+        [
+            "UndentedItemCloseInfixLineRightOfClose.fs(6,4): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemCloseInfixLineRightOfClose.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "UndentedItemCloseInfixLineRightOfItem.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map (fun x ->\n  x)\n     |> ignore\n",
+        [
+            "UndentedItemCloseInfixLineRightOfItem.fs(6,6): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemCloseInfixLineRightOfItem.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "UndentedItemCloseInfixLineTwice.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map (fun x ->\n  x)\n  |> ignore\n    |> ignore\n",
+        [
+            "UndentedItemCloseInfixLineTwice.fs(6,3): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemCloseInfixLineTwice.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "UndentedItemCloseInfixLinePlus.fs",
+        "module A\nlet f x =\n    x\n    + g (fun y ->\n  y)\n  + 1\n",
+        [
+            "UndentedItemCloseInfixLinePlus.fs(6,3): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemCloseInfixLinePlus.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "UndentedItemCloseInfixLineComma.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map (fun x ->\n  x)\n  , 1\n",
+        [
+            "UndentedItemCloseInfixLineComma.fs(6,3): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemCloseInfixLineComma.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "UndentedItemCloseInfixLineCons.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map (fun x ->\n  x)\n  :: ys\n",
+        [
+            "UndentedItemCloseInfixLineCons.fs(6,3): error FS0010: Unexpected symbol '::' in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemCloseInfixLineCons.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "UndentedItemCloseInfixLineList.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map [\n  1]\n  |> ignore\n",
+        [
+            "UndentedItemCloseInfixLineList.fs(6,3): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemCloseInfixLineList.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "UndentedItemCloseInfixLineRootlet.fs",
+        "module A\nlet y = g (fun x ->\n  x)\n |> h\n",
+        [
+            "UndentedItemCloseInfixLineRootlet.fs(4,2): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemCloseInfixLineRootlet.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "UndentedItemCloseInfixLineLocalLet.fs",
+        "module A\nlet f xs =\n    let y =\n        xs\n        |> List.map (fun x ->\n      x)\n      |> ignore\n    y\n",
+        [
+            "UndentedItemCloseInfixLineLocalLet.fs(7,7): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+            "UndentedItemCloseInfixLineLocalLet.fs(3,5): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+            "UndentedItemCloseInfixLineLocalLet.fs(3,5): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+        ]
+        "UndentedItemCloseInfixLineMember.fs",
+        "module A\ntype T() =\n    member _.M xs =\n        xs\n        |> List.map (fun x ->\n      x)\n      |> ignore\n",
+        [
+            "UndentedItemCloseInfixLineMember.fs(7,7): error FS0010: Unexpected infix operator in member definition"
+        ]
+    ]
+
+    let private prefixSignCases = [
+        "PrefixSignLiteralArgument.fs",
+        "module A\nlet r = f -1\n",
+        [ "let r = [f -1]" ],
+        [ "app(2,9--2,13)" ]
+        "PrefixSignSpacedSubtraction.fs",
+        "module A\nlet r = f - 1\n",
+        [ "let r = {f - 1}" ],
+        [ "-(2,9--2,14)" ]
+        "PrefixSignAdjacentSubtraction.fs",
+        "module A\nlet r = f-1\n",
+        [ "let r = {f - 1}" ],
+        [ "-(2,9--2,12)" ]
+        "PrefixSignPlusLiteralArgument.fs",
+        "module A\nlet r = f +1\n",
+        [ "let r = [f +1]" ],
+        [ "app(2,9--2,13)" ]
+        "PrefixSignIdentifierArgument.fs",
+        "module A\nlet r = f -x\n",
+        [ "let r = [f ~-x]" ],
+        [
+            "~-(2,11--2,13)"
+            "app(2,9--2,13)"
+        ]
+        "PrefixSignPlusIdentifierArgument.fs",
+        "module A\nlet r = f +x\n",
+        [ "let r = [f ~+x]" ],
+        [
+            "~+(2,11--2,13)"
+            "app(2,9--2,13)"
+        ]
+        "PrefixSignArgumentTakesOneAtom.fs",
+        "module A\nlet r = f -g x\n",
+        [ "let r = [[f ~-g] x]" ],
+        [
+            "~-(2,11--2,13)"
+            "app(2,9--2,15)"
+            "app(2,9--2,13)"
+        ]
+        "PrefixSignParenthesizedArgument.fs",
+        "module A\nlet r = f -(x)\n",
+        [ "let r = [f ~-(x)]" ],
+        [
+            "~-(2,11--2,15)"
+            "app(2,9--2,15)"
+        ]
+        "PrefixSignUnsignedLiteralArgument.fs",
+        "module A\nlet r = f -1u\n",
+        [ "let r = [f ~-1u]" ],
+        [
+            "~-(2,11--2,14)"
+            "app(2,9--2,14)"
+        ]
+        "PrefixSignFloatArgument.fs",
+        "module A\nlet r = f -1.5\n",
+        [ "let r = [f -1.5]" ],
+        [ "app(2,9--2,15)" ]
+        "PrefixSignHexArgument.fs",
+        "module A\nlet r = f -0x10\n",
+        [ "let r = [f -0x10]" ],
+        [ "app(2,9--2,16)" ]
+        "PrefixSignInt32MinimumArgument.fs",
+        "module A\nlet r = f -2147483648\n",
+        [ "let r = [f -2147483648]" ],
+        [ "app(2,9--2,22)" ]
+        "PrefixSignTwoArguments.fs",
+        "module A\nlet r = f -1 -2\n",
+        [ "let r = [[f -1] -2]" ],
+        [
+            "app(2,9--2,16)"
+            "app(2,9--2,13)"
+        ]
+        "PrefixSignArgumentThenAdjacentMinus.fs",
+        "module A\nlet r = f -1-2\n",
+        [ "let r = {[f -1] - 2}" ],
+        [
+            "-(2,9--2,15)"
+            "app(2,9--2,13)"
+        ]
+        "PrefixSignLiteralHead.fs", "module A\nlet r = -1\n", [ "let r = -1" ], []
+        "PrefixSignPlusLiteralHead.fs", "module A\nlet r = +1\n", [ "let r = +1" ], []
+        "PrefixSignIdentifierHead.fs",
+        "module A\nlet r = -x\n",
+        [ "let r = ~-x" ],
+        [ "~-(2,9--2,11)" ]
+        "PrefixSignSpacedHead.fs", "module A\nlet r = - x\n", [ "let r = ~-x" ], [ "~-(2,9--2,12)" ]
+        "PrefixSignSpacedLiteralHead.fs",
+        "module A\nlet r = - 1\n",
+        [ "let r = ~-1" ],
+        [ "~-(2,9--2,12)" ]
+        "PrefixSignHeadApplication.fs",
+        "module A\nlet r = -f x\n",
+        [ "let r = ~-[f x]" ],
+        [
+            "~-(2,9--2,13)"
+            "app(2,10--2,13)"
+        ]
+        "PrefixSignHeadTwice.fs",
+        "module A\nlet r = - -x\n",
+        [ "let r = ~-~-x" ],
+        [
+            "~-(2,9--2,13)"
+            "~-(2,11--2,13)"
+        ]
+        "PrefixSignLiteralHeadApplication.fs",
+        "module A\nlet r = -1 x\n",
+        [ "let r = [-1 x]" ],
+        [ "app(2,9--2,13)" ]
+        "PrefixSignAfterParenthesized.fs",
+        "module A\nlet r = (f)-1\n",
+        [ "let r = {(f) - 1}" ],
+        [ "-(2,9--2,14)" ]
+        "PrefixSignAfterSpacedParenthesized.fs",
+        "module A\nlet r = (f) -1\n",
+        [ "let r = [(f) -1]" ],
+        [ "app(2,9--2,15)" ]
+        "PrefixSignAfterConstant.fs",
+        "module A\nlet r = 1 -1\n",
+        [ "let r = [1 -1]" ],
+        [ "app(2,9--2,13)" ]
+        "PrefixSignBeforeInfix.fs",
+        "module A\nlet r = f -1 + 2\n",
+        [ "let r = {[f -1] + 2}" ],
+        [
+            "+(2,9--2,17)"
+            "app(2,9--2,13)"
+        ]
+        "PrefixSignHeadBeforeInfix.fs",
+        "module A\nlet r = -x * 2\n",
+        [ "let r = {~-x * 2}" ],
+        [
+            "*(2,9--2,15)"
+            "~-(2,9--2,11)"
+        ]
+        "PrefixSignAfterInfix.fs",
+        "module A\nlet r = a - -x\n",
+        [ "let r = {a - ~-x}" ],
+        [
+            "-(2,9--2,15)"
+            "~-(2,13--2,15)"
+        ]
+        "PrefixSignInParentheses.fs",
+        "module A\nlet r = (f -1)\n",
+        [ "let r = ([f -1])" ],
+        [ "app(2,10--2,14)" ]
+        "PrefixSignInList.fs",
+        "module A\nlet r = [-1; -x]\n",
+        [ "let r = [-1; ~-x]" ],
+        [ "~-(2,14--2,16)" ]
+        "PrefixSignInRecord.fs", "module A\nlet r = { X = -1 }\n", [ "let r = {X = -1}" ], []
+        "PrefixSignInTuple.fs",
+        "module A\nlet r = -1, -x\n",
+        [ "let r = -1, ~-x" ],
+        [
+            "tuple(2,9--2,15)"
+            "~-(2,13--2,15)"
+        ]
+        "PrefixSignConditionBranch.fs",
+        "module A\nlet r c = if -c then -1 else 1\n",
+        [ "let r c = if ~-c then -1 else 1" ],
+        [ "~-(2,14--2,16)" ]
+        "PrefixSignLambdaBody.fs",
+        "module A\nlet r = fun x -> -x\n",
+        [ "let r = fun x -> ~-x" ],
+        [ "~-(2,18--2,20)" ]
+        "PrefixSignNextLineArgument.fs",
+        "module A\nlet r =\n    f\n        -1\n",
+        [ "let r = [f -1]" ],
+        [ "app(3,5--4,11)" ]
+        "PrefixSignNextLineSubtraction.fs",
+        "module A\nlet r =\n    f\n    - 1\n",
+        [ "let r = {f - 1}" ],
+        [ "-(3,5--4,8)" ]
+        "PrefixSignNextLineItem.fs",
+        "module A\nlet r =\n    f ()\n    -x\n",
+        [ "let r = seq[[f ()]; ~-x]" ],
+        [
+            "seq(3,5--4,7)"
+            "~-(4,5--4,7)"
+            "app(3,5--3,9)"
+        ]
+        "PrefixSignNextLineItemInParentheses.fs",
+        "module A\nlet r = (f\n         -1)\n",
+        [ "let r = (seq[f; -1])" ],
+        [ "seq(2,10--3,12)" ]
+        "PrefixSignNextLineListItem.fs",
+        "module A\nlet r = [\n    1\n    -1\n]\n",
+        [ "let r = [1; -1]" ],
+        []
+        "PrefixSignEndOfLineSubtraction.fs",
+        "module A\nlet r =\n    f -\n        1\n",
+        [ "let r = {f - 1}" ],
+        [ "-(3,5--4,10)" ]
+        "PrefixSignLocalLetBody.fs",
+        "module A\nlet r () =\n    let y = 1\n    - 1\n",
+        [ "let r () = let y = 1 in ~-1" ],
+        [
+            "let(3,5--4,8)"
+            "~-(4,5--4,8)"
+        ]
+        "PrefixSignAfterNestedBlock.fs",
+        "module A\nlet r c =\n    if c then\n        1\n    else\n        2\n    -1\n",
+        [ "let r c = seq[if c then 1 else 2; -1]" ],
+        [ "seq(3,5--7,7)" ]
+        "PrefixSignSubtractionAfterNestedBlock.fs",
+        "module A\nlet r c =\n    if c then\n        1\n    else\n        2\n    - 1\n",
+        [ "let r c = {if c then 1 else 2 - 1}" ],
+        [ "-(3,5--7,8)" ]
+        "PrefixSignModuleExpression.fs",
+        "module A\nlet a = 1\n-1\n",
+        [
+            "let a = 1"
+            "expr -1"
+        ],
+        []
+        "InfixLineParenMinusAdjacentIdent.fs",
+        "module A\nlet f a x =\n    (a\n     -x)\n",
+        [ "let f a x = (seq[a; ~-x])" ],
+        [
+            "seq(3,6--4,8)"
+            "~-(4,6--4,8)"
+        ]
+        "InfixAtColumnNestedBindingBlock.fs",
+        "module A\nlet f a b =\n    let y =\n        a\n    + b\n    y\n",
+        [ "let f a b = let y = a in seq[~+b; y]" ],
+        [
+            "let(3,5--6,6)"
+            "seq(5,5--6,6)"
+            "~+(5,5--5,8)"
+        ]
+        "InfixLineLocalLetSameLineValue.fs",
+        "module A\nlet f a b =\n    let y = a\n    + b\n    y\n",
+        [ "let f a b = let y = a in seq[~+b; y]" ],
+        [
+            "let(3,5--5,6)"
+            "seq(4,5--5,6)"
+            "~+(4,5--4,8)"
+        ]
+        "InfixLineMinusIdent.fs",
+        "module A\nlet f a x =\n    a\n    -x\n",
+        [ "let f a x = seq[a; ~-x]" ],
+        [
+            "seq(3,5--4,7)"
+            "~-(4,5--4,7)"
+        ]
+        "InfixLinePlusAdjacentIdent.fs",
+        "module A\nlet f a x =\n    a\n    +x\n",
+        [ "let f a x = seq[a; ~+x]" ],
+        [
+            "seq(3,5--4,7)"
+            "~+(4,5--4,7)"
+        ]
+        "InfixLineParenMinusAdjacentLit.fs",
+        "module A\nlet f a =\n    (a\n     -1)\n",
+        [ "let f a = (seq[a; -1])" ],
+        [ "seq(3,6--4,8)" ]
+        "InfixAtColumnMinusAdjacent.fs",
+        "module A\nlet f a =\n    a\n    -1\n",
+        [ "let f a = seq[a; -1]" ],
+        [ "seq(3,5--4,7)" ]
+        "ConditionalBodyIfPlus1.fs",
+        "module A\nlet f x =\n    if x > 0\n       then\n     x\n       else\n     -x\n",
+        [ "let f x = if {x > 0} then x else ~-x" ],
+        [
+            ">(3,8--3,13)"
+            "~-(7,6--7,8)"
+        ]
+        "PrefixMinus.fs",
+        "module Program\nlet y = f -1\n",
+        [ "let y = [f -1]" ],
+        [ "app(2,9--2,13)" ]
+        "PrefixSignLineAtLocalBodyColumn.fs",
+        "module A\nlet f a =\n    let g =\n        a\n    -1\n    g\n",
+        [ "let f a = let g = a in seq[-1; g]" ],
+        [
+            "let(3,5--6,6)"
+            "seq(5,5--6,6)"
+        ]
+        "SpacedSignLineAtLocalBodyColumn.fs",
+        "module A\nlet f a =\n    let g =\n        a\n    + 1\n    g\n",
+        [ "let f a = let g = a in seq[~+1; g]" ],
+        [
+            "let(3,5--6,6)"
+            "seq(5,5--6,6)"
+            "~+(5,5--5,8)"
+        ]
+        "SignedHexFloatLiteral.fs",
+        "module A\nlet y = f -0x1LF\n",
+        [ "let y = [f -0x1LF]" ],
+        [ "app(2,9--2,17)" ]
+        "SignedUnsignedLongLiteral.fs",
+        "module A\nlet y = f -1uL\n",
+        [ "let y = [f ~-1uL]" ],
+        [
+            "~-(2,11--2,15)"
+            "app(2,9--2,15)"
+        ]
+        "SignedLeadingZeroLiteral.fs",
+        "module A\nlet y = f -08\n",
+        [ "let y = [f -08]" ],
+        [ "app(2,9--2,14)" ]
+        "SignedDecimalLiteral.fs",
+        "module A\nlet y = f -1.5M\n",
+        [ "let y = [f -1.5M]" ],
+        [ "app(2,9--2,16)" ]
+        "SignedBignumLiteral.fs",
+        "module A\nlet y = f -1Z\n",
+        [ "let y = [f -1Z]" ],
+        [ "app(2,9--2,14)" ]
+        "SignedDecimalExponentLiteral.fs",
+        "module A\nlet y = f -1e5m\n",
+        [ "let y = [f -1e5m]" ],
+        [ "app(2,9--2,16)" ]
+        "SignedHexWithLetterE.fs",
+        "module A\nlet y = f -0x1e3\n",
+        [ "let y = [f -0x1e3]" ],
+        [ "app(2,9--2,17)" ]
+        "SignedUnsignedByteInRange.fs",
+        "module A\nlet y = f -255uy\n",
+        [ "let y = [f ~-255uy]" ],
+        [
+            "~-(2,11--2,17)"
+            "app(2,9--2,17)"
+        ]
+    ]
+
+    let private prefixOperatorExplicitCases = [
+        "PrefixAmpersandArgument.fs", "module A\nlet r = a &b\n", []
+        "PrefixDoubleAmpersandArgument.fs", "module A\nlet r = a &&b\n", []
+        "PrefixPercentArgument.fs", "module A\nlet r = a %b\n", []
+        "PrefixMinusDotArgument.fs", "module A\nlet r = f -.1\n", []
+        "PrefixPlusDotArgument.fs", "module A\nlet r = f +.1\n", []
+        "PrefixSignConditionalOperand.fs",
+        "module A\nlet r c = f -if c then 1 else 2\n",
+        [
+            "PrefixSignConditionalOperand.fs(2,14): error FS0010: Unexpected keyword 'if' in expression"
+        ]
+        "PrefixSignHeadConditionalOperand.fs",
+        "module A\nlet r c = -if c then 1 else 2\n",
+        [
+            "PrefixSignHeadConditionalOperand.fs(2,12): error FS0010: Unexpected keyword 'if' in expression"
+        ]
+        "PrefixSignModuleSubtractionLine.fs", "module A\nlet a = 1\n- 1\n", []
+        "PrefixSignInt32Overflow.fs",
+        "module A\nlet r = f -2147483649\n",
+        [
+            "PrefixSignInt32Overflow.fs(2,12): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "PrefixPlusInt32Limit.fs",
+        "module A\nlet r = f +2147483648\n",
+        [
+            "PrefixPlusInt32Limit.fs(2,11): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "PrefixPlusSByteLimit.fs",
+        "module A\nlet r = f +128y\n",
+        [
+            "PrefixPlusSByteLimit.fs(2,11): error FS1142: This number is outside the allowable range for 8-bit signed integers"
+        ]
+        "PrefixSignDecimalOverflow.fs",
+        "module A\nlet r = f -79228162514264337593543950336m\n",
+        [
+            "PrefixSignDecimalOverflow.fs(2,12): error FS1154: This number is outside the allowable range for decimal literals"
+        ]
+        "PrefixSignHexLimit.fs", "module A\nlet r = f -0x80000000\n", []
+        "PrefixSignUndentedInParentheses.fs", "module A\nlet r = (f\n        -1)\n", []
+        "SpacedSignLineLeftOfLocalValue.fs",
+        "module A\nlet f a =\n    let g =\n        a\n   + 1\n    g\n",
+        []
+        "SpacedSignLineLeftOfLocalValueAlone.fs",
+        "module A\nlet f a =\n    let g =\n        a\n   + 1\n",
+        []
+        "SpacedSignLineLeftOfNestedLocalValue.fs",
+        "module A\nlet f a =\n    let g =\n        let h = a\n       + 1\n        h\n    g\n",
+        []
+        "PrefixSignLineLeftOfLocalValue.fs",
+        "module A\nlet f a =\n    let g =\n        a\n   -1\n    g\n",
+        [
+            "PrefixSignLineLeftOfLocalValue.fs(3,5): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+            "PrefixSignLineLeftOfLocalValue.fs(5,4): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+            "PrefixSignLineLeftOfLocalValue.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "SpacedSignLineLeftOfBlockThenItem.fs", "module A\nlet f a =\n    a\n   + 1\n    g\n", []
+    ]
+
+    let private prefixArgumentDiagnosticCases = [
+        "PrefixSignHighPrecedenceArgument.fs",
+        "module A\nlet r = f -g(x)\n",
+        [
+            "PrefixSignHighPrecedenceArgument.fs(2,11): error FS0597: Successive arguments should be separated by spaces or tupled, and arguments involving function or method applications should be parenthesized"
+        ]
+        "DereferenceHighPrecedenceArgument.fs",
+        "module A\nlet r = f !g(x)\n",
+        [
+            "DereferenceHighPrecedenceArgument.fs(2,11): error FS0597: Successive arguments should be separated by spaces or tupled, and arguments involving function or method applications should be parenthesized"
+        ]
+    ]
+
+    let private dotOperatorCases = [
+        "DotOperatorBelowAddition.fs",
+        "module A\nlet r = a .>> b + c\n",
+        [ "let r = {a .>> {b + c}}" ],
+        [
+            ".>>(2,9--2,20)"
+            "+(2,15--2,20)"
+        ]
+        "DotOperatorLeftAssociative.fs",
+        "module A\nlet r = a .>> b .>> c\n",
+        [ "let r = {{a .>> b} .>> c}" ],
+        [
+            ".>>(2,9--2,22)"
+            ".>>(2,9--2,16)"
+        ]
+        "DotOperatorWithTrailingDot.fs",
+        "module A\nlet r = a .>> b >>. c\n",
+        [ "let r = {{a .>> b} >>. c}" ],
+        [
+            ">>.(2,9--2,22)"
+            ".>>(2,9--2,16)"
+        ]
+        "DotMultiplyAboveAddition.fs",
+        "module A\nlet r = a .* b + c\n",
+        [ "let r = {{a .* b} + c}" ],
+        [
+            "+(2,9--2,19)"
+            ".*(2,9--2,15)"
+        ]
+        "DotPlusBelowMultiply.fs",
+        "module A\nlet r = a .+ b * c\n",
+        [ "let r = {a .+ {b * c}}" ],
+        [
+            ".+(2,9--2,19)"
+            "*(2,14--2,19)"
+        ]
+        "DotPowerRightAssociative.fs",
+        "module A\nlet r = a .** b .** c\n",
+        [ "let r = {a .** {b .** c}}" ],
+        [
+            ".**(2,9--2,22)"
+            ".**(2,15--2,22)"
+        ]
+        "DotAtRightAssociative.fs",
+        "module A\nlet r = a .@ b .@ c\n",
+        [ "let r = {a .@ {b .@ c}}" ],
+        [
+            ".@(2,9--2,20)"
+            ".@(2,14--2,20)"
+        ]
+        "DotBarBarIsComparison.fs",
+        "module A\nlet r = a .|| b = c\n",
+        [ "let r = {{a .|| b} = c}" ],
+        [
+            "=(2,9--2,20)"
+            ".||(2,9--2,16)"
+        ]
+        "DotAmpAmpIsComparison.fs",
+        "module A\nlet r = a .&& b = c\n",
+        [ "let r = {{a .&& b} = c}" ],
+        [
+            "=(2,9--2,20)"
+            ".&&(2,9--2,16)"
+        ]
+        "DotAmpIsComparison.fs",
+        "module A\nlet r = a .& b = c\n",
+        [ "let r = {{a .& b} = c}" ],
+        [
+            "=(2,9--2,19)"
+            ".&(2,9--2,15)"
+        ]
+        "DotBangEquals.fs",
+        "module A\nlet r = a .!= b + c\n",
+        [ "let r = {a .!= {b + c}}" ],
+        [
+            ".!=(2,9--2,20)"
+            "+(2,15--2,20)"
+        ]
+        "TwoDotsIgnored.fs",
+        "module A\nlet r = a ..> b + c\n",
+        [ "let r = {a ..> {b + c}}" ],
+        [
+            "..>(2,9--2,20)"
+            "+(2,15--2,20)"
+        ]
+        "DotOperatorAdjacent.fs",
+        "module A\nlet r = a.>>b\n",
+        [ "let r = {a .>> b}" ],
+        [ ".>>(2,9--2,14)" ]
+        "DotMinusAdjacentIsInfix.fs",
+        "module A\nlet r = a .-b\n",
+        [ "let r = {a .- b}" ],
+        [ ".-(2,9--2,14)" ]
+        "DotOperatorAfterMemberAccess.fs",
+        "module A\nlet r = a.b .>> c\n",
+        [ "let r = {a.b .>> c}" ],
+        [ ".>>(2,9--2,18)" ]
+        "DotOperatorInTuple.fs",
+        "module A\nlet r = a .>> b, c\n",
+        [ "let r = {a .>> b}, c" ],
+        [
+            "tuple(2,9--2,19)"
+            ".>>(2,9--2,16)"
+        ]
+        "DotOperatorNextLine.fs",
+        "module A\nlet r =\n    a\n    .>> b\n",
+        [ "let r = {a .>> b}" ],
+        [ ".>>(3,5--4,10)" ]
+        "DotOperatorNextLineUndented.fs",
+        "module A\nlet r =\n    a\n  .>> b\n",
+        [ "let r = {a .>> b}" ],
+        [ ".>>(3,5--4,8)" ]
+        "DotOperatorNextLineInParentheses.fs",
+        "module A\nlet r = (a\n        .>> b)\n",
+        [ "let r = ({a .>> b})" ],
+        [ ".>>(2,10--3,14)" ]
+        "DotOperatorEndOfLine.fs",
+        "module A\nlet r =\n    a .>>\n        b\n",
+        [ "let r = {a .>> b}" ],
+        [ ".>>(3,5--4,10)" ]
+        "DotOperatorAfterNestedBlock.fs",
+        "module A\nlet r c =\n    if c then\n        a\n    else\n        b\n    .>> d\n",
+        [ "let r c = if c then a else {b .>> d}" ],
+        [ ".>>(6,9--7,10)" ]
+    ]
+
+    let private dotOperatorExplicitCases = [
+        "DotDollarOperator.fs",
+        "module A\nlet r = a .$ b + c\n",
+        [
+            "DotDollarOperator.fs(2,11): error FS0035: This construct is deprecated: '$' is not permitted as a character in operator names and is reserved for future use"
+        ]
+        "QuestionMarkOperator.fs", "module A\nlet r = a ?>> b + c\n", []
+        "ThreeDots.fs",
+        "module A\nlet r = a ... b\n",
+        [
+            "ThreeDots.fs(2,13): error FS0010: Unexpected symbol '.' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "DotArrowOperator.fs", "module A\nlet r = a .-> b\n", []
+        "DotColonColon.fs",
+        "module A\nlet r = a .:: b\n",
+        [ "DotColonColon.fs(2,11): error FS0599: Missing qualification after '.'" ]
+        "DotOperatorModuleLine.fs",
+        "module A\nlet a = 1\n.>> b\n",
+        [
+            "DotOperatorModuleLine.fs(3,1): error FS0010: Unexpected infix operator in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+    ]
+
+    let private assignmentOperatorCases = [
+        "AssignTupleValue.fs",
+        "module A\nlet r () = x := 1, 2\n",
+        [ "let r () = {x := 1, 2}" ],
+        [
+            ":=(2,12--2,21)"
+            "tuple(2,17--2,21)"
+        ]
+        "AssignBelowOr.fs",
+        "module A\nlet r () = x := a || b\n",
+        [ "let r () = {x := {a || b}}" ],
+        [
+            ":=(2,12--2,23)"
+            "||(2,17--2,23)"
+        ]
+        "AssignRightAssociative.fs",
+        "module A\nlet r () = x := y := 1\n",
+        [ "let r () = {x := {y := 1}}" ],
+        [
+            ":=(2,12--2,23)"
+            ":=(2,17--2,23)"
+        ]
+        "AssignTupleTarget.fs",
+        "module A\nlet r () = a, x := 1\n",
+        [ "let r () = {a, x := 1}" ],
+        [
+            ":=(2,12--2,21)"
+            "tuple(2,12--2,16)"
+        ]
+        "AssignApplicationTarget.fs",
+        "module A\nlet r () = f x := 1\n",
+        [ "let r () = {[f x] := 1}" ],
+        [
+            ":=(2,12--2,20)"
+            "app(2,12--2,15)"
+        ]
+        "AssignConditionalValue.fs",
+        "module A\nlet r c = x := if c then 1 else 2\n",
+        [ "let r c = {x := if c then 1 else 2}" ],
+        [ ":=(2,11--2,34)" ]
+        "AssignLambdaValue.fs",
+        "module A\nlet r () = x := fun y -> y\n",
+        [ "let r () = {x := fun y -> y}" ],
+        [ ":=(2,12--2,27)" ]
+        "AssignInSetValue.fs",
+        "module A\nlet mutable z = 0\nlet r () = z <- y := 1\n",
+        [
+            "let mutable z = 0"
+            "let r () = {z <- {y := 1}}"
+        ],
+        [
+            "set(3,12--3,23)"
+            ":=(3,17--3,23)"
+        ]
+        "AssignInParentheses.fs",
+        "module A\nlet r () = (x := 1, 2)\n",
+        [ "let r () = ({x := 1, 2})" ],
+        [
+            ":=(2,13--2,22)"
+            "tuple(2,18--2,22)"
+        ]
+        "AssignAdjacent.fs",
+        "module A\nlet r () = x:=1\n",
+        [ "let r () = {x := 1}" ],
+        [ ":=(2,12--2,16)" ]
+        "AssignModuleExpression.fs", "module A\nx := 1\n", [ "expr {x := 1}" ], [ ":=(2,1--2,7)" ]
+        "AssignSequentialItem.fs",
+        "module A\nlet r () =\n    x := 1\n    y\n",
+        [ "let r () = seq[{x := 1}; y]" ],
+        [
+            "seq(3,5--4,6)"
+            ":=(3,5--3,11)"
+        ]
+        "AssignValueNextLine.fs",
+        "module A\nlet r () =\n    x :=\n        1\n",
+        [ "let r () = {x := 1}" ],
+        [ ":=(3,5--4,10)" ]
+        "AssignOperatorLine.fs",
+        "module A\nlet r () =\n    x\n    := 1\n",
+        [ "let r () = {x := 1}" ],
+        [ ":=(3,5--4,9)" ]
+        "AssignOperatorLineUndented.fs",
+        "module A\nlet r () =\n    x\n  := 1\n",
+        [ "let r () = {x := 1}" ],
+        [ ":=(3,5--4,7)" ]
+        "AssignCommaLine.fs",
+        "module A\nlet r () =\n    x := 1\n    , 2\n",
+        [ "let r () = {x := 1, 2}" ],
+        [
+            ":=(3,5--4,8)"
+            "tuple(3,10--4,8)"
+        ]
+        "AssignInfixLine.fs",
+        "module A\nlet r () =\n    x := 1\n    + 2\n",
+        [ "let r () = {x := {1 + 2}}" ],
+        [
+            ":=(3,5--4,8)"
+            "+(3,10--4,8)"
+        ]
+        "AssignOperatorLineTwice.fs",
+        "module A\nlet r () =\n    x := y\n    := 1\n",
+        [ "let r () = {x := {y := 1}}" ],
+        [
+            ":=(3,5--4,9)"
+            ":=(3,10--4,9)"
+        ]
+        "AssignOperatorLineAfterSet.fs",
+        "module A\nlet mutable z = 0\nlet r () =\n    z <- y\n    := 1\n",
+        [
+            "let mutable z = 0"
+            "let r () = {z <- {y := 1}}"
+        ],
+        [
+            "set(4,5--5,9)"
+            ":=(4,10--5,9)"
+        ]
+        "AssignOperatorLineAfterSetBlock.fs",
+        "module A\nlet mutable z = 0\nlet r () =\n    z <-\n        y\n    := 1\n",
+        [
+            "let mutable z = 0"
+            "let r () = {{z <- y} := 1}"
+        ],
+        [
+            ":=(4,5--6,9)"
+            "set(4,5--5,10)"
+        ]
+        "AssignOperatorLineAfterLambda.fs",
+        "module A\nlet r =\n    fun () -> x\n    := 1\n",
+        [ "let r = {fun () -> x := 1}" ],
+        [ ":=(3,5--4,9)" ]
+        "InfixAtColumnColonEquals.fs",
+        "module A\nlet f a b =\n    a\n    := b\n",
+        [ "let f a b = {a := b}" ],
+        [ ":=(3,5--4,9)" ]
+    ]
+
+    let private assignmentOperatorExplicitCases = [
+        "AssignLineAfterUndentedClose.fs",
+        "module A\nlet f xs =\n    xs\n    |> List.map (fun x ->\n  x)\n  := 1\n",
+        [
+            "AssignLineAfterUndentedClose.fs(6,3): error FS0010: Unexpected symbol ':=' in binding. Expected incomplete structured construct at or before this point or other token."
+            "AssignLineAfterUndentedClose.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "AssignLineAtModuleColumn.fs",
+        "module A\nlet r () =\n    x\n:= 1\n",
+        [
+            "AssignLineAtModuleColumn.fs(4,1): error FS0010: Unexpected symbol ':=' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+    ]
+
+    let private orKeywordCases = [
+        "OrKeywordBelowAnd.fs",
+        "module A\nlet r = a or b && c\n",
+        [ "let r = {a or {b && c}}" ],
+        [
+            "or(2,9--2,20)"
+            "&&(2,14--2,20)"
+        ]
+        "OrKeywordLeftAssociative.fs",
+        "module A\nlet r = a or b or c\n",
+        [ "let r = {{a or b} or c}" ],
+        [
+            "or(2,9--2,20)"
+            "or(2,9--2,15)"
+        ]
+        "OrKeywordAfterBarBar.fs",
+        "module A\nlet r = a || b or c\n",
+        [ "let r = {{a || b} or c}" ],
+        [
+            "or(2,9--2,20)"
+            "||(2,9--2,15)"
+        ]
+        "OrKeywordBeforeBarBar.fs",
+        "module A\nlet r = a or b || c\n",
+        [ "let r = {{a or b} || c}" ],
+        [
+            "||(2,9--2,20)"
+            "or(2,9--2,15)"
+        ]
+        "OrKeywordBelowComparison.fs",
+        "module A\nlet r = a or b = c\n",
+        [ "let r = {a or {b = c}}" ],
+        [
+            "or(2,9--2,19)"
+            "=(2,14--2,19)"
+        ]
+        "OrKeywordBelowAmpersand.fs",
+        "module A\nlet r = a & b or c\n",
+        [ "let r = {{a & b} or c}" ],
+        [
+            "or(2,9--2,19)"
+            "&(2,9--2,14)"
+        ]
+        "OrKeywordApplications.fs",
+        "module A\nlet r = f a or g b\n",
+        [ "let r = {[f a] or [g b]}" ],
+        [
+            "or(2,9--2,19)"
+            "app(2,9--2,12)"
+            "app(2,16--2,19)"
+        ]
+        "OrKeywordInTuple.fs",
+        "module A\nlet r = a, b or c\n",
+        [ "let r = a, {b or c}" ],
+        [
+            "tuple(2,9--2,18)"
+            "or(2,12--2,18)"
+        ]
+        "OrKeywordInAssignment.fs",
+        "module A\nlet r () = x := a or b\n",
+        [ "let r () = {x := {a or b}}" ],
+        [
+            ":=(2,12--2,23)"
+            "or(2,17--2,23)"
+        ]
+        "OrKeywordInCondition.fs",
+        "module A\nlet r = if a or b then 1 else 2\n",
+        [ "let r = if {a or b} then 1 else 2" ],
+        [ "or(2,12--2,18)" ]
+        "OrKeywordAdjacentParentheses.fs",
+        "module A\nlet r = (a)or(b)\n",
+        [ "let r = {(a) or (b)}" ],
+        [ "or(2,9--2,17)" ]
+        "OrKeywordLine.fs",
+        "module A\nlet r =\n    a\n    or b\n",
+        [ "let r = {a or b}" ],
+        [ "or(3,5--4,9)" ]
+        "OrKeywordLineUndented.fs",
+        "module A\nlet r =\n    a\n  or b\n",
+        [ "let r = {a or b}" ],
+        [ "or(3,5--4,7)" ]
+        "OrKeywordEndOfLine.fs",
+        "module A\nlet r =\n    a or\n        b\n",
+        [ "let r = {a or b}" ],
+        [ "or(3,5--4,10)" ]
+        "OrKeywordLineInParentheses.fs",
+        "module A\nlet r = (a\n        or b)\n",
+        [ "let r = ({a or b})" ],
+        [ "or(2,10--3,13)" ]
+        "OrKeywordThenInfixLine.fs",
+        "module A\nlet r =\n    a or b\n    |> f\n",
+        [ "let r = {a or {b |> f}}" ],
+        [
+            "or(3,5--4,9)"
+            "|>(3,10--4,9)"
+        ]
+        "OrKeywordAfterNestedBlock.fs",
+        "module A\nlet r c =\n    if c then\n        a\n    else\n        b\n    or d\n",
+        [ "let r c = {if c then a else b or d}" ],
+        [ "or(3,5--7,9)" ]
+        "BarBarLineUndentedTwoColumns.fs",
+        "module A\nlet r =\n    a\n || b\n",
+        [ "let r = {a || b}" ],
+        [ "||(3,5--4,6)" ]
+    ]
+
+    let private orKeywordExplicitCases = [
+        "OrKeywordLineUndentedBeyondLimit.fs",
+        "module A\nlet r =\n    a\n or b\n",
+        [
+            "OrKeywordLineUndentedBeyondLimit.fs(4,2): error FS0010: Unexpected keyword 'or' in binding. Expected incomplete structured construct at or before this point or other token."
+            "OrKeywordLineUndentedBeyondLimit.fs(2,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "OrKeywordModuleLine.fs",
+        "module A\nlet a = 1\nor b\n",
+        [
+            "OrKeywordModuleLine.fs(3,1): error FS0010: Unexpected keyword 'or' in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "OrKeywordEndOfLineAtBlockColumn.fs", "module A\nlet r =\n    a or\n    b\n", []
+    ]
+
+    let private dereferenceCases = [
+        "DereferenceArgument.fs",
+        "module A\nlet r = f !x\n",
+        [ "let r = [f ~!x]" ],
+        [
+            "~!(2,11--2,13)"
+            "app(2,9--2,13)"
+        ]
+        "DereferenceSpacedArgument.fs",
+        "module A\nlet r = f ! x\n",
+        [ "let r = [f ~!x]" ],
+        [
+            "~!(2,11--2,14)"
+            "app(2,9--2,14)"
+        ]
+        "DereferenceHead.fs", "module A\nlet r = !x\n", [ "let r = ~!x" ], [ "~!(2,9--2,11)" ]
+        "DereferenceHeadTakesOneAtom.fs",
+        "module A\nlet r = !f x\n",
+        [ "let r = [~!f x]" ],
+        [
+            "~!(2,9--2,11)"
+            "app(2,9--2,13)"
+        ]
+        "DereferenceHighPrecedenceApplication.fs",
+        "module A\nlet r = !f(x)\n",
+        [ "let r = ~![f (x)]" ],
+        [
+            "~!(2,9--2,14)"
+            "app(2,10--2,14)"
+        ]
+        "DereferenceIndexer.fs",
+        "module A\nlet r = !x[0]\n",
+        [ "let r = ~!x[0]" ],
+        [ "~!(2,9--2,14)" ]
+        "DereferenceLongIdentifier.fs",
+        "module A\nlet r = f !x.y\n",
+        [ "let r = [f ~!x.y]" ],
+        [
+            "~!(2,11--2,15)"
+            "app(2,9--2,15)"
+        ]
+        "DereferenceBeforeInfix.fs",
+        "module A\nlet r = !x + 1\n",
+        [ "let r = {~!x + 1}" ],
+        [
+            "+(2,9--2,15)"
+            "~!(2,9--2,11)"
+        ]
+        "DereferenceTwoArguments.fs",
+        "module A\nlet r = f !x y\n",
+        [ "let r = [[f ~!x] y]" ],
+        [
+            "~!(2,11--2,13)"
+            "app(2,9--2,15)"
+            "app(2,9--2,13)"
+        ]
+        "DereferenceParenthesized.fs",
+        "module A\nlet r = !(f x)\n",
+        [ "let r = ~!([f x])" ],
+        [
+            "~!(2,9--2,15)"
+            "app(2,11--2,14)"
+        ]
+        "DereferenceUnderSign.fs",
+        "module A\nlet r = - !x\n",
+        [ "let r = ~-~!x" ],
+        [
+            "~-(2,9--2,13)"
+            "~!(2,11--2,13)"
+        ]
+        "DereferenceConstant.fs", "module A\nlet r = !1\n", [ "let r = ~!1" ], [ "~!(2,9--2,11)" ]
+        "DereferenceAfterParentheses.fs",
+        "module A\nlet r = (f)!x\n",
+        [ "let r = [(f) ~!x]" ],
+        [
+            "~!(2,12--2,14)"
+            "app(2,9--2,14)"
+        ]
+        "DereferenceAfterConstant.fs",
+        "module A\nlet r = f 1!x\n",
+        [ "let r = [[f 1] ~!x]" ],
+        [
+            "~!(2,12--2,14)"
+            "app(2,9--2,14)"
+            "app(2,9--2,12)"
+        ]
+        "DereferenceInList.fs",
+        "module A\nlet r = [!x; !y]\n",
+        [ "let r = [~!x; ~!y]" ],
+        [
+            "~!(2,10--2,12)"
+            "~!(2,14--2,16)"
+        ]
+        "DereferenceInCondition.fs",
+        "module A\nlet r = if !x then 1 else 2\n",
+        [ "let r = if ~!x then 1 else 2" ],
+        [ "~!(2,12--2,14)" ]
+        "DereferenceModuleExpression.fs", "module A\n!x\n", [ "expr ~!x" ], [ "~!(2,1--2,3)" ]
+        "DereferenceNextLineItem.fs",
+        "module A\nlet r =\n    f ()\n    !x\n",
+        [ "let r = seq[[f ()]; ~!x]" ],
+        [
+            "seq(3,5--4,7)"
+            "~!(4,5--4,7)"
+            "app(3,5--3,9)"
+        ]
+        "DereferenceNextLineArgument.fs",
+        "module A\nlet r =\n    f\n        !x\n",
+        [ "let r = [f ~!x]" ],
+        [
+            "~!(4,9--4,11)"
+            "app(3,5--4,11)"
+        ]
+        "BangEqualsStaysInfix.fs",
+        "module A\nlet r = a !=b\n",
+        [ "let r = {a != b}" ],
+        [ "!=(2,9--2,14)" ]
+    ]
+
+    let private dereferenceExplicitCases = [
+        "DereferenceAfterIdentifier.fs",
+        "module A\nlet r = f!x\n",
+        [
+            "DereferenceAfterIdentifier.fs(2,9): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "DoBangKeyword.fs", "module A\ndo! x\n", []
+        "MatchBangKeyword.fs", "module A\nlet r () =\n    match! x with\n    | _ -> 1\n", []
+        "IfFollowedByBang.fs",
+        "module A\nlet r = if!x then 1 else 2\n",
+        [
+            "IfFollowedByBang.fs(2,9): error FS1141: Identifiers followed by '!' are reserved for future use"
+            "IfFollowedByBang.fs(2,21): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "DoubleBangOperator.fs", "module A\nlet r = !!x\n", []
+        "BangPlusOperator.fs", "module A\nlet r = f !+x\n", []
+        "DereferenceConditionalOperand.fs",
+        "module A\nlet r c = !if c then x else y\n",
+        [
+            "DereferenceConditionalOperand.fs(2,12): error FS0010: Unexpected keyword 'if' in expression"
+        ]
+        "DereferenceOperandBeforeBangEquals.fs",
+        "module A\nlet y = !x!=y\n",
+        [
+            "DereferenceOperandBeforeBangEquals.fs(2,10): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+    ]
+
+    let private bodyArgumentLineCases = [
+        "LambdaBodyThenPrefixSignLine.fs",
+        "module A\nlet y =\n    fun x ->\n        a\n      -1\n",
+        [
+            "LambdaBodyThenPrefixSignLine.fs(5,7): error FS0010: Unexpected integer literal in lambda expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "LambdaBodyThenPlusSignLine.fs",
+        "module A\nlet y =\n    fun x ->\n        a\n      +1\n",
+        [
+            "LambdaBodyThenPlusSignLine.fs(5,7): error FS0010: Unexpected integer literal in lambda expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "LambdaBodyThenDereferenceLine.fs",
+        "module A\nlet y =\n    fun x ->\n        a\n      !x\n",
+        [
+            "LambdaBodyThenDereferenceLine.fs(5,7): error FS0010: Unexpected prefix operator in lambda expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "LambdaBodyThenSignLineThenAtom.fs",
+        "module A\nlet y =\n    fun x ->\n        a\n      -1\n      b\n",
+        [
+            "LambdaBodyThenSignLineThenAtom.fs(5,7): error FS0010: Unexpected integer literal in lambda expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "LambdaBodyThenSignIdentifierLine.fs",
+        "module A\nlet y =\n    fun x ->\n        a\n      -x\n",
+        [
+            "LambdaBodyThenSignIdentifierLine.fs(5,7): error FS0010: Unexpected prefix operator in lambda expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "LambdaApplicationBodyThenSignLine.fs",
+        "module A\nlet y =\n    fun x ->\n        f a\n      -1\n",
+        [
+            "LambdaApplicationBodyThenSignLine.fs(5,7): error FS0010: Unexpected integer literal in lambda expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "MatchClauseResultThenSignLine.fs",
+        "module A\nlet y =\n    match x with\n    | A ->\n        a\n      -1\n",
+        [
+            "MatchClauseResultThenSignLine.fs(6,7): error FS0010: Unexpected integer literal in expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "MatchClauseResultThenSignLineThenClause.fs",
+        "module A\nlet y =\n    match x with\n    | A ->\n        a\n      -1\n    | B -> 2\n",
+        [
+            "MatchClauseResultThenSignLineThenClause.fs(6,7): error FS0010: Unexpected integer literal in expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "ThenBodyThenSignLineThenElse.fs",
+        "module A\nlet y =\n    if c then\n        a\n      -1\n    else 2\n",
+        [
+            "ThenBodyThenSignLineThenElse.fs(5,7): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "LambdaBodyThenIdentifierLine.fs",
+        "module A\nlet y =\n    fun x ->\n        a\n      f\n",
+        [
+            "LambdaBodyThenIdentifierLine.fs(5,7): error FS0010: Unexpected identifier in lambda expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "LambdaBodyThenParenthesizedLine.fs",
+        "module A\nlet y =\n    fun x ->\n        a\n      (b)\n",
+        [
+            "LambdaBodyThenParenthesizedLine.fs(5,7): error FS0010: Unexpected symbol '(' in lambda expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "LambdaBodyThenConstantLine.fs",
+        "module A\nlet y =\n    fun x ->\n        a\n      1\n",
+        [
+            "LambdaBodyThenConstantLine.fs(5,7): error FS0010: Unexpected integer literal in lambda expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+    ]
+
+    let private unreadableSignedLiteralCases = [
+        "SignedHexBignumSuffix.fs",
+        "module A\nlet y = f -0x1FI\n",
+        [
+            "SignedHexBignumSuffix.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedHexWithFraction.fs",
+        "module A\nlet y = f -0x1.0\n",
+        [ "SignedHexWithFraction.fs(2,15): error FS0599: Missing qualification after '.'" ]
+        "SignedLiteralSuffixLs.fs",
+        "module A\nlet y = f -1ls\n",
+        [
+            "SignedLiteralSuffixLs.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedHexDecimalSuffix.fs",
+        "module A\nlet y = f -0x1M\n",
+        [
+            "SignedHexDecimalSuffix.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedBinaryBignumSuffix.fs",
+        "module A\nlet y = f -0b1I\n",
+        [
+            "SignedBinaryBignumSuffix.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedOctalBignumSuffix.fs",
+        "module A\nlet y = f -0o7N\n",
+        [
+            "SignedOctalBignumSuffix.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedLiteralSuffixLsAgain.fs",
+        "module A\nlet y = f -1ls\n",
+        [
+            "SignedLiteralSuffixLsAgain.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedHexBignumHead.fs",
+        "module A\nlet y = -0x1FI\n",
+        [
+            "SignedHexBignumHead.fs(2,10): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedLiteralSuffixXy.fs",
+        "module A\nlet y = f -1xy\n",
+        [
+            "SignedLiteralSuffixXy.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedHexLowerDecimalSuffix.fs",
+        "module A\nlet y = f -0x1Fm\n",
+        [
+            "SignedHexLowerDecimalSuffix.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedHexSuffixG.fs",
+        "module A\nlet y = f -0x1G\n",
+        [
+            "SignedHexSuffixG.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedHexSuffixQInList.fs",
+        "module A\nlet y = [ -0x1Q ]\n",
+        [
+            "SignedHexSuffixQInList.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+    ]
+
+    let private invalidSignedLiteralCases = [
+        "SignedBinaryDigitTwo.fs",
+        "module A\nlet y = f -0b2\n",
+        [
+            "SignedBinaryDigitTwo.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedFloatSuffixI.fs",
+        "module A\nlet y = f -1.0I\n",
+        [
+            "SignedFloatSuffixI.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedFloatSuffixL.fs",
+        "module A\nlet y = f -1.5L\n",
+        [
+            "SignedFloatSuffixL.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedFloatSuffixLowerLF.fs",
+        "module A\nlet y = f -1.0lf\n",
+        [
+            "SignedFloatSuffixLowerLF.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedFloatSuffixUpperLF.fs",
+        "module A\nlet y = f -1.0LF\n",
+        [
+            "SignedFloatSuffixUpperLF.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedFloatSuffixY.fs",
+        "module A\nlet y = f -1.0y\n",
+        [
+            "SignedFloatSuffixY.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedHexNoDigits.fs",
+        "module A\nlet y = f -0x\n",
+        [
+            "SignedHexNoDigits.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedLiteralEmptyExponent.fs",
+        "module A\nlet y = f -1e\n",
+        [
+            "SignedLiteralEmptyExponent.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedLiteralSuffixLu.fs",
+        "module A\nlet y = f -1lu\n",
+        [
+            "SignedLiteralSuffixLu.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedLiteralSuffixUl.fs",
+        "module A\nlet y = f -1Ul\n",
+        [
+            "SignedLiteralSuffixUl.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedLiteralSuffixUpperLF.fs",
+        "module A\nlet y = f -1LF\n",
+        [
+            "SignedLiteralSuffixUpperLF.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedLiteralSuffixUpperLFHead.fs",
+        "module A\nlet y = -1LF\n",
+        [
+            "SignedLiteralSuffixUpperLFHead.fs(2,10): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedLiteralTrailingUnderscore.fs",
+        "module A\nlet y = f -1_\n",
+        [
+            "SignedLiteralTrailingUnderscore.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedOctalDigitNine.fs",
+        "module A\nlet y = f -0o9\n",
+        [
+            "SignedOctalDigitNine.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "SignedUnsignedByteOutOfRange.fs",
+        "module A\nlet y = f -1_000uy\n",
+        [
+            "SignedUnsignedByteOutOfRange.fs(2,12): error FS1144: This number is outside the allowable range for 8-bit unsigned integers"
+        ]
+        "SignedUnsignedHexByteOutOfRange.fs",
+        "module A\nlet y = f -0x1e3uy\n",
+        [
+            "SignedUnsignedHexByteOutOfRange.fs(2,12): error FS1144: This number is outside the allowable range for 8-bit unsigned integers"
         ]
     ]
 
@@ -5601,6 +6849,225 @@ let items = [ origin.X; 1 ]
                              ))
                             expectedRanges
                             "The infix, application, conditional, and match ranges, and the clause count of each match"
+            ]
+
+            testList "a leading dot does not change the precedence of an operator" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in dotOperatorCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with dot operators"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect (fun body ->
+                                 infixRanges body
+                                 @ applicationRanges body
+                             ))
+                            expectedRanges
+                            "The infix, prefix, and application ranges"
+            ]
+
+            testList "a dot operator the parser does not model stays explicit" [
+                for logicalPath, text, oracle in dotOperatorExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testList "':=' binds looser than ',' and tighter than '<-'" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in
+                    assignmentOperatorCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with ':='"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect (fun body ->
+                                 infixRanges body
+                                 @ applicationRanges body
+                             ))
+                            expectedRanges
+                            "The infix, prefix, and application ranges"
+            ]
+
+            testList "a ':=' line the parser does not model stays explicit" [
+                for logicalPath, text, oracle in assignmentOperatorExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testList "the 'or' keyword is an infix operator at the '||' level" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in orKeywordCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with 'or'"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect (fun body ->
+                                 infixRanges body
+                                 @ applicationRanges body
+                             ))
+                            expectedRanges
+                            "The infix, prefix, and application ranges"
+            ]
+
+            testList "an 'or' line the parser does not model stays explicit" [
+                for logicalPath, text, oracle in orKeywordExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testList "'!' is a prefix operator on one atomic expression" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in dereferenceCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with '!'"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect (fun body ->
+                                 infixRanges body
+                                 @ applicationRanges body
+                             ))
+                            expectedRanges
+                            "The infix, prefix, and application ranges"
+            ]
+
+            testList "a '!' form the parser does not model stays explicit" [
+                for logicalPath, text, oracle in dereferenceExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testList "an argument line left of a lambda, match, or conditional body stays explicit" [
+                for logicalPath, text, oracle in bodyArgumentLineCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testList "a signed literal the parser cannot read stays explicit" [
+                for logicalPath, text, oracle in unreadableSignedLiteralCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testList "a signed literal that is not a valid numeric literal stays explicit" [
+                for logicalPath, text, oracle in invalidSignedLiteralCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testList "an adjacent sign is a prefix operator and a spaced sign is subtraction" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in prefixSignCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with prefix and infix signs"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect (fun body ->
+                                 infixRanges body
+                                 @ applicationRanges body
+                             ))
+                            expectedRanges
+                            "The infix, prefix, and application ranges"
+            ]
+
+            testList "a prefix operator the parser does not model stays explicit" [
+                for logicalPath, text, oracle in prefixOperatorExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testList "a prefix operator argument reports the Oracle diagnostics" [
+                for logicalPath, text, oracle in prefixArgumentDiagnosticCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        Expect.sequenceEqual
+                            (oracleLines logicalPath result)
+                            oracle
+                            "The diagnostics match the Compatibility Oracle"
             ]
 
             testList "a token after a delimiter that closes left of its block item stays explicit" [

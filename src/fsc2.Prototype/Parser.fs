@@ -115,6 +115,25 @@ module internal Parser =
 
             if opensItem then Some token.Range.Start.Column else column
 
+        member _.PreviousSource =
+            let mutable position = index - 1
+
+            while position
+                  >= 0
+                  && tokens[position].Kind
+                     <> LayoutTokenKind.SourceToken do
+                position <-
+                    position
+                    - 1
+
+            if
+                position
+                >= 0
+            then
+                Some tokens[position]
+            else
+                None
+
         member this.Peek offset =
             if offset = 0 then
                 this.Current
@@ -713,10 +732,15 @@ module internal Parser =
             token.Kind = LayoutTokenKind.SourceToken
             && token.Range.Start.Line > context.Offside.Line
 
+        let length =
+            token.Token
+            |> Option.map Layout.infixLength
+            |> Option.defaultValue (tokenText token).Length
+
         let undented =
             laterLine
             && token.Range.Start.Column
-               + (tokenText token).Length
+               + length
                + 1 < context.Offside.Column
 
         if not state.InDelimiters then
@@ -940,7 +964,7 @@ module internal Parser =
             Some(SyntaxConstant.Boolean false)
         | _ -> None
 
-    let private operatorPrecedence (text: string) =
+    let rec private operatorPrecedence (text: string) =
         match text with
         | "->"
         | "<-"
@@ -956,12 +980,33 @@ module internal Parser =
         | "<@@"
         | "@>"
         | "@@>" -> None
-        | "||" -> Some(1, false)
+        | "||"
+        | "or" -> Some(1, false)
         | "&"
         | "&&" -> Some(2, false)
         | "::" -> Some(6, true)
         | "!=" -> Some(4, false)
         | _ when text.StartsWith("**", StringComparison.Ordinal) -> Some(9, true)
+        // The FCS lexer ignores leading '.' characters for the precedence, so '.||' and '.&&' are comparison operators.
+        | _ when text.StartsWith('.') ->
+            let rest = text.TrimStart '.'
+
+            if
+                rest.Length = 0
+                || rest.Contains '$'
+            then
+                None
+            else
+                match rest[0] with
+                | '|'
+                | '&' -> Some(4, false)
+                | '!' when rest.StartsWith("!=", StringComparison.Ordinal) -> Some(4, false)
+                | first when
+                    "@^<>=+-*/%".IndexOf first
+                    >= 0
+                    ->
+                    operatorPrecedence rest
+                | _ -> None
         | _ ->
             match text[0] with
             | '<'
@@ -980,10 +1025,252 @@ module internal Parser =
             | _ -> None
 
     let private infixPrecedence (token: LayoutToken) =
-        if isKind LexicalTokenKind.Operator token then
+        if
+            isKind LexicalTokenKind.Operator token
+            || isKeyword "or" token
+        then
             operatorPrecedence (tokenText token)
         else
             None
+
+    // FCS LexFilter reads these operators as prefix operators when a token follows without a space and no atomic token precedes without a space.
+    let private adjacentPrefixOperators =
+        set [
+            "-"
+            "+"
+            "-."
+            "+."
+            "%"
+            "%%"
+            "&"
+            "&&"
+        ]
+
+    let private isSign (token: LayoutToken) =
+        isOperator "-" token
+        || isOperator "+" token
+
+    let private isDereference = isOperator "!"
+
+    let private prefixOperator (token: LayoutToken) =
+        match sourceKind token, tokenText token with
+        | Some LexicalTokenKind.Operator, "-" -> Some(SyntaxPrefixOperator.Negate token.Range)
+        | Some LexicalTokenKind.Operator, "+" -> Some(SyntaxPrefixOperator.Plus token.Range)
+        | Some LexicalTokenKind.Operator, "!" -> Some(SyntaxPrefixOperator.Dereference token.Range)
+        | _ -> None
+
+    // FCS lexes an identifier or keyword with '!' after it as one token, such as 'do!' or the reserved 'f!'.
+    let private startsDereference (cursor: Cursor) =
+        isDereference cursor.Current
+        && not (
+            cursor.Current.Range.Start.Offset = cursor.LastEnd.Offset
+            && cursor.PreviousSource
+               |> Option.exists (fun token ->
+                   isIdentifier token
+                   || isKind LexicalTokenKind.Keyword token
+               )
+        )
+
+    let private precedesWithoutSpace (token: LayoutToken) (next: LayoutToken) =
+        next.Kind = LayoutTokenKind.SourceToken
+        && next.Range.Start.Offset = token.Range.End.Offset
+
+    // FCS LexFilter merges an adjacent sign into a signed integer, float, decimal, or bignum literal, but not into an unsigned literal.
+    let private numericForms =
+        let decimalDigits = "[0-9](?:_*[0-9])*"
+
+        let radixDigits =
+            "(?:0[xX][0-9a-fA-F](?:_*[0-9a-fA-F])*|0[oO][0-7](?:_*[0-7])*|0[bB][01](?:_*[01])*)"
+
+        let floating =
+            $"(?:{decimalDigits}\\.(?:{decimalDigits})?(?:[eE][+-]?{decimalDigits})?|{decimalDigits}[eE][+-]?{decimalDigits})"
+
+        let form pattern =
+            Text.RegularExpressions.Regex(
+                $"^(?:{pattern})$",
+                Text.RegularExpressions.RegexOptions.CultureInvariant
+            )
+
+        {|
+            Unsigned = form $"(?:{decimalDigits}|{radixDigits})(?:u|uy|us|ul|uL|UL|un)"
+            Signed =
+                form (
+                    String.concat "|" [
+                        $"(?:{decimalDigits}|{radixDigits})(?:y|s|l|n|L)?"
+                        $"{decimalDigits}[QRZING]"
+                        $"{radixDigits}(?:lf|LF)"
+                        $"(?:{floating}|{decimalDigits})[fF]"
+                        floating
+                        $"(?:{floating}|{decimalDigits})[mM]"
+                    ]
+                )
+        |}
+
+    // FCS merges an adjacent sign into every numeric literal except an unsigned integer. The lexer does not check the literal form.
+    let private takesSign (token: LayoutToken) =
+        isKind LexicalTokenKind.NumericLiteral token
+        && not (numericForms.Unsigned.IsMatch(tokenText token))
+
+    // The lexer does not check literal ranges or digits, and the Oracle reports FS1142 to FS1156 for such a literal.
+    let private readsWithSign (sign: LayoutToken) (literal: LayoutToken) =
+        let text = (tokenText literal).Replace("_", "")
+
+        let suffix =
+            text[text.Length
+                 - 1]
+
+        let withoutSuffix =
+            text.Substring(
+                0,
+                text.Length
+                - 1
+            )
+
+        let radix =
+            match text with
+            | _ when text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) -> 16
+            | _ when text.StartsWith("0o", StringComparison.OrdinalIgnoreCase) -> 8
+            | _ when text.StartsWith("0b", StringComparison.OrdinalIgnoreCase) -> 2
+            | _ -> 10
+
+        if
+            radix = 10
+            && "mM".IndexOf suffix
+               >= 0
+        then
+            fst (
+                Decimal.TryParse(
+                    withoutSuffix,
+                    Globalization.NumberStyles.Float,
+                    Globalization.CultureInfo.InvariantCulture
+                )
+            )
+        elif
+            text.EndsWith("lf", StringComparison.OrdinalIgnoreCase)
+            || radix = 10
+               && (text.IndexOfAny [|
+                       '.'
+                       'e'
+                       'E'
+                   |]
+                   >= 0
+                   || "fFIQRZNG".IndexOf suffix
+                      >= 0)
+        then
+            true
+        else
+            let bits, digits =
+                match suffix with
+                | 'y' -> 8, withoutSuffix
+                | 's' -> 16, withoutSuffix
+                | 'l' -> 32, withoutSuffix
+                | 'L'
+                | 'n' -> 64, withoutSuffix
+                | _ -> 32, text
+
+            let digitValues =
+                (if radix = 10 then digits else digits.Substring 2)
+                |> Seq.map (fun digit -> "0123456789abcdef".IndexOf(Char.ToLowerInvariant digit))
+                |> Seq.toList
+
+            if
+                digitValues.IsEmpty
+                || digitValues
+                   |> List.exists (fun value ->
+                       value < 0
+                       || value
+                          >= radix
+                   )
+            then
+                false
+            else
+                let magnitude =
+                    digitValues
+                    |> List.fold
+                        (fun (value: Numerics.BigInteger) digit ->
+                            value
+                            * Numerics.BigInteger radix
+                            + Numerics.BigInteger digit
+                        )
+                        Numerics.BigInteger.Zero
+
+                let limit = Numerics.BigInteger.Pow(Numerics.BigInteger 2, bits - 1)
+
+                magnitude < limit
+                || radix = 10
+                   && isOperator "-" sign
+                   && magnitude = limit
+
+    let private fitsWithSign (sign: LayoutToken) (literal: LayoutToken) =
+        numericForms.Signed.IsMatch(tokenText literal)
+        && readsWithSign sign literal
+
+    // FCS keeps an unsigned literal after a sign, and the Oracle reports FS1143 to FS1150 for one outside its range.
+    let private unsignedLiteralFits (literal: LayoutToken) =
+        let text = (tokenText literal).Replace("_", "")
+        let lower = text.ToLowerInvariant()
+
+        let bits, suffixLength =
+            if lower.EndsWith("uy", StringComparison.Ordinal) then
+                8, 2
+            elif lower.EndsWith("us", StringComparison.Ordinal) then
+                16, 2
+            elif
+                lower.EndsWith("ul", StringComparison.Ordinal)
+                || lower.EndsWith("un", StringComparison.Ordinal)
+            then
+                64, 2
+            else
+                32, 1
+
+        let digits =
+            lower.Substring(
+                0,
+                text.Length
+                - suffixLength
+            )
+
+        let radix, digits =
+            if digits.StartsWith("0x", StringComparison.Ordinal) then
+                16, digits.Substring 2
+            elif digits.StartsWith("0o", StringComparison.Ordinal) then
+                8, digits.Substring 2
+            elif digits.StartsWith("0b", StringComparison.Ordinal) then
+                2, digits.Substring 2
+            else
+                10, digits
+
+        let magnitude =
+            digits
+            |> Seq.fold
+                (fun (value: Numerics.BigInteger) digit ->
+                    value
+                    * Numerics.BigInteger radix
+                    + Numerics.BigInteger("0123456789abcdef".IndexOf digit)
+                )
+                Numerics.BigInteger.Zero
+
+        numericForms.Unsigned.IsMatch(tokenText literal)
+        && magnitude < Numerics.BigInteger.Pow(Numerics.BigInteger 2, bits)
+
+    let private reportUnsignedOperand state (token: LayoutToken) =
+        if
+            isKind LexicalTokenKind.NumericLiteral token
+            && not (takesSign token)
+            && not (unsignedLiteralFits token)
+        then
+            reportUnsupported state token "an unsigned literal outside its range"
+
+    let private isSignedLiteral (cursor: Cursor) =
+        isSign cursor.Current
+        && precedesWithoutSpace cursor.Current (cursor.Peek 1)
+        && takesSign (cursor.Peek 1)
+
+    let private startsPrefixArgument (cursor: Cursor) =
+        isSign cursor.Current
+        && precedesWithoutSpace cursor.Current (cursor.Peek 1)
+        && cursor.Current.Range.Start.Offset
+           <> cursor.LastEnd.Offset
 
     [<RequireQualifiedAccess>]
     type private TypeGap =
@@ -1390,6 +1677,8 @@ module internal Parser =
 
     let private canStartExpression (token: LayoutToken) =
         canStartAtom token
+        || isSign token
+        || isDereference token
         || isKeyword "if" token
         || isKeyword "match" token
         || isKeyword "fun" token
@@ -1685,7 +1974,7 @@ module internal Parser =
                 innerPrecedence < precedence
                 || innerPrecedence = precedence
                    && rightAssociative
-            | None -> false
+            | None -> inner.Text = ":="
 
         match left with
         | SyntaxExpression.Infix(inner, innerLeft, innerRight, _) when bindsLooser inner ->
@@ -1725,10 +2014,44 @@ module internal Parser =
             ->
             let value = appendTupleItem value right
             SyntaxExpression.LongIdentifierSet(name, value, span range value.Range)
+        | SyntaxExpression.Infix(operator, target, value, _) when operator.Text = ":=" ->
+            let value = appendTupleItem value right
+            SyntaxExpression.Infix(operator, target, value, span target.Range value.Range)
         | _ ->
             SyntaxExpression.Tuple(ImmutableArray.Create(left, right), span left.Range right.Range)
 
+    // ':=' binds looser than ',' and tighter than '<-', and is right-associative.
+    let rec private attachAssignment
+        (operator: SyntaxIdentifier)
+        (left: SyntaxExpression)
+        (right: SyntaxExpression)
+        =
+        match left with
+        | SyntaxExpression.Infix(inner, target, value, _) when inner.Text = ":=" ->
+            let value = attachAssignment operator value right
+            SyntaxExpression.Infix(inner, target, value, span target.Range value.Range)
+        | SyntaxExpression.LongIdentifierSet(name, value, range) when
+            continuesAssignedValue range value
+            ->
+            let value = attachAssignment operator value right
+            SyntaxExpression.LongIdentifierSet(name, value, span range value.Range)
+        | _ -> SyntaxExpression.Infix(operator, left, right, span left.Range right.Range)
+
     let rec private parseExpression state context =
+        let cursor = state.Cursor
+        let left = parseTuple state context
+
+        if
+            isOperator ":=" cursor.Current
+            && not (isOffsideInfix state context cursor.Current (cursor.Peek 1))
+        then
+            let operator = identifier (cursor.Advance())
+            let right = parseExpression state context
+            SyntaxExpression.Infix(operator, left, right, span left.Range right.Range)
+        else
+            left
+
+    and private parseTuple state context =
         let cursor = state.Cursor
         let first = parseInfix state context 0
 
@@ -1852,7 +2175,6 @@ module internal Parser =
         let next = cursor.Peek 1
         let text = tokenText token
         let followsWithoutSpace = token.Range.Start.Offset = cursor.LastEnd.Offset
-        let precedesWithoutSpace = next.Range.Start.Offset = token.Range.End.Offset
 
         if reportedAt state token then
             ()
@@ -1864,9 +2186,8 @@ module internal Parser =
             reportUnsupported state token "a type application in an expression"
         elif
             not followsWithoutSpace
-            && precedesWithoutSpace
-            && (text = "-"
-                || text = "+")
+            && precedesWithoutSpace token next
+            && adjacentPrefixOperators.Contains text
         then
             reportUnsupported state token "a prefix operator application"
 
@@ -1905,8 +2226,47 @@ module internal Parser =
     and private parseApplication state context =
         let cursor = state.Cursor
 
+        if
+            isSign cursor.Current
+            && not (isSignedLiteral cursor)
+        then
+            let operatorToken = cursor.Advance()
+            reportUnsignedOperand state cursor.Current
+
+            let operand =
+                if
+                    (canStartAtom cursor.Current
+                     || isSign cursor.Current
+                     || isDereference cursor.Current)
+                    && not (isOffside context cursor.Current)
+                then
+                    parseApplication state context
+                else
+                    reportUnsupported state cursor.Current "an operand of a prefix operator"
+                    missingExpression cursor.Current
+
+            prefixExpression state operatorToken operand
+        else
+            parseApplicationFromAtom state context
+
+    and private prefixExpression state (operatorToken: LayoutToken) operand =
+        match prefixOperator operatorToken with
+        | Some operator ->
+            SyntaxExpression.Prefix(operator, operand, span operatorToken.Range operand.Range)
+        | None ->
+            reportUnsupported state operatorToken "a prefix operator"
+            missingExpression operatorToken
+
+    and private parseApplicationFromAtom state context =
+        let cursor = state.Cursor
+
         let result =
-            match parseAtom state context with
+            match
+                if startsDereference cursor then
+                    parseDereference state context
+                else
+                    parseAtom state context
+            with
             | SyntaxExpression.DotLambda _ as dotLambda ->
                 if
                     canStartAtom cursor.Current
@@ -1923,16 +2283,96 @@ module internal Parser =
 
         let mutable result = result
 
-        while canStartAtom cursor.Current
-              && not (isOffside context cursor.Current) do
-            let argument = parseArgument state context
+        let startsArgument () =
+            (canStartAtom cursor.Current
+             || startsPrefixArgument cursor
+             || startsDereference cursor)
+            && not (isOffside context cursor.Current)
+
+        // A lambda, 'match', or 'if' body takes every argument on its lines, so FCS reports FS0010 at an argument on a later line left of the body.
+        match result with
+        | SyntaxExpression.Lambda _
+        | SyntaxExpression.Match _
+        | SyntaxExpression.If _ when
+            startsArgument ()
+            && not (reportedAt state cursor.Current)
+            ->
+            reportUnsupported
+                state
+                cursor.Current
+                "an argument after a lambda, match, or conditional body"
+        | _ -> ()
+
+        while startsArgument ()
+              && not (reportedAt state cursor.Current) do
+            let argument =
+                if
+                    isSign cursor.Current
+                    && not (isSignedLiteral cursor)
+                    || startsDereference cursor
+                then
+                    parsePrefixArgument state context
+                else
+                    parseArgument state context None
 
             result <-
                 SyntaxExpression.Application(result, argument, span result.Range argument.Range)
 
         result
 
-    and private parseArgument state context =
+    // FCS 'atomicExpr': '!' applies to one atomic expression, also at the start of an application.
+    and private parseDereference state context =
+        let cursor = state.Cursor
+        let operatorToken = cursor.Advance()
+
+        let operand =
+            if
+                canStartAtom cursor.Current
+                && not (isOffside context cursor.Current)
+            then
+                match parseAtom state context with
+                | SyntaxExpression.DotLambda _ as dotLambda -> dotLambda
+                | head -> parsePostfix state context Int32.MaxValue head
+            else
+                reportUnsupported state cursor.Current "an operand of a prefix operator"
+                missingExpression cursor.Current
+
+        reportBangAfterOperand state
+        prefixExpression state operatorToken operand
+
+    // The lexer splits 'x!=' into 'x' and '!=', and FCS reads 'x!' as one reserved token (FS1141).
+    and private reportBangAfterOperand state =
+        let cursor = state.Cursor
+
+        if
+            cursor.Current.Kind = LayoutTokenKind.SourceToken
+            && cursor.Current.Range.Start.Offset = cursor.LastEnd.Offset
+            && (tokenText cursor.Current).StartsWith('!')
+            && not (reportedAt state cursor.Current)
+        then
+            reportUnsupported state cursor.Current "a '!' after the operand of '!'"
+
+    // FCS 'argExpr': a prefix operator in an argument applies to one atomic expression.
+    and private parsePrefixArgument state context =
+        let cursor = state.Cursor
+        let operatorToken = cursor.Advance()
+
+        if isSign operatorToken then
+            reportUnsignedOperand state cursor.Current
+
+        let operand =
+            if canStartAtom cursor.Current then
+                parseArgument state context (Some operatorToken.Range)
+            else
+                reportUnsupported state cursor.Current "an operand of a prefix operator"
+                missingExpression cursor.Current
+
+        if isDereference operatorToken then
+            reportBangAfterOperand state
+
+        prefixExpression state operatorToken operand
+
+    and private parseArgument state context prefixRange =
         match parseAtom state context with
         | SyntaxExpression.Identifier _ as name ->
             let argument = parsePostfix state context 1 name
@@ -1943,7 +2383,8 @@ module internal Parser =
                     state
                     successiveArgumentsCode
                     "Successive arguments should be separated by spaces or tupled, and arguments involving function or method applications should be parenthesized"
-                    range
+                    (prefixRange
+                     |> Option.defaultValue range)
             | _ -> ()
 
             argument
@@ -2074,6 +2515,25 @@ module internal Parser =
         | None when isKeyword "fun" token -> parseLambda state context
         | None when isDelimiter "[" token -> parseList state context
         | None when isDelimiter "{" token -> parseRecord state context
+        | None when isSignedLiteral cursor ->
+            cursor.Advance()
+            |> ignore
+
+            let literal = cursor.Advance()
+
+            if not (fitsWithSign token literal) then
+                reportUnsupported
+                    state
+                    literal
+                    "a signed literal that is outside its range or not readable"
+
+            SyntaxExpression.Constant(
+                SyntaxConstant.Numeric(
+                    tokenText token
+                    + tokenText literal
+                ),
+                span token.Range literal.Range
+            )
         | None ->
             reportUnsupported state token "an expression"
             missingExpression token
@@ -2147,9 +2607,16 @@ module internal Parser =
     and private continuesBlock state column =
         let cursor = state.Cursor
 
+        let next = cursor.Peek 1
+
+        // FCS starts a new block at a sign line left of the block column, so the lines after it continue that line.
         if
             cursor.Current.Kind = LayoutTokenKind.Separator
-            && startsBlockItem (cursor.Peek 1)
+            && startsBlockItem next
+            && not (
+                isSign next
+                && next.Range.Start.Column < column
+            )
         then
             cursor.Advance()
             |> ignore
@@ -2180,6 +2647,7 @@ module internal Parser =
 
             let operator =
                 isDelimiter "," token
+                || isOperator ":=" token
                 || (infixPrecedence token).IsSome
 
             let onLine =
@@ -2217,6 +2685,9 @@ module internal Parser =
                     |> ignore
 
                     result <- appendTupleItem result (parseInfix state context 0)
+                elif isOperator ":=" cursor.Current then
+                    let operator = identifier (cursor.Advance())
+                    result <- attachAssignment operator result (parseExpression state context)
                 else
                     let precedence, rightAssociative = (infixPrecedence cursor.Current).Value
                     let operator = parseInfixOperator state
@@ -2411,7 +2882,7 @@ module internal Parser =
         else
             parseBranchStart state context point
 
-    // The Oracle ends the block when a delimiter closes left of the block item that opened it, so a later token of the block is an error.
+    // The Oracle ends the block when a delimiter closes left of the block item that opened it, so a later token of the block or an infix line is an error.
     and private reportAfterUndentedClose
         state
         (context: Frame)
@@ -2436,19 +2907,20 @@ module internal Parser =
                     let token = cursor.Peek 1
 
                     if Some token.Range.Start.Column = itemColumn then
-                        Some(true, token)
+                        Some(true, token, cursor.Peek 2)
                     else
-                        Some(false, token)
-                | LayoutTokenKind.BeginBlock -> Some(false, cursor.Peek 1)
+                        Some(false, token, cursor.Peek 2)
+                | LayoutTokenKind.BeginBlock -> Some(false, cursor.Peek 1, cursor.Peek 2)
                 | LayoutTokenKind.SourceToken when not (isEndOfFile cursor.Current) ->
-                    Some(false, cursor.Current)
+                    Some(false, cursor.Current, cursor.Peek 1)
                 | _ -> None
 
             match next with
-            | Some(sameItemColumn, token) when
+            | Some(sameItemColumn, token, following) when
                 not (reportedAt state token)
                 && (sameItemColumn
-                    || not (isOffside context token))
+                    || not (isOffside context token)
+                    || isLayoutInfix token following)
                 ->
                 reportUnsupported
                     state
@@ -2579,8 +3051,9 @@ module internal Parser =
             not (isKeyword "with" cursor.Current)
             || cursor.Current.Range.Start.Column < matchToken.Range.Start.Column
         then
-            reportUnexpected state RecoveryPoint.MatchWith "a match expression"
-            |> ignore
+            if not (reportedAt state cursor.Current) then
+                reportUnexpected state RecoveryPoint.MatchWith "a match expression"
+                |> ignore
         else
             let withToken = cursor.Advance()
 
@@ -5141,7 +5614,11 @@ module internal Parser =
                     Some(Some(parseDo state attributes), ListRecovery.Continues)
                 elif isKeyword "type" token then
                     Some(parseTypeDefinition state attributes)
-                elif canStartExpression token then
+                // FCS reads a module-level line that starts with an infix '-' or '+' as the body of the declaration before it.
+                elif
+                    canStartExpression token
+                    && not (isLayoutInfix token (state.Cursor.Peek 1))
+                then
                     let declaration, recovery =
                         parseExpressionDeclaration state (implementationStartPoint list) attributes
 

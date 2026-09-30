@@ -136,6 +136,18 @@ type internal SyntaxLetKeyword =
     | Use
 
 [<RequireQualifiedAccess>]
+type internal SyntaxPrefixOperator =
+    | Negate of SourceRange
+    | Plus of SourceRange
+    | Dereference of SourceRange
+
+    member this.Range =
+        match this with
+        | Negate range
+        | Plus range
+        | Dereference range -> range
+
+[<RequireQualifiedAccess>]
 type internal SyntaxExpression =
     | Constant of SyntaxConstant * SourceRange
     | Identifier of LongIdentifier
@@ -143,6 +155,7 @@ type internal SyntaxExpression =
     | Tuple of ImmutableArray<SyntaxExpression> * SourceRange
     | Application of SyntaxExpression * SyntaxExpression * SourceRange
     | Infix of SyntaxIdentifier * SyntaxExpression * SyntaxExpression * SourceRange
+    | Prefix of operator: SyntaxPrefixOperator * operand: SyntaxExpression * SourceRange
     | If of SyntaxExpression * SyntaxExpression * SyntaxExpression option * SourceRange
     | Match of SyntaxExpression * ImmutableArray<SyntaxMatchClause> * SourceRange
     | Lambda of ImmutableArray<SyntaxPattern> * SyntaxExpression * SourceRange
@@ -168,6 +181,7 @@ type internal SyntaxExpression =
         | Tuple(_, range)
         | Application(_, _, range)
         | Infix(_, _, _, range)
+        | Prefix(_, _, range)
         | If(_, _, _, range)
         | Match(_, _, range)
         | Lambda(_, _, range)

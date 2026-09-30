@@ -452,6 +452,24 @@ module SyntaxProjectionTests =
                         (document "Program.fsi" "module Program\nlet answer = 42\n"))
                     "The syntax parser must not run on a signature file"
 
+            testCase
+                "a prototype special identifier keeps a projectable source off the syntax parser"
+            <| fun _ ->
+                for text in
+                    [
+                        "module Program\nignore 1\n"
+                        "module Program\nlet answer = int\n"
+                    ] do
+                    let source = document "Program.fs" text
+
+                    Expect.isTrue
+                        (SyntaxRouting.hasProjectableTokenShape ImplicitModule.Rejected source)
+                        $"The source must have a projectable token shape:\n{text}"
+
+                    Expect.isFalse
+                        (SyntaxRouting.isEligible ImplicitModule.Rejected source)
+                        $"The prototype Frontend special identifier must keep the syntax parser off this source:\n{text}"
+
             testCase "the token shape check accepts every source that the projection accepts"
             <| fun _ ->
                 let mutable projectable = 0
