@@ -2177,6 +2177,14 @@ module ParserGrammarTests =
     ]
 
     let private infixLineExplicitCases = [
+        "QuotationThenLine.fs", "module A\nlet f () =\n    g 1 <@ 2 @>\n        3\n", []
+        "UntypedQuotationThenLine.fs", "module A\nlet f () =\n    g <@@ 2 @@>\n        3\n", []
+        "UntypedQuotationArgumentThenLine.fs",
+        "module A\nlet f () =\n    g 1 <@@ 2 @@>\n        3\n",
+        []
+        "QuotationThenArgument.fs", "module A\nlet f () =\n    g <@ 1 @> 2\n", []
+        "QuotationCloseNextLine.fs", "module A\nlet f () =\n    g 1 <@ 2\n           @>\n", []
+        "QuotationInParentheses.fs", "module A\nlet f () =\n    g (<@ 2 @>)\n        3\n", []
         "InfixAtColumnQuestionQuestion.fs",
         "module A
 let f a b =
