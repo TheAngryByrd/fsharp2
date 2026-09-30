@@ -940,7 +940,7 @@ module internal Parser =
             Some(SyntaxConstant.Boolean false)
         | _ -> None
 
-    let private operatorPrecedence (text: string) =
+    let rec private operatorPrecedence (text: string) =
         match text with
         | "->"
         | "<-"
@@ -962,6 +962,26 @@ module internal Parser =
         | "::" -> Some(6, true)
         | "!=" -> Some(4, false)
         | _ when text.StartsWith("**", StringComparison.Ordinal) -> Some(9, true)
+        // The FCS lexer ignores leading '.' characters for the precedence, so '.||' and '.&&' are comparison operators.
+        | _ when text.StartsWith('.') ->
+            let rest = text.TrimStart '.'
+
+            if
+                rest.Length = 0
+                || rest.Contains '$'
+            then
+                None
+            else
+                match rest[0] with
+                | '|'
+                | '&' -> Some(4, false)
+                | '!' when rest.StartsWith("!=", StringComparison.Ordinal) -> Some(4, false)
+                | first when
+                    "@^<>=+-*/%".IndexOf first
+                    >= 0
+                    ->
+                    operatorPrecedence rest
+                | _ -> None
         | _ ->
             match text[0] with
             | '<'

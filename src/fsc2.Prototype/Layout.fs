@@ -53,6 +53,14 @@ module internal Layout =
             | ":="
             | ":>"
             | ":?>" -> true
+            | text when text.StartsWith('.') ->
+                let rest = text.TrimStart '.'
+
+                rest.Length > 0
+                && not (rest.Contains '$')
+                && ("@^<>=|&+-*/%".IndexOf(rest[0])
+                    >= 0
+                    || rest.StartsWith("!=", StringComparison.Ordinal))
             | text ->
                 "@^<>=|&+-*/%$".IndexOf(text[0])
                 >= 0

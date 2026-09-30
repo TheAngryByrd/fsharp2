@@ -5143,6 +5143,155 @@ let f a b =
         ]
     ]
 
+    let private dotOperatorCases = [
+        "DotOperatorBelowAddition.fs",
+        "module A\nlet r = a .>> b + c\n",
+        [ "let r = {a .>> {b + c}}" ],
+        [
+            ".>>(2,9--2,20)"
+            "+(2,15--2,20)"
+        ]
+        "DotOperatorLeftAssociative.fs",
+        "module A\nlet r = a .>> b .>> c\n",
+        [ "let r = {{a .>> b} .>> c}" ],
+        [
+            ".>>(2,9--2,22)"
+            ".>>(2,9--2,16)"
+        ]
+        "DotOperatorWithTrailingDot.fs",
+        "module A\nlet r = a .>> b >>. c\n",
+        [ "let r = {{a .>> b} >>. c}" ],
+        [
+            ">>.(2,9--2,22)"
+            ".>>(2,9--2,16)"
+        ]
+        "DotMultiplyAboveAddition.fs",
+        "module A\nlet r = a .* b + c\n",
+        [ "let r = {{a .* b} + c}" ],
+        [
+            "+(2,9--2,19)"
+            ".*(2,9--2,15)"
+        ]
+        "DotPlusBelowMultiply.fs",
+        "module A\nlet r = a .+ b * c\n",
+        [ "let r = {a .+ {b * c}}" ],
+        [
+            ".+(2,9--2,19)"
+            "*(2,14--2,19)"
+        ]
+        "DotPowerRightAssociative.fs",
+        "module A\nlet r = a .** b .** c\n",
+        [ "let r = {a .** {b .** c}}" ],
+        [
+            ".**(2,9--2,22)"
+            ".**(2,15--2,22)"
+        ]
+        "DotAtRightAssociative.fs",
+        "module A\nlet r = a .@ b .@ c\n",
+        [ "let r = {a .@ {b .@ c}}" ],
+        [
+            ".@(2,9--2,20)"
+            ".@(2,14--2,20)"
+        ]
+        "DotBarBarIsComparison.fs",
+        "module A\nlet r = a .|| b = c\n",
+        [ "let r = {{a .|| b} = c}" ],
+        [
+            "=(2,9--2,20)"
+            ".||(2,9--2,16)"
+        ]
+        "DotAmpAmpIsComparison.fs",
+        "module A\nlet r = a .&& b = c\n",
+        [ "let r = {{a .&& b} = c}" ],
+        [
+            "=(2,9--2,20)"
+            ".&&(2,9--2,16)"
+        ]
+        "DotAmpIsComparison.fs",
+        "module A\nlet r = a .& b = c\n",
+        [ "let r = {{a .& b} = c}" ],
+        [
+            "=(2,9--2,19)"
+            ".&(2,9--2,15)"
+        ]
+        "DotBangEquals.fs",
+        "module A\nlet r = a .!= b + c\n",
+        [ "let r = {a .!= {b + c}}" ],
+        [
+            ".!=(2,9--2,20)"
+            "+(2,15--2,20)"
+        ]
+        "TwoDotsIgnored.fs",
+        "module A\nlet r = a ..> b + c\n",
+        [ "let r = {a ..> {b + c}}" ],
+        [
+            "..>(2,9--2,20)"
+            "+(2,15--2,20)"
+        ]
+        "DotOperatorAdjacent.fs",
+        "module A\nlet r = a.>>b\n",
+        [ "let r = {a .>> b}" ],
+        [ ".>>(2,9--2,14)" ]
+        "DotMinusAdjacentIsInfix.fs",
+        "module A\nlet r = a .-b\n",
+        [ "let r = {a .- b}" ],
+        [ ".-(2,9--2,14)" ]
+        "DotOperatorAfterMemberAccess.fs",
+        "module A\nlet r = a.b .>> c\n",
+        [ "let r = {a.b .>> c}" ],
+        [ ".>>(2,9--2,18)" ]
+        "DotOperatorInTuple.fs",
+        "module A\nlet r = a .>> b, c\n",
+        [ "let r = {a .>> b}, c" ],
+        [
+            "tuple(2,9--2,19)"
+            ".>>(2,9--2,16)"
+        ]
+        "DotOperatorNextLine.fs",
+        "module A\nlet r =\n    a\n    .>> b\n",
+        [ "let r = {a .>> b}" ],
+        [ ".>>(3,5--4,10)" ]
+        "DotOperatorNextLineUndented.fs",
+        "module A\nlet r =\n    a\n  .>> b\n",
+        [ "let r = {a .>> b}" ],
+        [ ".>>(3,5--4,8)" ]
+        "DotOperatorNextLineInParentheses.fs",
+        "module A\nlet r = (a\n        .>> b)\n",
+        [ "let r = ({a .>> b})" ],
+        [ ".>>(2,10--3,14)" ]
+        "DotOperatorEndOfLine.fs",
+        "module A\nlet r =\n    a .>>\n        b\n",
+        [ "let r = {a .>> b}" ],
+        [ ".>>(3,5--4,10)" ]
+        "DotOperatorAfterNestedBlock.fs",
+        "module A\nlet r c =\n    if c then\n        a\n    else\n        b\n    .>> d\n",
+        [ "let r c = if c then a else {b .>> d}" ],
+        [ ".>>(6,9--7,10)" ]
+    ]
+
+    let private dotOperatorExplicitCases = [
+        "DotDollarOperator.fs",
+        "module A\nlet r = a .$ b + c\n",
+        [
+            "DotDollarOperator.fs(2,11): error FS0035: This construct is deprecated: '$' is not permitted as a character in operator names and is reserved for future use"
+        ]
+        "QuestionMarkOperator.fs", "module A\nlet r = a ?>> b + c\n", []
+        "ThreeDots.fs",
+        "module A\nlet r = a ... b\n",
+        [
+            "ThreeDots.fs(2,13): error FS0010: Unexpected symbol '.' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "DotArrowOperator.fs", "module A\nlet r = a .-> b\n", []
+        "DotColonColon.fs",
+        "module A\nlet r = a .:: b\n",
+        [ "DotColonColon.fs(2,11): error FS0599: Missing qualification after '.'" ]
+        "DotOperatorModuleLine.fs",
+        "module A\nlet a = 1\n.>> b\n",
+        [
+            "DotOperatorModuleLine.fs(3,1): error FS0010: Unexpected infix operator in definition. Expected incomplete structured construct at or before this point or other token."
+        ]
+    ]
+
     [<Tests>]
     let tests =
         testList "Issue29.ParserGrammar" [
@@ -5995,6 +6144,40 @@ let items = [ origin.X; 1 ]
                              ))
                             expectedRanges
                             "The infix, application, conditional, and match ranges, and the clause count of each match"
+            ]
+
+            testList "a leading dot does not change the precedence of an operator" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in dotOperatorCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with dot operators"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect (fun body ->
+                                 infixRanges body
+                                 @ applicationRanges body
+                             ))
+                            expectedRanges
+                            "The infix, prefix, and application ranges"
+            ]
+
+            testList "a dot operator the parser does not model stays explicit" [
+                for logicalPath, text, oracle in dotOperatorExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
             ]
 
             testList "an adjacent sign is a prefix operator and a spaced sign is subtraction" [
