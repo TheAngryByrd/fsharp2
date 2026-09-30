@@ -43,6 +43,33 @@ module internal Parser =
 
             found
 
+        member _.LineStartColumn line =
+            let mutable position =
+                min
+                    index
+                    (tokens.Length
+                     - 1)
+
+            let mutable column = None
+
+            while position
+                  >= 0
+                  && tokens[position].Range.Start.Line
+                     >= line do
+                let token = tokens[position]
+
+                if
+                    token.Kind = LayoutTokenKind.SourceToken
+                    && token.Range.Start.Line = line
+                then
+                    column <- Some token.Range.Start.Column
+
+                position <-
+                    position
+                    - 1
+
+            column
+
         member this.Peek offset =
             if offset = 0 then
                 this.Current
@@ -1965,6 +1992,7 @@ module internal Parser =
                 SyntaxExpression.Constant(SyntaxConstant.Unit, span token.Range close.Range)
             else
                 let contentContext = frameAt FrameKind.Paren cursor.Current
+                let reportedBefore = state.Diagnostics.Count
 
                 let inner =
                     withinDelimiters
@@ -1986,6 +2014,7 @@ module internal Parser =
 
                 if isDelimiter ")" cursor.Current then
                     let close = cursor.Advance()
+                    reportAfterUndentedClose state context token close reportedBefore
                     SyntaxExpression.Parenthesized(inner, span token.Range close.Range)
                 else
                     if not (reportedAt state cursor.Current) then
@@ -2334,15 +2363,57 @@ module internal Parser =
         else
             parseBranchStart state context point
 
+    // The Oracle ends the block when a delimiter closes left of the column of the line that opened it, so a later token of the block is an error.
+    and private reportAfterUndentedClose
+        state
+        (context: Frame)
+        (openToken: LayoutToken)
+        (close: LayoutToken)
+        reported
+        =
+        let cursor = state.Cursor
+
+        if
+            not state.InDelimiters
+            && not (reportedSince state reported)
+            && close.Range.Start.Line > openToken.Range.Start.Line
+            && cursor.LineStartColumn openToken.Range.Start.Line
+               |> Option.exists (fun column -> close.Range.Start.Column < column)
+        then
+            let next =
+                match cursor.Current.Kind with
+                | LayoutTokenKind.Separator
+                | LayoutTokenKind.BeginBlock -> Some(cursor.Peek 1)
+                | LayoutTokenKind.SourceToken when not (isEndOfFile cursor.Current) ->
+                    Some cursor.Current
+                | _ -> None
+
+            match next with
+            | Some token when
+                not (reportedAt state token)
+                && not (isOffside context token)
+                ->
+                reportUnsupported
+                    state
+                    token
+                    "a token after a delimiter that closes left of its block"
+            | _ -> ()
+
     and private parseIf state context =
         let cursor = state.Cursor
         let ifToken = cursor.Advance()
 
+        // 15.1.10.1: a lambda body in the condition must start right of 'if'.
         let condition =
-            if cursor.Current.Kind = LayoutTokenKind.BeginBlock then
-                parseBranch state context None
-            else
-                parseExpression state context
+            withUndentationColumn
+                state
+                ifToken.Range.Start.Column
+                (fun () ->
+                    if cursor.Current.Kind = LayoutTokenKind.BeginBlock then
+                        parseBranch state context None
+                    else
+                        parseExpression state context
+                )
 
         let continuation () =
             if cursor.Current.Kind = LayoutTokenKind.Separator then
@@ -2718,6 +2789,7 @@ module internal Parser =
     and private parseList state context =
         let cursor = state.Cursor
         let openToken = cursor.Advance()
+        let reportedBefore = state.Diagnostics.Count
         let items = ImmutableArray.CreateBuilder<SyntaxExpression>()
         let elementContext = frameAt FrameKind.Bracket cursor.Current
         let mutable closed = isDelimiter "]" cursor.Current
@@ -2753,6 +2825,7 @@ module internal Parser =
 
         if closed then
             let close = cursor.Advance()
+            reportAfterUndentedClose state context openToken close reportedBefore
             SyntaxExpression.List(items.ToImmutable(), span openToken.Range close.Range)
         else
             if not (reportedAt state cursor.Current) then
