@@ -5134,11 +5134,16 @@ let f a b =
         "PrefixSignUndentedInParentheses.fs", "module A\nlet r = (f\n        -1)\n", []
     ]
 
-    let private prefixSignDiagnosticCases = [
+    let private prefixArgumentDiagnosticCases = [
         "PrefixSignHighPrecedenceArgument.fs",
         "module A\nlet r = f -g(x)\n",
         [
             "PrefixSignHighPrecedenceArgument.fs(2,11): error FS0597: Successive arguments should be separated by spaces or tupled, and arguments involving function or method applications should be parenthesized"
+        ]
+        "DereferenceHighPrecedenceArgument.fs",
+        "module A\nlet r = f !g(x)\n",
+        [
+            "DereferenceHighPrecedenceArgument.fs(2,11): error FS0597: Successive arguments should be separated by spaces or tupled, and arguments involving function or method applications should be parenthesized"
         ]
     ]
 
@@ -5560,6 +5565,148 @@ let f a b =
             "OrKeywordModuleLine.fs(3,1): error FS0010: Unexpected keyword 'or' in definition. Expected incomplete structured construct at or before this point or other token."
         ]
         "OrKeywordEndOfLineAtBlockColumn.fs", "module A\nlet r =\n    a or\n    b\n", []
+    ]
+
+    let private dereferenceCases = [
+        "DereferenceArgument.fs",
+        "module A\nlet r = f !x\n",
+        [ "let r = [f ~!x]" ],
+        [
+            "~!(2,11--2,13)"
+            "app(2,9--2,13)"
+        ]
+        "DereferenceSpacedArgument.fs",
+        "module A\nlet r = f ! x\n",
+        [ "let r = [f ~!x]" ],
+        [
+            "~!(2,11--2,14)"
+            "app(2,9--2,14)"
+        ]
+        "DereferenceHead.fs", "module A\nlet r = !x\n", [ "let r = ~!x" ], [ "~!(2,9--2,11)" ]
+        "DereferenceHeadTakesOneAtom.fs",
+        "module A\nlet r = !f x\n",
+        [ "let r = [~!f x]" ],
+        [
+            "~!(2,9--2,11)"
+            "app(2,9--2,13)"
+        ]
+        "DereferenceHighPrecedenceApplication.fs",
+        "module A\nlet r = !f(x)\n",
+        [ "let r = ~![f (x)]" ],
+        [
+            "~!(2,9--2,14)"
+            "app(2,10--2,14)"
+        ]
+        "DereferenceIndexer.fs",
+        "module A\nlet r = !x[0]\n",
+        [ "let r = ~!x[0]" ],
+        [ "~!(2,9--2,14)" ]
+        "DereferenceLongIdentifier.fs",
+        "module A\nlet r = f !x.y\n",
+        [ "let r = [f ~!x.y]" ],
+        [
+            "~!(2,11--2,15)"
+            "app(2,9--2,15)"
+        ]
+        "DereferenceBeforeInfix.fs",
+        "module A\nlet r = !x + 1\n",
+        [ "let r = {~!x + 1}" ],
+        [
+            "+(2,9--2,15)"
+            "~!(2,9--2,11)"
+        ]
+        "DereferenceTwoArguments.fs",
+        "module A\nlet r = f !x y\n",
+        [ "let r = [[f ~!x] y]" ],
+        [
+            "~!(2,11--2,13)"
+            "app(2,9--2,15)"
+            "app(2,9--2,13)"
+        ]
+        "DereferenceParenthesized.fs",
+        "module A\nlet r = !(f x)\n",
+        [ "let r = ~!([f x])" ],
+        [
+            "~!(2,9--2,15)"
+            "app(2,11--2,14)"
+        ]
+        "DereferenceUnderSign.fs",
+        "module A\nlet r = - !x\n",
+        [ "let r = ~-~!x" ],
+        [
+            "~-(2,9--2,13)"
+            "~!(2,11--2,13)"
+        ]
+        "DereferenceConstant.fs", "module A\nlet r = !1\n", [ "let r = ~!1" ], [ "~!(2,9--2,11)" ]
+        "DereferenceAfterParentheses.fs",
+        "module A\nlet r = (f)!x\n",
+        [ "let r = [(f) ~!x]" ],
+        [
+            "~!(2,12--2,14)"
+            "app(2,9--2,14)"
+        ]
+        "DereferenceAfterConstant.fs",
+        "module A\nlet r = f 1!x\n",
+        [ "let r = [[f 1] ~!x]" ],
+        [
+            "~!(2,12--2,14)"
+            "app(2,9--2,14)"
+            "app(2,9--2,12)"
+        ]
+        "DereferenceInList.fs",
+        "module A\nlet r = [!x; !y]\n",
+        [ "let r = [~!x; ~!y]" ],
+        [
+            "~!(2,10--2,12)"
+            "~!(2,14--2,16)"
+        ]
+        "DereferenceInCondition.fs",
+        "module A\nlet r = if !x then 1 else 2\n",
+        [ "let r = if ~!x then 1 else 2" ],
+        [ "~!(2,12--2,14)" ]
+        "DereferenceModuleExpression.fs", "module A\n!x\n", [ "expr ~!x" ], [ "~!(2,1--2,3)" ]
+        "DereferenceNextLineItem.fs",
+        "module A\nlet r =\n    f ()\n    !x\n",
+        [ "let r = seq[[f ()]; ~!x]" ],
+        [
+            "seq(3,5--4,7)"
+            "~!(4,5--4,7)"
+            "app(3,5--3,9)"
+        ]
+        "DereferenceNextLineArgument.fs",
+        "module A\nlet r =\n    f\n        !x\n",
+        [ "let r = [f ~!x]" ],
+        [
+            "~!(4,9--4,11)"
+            "app(3,5--4,11)"
+        ]
+        "BangEqualsStaysInfix.fs",
+        "module A\nlet r = a !=b\n",
+        [ "let r = {a != b}" ],
+        [ "!=(2,9--2,14)" ]
+    ]
+
+    let private dereferenceExplicitCases = [
+        "DereferenceAfterIdentifier.fs",
+        "module A\nlet r = f!x\n",
+        [
+            "DereferenceAfterIdentifier.fs(2,9): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "DoBangKeyword.fs", "module A\ndo! x\n", []
+        "MatchBangKeyword.fs", "module A\nlet r () =\n    match! x with\n    | _ -> 1\n", []
+        "IfFollowedByBang.fs",
+        "module A\nlet r = if!x then 1 else 2\n",
+        [
+            "IfFollowedByBang.fs(2,9): error FS1141: Identifiers followed by '!' are reserved for future use"
+            "IfFollowedByBang.fs(2,21): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "DoubleBangOperator.fs", "module A\nlet r = !!x\n", []
+        "BangPlusOperator.fs", "module A\nlet r = f !+x\n", []
+        "DereferenceConditionalOperand.fs",
+        "module A\nlet r c = !if c then x else y\n",
+        [
+            "DereferenceConditionalOperand.fs(2,12): error FS0010: Unexpected keyword 'if' in expression"
+        ]
     ]
 
     [<Tests>]
@@ -6519,6 +6666,40 @@ let items = [ origin.X; 1 ]
                             (oracleLines logicalPath result)
             ]
 
+            testList "'!' is a prefix operator on one atomic expression" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in dereferenceCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with '!'"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect (fun body ->
+                                 infixRanges body
+                                 @ applicationRanges body
+                             ))
+                            expectedRanges
+                            "The infix, prefix, and application ranges"
+            ]
+
+            testList "a '!' form the parser does not model stays explicit" [
+                for logicalPath, text, oracle in dereferenceExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
             testList "an adjacent sign is a prefix operator and a spaced sign is subtraction" [
                 for logicalPath, text, expectedDeclarations, expectedRanges in prefixSignCases ->
                     testCase logicalPath
@@ -6553,8 +6734,8 @@ let items = [ origin.X; 1 ]
                             (oracleLines logicalPath result)
             ]
 
-            testList "a prefix sign argument reports the Oracle diagnostics" [
-                for logicalPath, text, oracle in prefixSignDiagnosticCases ->
+            testList "a prefix operator argument reports the Oracle diagnostics" [
+                for logicalPath, text, oracle in prefixArgumentDiagnosticCases ->
                     testCase logicalPath
                     <| fun _ ->
                         let result = parse logicalPath text

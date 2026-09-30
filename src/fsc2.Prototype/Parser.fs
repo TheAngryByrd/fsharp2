@@ -115,6 +115,25 @@ module internal Parser =
 
             if opensItem then Some token.Range.Start.Column else column
 
+        member _.PreviousSource =
+            let mutable position = index - 1
+
+            while position
+                  >= 0
+                  && tokens[position].Kind
+                     <> LayoutTokenKind.SourceToken do
+                position <-
+                    position
+                    - 1
+
+            if
+                position
+                >= 0
+            then
+                Some tokens[position]
+            else
+                None
+
         member this.Peek offset =
             if offset = 0 then
                 this.Current
@@ -1031,6 +1050,20 @@ module internal Parser =
         isOperator "-" token
         || isOperator "+" token
 
+    let private isDereference = isOperator "!"
+
+    // FCS lexes an identifier or keyword with '!' after it as one token, such as 'do!' or the reserved 'f!'.
+    let private startsDereference (cursor: Cursor) =
+        isDereference cursor.Current
+        && not (
+            cursor.Current.Range.Start.Offset = cursor.LastEnd.Offset
+            && cursor.PreviousSource
+               |> Option.exists (fun token ->
+                   isIdentifier token
+                   || isKind LexicalTokenKind.Keyword token
+               )
+        )
+
     let private precedesWithoutSpace (token: LayoutToken) (next: LayoutToken) =
         next.Kind = LayoutTokenKind.SourceToken
         && next.Range.Start.Offset = token.Range.End.Offset
@@ -1540,6 +1573,7 @@ module internal Parser =
     let private canStartExpression (token: LayoutToken) =
         canStartAtom token
         || isSign token
+        || isDereference token
         || isKeyword "if" token
         || isKeyword "match" token
         || isKeyword "fun" token
@@ -2096,7 +2130,8 @@ module internal Parser =
             let operand =
                 if
                     (canStartAtom cursor.Current
-                     || isSign cursor.Current)
+                     || isSign cursor.Current
+                     || isDereference cursor.Current)
                     && not (isOffside context cursor.Current)
                 then
                     parseApplication state context
@@ -2116,7 +2151,12 @@ module internal Parser =
         let cursor = state.Cursor
 
         let result =
-            match parseAtom state context with
+            match
+                if startsDereference cursor then
+                    parseDereference state context
+                else
+                    parseAtom state context
+            with
             | SyntaxExpression.DotLambda _ as dotLambda ->
                 if
                     canStartAtom cursor.Current
@@ -2134,12 +2174,14 @@ module internal Parser =
         let mutable result = result
 
         while (canStartAtom cursor.Current
-               || startsPrefixArgument cursor)
+               || startsPrefixArgument cursor
+               || startsDereference cursor)
               && not (isOffside context cursor.Current) do
             let argument =
                 if
                     isSign cursor.Current
                     && not (isSignedLiteral cursor)
+                    || startsDereference cursor
                 then
                     parsePrefixArgument state context
                 else
@@ -2149,6 +2191,29 @@ module internal Parser =
                 SyntaxExpression.Application(result, argument, span result.Range argument.Range)
 
         result
+
+    // FCS 'atomicExpr': '!' applies to one atomic expression, also at the start of an application.
+    and private parseDereference state context =
+        let cursor = state.Cursor
+        let operatorToken = cursor.Advance()
+
+        let operand =
+            if
+                canStartAtom cursor.Current
+                && not (isOffside context cursor.Current)
+            then
+                match parseAtom state context with
+                | SyntaxExpression.DotLambda _ as dotLambda -> dotLambda
+                | head -> parsePostfix state context Int32.MaxValue head
+            else
+                reportUnsupported state cursor.Current "an operand of a prefix operator"
+                missingExpression cursor.Current
+
+        SyntaxExpression.Prefix(
+            identifier operatorToken,
+            operand,
+            span operatorToken.Range operand.Range
+        )
 
     // FCS 'argExpr': a prefix operator in an argument applies to one atomic expression.
     and private parsePrefixArgument state context =
@@ -2837,8 +2902,9 @@ module internal Parser =
             not (isKeyword "with" cursor.Current)
             || cursor.Current.Range.Start.Column < matchToken.Range.Start.Column
         then
-            reportUnexpected state RecoveryPoint.MatchWith "a match expression"
-            |> ignore
+            if not (reportedAt state cursor.Current) then
+                reportUnexpected state RecoveryPoint.MatchWith "a match expression"
+                |> ignore
         else
             let withToken = cursor.Advance()
 
