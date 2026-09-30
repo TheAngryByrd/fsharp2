@@ -5783,6 +5783,11 @@ let f a b =
         [
             "DereferenceConditionalOperand.fs(2,12): error FS0010: Unexpected keyword 'if' in expression"
         ]
+        "DereferenceOperandBeforeBangEquals.fs",
+        "module A\nlet y = !x!=y\n",
+        [
+            "DereferenceOperandBeforeBangEquals.fs(2,10): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
     ]
 
     let private bodyArgumentLineCases = [

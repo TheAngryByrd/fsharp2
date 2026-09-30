@@ -2337,7 +2337,20 @@ module internal Parser =
                 reportUnsupported state cursor.Current "an operand of a prefix operator"
                 missingExpression cursor.Current
 
+        reportBangAfterOperand state
         prefixExpression state operatorToken operand
+
+    // The lexer splits 'x!=' into 'x' and '!=', and FCS reads 'x!' as one reserved token (FS1141).
+    and private reportBangAfterOperand state =
+        let cursor = state.Cursor
+
+        if
+            cursor.Current.Kind = LayoutTokenKind.SourceToken
+            && cursor.Current.Range.Start.Offset = cursor.LastEnd.Offset
+            && (tokenText cursor.Current).StartsWith('!')
+            && not (reportedAt state cursor.Current)
+        then
+            reportUnsupported state cursor.Current "a '!' after the operand of '!'"
 
     // FCS 'argExpr': a prefix operator in an argument applies to one atomic expression.
     and private parsePrefixArgument state context =
@@ -2353,6 +2366,9 @@ module internal Parser =
             else
                 reportUnsupported state cursor.Current "an operand of a prefix operator"
                 missingExpression cursor.Current
+
+        if isDereference operatorToken then
+            reportBangAfterOperand state
 
         prefixExpression state operatorToken operand
 
