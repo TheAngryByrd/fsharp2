@@ -5741,6 +5741,69 @@ let f a b =
         ]
     ]
 
+    let private bodyArgumentLineCases = [
+        "LambdaBodyThenPrefixSignLine.fs",
+        "module A\nlet y =\n    fun x ->\n        a\n      -1\n",
+        [
+            "LambdaBodyThenPrefixSignLine.fs(5,7): error FS0010: Unexpected integer literal in lambda expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "LambdaBodyThenPlusSignLine.fs",
+        "module A\nlet y =\n    fun x ->\n        a\n      +1\n",
+        [
+            "LambdaBodyThenPlusSignLine.fs(5,7): error FS0010: Unexpected integer literal in lambda expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "LambdaBodyThenDereferenceLine.fs",
+        "module A\nlet y =\n    fun x ->\n        a\n      !x\n",
+        [
+            "LambdaBodyThenDereferenceLine.fs(5,7): error FS0010: Unexpected prefix operator in lambda expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "LambdaBodyThenSignLineThenAtom.fs",
+        "module A\nlet y =\n    fun x ->\n        a\n      -1\n      b\n",
+        [
+            "LambdaBodyThenSignLineThenAtom.fs(5,7): error FS0010: Unexpected integer literal in lambda expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "LambdaBodyThenSignIdentifierLine.fs",
+        "module A\nlet y =\n    fun x ->\n        a\n      -x\n",
+        [
+            "LambdaBodyThenSignIdentifierLine.fs(5,7): error FS0010: Unexpected prefix operator in lambda expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "LambdaApplicationBodyThenSignLine.fs",
+        "module A\nlet y =\n    fun x ->\n        f a\n      -1\n",
+        [
+            "LambdaApplicationBodyThenSignLine.fs(5,7): error FS0010: Unexpected integer literal in lambda expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "MatchClauseResultThenSignLine.fs",
+        "module A\nlet y =\n    match x with\n    | A ->\n        a\n      -1\n",
+        [
+            "MatchClauseResultThenSignLine.fs(6,7): error FS0010: Unexpected integer literal in expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "MatchClauseResultThenSignLineThenClause.fs",
+        "module A\nlet y =\n    match x with\n    | A ->\n        a\n      -1\n    | B -> 2\n",
+        [
+            "MatchClauseResultThenSignLineThenClause.fs(6,7): error FS0010: Unexpected integer literal in expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "ThenBodyThenSignLineThenElse.fs",
+        "module A\nlet y =\n    if c then\n        a\n      -1\n    else 2\n",
+        [
+            "ThenBodyThenSignLineThenElse.fs(5,7): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "LambdaBodyThenIdentifierLine.fs",
+        "module A\nlet y =\n    fun x ->\n        a\n      f\n",
+        [
+            "LambdaBodyThenIdentifierLine.fs(5,7): error FS0010: Unexpected identifier in lambda expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "LambdaBodyThenParenthesizedLine.fs",
+        "module A\nlet y =\n    fun x ->\n        a\n      (b)\n",
+        [
+            "LambdaBodyThenParenthesizedLine.fs(5,7): error FS0010: Unexpected symbol '(' in lambda expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "LambdaBodyThenConstantLine.fs",
+        "module A\nlet y =\n    fun x ->\n        a\n      1\n",
+        [
+            "LambdaBodyThenConstantLine.fs(5,7): error FS0010: Unexpected integer literal in lambda expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+    ]
+
     [<Tests>]
     let tests =
         testList "Issue29.ParserGrammar" [
@@ -6722,6 +6785,18 @@ let items = [ origin.X; 1 ]
 
             testList "a '!' form the parser does not model stays explicit" [
                 for logicalPath, text, oracle in dereferenceExplicitCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+
+                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                            oracle
+                            result.Diagnostics
+                            (oracleLines logicalPath result)
+            ]
+
+            testList "an argument line left of a lambda, match, or conditional body stays explicit" [
+                for logicalPath, text, oracle in bodyArgumentLineCases ->
                     testCase logicalPath
                     <| fun _ ->
                         let result = parse logicalPath text

@@ -2173,10 +2173,28 @@ module internal Parser =
 
         let mutable result = result
 
-        while (canStartAtom cursor.Current
-               || startsPrefixArgument cursor
-               || startsDereference cursor)
-              && not (isOffside context cursor.Current) do
+        let startsArgument () =
+            (canStartAtom cursor.Current
+             || startsPrefixArgument cursor
+             || startsDereference cursor)
+            && not (isOffside context cursor.Current)
+
+        // A lambda, 'match', or 'if' body takes every argument on its lines, so FCS reports FS0010 at an argument on a later line left of the body.
+        match result with
+        | SyntaxExpression.Lambda _
+        | SyntaxExpression.Match _
+        | SyntaxExpression.If _ when
+            startsArgument ()
+            && not (reportedAt state cursor.Current)
+            ->
+            reportUnsupported
+                state
+                cursor.Current
+                "an argument after a lambda, match, or conditional body"
+        | _ -> ()
+
+        while startsArgument ()
+              && not (reportedAt state cursor.Current) do
             let argument =
                 if
                     isSign cursor.Current
