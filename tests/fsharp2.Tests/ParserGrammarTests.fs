@@ -26,6 +26,44 @@ module ParserGrammarTests =
         )
         |> Seq.toList
 
+    let private lexicalAndParserLines logicalPath text =
+        let language =
+            LanguageVersion.normalize (Some "10.0")
+            |> Result.defaultWith failtest
+
+        let document =
+            SourceSnapshot.Create(StableIdentity.create logicalPath, logicalPath, text, "content")
+            |> LexicalPipeline.prepare language Array.empty
+
+        let line (start: SourcePosition) severity code message =
+            start, $"{logicalPath}({start.Line},{start.Column}): {severity} {code}: {message}"
+
+        let lexical =
+            document.Diagnostics
+            |> Seq.map (fun diagnostic ->
+                let severity =
+                    match diagnostic.Severity with
+                    | DiagnosticSeverity.Warning -> "warning"
+                    | _ -> "error"
+
+                line diagnostic.Range.Start severity diagnostic.Code diagnostic.Message
+            )
+
+        let syntax =
+            (Parser.parseImplementationFile document).Diagnostics
+            |> Seq.map (fun diagnostic ->
+                line
+                    diagnostic.Range.Start
+                    (SyntaxDiagnosticText.severity diagnostic)
+                    diagnostic.Code
+                    diagnostic.Message
+            )
+
+        Seq.append lexical syntax
+        |> Seq.sortBy (fun (start, _) -> start.Line, start.Column)
+        |> Seq.map snd
+        |> Seq.toList
+
     let rec private typeShape syntaxType =
         match syntaxType with
         | SyntaxType.LongIdentifier name -> name.Text
@@ -164,6 +202,13 @@ module ParserGrammarTests =
             $"{keywordText}{recursive} {bindingHead binding} = {expressionShape binding.Body} in {expressionShape body}"
         | SyntaxExpression.LongIdentifierSet(name, value, _) ->
             $"{{{name.Text} <- {expressionShape value}}}"
+        | SyntaxExpression.Upcast(target, targetType, _) ->
+            $"{{{expressionShape target} :> {typeShape targetType.Type}}}"
+        | SyntaxExpression.Downcast(target, targetType, _) ->
+            $"{{{expressionShape target} :?> {typeShape targetType.Type}}}"
+        | SyntaxExpression.TypeTest(target, targetType, _) ->
+            $"{{{expressionShape target} :? {typeShape targetType.Type}}}"
+        | SyntaxExpression.DotGet(target, members, _) -> $"{expressionShape target}.{members.Text}"
         | SyntaxExpression.Missing _ -> "<missing>"
 
     let private memberShape (value: SyntaxMember) =
@@ -364,6 +409,18 @@ module ParserGrammarTests =
             )
         | SyntaxExpression.Lambda(_, body, _) -> infixRanges body
         | SyntaxExpression.List(items, _) -> all items
+        | SyntaxExpression.Upcast(target, _, range) ->
+            text ":>" range
+            :: infixRanges target
+        | SyntaxExpression.Downcast(target, _, range) ->
+            text ":?>" range
+            :: infixRanges target
+        | SyntaxExpression.TypeTest(target, _, range) ->
+            text ":?" range
+            :: infixRanges target
+        | SyntaxExpression.DotGet(target, _, range) ->
+            text "dot" range
+            :: infixRanges target
         | _ -> []
 
     let rec private applicationRanges expression =
@@ -416,6 +473,10 @@ module ParserGrammarTests =
             )
         | SyntaxExpression.Lambda(_, body, _) -> applicationRanges body
         | SyntaxExpression.List(items, _) -> all items
+        | SyntaxExpression.Upcast(target, _, _)
+        | SyntaxExpression.Downcast(target, _, _)
+        | SyntaxExpression.TypeTest(target, _, _)
+        | SyntaxExpression.DotGet(target, _, _) -> applicationRanges target
         | _ -> []
 
     let rec private conditionalRanges expression =
@@ -5169,27 +5230,6 @@ let f a b =
             "PrefixSignHeadConditionalOperand.fs(2,12): error FS0010: Unexpected keyword 'if' in expression"
         ]
         "PrefixSignModuleSubtractionLine.fs", "module A\nlet a = 1\n- 1\n", []
-        "PrefixSignInt32Overflow.fs",
-        "module A\nlet r = f -2147483649\n",
-        [
-            "PrefixSignInt32Overflow.fs(2,12): error FS1147: This number is outside the allowable range for 32-bit signed integers"
-        ]
-        "PrefixPlusInt32Limit.fs",
-        "module A\nlet r = f +2147483648\n",
-        [
-            "PrefixPlusInt32Limit.fs(2,11): error FS1147: This number is outside the allowable range for 32-bit signed integers"
-        ]
-        "PrefixPlusSByteLimit.fs",
-        "module A\nlet r = f +128y\n",
-        [
-            "PrefixPlusSByteLimit.fs(2,11): error FS1142: This number is outside the allowable range for 8-bit signed integers"
-        ]
-        "PrefixSignDecimalOverflow.fs",
-        "module A\nlet r = f -79228162514264337593543950336m\n",
-        [
-            "PrefixSignDecimalOverflow.fs(2,12): error FS1154: This number is outside the allowable range for decimal literals"
-        ]
-        "PrefixSignHexLimit.fs", "module A\nlet r = f -0x80000000\n", []
         "PrefixSignUndentedInParentheses.fs", "module A\nlet r = (f\n        -1)\n", []
         "SpacedSignLineLeftOfLocalValue.fs",
         "module A\nlet f a =\n    let g =\n        a\n   + 1\n    g\n",
@@ -5762,12 +5802,110 @@ let f a b =
         [ "!=(2,9--2,14)" ]
     ]
 
-    let private dereferenceExplicitCases = [
+    let private reservedBangIdentifierCases = [
         "DereferenceAfterIdentifier.fs",
         "module A\nlet r = f!x\n",
+        [ "let r = [f! x]" ],
         [
             "DereferenceAfterIdentifier.fs(2,9): error FS1141: Identifiers followed by '!' are reserved for future use"
         ]
+        "DereferenceOperandBeforeBangEquals.fs",
+        "module A\nlet y = !x!=y\n",
+        [ "let y = {~!x! = y}" ],
+        [
+            "DereferenceOperandBeforeBangEquals.fs(2,10): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "IdentifierBang.fs",
+        "module A\nlet r = x!\n",
+        [ "let r = x!" ],
+        [
+            "IdentifierBang.fs(2,9): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "IdentifierBangEquals.fs",
+        "module A\nlet r = x!=y\n",
+        [ "let r = {x! = y}" ],
+        [
+            "IdentifierBangEquals.fs(2,9): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "IdentifierBangEqualsArgument.fs",
+        "module A\nlet r = f x!=y\n",
+        [ "let r = {[f x!] = y}" ],
+        [
+            "IdentifierBangEqualsArgument.fs(2,11): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "IdentifierBangEqualsInParentheses.fs",
+        "module A\nlet r = (x!=y)\n",
+        [ "let r = ({x! = y})" ],
+        [
+            "IdentifierBangEqualsInParentheses.fs(2,10): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "IdentifierBangArgument.fs",
+        "module A\nlet r = f x!\n",
+        [ "let r = [f x!]" ],
+        [
+            "IdentifierBangArgument.fs(2,11): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "IdentifierBangMemberAccess.fs",
+        "module A\nlet r = x!.A\n",
+        [ "let r = x!.A" ],
+        [
+            "IdentifierBangMemberAccess.fs(2,9): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "QualifiedIdentifierBang.fs",
+        "module A\nlet r = A.B!\n",
+        [ "let r = A.B!" ],
+        [
+            "QualifiedIdentifierBang.fs(2,11): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "IdentifierBangApplication.fs",
+        "module A\nlet r = x!y\n",
+        [ "let r = [x! y]" ],
+        [
+            "IdentifierBangApplication.fs(2,9): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "PrimedIdentifierBang.fs",
+        "module A\nlet r = x'!\n",
+        [ "let r = x'!" ],
+        [
+            "PrimedIdentifierBang.fs(2,9): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "UnderscoreBang.fs",
+        "module A\nlet r = _!\n",
+        [ "let r = _!" ],
+        [
+            "UnderscoreBang.fs(2,9): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "IdentifierBangInList.fs",
+        "module A\nlet r = [x!]\n",
+        [ "let r = [x!]" ],
+        [
+            "IdentifierBangInList.fs(2,10): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "IdentifierBangBinding.fs",
+        "module A\nlet x! = 1\n",
+        [ "let x! = 1" ],
+        [
+            "IdentifierBangBinding.fs(2,5): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "IdentifierBangParameter.fs",
+        "module A\nlet f x! = 1\n",
+        [ "let f x! = 1" ],
+        [
+            "IdentifierBangParameter.fs(2,7): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+        "EscapedIdentifierBeforeDereference.fs",
+        "module A\nlet r = ``x``!y\n",
+        [ "let r = [``x`` ~!y]" ],
+        []
+        "IdentifierBangPattern.fs",
+        "module A\nlet r x =\n    match x with\n    | x! -> 1\n",
+        [ "let r x = match x with | x! -> 1" ],
+        [
+            "IdentifierBangPattern.fs(4,7): error FS1141: Identifiers followed by '!' are reserved for future use"
+        ]
+    ]
+
+    let private dereferenceExplicitCases = [
         "DoBangKeyword.fs", "module A\ndo! x\n", []
         "MatchBangKeyword.fs", "module A\nlet r () =\n    match! x with\n    | _ -> 1\n", []
         "IfFollowedByBang.fs",
@@ -5782,11 +5920,6 @@ let f a b =
         "module A\nlet r c = !if c then x else y\n",
         [
             "DereferenceConditionalOperand.fs(2,12): error FS0010: Unexpected keyword 'if' in expression"
-        ]
-        "DereferenceOperandBeforeBangEquals.fs",
-        "module A\nlet y = !x!=y\n",
-        [
-            "DereferenceOperandBeforeBangEquals.fs(2,10): error FS1141: Identifiers followed by '!' are reserved for future use"
         ]
     ]
 
@@ -5853,15 +5986,3701 @@ let f a b =
         ]
     ]
 
+    let private numericLiteralCases = [
+        "SignedSingleBitsOutOfRange.fs",
+        "module A\nlet r = f -0x123456789lf\n",
+        [ "let r = [f -0x123456789lf]" ],
+        [
+            "SignedSingleBitsOutOfRange.fs(2,12): error FS1155: This number is outside the allowable range for 32-bit floats"
+        ]
+        "SignedSingleBitsOutOfRangeHead.fs",
+        "module A\nlet r = -0x123456789lf\n",
+        [ "let r = -0x123456789lf" ],
+        [
+            "SignedSingleBitsOutOfRangeHead.fs(2,10): error FS1155: This number is outside the allowable range for 32-bit floats"
+        ]
+        "SignedSingleBitsOutOfRangeInList.fs",
+        "module A\nlet r = [ -0x100000000lf ]\n",
+        [ "let r = [-0x100000000lf]" ],
+        [
+            "SignedSingleBitsOutOfRangeInList.fs(2,12): error FS1155: This number is outside the allowable range for 32-bit floats"
+        ]
+        "SignedDoubleBitsOutOfRange.fs",
+        "module A\nlet r = f -0x1234567890123456789LF\n",
+        [ "let r = [f -0x1234567890123456789LF]" ],
+        [ "SignedDoubleBitsOutOfRange.fs(2,12): error FS1153: Invalid floating point number" ]
+        "SignedDoubleBitsAboveLimit.fs",
+        "module A\nlet r = f -0x10000000000000000LF\n",
+        [ "let r = [f -0x10000000000000000LF]" ],
+        [ "SignedDoubleBitsAboveLimit.fs(2,12): error FS1153: Invalid floating point number" ]
+        "SignedSingleBitsLimit.fs",
+        "module A\nlet r = f -0xFFFFFFFFlf\n",
+        [ "let r = [f -0xFFFFFFFFlf]" ],
+        []
+        "SignedDoubleBitsLimit.fs",
+        "module A\nlet r = f -0x7FF0000000000000LF\n",
+        [ "let r = [f -0x7FF0000000000000LF]" ],
+        []
+        "SingleBitsOutOfRange.fs",
+        "module A\nlet r = f 0x123456789lf\n",
+        [ "let r = [f 0x123456789lf]" ],
+        [
+            "SingleBitsOutOfRange.fs(2,11): error FS1155: This number is outside the allowable range for 32-bit floats"
+        ]
+        "DoubleBitsOutOfRange.fs",
+        "module A\nlet r = f 0x10000000000000000LF\n",
+        [ "let r = [f 0x10000000000000000LF]" ],
+        [ "DoubleBitsOutOfRange.fs(2,11): error FS1153: Invalid floating point number" ]
+        "Int32AtLimit.fs",
+        "module A\nlet r = f 2147483648\n",
+        [ "let r = [f 2147483648]" ],
+        [
+            "Int32AtLimit.fs(2,11): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "Int32AtLimitHead.fs",
+        "module A\nlet r = 2147483648\n",
+        [ "let r = 2147483648" ],
+        [
+            "Int32AtLimitHead.fs(2,9): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "SByteAtLimit.fs",
+        "module A\nlet r = f 128y\n",
+        [ "let r = [f 128y]" ],
+        [
+            "SByteAtLimit.fs(2,11): error FS1142: This number is outside the allowable range for 8-bit signed integers"
+        ]
+        "Int16AtLimit.fs",
+        "module A\nlet r = f 32768s\n",
+        [ "let r = [f 32768s]" ],
+        [
+            "Int16AtLimit.fs(2,11): error FS1145: This number is outside the allowable range for 16-bit signed integers"
+        ]
+        "Int64AtLimit.fs",
+        "module A\nlet r = f 9223372036854775808L\n",
+        [ "let r = [f 9223372036854775808L]" ],
+        [
+            "Int64AtLimit.fs(2,11): error FS1149: This number is outside the allowable range for 64-bit signed integers"
+        ]
+        "NativeIntAtLimit.fs",
+        "module A\nlet r = f 9223372036854775808n\n",
+        [ "let r = [f 9223372036854775808n]" ],
+        [
+            "NativeIntAtLimit.fs(2,11): error FS1151: This number is outside the allowable range for signed native integers"
+        ]
+        "Int32AboveLimit.fs",
+        "module A\nlet r = f 21474836479\n",
+        [ "let r = [f 21474836479]" ],
+        [
+            "Int32AboveLimit.fs(2,11): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "ByteAboveLimit.fs",
+        "module A\nlet r = f 256uy\n",
+        [ "let r = [f 256uy]" ],
+        [
+            "ByteAboveLimit.fs(2,11): error FS1144: This number is outside the allowable range for 8-bit unsigned integers"
+        ]
+        "UInt16AboveLimit.fs",
+        "module A\nlet r = f 65536us\n",
+        [ "let r = [f 65536us]" ],
+        [
+            "UInt16AboveLimit.fs(2,11): error FS1146: This number is outside the allowable range for 16-bit unsigned integers"
+        ]
+        "UInt32AboveLimit.fs",
+        "module A\nlet r = f 4294967296u\n",
+        [ "let r = [f 4294967296u]" ],
+        [
+            "UInt32AboveLimit.fs(2,11): error FS1148: This number is outside the allowable range for 32-bit unsigned integers"
+        ]
+        "UInt32LowerLAboveLimit.fs",
+        "module A\nlet r = f 4294967296ul\n",
+        [ "let r = [f 4294967296ul]" ],
+        [
+            "UInt32LowerLAboveLimit.fs(2,11): error FS1148: This number is outside the allowable range for 32-bit unsigned integers"
+        ]
+        "UInt64AboveLimit.fs",
+        "module A\nlet r = f 18446744073709551616UL\n",
+        [ "let r = [f 18446744073709551616UL]" ],
+        [
+            "UInt64AboveLimit.fs(2,11): error FS1150: This number is outside the allowable range for 64-bit unsigned integers"
+        ]
+        "UNativeIntAboveLimit.fs",
+        "module A\nlet r = f 18446744073709551616un\n",
+        [ "let r = [f 18446744073709551616un]" ],
+        [
+            "UNativeIntAboveLimit.fs(2,11): error FS1152: This number is outside the allowable range for unsigned native integers"
+        ]
+        "HexSByteAboveLimit.fs",
+        "module A\nlet r = f 0x100y\n",
+        [ "let r = [f 0x100y]" ],
+        [
+            "HexSByteAboveLimit.fs(2,11): error FS1143: This number is outside the allowable range for hexadecimal 8-bit signed integers"
+        ]
+        "OctalSByteAboveLimit.fs",
+        "module A\nlet r = f 0o400y\n",
+        [ "let r = [f 0o400y]" ],
+        [
+            "OctalSByteAboveLimit.fs(2,11): error FS1143: This number is outside the allowable range for hexadecimal 8-bit signed integers"
+        ]
+        "HexInt16AboveLimit.fs",
+        "module A\nlet r = f 0x10000s\n",
+        [ "let r = [f 0x10000s]" ],
+        [
+            "HexInt16AboveLimit.fs(2,11): error FS1145: This number is outside the allowable range for 16-bit signed integers"
+        ]
+        "HexInt32AboveLimit.fs",
+        "module A\nlet r = f 0x100000000\n",
+        [ "let r = [f 0x100000000]" ],
+        [
+            "HexInt32AboveLimit.fs(2,11): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "BinaryInt32AboveLimit.fs",
+        "module A\nlet r = f 0b100000000000000000000000000000000\n",
+        [ "let r = [f 0b100000000000000000000000000000000]" ],
+        [
+            "BinaryInt32AboveLimit.fs(2,11): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "HexInt64AboveLimit.fs",
+        "module A\nlet r = f 0x10000000000000000L\n",
+        [ "let r = [f 0x10000000000000000L]" ],
+        [
+            "HexInt64AboveLimit.fs(2,11): error FS1149: This number is outside the allowable range for 64-bit signed integers"
+        ]
+        "DecimalAboveLimit.fs",
+        "module A\nlet r = f 79228162514264337593543950336M\n",
+        [ "let r = [f 79228162514264337593543950336M]" ],
+        [
+            "DecimalAboveLimit.fs(2,11): error FS1154: This number is outside the allowable range for decimal literals"
+        ]
+        "DecimalExponentAboveLimit.fs",
+        "module A\nlet r = f 1e29M\n",
+        [ "let r = [f 1e29M]" ],
+        [
+            "DecimalExponentAboveLimit.fs(2,11): error FS1154: This number is outside the allowable range for decimal literals"
+        ]
+        "HexInt32AllBits.fs", "module A\nlet r = f 0xFFFFFFFF\n", [ "let r = [f 0xFFFFFFFF]" ], []
+        "HexSByteAllBits.fs", "module A\nlet r = f 0xFFy\n", [ "let r = [f 0xFFy]" ], []
+        "SignedHexSByteAllBits.fs", "module A\nlet r = -0xFFy\n", [ "let r = -0xFFy" ], []
+        "SignedHexInt16AllBits.fs",
+        "module A\nlet r = f -0xFF_FFs\n",
+        [ "let r = [f -0xFF_FFs]" ],
+        []
+        "PrefixSignHexLimit.fs",
+        "module A\nlet r = f -0x80000000\n",
+        [ "let r = [f -0x80000000]" ],
+        []
+        "PrefixSignInt32Overflow.fs",
+        "module A\nlet r = f -2147483649\n",
+        [ "let r = [f -2147483649]" ],
+        [
+            "PrefixSignInt32Overflow.fs(2,12): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "PrefixPlusInt32Limit.fs",
+        "module A\nlet r = f +2147483648\n",
+        [ "let r = [f +2147483648]" ],
+        [
+            "PrefixPlusInt32Limit.fs(2,11): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "PrefixPlusSByteLimit.fs",
+        "module A\nlet r = f +128y\n",
+        [ "let r = [f +128y]" ],
+        [
+            "PrefixPlusSByteLimit.fs(2,11): error FS1142: This number is outside the allowable range for 8-bit signed integers"
+        ]
+        "PrefixSignDecimalOverflow.fs",
+        "module A\nlet r = f -79228162514264337593543950336m\n",
+        [ "let r = [f -79228162514264337593543950336m]" ],
+        [
+            "PrefixSignDecimalOverflow.fs(2,12): error FS1154: This number is outside the allowable range for decimal literals"
+        ]
+        "SignedHexInt64SignBit.fs",
+        "module A\nlet r = f -0x8000000000000000L\n",
+        [ "let r = [f -0x8000000000000000L]" ],
+        []
+        "SignedBinarySByteAllBits.fs",
+        "module A\nlet r = f -0b11111111y\n",
+        [ "let r = [f -0b11111111y]" ],
+        []
+        "SignedHexInt32AboveLimit.fs",
+        "module A\nlet r = f -0x100000000\n",
+        [ "let r = [f -0x100000000]" ],
+        [
+            "SignedHexInt32AboveLimit.fs(2,12): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "SignedInt32Limit.fs",
+        "module A\nlet r = f -2147483648\n",
+        [ "let r = [f -2147483648]" ],
+        []
+        "SignedInt32LimitHead.fs", "module A\nlet r = -2147483648\n", [ "let r = -2147483648" ], []
+        "SignedInt32LimitInParentheses.fs",
+        "module A\nlet r = (-2147483648)\n",
+        [ "let r = (-2147483648)" ],
+        []
+        "SignedInt32LimitAfterSubtraction.fs",
+        "module A\nlet r = x - -2147483648\n",
+        [ "let r = {x - -2147483648}" ],
+        []
+        "SubtractedInt32Limit.fs",
+        "module A\nlet r = x-2147483648\n",
+        [ "let r = {x - 2147483648}" ],
+        [
+            "SubtractedInt32Limit.fs(2,11): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "SpacedSubtractedInt32Limit.fs",
+        "module A\nlet r = x - 2147483648\n",
+        [ "let r = {x - 2147483648}" ],
+        [
+            "SpacedSubtractedInt32Limit.fs(2,13): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "SpacedSignInt32Limit.fs",
+        "module A\nlet r = f - 2147483648\n",
+        [ "let r = {f - 2147483648}" ],
+        [
+            "SpacedSignInt32Limit.fs(2,13): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "SpacedSignInt32LimitHead.fs",
+        "module A\nlet r = - 2147483648\n",
+        [ "let r = ~-2147483648" ],
+        [
+            "SpacedSignInt32LimitHead.fs(2,11): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "SignedParenthesizedInt32Limit.fs",
+        "module A\nlet r = -(2147483648)\n",
+        [ "let r = ~-(2147483648)" ],
+        [
+            "SignedParenthesizedInt32Limit.fs(2,11): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "SubtractedInt32LimitArgument.fs",
+        "module A\nlet r = f x-2147483648\n",
+        [ "let r = {[f x] - 2147483648}" ],
+        [
+            "SubtractedInt32LimitArgument.fs(2,13): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "DereferencedInt32Limit.fs",
+        "module A\nlet r = f !2147483648\n",
+        [ "let r = [f ~!2147483648]" ],
+        [
+            "DereferencedInt32Limit.fs(2,12): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "Int32LimitArguments.fs",
+        "module A\nlet r = f 2147483648 2147483648\n",
+        [ "let r = [[f 2147483648] 2147483648]" ],
+        [
+            "Int32LimitArguments.fs(2,11): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+            "Int32LimitArguments.fs(2,22): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "Int32LimitInfixOperand.fs",
+        "module A\nlet r = 1 + 2147483648\n",
+        [ "let r = {1 + 2147483648}" ],
+        [
+            "Int32LimitInfixOperand.fs(2,13): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "Int32LimitConditionalBranch.fs",
+        "module A\nlet r c = if c then 2147483648 else 1\n",
+        [ "let r c = if c then 2147483648 else 1" ],
+        [
+            "Int32LimitConditionalBranch.fs(2,21): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "Int32LimitTupleItem.fs",
+        "module A\nlet r = 2147483648, 1\n",
+        [ "let r = 2147483648, 1" ],
+        [
+            "Int32LimitTupleItem.fs(2,9): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "PlusInt32LimitHead.fs",
+        "module A\nlet r = +2147483648\n",
+        [ "let r = +2147483648" ],
+        [
+            "PlusInt32LimitHead.fs(2,9): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "PlusInt32AboveLimit.fs",
+        "module A\nlet r = f +2147483649\n",
+        [ "let r = [f +2147483649]" ],
+        [
+            "PlusInt32AboveLimit.fs(2,12): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+        "PlusSByteAboveLimit.fs",
+        "module A\nlet r = f +129y\n",
+        [ "let r = [f +129y]" ],
+        [
+            "PlusSByteAboveLimit.fs(2,12): error FS1142: This number is outside the allowable range for 8-bit signed integers"
+        ]
+        "SignedDecimalLimit.fs",
+        "module A\nlet r = f -79228162514264337593543950335M\n",
+        [ "let r = [f -79228162514264337593543950335M]" ],
+        []
+        "SignedNativeIntLimit.fs",
+        "module A\nlet r = f -9223372036854775808n\n",
+        [ "let r = [f -9223372036854775808n]" ],
+        []
+        "SignedUInt32LowerLAboveLimit.fs",
+        "module A\nlet r = f -4294967296ul\n",
+        [ "let r = [f ~-4294967296ul]" ],
+        [
+            "SignedUInt32LowerLAboveLimit.fs(2,12): error FS1148: This number is outside the allowable range for 32-bit unsigned integers"
+        ]
+        "InvalidLiteralSuffixUpperLF.fs",
+        "module A\nlet r = f 1LF\n",
+        [ "let r = [f 1LF]" ],
+        [
+            "InvalidLiteralSuffixUpperLF.fs(2,11): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "InvalidFloatSuffixL.fs",
+        "module A\nlet r = f 1.5L\n",
+        [ "let r = [f 1.5L]" ],
+        [
+            "InvalidFloatSuffixL.fs(2,11): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "InvalidHexBignumSuffix.fs",
+        "module A\nlet r = f 0x1FI\n",
+        [ "let r = [f 0x1FI]" ],
+        [
+            "InvalidHexBignumSuffix.fs(2,11): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "InvalidTrailingUnderscore.fs",
+        "module A\nlet r = f 1_\n",
+        [ "let r = [f 1_]" ],
+        [
+            "InvalidTrailingUnderscore.fs(2,11): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "InvalidBinaryDigitTwo.fs",
+        "module A\nlet r = f 0b2\n",
+        [ "let r = [f 0b2]" ],
+        [
+            "InvalidBinaryDigitTwo.fs(2,11): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "InvalidFractionUnderscore.fs",
+        "module A\nlet r = f 1._0\n",
+        [ "let r = [f 1._0]" ],
+        [
+            "InvalidFractionUnderscore.fs(2,11): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "InvalidExponentUnderscore.fs",
+        "module A\nlet r = f 1e_5\n",
+        [ "let r = [f 1e_5]" ],
+        [
+            "InvalidExponentUnderscore.fs(2,11): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+        ]
+        "Int32LimitPattern.fs",
+        "module A\nlet r x =\n    match x with\n    | 2147483648 -> 1\n    | _ -> 2\n",
+        [ "let r x = match x with | 2147483648 -> 1 | _ -> 2" ],
+        [
+            "Int32LimitPattern.fs(4,7): error FS1147: This number is outside the allowable range for 32-bit signed integers"
+        ]
+    ]
+
+    let private numericLiteralDotCases = [
+        "SignedHexWithFraction.fs",
+        "module A\nlet y = f -0x1.0\n",
+        [ "let y = [[f -0x1] 0]" ],
+        [ "SignedHexWithFraction.fs(2,15): error FS0599: Missing qualification after '.'" ]
+        "HexLiteralDotFraction.fs",
+        "module A\nlet r = f 0x1.0\n",
+        [ "let r = [[f 0x1] 0]" ],
+        [ "HexLiteralDotFraction.fs(2,14): error FS0599: Missing qualification after '.'" ]
+        "HexLiteralMemberAccess.fs", "module A\nlet r = f 0x1.A\n", [ "let r = [f 0x1.A]" ], []
+        "UnsignedLiteralDotFraction.fs",
+        "module A\nlet r = f 1u.0\n",
+        [ "let r = [[f 1u] 0]" ],
+        [ "UnsignedLiteralDotFraction.fs(2,13): error FS0599: Missing qualification after '.'" ]
+        "FloatLiteralMemberAccess.fs", "module A\nlet r = f 1.5.A\n", [ "let r = [f 1.5.A]" ], []
+        "SByteLiteralMemberAccess.fs", "module A\nlet r = f 1y.A\n", [ "let r = [f 1y.A]" ], []
+        "ExponentLiteralDotFraction.fs",
+        "module A\nlet r = f 1e5.0\n",
+        [ "let r = [[f 1e5] 0]" ],
+        [ "ExponentLiteralDotFraction.fs(2,14): error FS0599: Missing qualification after '.'" ]
+        "TrailingUnderscoreDotFraction.fs",
+        "module A\nlet r = f 1_.0\n",
+        [ "let r = [[f 1_] 0]" ],
+        [
+            "TrailingUnderscoreDotFraction.fs(2,11): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
+            "TrailingUnderscoreDotFraction.fs(2,13): error FS0599: Missing qualification after '.'"
+        ]
+    ]
+
+    let private castAndMemberAccessCases = [
+        "Upcast.fs", "module A\nlet r = x :> T\n", [ "let r = {x :> T}" ], [ ":>(2,9--2,15)" ]
+        "UpcastApplication.fs",
+        "module A\nlet r = f x :> T\n",
+        [ "let r = {[f x] :> T}" ],
+        [
+            ":>(2,9--2,17)"
+            "app(2,9--2,12)"
+        ]
+        "UpcastChain.fs",
+        "module A\nlet r = x :> T :> U\n",
+        [ "let r = {{x :> T} :> U}" ],
+        [
+            ":>(2,9--2,20)"
+            ":>(2,9--2,15)"
+        ]
+        "UpcastAfterComparison.fs",
+        "module A\nlet r = a = b :> T\n",
+        [ "let r = {{a = b} :> T}" ],
+        [
+            ":>(2,9--2,19)"
+            "=(2,9--2,14)"
+        ]
+        "UpcastBelowAnd.fs",
+        "module A\nlet r = a && b :> T\n",
+        [ "let r = {a && {b :> T}}" ],
+        [
+            "&&(2,9--2,20)"
+            ":>(2,14--2,20)"
+        ]
+        "UpcastAfterAddition.fs",
+        "module A\nlet r = a + b :> T\n",
+        [ "let r = {{a + b} :> T}" ],
+        [
+            ":>(2,9--2,19)"
+            "+(2,9--2,14)"
+        ]
+        "UpcastAfterCons.fs",
+        "module A\nlet r = a :: x :> T\n",
+        [ "let r = {{a :: x} :> T}" ],
+        [
+            ":>(2,9--2,20)"
+            "::(2,9--2,15)"
+        ]
+        "UpcastAfterPipeLeft.fs",
+        "module A\nlet r = f <| x :> T\n",
+        [ "let r = {{f <| x} :> T}" ],
+        [
+            ":>(2,9--2,20)"
+            "<|(2,9--2,15)"
+        ]
+        "UpcastAfterLessThan.fs",
+        "module A\nlet r = x < z :> T\n",
+        [ "let r = {{x < z} :> T}" ],
+        [
+            ":>(2,9--2,19)"
+            "<(2,9--2,14)"
+        ]
+        "UpcastOfNegation.fs",
+        "module A\nlet r = -x :> T\n",
+        [ "let r = {~-x :> T}" ],
+        [
+            ":>(2,9--2,16)"
+            "~-(2,9--2,11)"
+        ]
+        "UpcastTupleItem.fs",
+        "module A\nlet r = x :> T, y\n",
+        [ "let r = {x :> T}, y" ],
+        [
+            "tuple(2,9--2,18)"
+            ":>(2,9--2,15)"
+        ]
+        "UpcastComparisonOperand.fs",
+        "module A\nlet r = x :> T = y\n",
+        [ "let r = {{x :> T} = y}" ],
+        [
+            "=(2,9--2,19)"
+            ":>(2,9--2,15)"
+        ]
+        "UpcastAdditionOperand.fs",
+        "module A\nlet r = x :> T + 1\n",
+        [ "let r = {{x :> T} + 1}" ],
+        [
+            "+(2,9--2,19)"
+            ":>(2,9--2,15)"
+        ]
+        "UpcastConsOperand.fs",
+        "module A\nlet r = x :> T :: z\n",
+        [ "let r = {{x :> T} :: z}" ],
+        [
+            "::(2,9--2,20)"
+            ":>(2,9--2,15)"
+        ]
+        "UpcastAssignedByColonEquals.fs",
+        "module A\nlet r = x := a :> T\n",
+        [ "let r = {x := {a :> T}}" ],
+        [
+            ":=(2,9--2,20)"
+            ":>(2,14--2,20)"
+        ]
+        "UpcastAssignedByArrow.fs",
+        "module A\nlet r = z <- x :> T\n",
+        [ "let r = {z <- {x :> T}}" ],
+        [
+            "set(2,9--2,20)"
+            ":>(2,14--2,20)"
+        ]
+        "UpcastPostfixTypeApplication.fs",
+        "module A\nlet r = x :> int list\n",
+        [ "let r = {x :> int list}" ],
+        [ ":>(2,9--2,22)" ]
+        "UpcastParenthesizedFunctionType.fs",
+        "module A\nlet r = x :> (int -> int)\n",
+        [ "let r = {x :> (int -> int)}" ],
+        [ ":>(2,9--2,26)" ]
+        "UpcastTupleType.fs",
+        "module A\nlet r = x :> int * int\n",
+        [ "let r = {x :> (int * int)}" ],
+        [ ":>(2,9--2,23)" ]
+        "UpcastFunctionType.fs",
+        "module A\nlet r = x :> T -> U\n",
+        [ "let r = {x :> (T -> U)}" ],
+        [ ":>(2,9--2,20)" ]
+        "UpcastQualifiedType.fs",
+        "module A\nlet r = x :> A.B\n",
+        [ "let r = {x :> A.B}" ],
+        [ ":>(2,9--2,17)" ]
+        "UpcastTypeArguments.fs",
+        "module A\nlet r = x :> T<int>\n",
+        [ "let r = {x :> T<int>}" ],
+        [ ":>(2,9--2,20)" ]
+        "UpcastArrayType.fs",
+        "module A\nlet r = x :> T[]\n",
+        [ "let r = {x :> T[]}" ],
+        [ ":>(2,9--2,17)" ]
+        "UpcastWithoutSpaces.fs",
+        "module A\nlet r = x:>T\n",
+        [ "let r = {x :> T}" ],
+        [ ":>(2,9--2,13)" ]
+        "UpcastInParentheses.fs",
+        "module A\nlet r = f (x :> T)\n",
+        [ "let r = [f ({x :> T})]" ],
+        [
+            ":>(2,12--2,18)"
+            "app(2,9--2,19)"
+        ]
+        "UpcastInList.fs",
+        "module A\nlet r = [x :> T; y]\n",
+        [ "let r = [{x :> T}; y]" ],
+        [ ":>(2,10--2,16)" ]
+        "UpcastInRecord.fs", "module A\nlet r = { A = x :> T }\n", [ "let r = {A = {x :> T}}" ], []
+        "UpcastLambdaBody.fs",
+        "module A\nlet r = fun x -> x :> T\n",
+        [ "let r = fun x -> {x :> T}" ],
+        [ ":>(2,18--2,24)" ]
+        "UpcastClauseResult.fs",
+        "module A\nlet r = match x with\n        | A -> x :> T\n        | B -> z\n",
+        [ "let r = match x with | A -> {x :> T} | B -> z" ],
+        [ ":>(3,16--3,22)" ]
+        "Downcast.fs", "module A\nlet r = x :?> T\n", [ "let r = {x :?> T}" ], [ ":?>(2,9--2,16)" ]
+        "DowncastChain.fs",
+        "module A\nlet r = x :?> T :?> U\n",
+        [ "let r = {{x :?> T} :?> U}" ],
+        [
+            ":?>(2,9--2,22)"
+            ":?>(2,9--2,16)"
+        ]
+        "DowncastAfterUpcast.fs",
+        "module A\nlet r = x :> T :?> U\n",
+        [ "let r = {{x :> T} :?> U}" ],
+        [
+            ":?>(2,9--2,21)"
+            ":>(2,9--2,15)"
+        ]
+        "TypeTest.fs", "module A\nlet r = x :? T\n", [ "let r = {x :? T}" ], [ ":?(2,9--2,15)" ]
+        "TypeTestChain.fs",
+        "module A\nlet r = x :? T :? U\n",
+        [ "let r = {{x :? T} :? U}" ],
+        [
+            ":?(2,9--2,20)"
+            ":?(2,9--2,15)"
+        ]
+        "TypeTestAboveComparison.fs",
+        "module A\nlet r = a = b :? T\n",
+        [ "let r = {a = {b :? T}}" ],
+        [
+            "=(2,9--2,19)"
+            ":?(2,13--2,19)"
+        ]
+        "TypeTestBelowAddition.fs",
+        "module A\nlet r = a + b :? T\n",
+        [ "let r = {{a + b} :? T}" ],
+        [
+            ":?(2,9--2,19)"
+            "+(2,9--2,14)"
+        ]
+        "TypeTestAboveCons.fs",
+        "module A\nlet r = a :: x :? T\n",
+        [ "let r = {a :: {x :? T}}" ],
+        [
+            "::(2,9--2,20)"
+            ":?(2,14--2,20)"
+        ]
+        "TypeTestAfterPipeLeft.fs",
+        "module A\nlet r = f <| x :? T\n",
+        [ "let r = {f <| {x :? T}}" ],
+        [
+            "<|(2,9--2,20)"
+            ":?(2,14--2,20)"
+        ]
+        "TypeTestAfterUpcast.fs",
+        "module A\nlet r = x :> T :? U\n",
+        [ "let r = {{x :> T} :? U}" ],
+        [
+            ":?(2,9--2,20)"
+            ":>(2,9--2,15)"
+        ]
+        "TypeTestConditionThenDowncast.fs",
+        "module A\nlet r = if x :? T then x :?> T else y\n",
+        [ "let r = if {x :? T} then {x :?> T} else y" ],
+        [
+            ":?(2,12--2,18)"
+            ":?>(2,24--2,31)"
+        ]
+        "TypeTestMatchInput.fs",
+        "module A\nlet r = match x :? T with\n        | true -> 1\n        | _ -> 2\n",
+        [ "let r = match {x :? T} with | Boolean true -> 1 | _ -> 2" ],
+        [ ":?(2,15--2,21)" ]
+        "MemberAccessOnParentheses.fs",
+        "module A\nlet r = (x).A\n",
+        [ "let r = (x).A" ],
+        [ "dot(2,9--2,14)" ]
+        "MemberAccessLongIdentifier.fs",
+        "module A\nlet r = (x).A.B\n",
+        [ "let r = (x).A.B" ],
+        [ "dot(2,9--2,16)" ]
+        "MemberAccessOnHighPrecedenceApplication.fs",
+        "module A\nlet r = f(x).A\n",
+        [ "let r = [f (x)].A" ],
+        [
+            "dot(2,9--2,15)"
+            "app(2,9--2,13)"
+        ]
+        "MemberAccessInArgument.fs",
+        "module A\nlet r = f (x).A\n",
+        [ "let r = [f (x).A]" ],
+        [
+            "dot(2,11--2,16)"
+            "app(2,9--2,16)"
+        ]
+        "MemberAccessOnString.fs",
+        "module A\nlet r = \"s\".Length\n",
+        [ "let r = \"s\".Length" ],
+        [ "dot(2,9--2,19)" ]
+        "MemberAccessOnList.fs",
+        "module A\nlet r = [1].Head\n",
+        [ "let r = [1].Head" ],
+        [ "dot(2,9--2,17)" ]
+        "MemberAccessOnFloat.fs",
+        "module A\nlet r = 1.5.A\n",
+        [ "let r = 1.5.A" ],
+        [ "dot(2,9--2,14)" ]
+        "MemberAccessOnHexLiteral.fs",
+        "module A\nlet r = 0x1.A\n",
+        [ "let r = 0x1.A" ],
+        [ "dot(2,9--2,14)" ]
+        "MemberAccessOnRecord.fs",
+        "module A\nlet r = { A = 1 }.A\n",
+        [ "let r = {A = 1}.A" ],
+        [ "dot(2,9--2,20)" ]
+        "MemberAccessOnBoolean.fs",
+        "module A\nlet r = true.A\n",
+        [ "let r = Boolean true.A" ],
+        [ "dot(2,9--2,15)" ]
+        "MemberAccessOnCharacter.fs",
+        "module A\nlet r = 'c'.A\n",
+        [ "let r = Character \"'c'\".A" ],
+        [ "dot(2,9--2,14)" ]
+        "MemberAccessEscapedName.fs",
+        "module A\nlet r = (x).``A B``\n",
+        [ "let r = (x).``A B``" ],
+        [ "dot(2,9--2,20)" ]
+        "MemberAccessApplied.fs",
+        "module A\nlet r = (x).A(1)\n",
+        [ "let r = [(x).A (1)]" ],
+        [
+            "dot(2,9--2,14)"
+            "app(2,9--2,17)"
+        ]
+        "MemberAccessAppliedWithSpace.fs",
+        "module A\nlet r = (x).A (1)\n",
+        [ "let r = [(x).A (1)]" ],
+        [
+            "dot(2,9--2,14)"
+            "app(2,9--2,18)"
+        ]
+        "MemberAccessWithArgument.fs",
+        "module A\nlet r = (x).A x\n",
+        [ "let r = [(x).A x]" ],
+        [
+            "dot(2,9--2,14)"
+            "app(2,9--2,16)"
+        ]
+        "MemberAccessNegated.fs",
+        "module A\nlet r = -(x).A\n",
+        [ "let r = ~-(x).A" ],
+        [
+            "~-(2,9--2,15)"
+            "dot(2,10--2,15)"
+        ]
+        "MemberAccessDereferenced.fs",
+        "module A\nlet r = !(x).A\n",
+        [ "let r = ~!(x).A" ],
+        [
+            "~!(2,9--2,15)"
+            "dot(2,10--2,15)"
+        ]
+        "MemberAccessAdditionOperand.fs",
+        "module A\nlet r = (x).A + 1\n",
+        [ "let r = {(x).A + 1}" ],
+        [
+            "+(2,9--2,18)"
+            "dot(2,9--2,14)"
+        ]
+        "MemberAccessArguments.fs",
+        "module A\nlet r = f (x).A (y).B\n",
+        [ "let r = [[f (x).A] (y).B]" ],
+        [
+            "dot(2,11--2,16)"
+            "dot(2,17--2,22)"
+            "app(2,9--2,22)"
+            "app(2,9--2,16)"
+        ]
+        "MemberAccessAfterMethodCall.fs",
+        "module A\nlet r = x.A(1).B\n",
+        [ "let r = [x.A (1)].B" ],
+        [
+            "dot(2,9--2,17)"
+            "app(2,9--2,15)"
+        ]
+        "MemberAccessChainOfMethodCalls.fs",
+        "module A\nlet r = x.A(1).B(2).C\n",
+        [ "let r = [[x.A (1)].B (2)].C" ],
+        [
+            "dot(2,9--2,22)"
+            "dot(2,9--2,17)"
+            "app(2,9--2,20)"
+            "app(2,9--2,15)"
+        ]
+        "MemberAccessOnIndex.fs",
+        "module A\nlet r = x[0].A\n",
+        [ "let r = x[0].A" ],
+        [ "dot(2,9--2,15)" ]
+        "MemberAccessIndexed.fs",
+        "module A\nlet r = (x).A[0].B\n",
+        [ "let r = (x).A[0].B" ],
+        [ "dot(2,9--2,19)" ]
+        "MemberAccessUpcast.fs",
+        "module A\nlet r = (x).A :> T\n",
+        [ "let r = {(x).A :> T}" ],
+        [
+            ":>(2,9--2,19)"
+            "dot(2,9--2,14)"
+        ]
+        "MemberAccessInArgumentLongIdentifier.fs",
+        "module A\nlet r = f (x).A.B\n",
+        [ "let r = [f (x).A.B]" ],
+        [
+            "dot(2,11--2,18)"
+            "app(2,9--2,18)"
+        ]
+        "MemberAccessStringArgument.fs",
+        "module A\nlet r = f \"s\".Length\n",
+        [ "let r = [f \"s\".Length]" ],
+        [
+            "dot(2,11--2,21)"
+            "app(2,9--2,21)"
+        ]
+    ]
+
+    let private castAndMemberAccessExplicitCases = [
+        "UpcastLineAtBlockColumn.fs", "module A\nlet r =\n    x\n    :> T\n", []
+        "UpcastLineIndented.fs", "module A\nlet r =\n    x\n        :> T\n", []
+        "UpcastTypeOnNextLine.fs", "module A\nlet r =\n    x :>\n        T\n", []
+        "TypeTestLineAtBlockColumn.fs",
+        "module A\nlet r =\n    x\n    :? T\n",
+        [
+            "TypeTestLineAtBlockColumn.fs(4,5): error FS0010: Unexpected symbol ':?' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "UpcastConstantType.fs", "module A\nlet r = x :> 1\n", []
+        "UpcastFlexibleType.fs", "module A\nlet r = x :> #seq<int>\n", []
+        "UpcastTypeBeforeAppend.fs",
+        "module A\nlet r = x :> T @ z\n",
+        [
+            "UpcastTypeBeforeAppend.fs(2,18): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "UpcastTypeBeforeCaret.fs",
+        "module A\nlet r = x :> T ^ z\n",
+        [
+            "UpcastTypeBeforeCaret.fs(2,18): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "UpcastTypeBeforeAdjacentSign.fs",
+        "module A\nlet r = x :> T -1\n",
+        [
+            "UpcastTypeBeforeAdjacentSign.fs(2,16): error FS0010: Unexpected integer literal in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "TypeTestGuardBeforeArrow.fs",
+        "module A\nlet r =\n    match x with\n    | A when y :? T -> 1\n    | _ -> 2\n",
+        [
+            "TypeTestGuardBeforeArrow.fs(5,5): error FS0010: Incomplete structured construct at or before this point in pattern matching. Expected '->' or other token."
+        ]
+        "MemberAccessDotSpaceName.fs", "module A\nlet r = (x). A\n", []
+        "MemberAccessSpaceDot.fs", "module A\nlet r = (x) .A\n", []
+        "MemberAccessNextLine.fs", "module A\nlet r =\n    (x)\n        .A\n", []
+        "MemberAccessAfterSecondApplication.fs", "module A\nlet r = f(x)(y).A\n", []
+        "MemberAccessAfterParenthesizedApplication.fs", "module A\nlet r = (x)(y).A\n", []
+        "MemberAccessArgumentApplied.fs",
+        "module A\nlet r = f (x).A(1)\n",
+        [
+            "MemberAccessArgumentApplied.fs(2,11): error FS0597: Successive arguments should be separated by spaces or tupled, and arguments involving function or method applications should be parenthesized"
+        ]
+        "MemberAccessAssignment.fs", "module A\nlet r = (x).A.B <- 1\n", []
+        "MemberAccessTypeApplication.fs", "module A\nlet r = (x).A<int>\n", []
+    ]
+
+    let private memberAccessDiagnosticCases = [
+        "MemberAccessOnIdentifierArgumentApplication.fs",
+        "module A\nlet r = f x(1).A\n",
+        [ "let r = [f [x (1)].A]" ],
+        [
+            "MemberAccessOnIdentifierArgumentApplication.fs(2,11): error FS0597: Successive arguments should be separated by spaces or tupled, and arguments involving function or method applications should be parenthesized"
+        ]
+        "MemberAccessMissingName.fs",
+        "module A\nlet r = (x).\n",
+        [ "let r = (x)" ],
+        [ "MemberAccessMissingName.fs(2,12): error FS0599: Missing qualification after '.'" ]
+        "MemberAccessNumericName.fs",
+        "module A\nlet r = (x).1\n",
+        [ "let r = [(x) 1]" ],
+        [ "MemberAccessNumericName.fs(2,12): error FS0599: Missing qualification after '.'" ]
+    ]
+
+    let private reviewCastTreeCases = [
+        "Review410088_nl.fs", "let y =\n    x :> T\n    + U\n", [ "let y = {{x :> T} + U}" ]
+        "Review410089_nl.fs", "let y =\n    x :> T\n   + U\n", [ "let y = {{x :> T} + U}" ]
+        "Review410090_nl.fs", "let y =\n    x :> T\n     + U\n", [ "let y = {{x :> T} + U}" ]
+        "Review410091_nl.fs", "let y =\n    x :> T\n        + U\n", [ "let y = {{x :> T} + U}" ]
+        "Review410092_nlp.fs", "let y =\n    (x :> T\n     + U)\n", [ "let y = ({{x :> T} + U})" ]
+        "Review410093_nlp2.fs", "let y =\n    (x :> T\n    + U)\n", [ "let y = ({{x :> T} + U})" ]
+        "Review410094_nll.fs",
+        "let y =\n    [ x :> T\n      + U ]\n",
+        [ "let y = [{{x :> T} + U}]" ]
+        "Review410095_nlf.fs",
+        "let y =\n    f (x :> T\n       + U)\n",
+        [ "let y = [f ({{x :> T} + U})]" ]
+        "Review410096_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :> T\n           + U\n    | B -> w\n",
+        [ "let y = match z with | A -> {{x :> T} + U} | B -> w" ]
+        "Review410097_nlb.fs",
+        "let y =\n    let v = x :> T\n    + U\n    v\n",
+        [ "let y = let v = {x :> T} in seq[~+U; v]" ]
+        "Review410098_nlb2.fs",
+        "let y =\n    let v =\n        x :> T\n        + U\n    v\n",
+        [ "let y = let v = {{x :> T} + U} in v" ]
+        "Review410099_nl.fs", "let y =\n    x :> T\n    - U\n", [ "let y = {{x :> T} - U}" ]
+        "Review410100_nl.fs", "let y =\n    x :> T\n   - U\n", [ "let y = {{x :> T} - U}" ]
+        "Review410101_nl.fs", "let y =\n    x :> T\n     - U\n", [ "let y = {{x :> T} - U}" ]
+        "Review410102_nl.fs", "let y =\n    x :> T\n        - U\n", [ "let y = {{x :> T} - U}" ]
+        "Review410103_nlp.fs", "let y =\n    (x :> T\n     - U)\n", [ "let y = ({{x :> T} - U})" ]
+        "Review410104_nlp2.fs", "let y =\n    (x :> T\n    - U)\n", [ "let y = ({{x :> T} - U})" ]
+        "Review410105_nll.fs",
+        "let y =\n    [ x :> T\n      - U ]\n",
+        [ "let y = [{{x :> T} - U}]" ]
+        "Review410106_nlf.fs",
+        "let y =\n    f (x :> T\n       - U)\n",
+        [ "let y = [f ({{x :> T} - U})]" ]
+        "Review410107_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :> T\n           - U\n    | B -> w\n",
+        [ "let y = match z with | A -> {{x :> T} - U} | B -> w" ]
+        "Review410108_nlb.fs",
+        "let y =\n    let v = x :> T\n    - U\n    v\n",
+        [ "let y = let v = {x :> T} in seq[~-U; v]" ]
+        "Review410109_nlb2.fs",
+        "let y =\n    let v =\n        x :> T\n        - U\n    v\n",
+        [ "let y = let v = {{x :> T} - U} in v" ]
+        "Review410132_nl.fs", "let y =\n    x :> T\n    list\n", [ "let y = seq[{x :> T}; list]" ]
+        "Review410136_nlp.fs",
+        "let y =\n    (x :> T\n     list)\n",
+        [ "let y = (seq[{x :> T}; list])" ]
+        "Review410138_nll.fs",
+        "let y =\n    [ x :> T\n      list ]\n",
+        [ "let y = [{x :> T}; list]" ]
+        "Review410139_nlf.fs",
+        "let y =\n    f (x :> T\n       list)\n",
+        [ "let y = [f (seq[{x :> T}; list])]" ]
+        "Review410141_nlb.fs",
+        "let y =\n    let v = x :> T\n    list\n    v\n",
+        [ "let y = let v = {x :> T} in seq[list; v]" ]
+        "Review410142_nlb2.fs",
+        "let y =\n    let v =\n        x :> T\n        list\n    v\n",
+        [ "let y = let v = seq[{x :> T}; list] in v" ]
+        "Review410165_nl.fs", "let y =\n    x :> T\n    []\n", [ "let y = seq[{x :> T}; []]" ]
+        "Review410169_nlp.fs", "let y =\n    (x :> T\n     [])\n", [ "let y = (seq[{x :> T}; []])" ]
+        "Review410171_nll.fs", "let y =\n    [ x :> T\n      [] ]\n", [ "let y = [{x :> T}; []]" ]
+        "Review410172_nlf.fs",
+        "let y =\n    f (x :> T\n       [])\n",
+        [ "let y = [f (seq[{x :> T}; []])]" ]
+        "Review410174_nlb.fs",
+        "let y =\n    let v = x :> T\n    []\n    v\n",
+        [ "let y = let v = {x :> T} in seq[[]; v]" ]
+        "Review410175_nlb2.fs",
+        "let y =\n    let v =\n        x :> T\n        []\n    v\n",
+        [ "let y = let v = seq[{x :> T}; []] in v" ]
+        "Review410271_nl.fs", "let y =\n    x :?> T\n    + U\n", [ "let y = {{x :?> T} + U}" ]
+        "Review410272_nl.fs", "let y =\n    x :?> T\n   + U\n", [ "let y = {{x :?> T} + U}" ]
+        "Review410273_nl.fs", "let y =\n    x :?> T\n     + U\n", [ "let y = {{x :?> T} + U}" ]
+        "Review410274_nl.fs", "let y =\n    x :?> T\n        + U\n", [ "let y = {{x :?> T} + U}" ]
+        "Review410275_nlp.fs", "let y =\n    (x :?> T\n     + U)\n", [ "let y = ({{x :?> T} + U})" ]
+        "Review410276_nlp2.fs", "let y =\n    (x :?> T\n    + U)\n", [ "let y = ({{x :?> T} + U})" ]
+        "Review410277_nll.fs",
+        "let y =\n    [ x :?> T\n      + U ]\n",
+        [ "let y = [{{x :?> T} + U}]" ]
+        "Review410278_nlf.fs",
+        "let y =\n    f (x :?> T\n       + U)\n",
+        [ "let y = [f ({{x :?> T} + U})]" ]
+        "Review410279_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :?> T\n           + U\n    | B -> w\n",
+        [ "let y = match z with | A -> {{x :?> T} + U} | B -> w" ]
+        "Review410280_nlb.fs",
+        "let y =\n    let v = x :?> T\n    + U\n    v\n",
+        [ "let y = let v = {x :?> T} in seq[~+U; v]" ]
+        "Review410281_nlb2.fs",
+        "let y =\n    let v =\n        x :?> T\n        + U\n    v\n",
+        [ "let y = let v = {{x :?> T} + U} in v" ]
+        "Review410282_nl.fs", "let y =\n    x :?> T\n    - U\n", [ "let y = {{x :?> T} - U}" ]
+        "Review410283_nl.fs", "let y =\n    x :?> T\n   - U\n", [ "let y = {{x :?> T} - U}" ]
+        "Review410284_nl.fs", "let y =\n    x :?> T\n     - U\n", [ "let y = {{x :?> T} - U}" ]
+        "Review410285_nl.fs", "let y =\n    x :?> T\n        - U\n", [ "let y = {{x :?> T} - U}" ]
+        "Review410286_nlp.fs", "let y =\n    (x :?> T\n     - U)\n", [ "let y = ({{x :?> T} - U})" ]
+        "Review410287_nlp2.fs", "let y =\n    (x :?> T\n    - U)\n", [ "let y = ({{x :?> T} - U})" ]
+        "Review410288_nll.fs",
+        "let y =\n    [ x :?> T\n      - U ]\n",
+        [ "let y = [{{x :?> T} - U}]" ]
+        "Review410289_nlf.fs",
+        "let y =\n    f (x :?> T\n       - U)\n",
+        [ "let y = [f ({{x :?> T} - U})]" ]
+        "Review410290_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :?> T\n           - U\n    | B -> w\n",
+        [ "let y = match z with | A -> {{x :?> T} - U} | B -> w" ]
+        "Review410291_nlb.fs",
+        "let y =\n    let v = x :?> T\n    - U\n    v\n",
+        [ "let y = let v = {x :?> T} in seq[~-U; v]" ]
+        "Review410292_nlb2.fs",
+        "let y =\n    let v =\n        x :?> T\n        - U\n    v\n",
+        [ "let y = let v = {{x :?> T} - U} in v" ]
+        "Review410315_nl.fs", "let y =\n    x :?> T\n    list\n", [ "let y = seq[{x :?> T}; list]" ]
+        "Review410319_nlp.fs",
+        "let y =\n    (x :?> T\n     list)\n",
+        [ "let y = (seq[{x :?> T}; list])" ]
+        "Review410321_nll.fs",
+        "let y =\n    [ x :?> T\n      list ]\n",
+        [ "let y = [{x :?> T}; list]" ]
+        "Review410322_nlf.fs",
+        "let y =\n    f (x :?> T\n       list)\n",
+        [ "let y = [f (seq[{x :?> T}; list])]" ]
+        "Review410324_nlb.fs",
+        "let y =\n    let v = x :?> T\n    list\n    v\n",
+        [ "let y = let v = {x :?> T} in seq[list; v]" ]
+        "Review410325_nlb2.fs",
+        "let y =\n    let v =\n        x :?> T\n        list\n    v\n",
+        [ "let y = let v = seq[{x :?> T}; list] in v" ]
+        "Review410348_nl.fs", "let y =\n    x :?> T\n    []\n", [ "let y = seq[{x :?> T}; []]" ]
+        "Review410352_nlp.fs",
+        "let y =\n    (x :?> T\n     [])\n",
+        [ "let y = (seq[{x :?> T}; []])" ]
+        "Review410354_nll.fs", "let y =\n    [ x :?> T\n      [] ]\n", [ "let y = [{x :?> T}; []]" ]
+        "Review410355_nlf.fs",
+        "let y =\n    f (x :?> T\n       [])\n",
+        [ "let y = [f (seq[{x :?> T}; []])]" ]
+        "Review410357_nlb.fs",
+        "let y =\n    let v = x :?> T\n    []\n    v\n",
+        [ "let y = let v = {x :?> T} in seq[[]; v]" ]
+        "Review410358_nlb2.fs",
+        "let y =\n    let v =\n        x :?> T\n        []\n    v\n",
+        [ "let y = let v = seq[{x :?> T}; []] in v" ]
+        "Review410454_nl.fs", "let y =\n    x :? T\n    + U\n", [ "let y = {{x :? T} + U}" ]
+        "Review410455_nl.fs", "let y =\n    x :? T\n   + U\n", [ "let y = {{x :? T} + U}" ]
+        "Review410456_nl.fs", "let y =\n    x :? T\n     + U\n", [ "let y = {{x :? T} + U}" ]
+        "Review410457_nl.fs", "let y =\n    x :? T\n        + U\n", [ "let y = {{x :? T} + U}" ]
+        "Review410458_nlp.fs", "let y =\n    (x :? T\n     + U)\n", [ "let y = ({{x :? T} + U})" ]
+        "Review410459_nlp2.fs", "let y =\n    (x :? T\n    + U)\n", [ "let y = ({{x :? T} + U})" ]
+        "Review410460_nll.fs",
+        "let y =\n    [ x :? T\n      + U ]\n",
+        [ "let y = [{{x :? T} + U}]" ]
+        "Review410461_nlf.fs",
+        "let y =\n    f (x :? T\n       + U)\n",
+        [ "let y = [f ({{x :? T} + U})]" ]
+        "Review410462_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :? T\n           + U\n    | B -> w\n",
+        [ "let y = match z with | A -> {{x :? T} + U} | B -> w" ]
+        "Review410463_nlb.fs",
+        "let y =\n    let v = x :? T\n    + U\n    v\n",
+        [ "let y = let v = {x :? T} in seq[~+U; v]" ]
+        "Review410464_nlb2.fs",
+        "let y =\n    let v =\n        x :? T\n        + U\n    v\n",
+        [ "let y = let v = {{x :? T} + U} in v" ]
+        "Review410465_nl.fs", "let y =\n    x :? T\n    - U\n", [ "let y = {{x :? T} - U}" ]
+        "Review410466_nl.fs", "let y =\n    x :? T\n   - U\n", [ "let y = {{x :? T} - U}" ]
+        "Review410467_nl.fs", "let y =\n    x :? T\n     - U\n", [ "let y = {{x :? T} - U}" ]
+        "Review410468_nl.fs", "let y =\n    x :? T\n        - U\n", [ "let y = {{x :? T} - U}" ]
+        "Review410469_nlp.fs", "let y =\n    (x :? T\n     - U)\n", [ "let y = ({{x :? T} - U})" ]
+        "Review410470_nlp2.fs", "let y =\n    (x :? T\n    - U)\n", [ "let y = ({{x :? T} - U})" ]
+        "Review410471_nll.fs",
+        "let y =\n    [ x :? T\n      - U ]\n",
+        [ "let y = [{{x :? T} - U}]" ]
+        "Review410472_nlf.fs",
+        "let y =\n    f (x :? T\n       - U)\n",
+        [ "let y = [f ({{x :? T} - U})]" ]
+        "Review410473_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :? T\n           - U\n    | B -> w\n",
+        [ "let y = match z with | A -> {{x :? T} - U} | B -> w" ]
+        "Review410474_nlb.fs",
+        "let y =\n    let v = x :? T\n    - U\n    v\n",
+        [ "let y = let v = {x :? T} in seq[~-U; v]" ]
+        "Review410475_nlb2.fs",
+        "let y =\n    let v =\n        x :? T\n        - U\n    v\n",
+        [ "let y = let v = {{x :? T} - U} in v" ]
+        "Review410498_nl.fs", "let y =\n    x :? T\n    list\n", [ "let y = seq[{x :? T}; list]" ]
+        "Review410502_nlp.fs",
+        "let y =\n    (x :? T\n     list)\n",
+        [ "let y = (seq[{x :? T}; list])" ]
+        "Review410504_nll.fs",
+        "let y =\n    [ x :? T\n      list ]\n",
+        [ "let y = [{x :? T}; list]" ]
+        "Review410505_nlf.fs",
+        "let y =\n    f (x :? T\n       list)\n",
+        [ "let y = [f (seq[{x :? T}; list])]" ]
+        "Review410507_nlb.fs",
+        "let y =\n    let v = x :? T\n    list\n    v\n",
+        [ "let y = let v = {x :? T} in seq[list; v]" ]
+        "Review410508_nlb2.fs",
+        "let y =\n    let v =\n        x :? T\n        list\n    v\n",
+        [ "let y = let v = seq[{x :? T}; list] in v" ]
+        "Review410531_nl.fs", "let y =\n    x :? T\n    []\n", [ "let y = seq[{x :? T}; []]" ]
+        "Review410535_nlp.fs", "let y =\n    (x :? T\n     [])\n", [ "let y = (seq[{x :? T}; []])" ]
+        "Review410537_nll.fs", "let y =\n    [ x :? T\n      [] ]\n", [ "let y = [{x :? T}; []]" ]
+        "Review410538_nlf.fs",
+        "let y =\n    f (x :? T\n       [])\n",
+        [ "let y = [f (seq[{x :? T}; []])]" ]
+        "Review410540_nlb.fs",
+        "let y =\n    let v = x :? T\n    []\n    v\n",
+        [ "let y = let v = {x :? T} in seq[[]; v]" ]
+        "Review410541_nlb2.fs",
+        "let y =\n    let v =\n        x :? T\n        []\n    v\n",
+        [ "let y = let v = seq[{x :? T}; []] in v" ]
+    ]
+
+    let private reviewCastDiagnosticCases = [
+        "Review410133_nl.fs",
+        "let y =\n    x :> T\n   list\n",
+        [
+            "Review410133_nl.fs(3,4): error FS0010: Unexpected identifier in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410133_nl.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410316_nl.fs",
+        "let y =\n    x :?> T\n   list\n",
+        [
+            "Review410316_nl.fs(3,4): error FS0010: Unexpected identifier in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410316_nl.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410499_nl.fs",
+        "let y =\n    x :? T\n   list\n",
+        [
+            "Review410499_nl.fs(3,4): error FS0010: Unexpected identifier in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410499_nl.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+    ]
+
+    let private reviewCastExplicitCases = [
+        "Review410000_nl.fs", "let y =\n    x :> T\n    * U\n", []
+        "Review410001_nl.fs", "let y =\n    x :> T\n   * U\n", []
+        "Review410002_nl.fs", "let y =\n    x :> T\n     * U\n", []
+        "Review410003_nl.fs", "let y =\n    x :> T\n        * U\n", []
+        "Review410004_nlp.fs", "let y =\n    (x :> T\n     * U)\n", []
+        "Review410005_nlp2.fs", "let y =\n    (x :> T\n    * U)\n", []
+        "Review410006_nll.fs", "let y =\n    [ x :> T\n      * U ]\n", []
+        "Review410007_nlf.fs", "let y =\n    f (x :> T\n       * U)\n", []
+        "Review410008_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :> T\n           * U\n    | B -> w\n",
+        []
+        "Review410009_nlb.fs",
+        "let y =\n    let v = x :> T\n    * U\n    v\n",
+        [
+            "Review410009_nlb.fs(3,7): error FS0010: Unexpected identifier in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410010_nlb2.fs", "let y =\n    let v =\n        x :> T\n        * U\n    v\n", []
+        "Review410011_nl.fs", "let y =\n    x :> T\n    / U\n", []
+        "Review410012_nl.fs", "let y =\n    x :> T\n   / U\n", []
+        "Review410013_nl.fs", "let y =\n    x :> T\n     / U\n", []
+        "Review410014_nl.fs", "let y =\n    x :> T\n        / U\n", []
+        "Review410015_nlp.fs", "let y =\n    (x :> T\n     / U)\n", []
+        "Review410016_nlp2.fs", "let y =\n    (x :> T\n    / U)\n", []
+        "Review410017_nll.fs", "let y =\n    [ x :> T\n      / U ]\n", []
+        "Review410018_nlf.fs", "let y =\n    f (x :> T\n       / U)\n", []
+        "Review410019_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :> T\n           / U\n    | B -> w\n",
+        []
+        "Review410020_nlb.fs",
+        "let y =\n    let v = x :> T\n    / U\n    v\n",
+        [
+            "Review410020_nlb.fs(2,5): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+            "Review410020_nlb.fs(3,5): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410021_nlb2.fs", "let y =\n    let v =\n        x :> T\n        / U\n    v\n", []
+        "Review410022_nl.fs",
+        "let y =\n    x :> T\n    -> U\n",
+        [
+            "Review410022_nl.fs(3,5): error FS0596: The use of '->' in sequence and computation expressions is limited to the form 'for pat in expr -> expr'. Use the syntax 'for ... in ... do ... yield...' to generate elements in more complex sequence expressions."
+        ]
+        "Review410023_nl.fs",
+        "let y =\n    x :> T\n   -> U\n",
+        [
+            "Review410023_nl.fs(3,4): error FS0010: Unexpected symbol '->' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410023_nl.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+            "Review410023_nl.fs(3,4): error FS0596: The use of '->' in sequence and computation expressions is limited to the form 'for pat in expr -> expr'. Use the syntax 'for ... in ... do ... yield...' to generate elements in more complex sequence expressions."
+        ]
+        "Review410024_nl.fs", "let y =\n    x :> T\n     -> U\n", []
+        "Review410025_nl.fs", "let y =\n    x :> T\n        -> U\n", []
+        "Review410026_nlp.fs",
+        "let y =\n    (x :> T\n     -> U)\n",
+        [
+            "Review410026_nlp.fs(3,6): error FS0596: The use of '->' in sequence and computation expressions is limited to the form 'for pat in expr -> expr'. Use the syntax 'for ... in ... do ... yield...' to generate elements in more complex sequence expressions."
+        ]
+        "Review410027_nlp2.fs", "let y =\n    (x :> T\n    -> U)\n", []
+        "Review410028_nll.fs",
+        "let y =\n    [ x :> T\n      -> U ]\n",
+        [
+            "Review410028_nll.fs(3,7): error FS0596: The use of '->' in sequence and computation expressions is limited to the form 'for pat in expr -> expr'. Use the syntax 'for ... in ... do ... yield...' to generate elements in more complex sequence expressions."
+        ]
+        "Review410029_nlf.fs",
+        "let y =\n    f (x :> T\n       -> U)\n",
+        [
+            "Review410029_nlf.fs(3,8): error FS0596: The use of '->' in sequence and computation expressions is limited to the form 'for pat in expr -> expr'. Use the syntax 'for ... in ... do ... yield...' to generate elements in more complex sequence expressions."
+        ]
+        "Review410030_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :> T\n           -> U\n    | B -> w\n",
+        [
+            "Review410030_nlm.fs(4,12): error FS0596: The use of '->' in sequence and computation expressions is limited to the form 'for pat in expr -> expr'. Use the syntax 'for ... in ... do ... yield...' to generate elements in more complex sequence expressions."
+        ]
+        "Review410031_nlb.fs",
+        "let y =\n    let v = x :> T\n    -> U\n    v\n",
+        [
+            "Review410031_nlb.fs(3,5): error FS0596: The use of '->' in sequence and computation expressions is limited to the form 'for pat in expr -> expr'. Use the syntax 'for ... in ... do ... yield...' to generate elements in more complex sequence expressions."
+        ]
+        "Review410032_nlb2.fs",
+        "let y =\n    let v =\n        x :> T\n        -> U\n    v\n",
+        [
+            "Review410032_nlb2.fs(4,9): error FS0596: The use of '->' in sequence and computation expressions is limited to the form 'for pat in expr -> expr'. Use the syntax 'for ... in ... do ... yield...' to generate elements in more complex sequence expressions."
+        ]
+        "Review410033_nl.fs",
+        "let y =\n    x :> T\n    ^ U\n",
+        [
+            "Review410033_nl.fs(3,7): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410034_nl.fs",
+        "let y =\n    x :> T\n   ^ U\n",
+        [
+            "Review410034_nl.fs(3,6): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410035_nl.fs",
+        "let y =\n    x :> T\n     ^ U\n",
+        [
+            "Review410035_nl.fs(3,8): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410036_nl.fs",
+        "let y =\n    x :> T\n        ^ U\n",
+        [
+            "Review410036_nl.fs(3,11): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410037_nlp.fs",
+        "let y =\n    (x :> T\n     ^ U)\n",
+        [
+            "Review410037_nlp.fs(3,8): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410038_nlp2.fs",
+        "let y =\n    (x :> T\n    ^ U)\n",
+        [
+            "Review410038_nlp2.fs(3,7): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410039_nll.fs",
+        "let y =\n    [ x :> T\n      ^ U ]\n",
+        [
+            "Review410039_nll.fs(3,9): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410040_nlf.fs",
+        "let y =\n    f (x :> T\n       ^ U)\n",
+        [
+            "Review410040_nlf.fs(3,10): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410041_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :> T\n           ^ U\n    | B -> w\n",
+        [
+            "Review410041_nlm.fs(4,14): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410042_nlb.fs", "let y =\n    let v = x :> T\n    ^ U\n    v\n", []
+        "Review410043_nlb2.fs",
+        "let y =\n    let v =\n        x :> T\n        ^ U\n    v\n",
+        [
+            "Review410043_nlb2.fs(4,11): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410044_nl.fs",
+        "let y =\n    x :> T\n    @ U\n",
+        [
+            "Review410044_nl.fs(3,7): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410045_nl.fs",
+        "let y =\n    x :> T\n   @ U\n",
+        [
+            "Review410045_nl.fs(3,6): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410046_nl.fs",
+        "let y =\n    x :> T\n     @ U\n",
+        [
+            "Review410046_nl.fs(3,8): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410047_nl.fs",
+        "let y =\n    x :> T\n        @ U\n",
+        [
+            "Review410047_nl.fs(3,11): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410048_nlp.fs",
+        "let y =\n    (x :> T\n     @ U)\n",
+        [
+            "Review410048_nlp.fs(3,8): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410049_nlp2.fs",
+        "let y =\n    (x :> T\n    @ U)\n",
+        [
+            "Review410049_nlp2.fs(3,7): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410050_nll.fs",
+        "let y =\n    [ x :> T\n      @ U ]\n",
+        [
+            "Review410050_nll.fs(3,9): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410051_nlf.fs",
+        "let y =\n    f (x :> T\n       @ U)\n",
+        [
+            "Review410051_nlf.fs(3,10): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410052_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :> T\n           @ U\n    | B -> w\n",
+        [
+            "Review410052_nlm.fs(4,14): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410053_nlb.fs",
+        "let y =\n    let v = x :> T\n    @ U\n    v\n",
+        [ "Review410053_nlb.fs(3,5): error FS1208: Invalid prefix operator" ]
+        "Review410054_nlb2.fs",
+        "let y =\n    let v =\n        x :> T\n        @ U\n    v\n",
+        [
+            "Review410054_nlb2.fs(4,11): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410055_nl.fs",
+        "let y =\n    x :> T\n    < U\n",
+        [
+            "Review410055_nl.fs(3,5): error FS0010: Unexpected symbol '<' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410056_nl.fs",
+        "let y =\n    x :> T\n   < U\n",
+        [
+            "Review410056_nl.fs(3,4): error FS0010: Unexpected symbol '<' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410056_nl.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410057_nl.fs",
+        "let y =\n    x :> T\n     < U\n",
+        [ "Review410057_nl.fs(4,1): error FS1241: Expected type argument or static argument" ]
+        "Review410058_nl.fs",
+        "let y =\n    x :> T\n        < U\n",
+        [ "Review410058_nl.fs(4,1): error FS1241: Expected type argument or static argument" ]
+        "Review410059_nlp.fs",
+        "let y =\n    (x :> T\n     < U)\n",
+        [ "Review410059_nlp.fs(3,6): error FS0010: Unexpected symbol '<' in expression" ]
+        "Review410060_nlp2.fs",
+        "let y =\n    (x :> T\n    < U)\n",
+        [ "Review410060_nlp2.fs(3,8): error FS1241: Expected type argument or static argument" ]
+        "Review410061_nll.fs",
+        "let y =\n    [ x :> T\n      < U ]\n",
+        [
+            "Review410061_nll.fs(3,7): error FS0010: Unexpected symbol '<' in expression. Expected ']' or other token."
+            "Review410061_nll.fs(2,5): error FS0598: Unmatched '['"
+        ]
+        "Review410062_nlf.fs",
+        "let y =\n    f (x :> T\n       < U)\n",
+        [ "Review410062_nlf.fs(3,8): error FS0010: Unexpected symbol '<' in expression" ]
+        "Review410063_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :> T\n           < U\n    | B -> w\n",
+        [
+            "Review410063_nlm.fs(4,12): error FS0010: Unexpected symbol '<' in expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410064_nlb.fs",
+        "let y =\n    let v = x :> T\n    < U\n    v\n",
+        [ "Review410064_nlb.fs(3,5): error FS0010: Unexpected symbol '<' in expression" ]
+        "Review410065_nlb2.fs",
+        "let y =\n    let v =\n        x :> T\n        < U\n    v\n",
+        [
+            "Review410065_nlb2.fs(4,9): error FS0010: Unexpected symbol '<' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410066_nl.fs", "let y =\n    x :> T\n    ** U\n", []
+        "Review410067_nl.fs", "let y =\n    x :> T\n   ** U\n", []
+        "Review410068_nl.fs", "let y =\n    x :> T\n     ** U\n", []
+        "Review410069_nl.fs", "let y =\n    x :> T\n        ** U\n", []
+        "Review410070_nlp.fs", "let y =\n    (x :> T\n     ** U)\n", []
+        "Review410071_nlp2.fs", "let y =\n    (x :> T\n    ** U)\n", []
+        "Review410072_nll.fs", "let y =\n    [ x :> T\n      ** U ]\n", []
+        "Review410073_nlf.fs", "let y =\n    f (x :> T\n       ** U)\n", []
+        "Review410074_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :> T\n           ** U\n    | B -> w\n",
+        []
+        "Review410075_nlb.fs",
+        "let y =\n    let v = x :> T\n    ** U\n    v\n",
+        [
+            "Review410075_nlb.fs(2,5): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+            "Review410075_nlb.fs(3,5): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410076_nlb2.fs", "let y =\n    let v =\n        x :> T\n        ** U\n    v\n", []
+        "Review410077_nl.fs", "let y =\n    x :> T\n    % U\n", []
+        "Review410078_nl.fs",
+        "let y =\n    x :> T\n   % U\n",
+        [
+            "Review410078_nl.fs(3,4): error FS0010: Unexpected symbol '{0} in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410078_nl.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410079_nl.fs", "let y =\n    x :> T\n     % U\n", []
+        "Review410080_nl.fs", "let y =\n    x :> T\n        % U\n", []
+        "Review410081_nlp.fs", "let y =\n    (x :> T\n     % U)\n", []
+        "Review410082_nlp2.fs", "let y =\n    (x :> T\n    % U)\n", []
+        "Review410083_nll.fs", "let y =\n    [ x :> T\n      % U ]\n", []
+        "Review410084_nlf.fs", "let y =\n    f (x :> T\n       % U)\n", []
+        "Review410085_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :> T\n           % U\n    | B -> w\n",
+        []
+        "Review410086_nlb.fs", "let y =\n    let v = x :> T\n    % U\n    v\n", []
+        "Review410087_nlb2.fs", "let y =\n    let v =\n        x :> T\n        % U\n    v\n", []
+        "Review410110_nl.fs", "let y =\n    x :> T\n    *U\n", []
+        "Review410111_nl.fs", "let y =\n    x :> T\n   *U\n", []
+        "Review410112_nl.fs", "let y =\n    x :> T\n     *U\n", []
+        "Review410113_nl.fs", "let y =\n    x :> T\n        *U\n", []
+        "Review410114_nlp.fs", "let y =\n    (x :> T\n     *U)\n", []
+        "Review410115_nlp2.fs", "let y =\n    (x :> T\n    *U)\n", []
+        "Review410116_nll.fs", "let y =\n    [ x :> T\n      *U ]\n", []
+        "Review410117_nlf.fs", "let y =\n    f (x :> T\n       *U)\n", []
+        "Review410118_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :> T\n           *U\n    | B -> w\n",
+        []
+        "Review410119_nlb.fs",
+        "let y =\n    let v = x :> T\n    *U\n    v\n",
+        [
+            "Review410119_nlb.fs(3,6): error FS0010: Unexpected identifier in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410120_nlb2.fs", "let y =\n    let v =\n        x :> T\n        *U\n    v\n", []
+        "Review410121_nl.fs", "let y =\n    x :> T\n    * U * V\n", []
+        "Review410122_nl.fs", "let y =\n    x :> T\n   * U * V\n", []
+        "Review410123_nl.fs", "let y =\n    x :> T\n     * U * V\n", []
+        "Review410124_nl.fs", "let y =\n    x :> T\n        * U * V\n", []
+        "Review410125_nlp.fs", "let y =\n    (x :> T\n     * U * V)\n", []
+        "Review410126_nlp2.fs", "let y =\n    (x :> T\n    * U * V)\n", []
+        "Review410127_nll.fs", "let y =\n    [ x :> T\n      * U * V ]\n", []
+        "Review410128_nlf.fs", "let y =\n    f (x :> T\n       * U * V)\n", []
+        "Review410129_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :> T\n           * U * V\n    | B -> w\n",
+        []
+        "Review410130_nlb.fs",
+        "let y =\n    let v = x :> T\n    * U * V\n    v\n",
+        [
+            "Review410130_nlb.fs(3,7): error FS0010: Unexpected identifier in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410131_nlb2.fs", "let y =\n    let v =\n        x :> T\n        * U * V\n    v\n", []
+        "Review410134_nl.fs", "let y =\n    x :> T\n     list\n", []
+        "Review410135_nl.fs", "let y =\n    x :> T\n        list\n", []
+        "Review410137_nlp2.fs", "let y =\n    (x :> T\n    list)\n", []
+        "Review410140_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :> T\n           list\n    | B -> w\n",
+        []
+        "Review410143_nl.fs",
+        "let y =\n    x :> T\n    <int>\n",
+        [
+            "Review410143_nl.fs(3,5): error FS0010: Unexpected symbol '<' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410144_nl.fs",
+        "let y =\n    x :> T\n   <int>\n",
+        [
+            "Review410144_nl.fs(3,4): error FS0010: Unexpected symbol '<' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410144_nl.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410145_nl.fs",
+        "let y =\n    x :> T\n     <int>\n",
+        [
+            "Review410145_nl.fs(3,6): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+        "Review410146_nl.fs",
+        "let y =\n    x :> T\n        <int>\n",
+        [
+            "Review410146_nl.fs(3,9): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+        "Review410147_nlp.fs",
+        "let y =\n    (x :> T\n     <int>)\n",
+        [
+            "Review410147_nlp.fs(3,6): error FS0010: Unexpected symbol '<' in expression"
+            "Review410147_nlp.fs(3,10): error FS3156: Unexpected token '>' or incomplete expression"
+            "Review410147_nlp.fs(3,11): error FS0010: Unexpected symbol ')' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410148_nlp2.fs",
+        "let y =\n    (x :> T\n    <int>)\n",
+        [
+            "Review410148_nlp2.fs(3,5): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+        "Review410149_nll.fs",
+        "let y =\n    [ x :> T\n      <int> ]\n",
+        [
+            "Review410149_nll.fs(3,7): error FS0010: Unexpected symbol '<' in expression. Expected ']' or other token."
+            "Review410149_nll.fs(2,5): error FS0598: Unmatched '['"
+            "Review410149_nll.fs(3,13): error FS0010: Unexpected symbol ']' in expression"
+            "Review410149_nll.fs(3,11): error FS3156: Unexpected token '>' or incomplete expression"
+        ]
+        "Review410150_nlf.fs",
+        "let y =\n    f (x :> T\n       <int>)\n",
+        [
+            "Review410150_nlf.fs(3,8): error FS0010: Unexpected symbol '<' in expression"
+            "Review410150_nlf.fs(3,12): error FS3156: Unexpected token '>' or incomplete expression"
+            "Review410150_nlf.fs(3,13): error FS0010: Unexpected symbol ')' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410151_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :> T\n           <int>\n    | B -> w\n",
+        [
+            "Review410151_nlm.fs(4,12): error FS0010: Unexpected symbol '<' in expression. Expected incomplete structured construct at or before this point or other token."
+            "Review410151_nlm.fs(5,5): error FS0010: Incomplete structured construct at or before this point in expression"
+            "Review410151_nlm.fs(4,16): error FS3156: Unexpected token '>' or incomplete expression"
+        ]
+        "Review410152_nlb.fs",
+        "let y =\n    let v = x :> T\n    <int>\n    v\n",
+        [
+            "Review410152_nlb.fs(3,5): error FS0010: Unexpected symbol '<' in expression"
+            "Review410152_nlb.fs(3,11): error FS0010: Incomplete structured construct at or before this point in expression"
+            "Review410152_nlb.fs(3,9): error FS3156: Unexpected token '>' or incomplete expression"
+        ]
+        "Review410153_nlb2.fs",
+        "let y =\n    let v =\n        x :> T\n        <int>\n    v\n",
+        [
+            "Review410153_nlb2.fs(4,9): error FS0010: Unexpected symbol '<' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410154_nl.fs",
+        "let y =\n    x :> T\n    .U\n",
+        [
+            "Review410154_nl.fs(3,5): error FS0010: Unexpected symbol '.' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410155_nl.fs",
+        "let y =\n    x :> T\n   .U\n",
+        [
+            "Review410155_nl.fs(3,4): error FS0010: Unexpected symbol '.' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410155_nl.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410156_nl.fs", "let y =\n    x :> T\n     .U\n", []
+        "Review410157_nl.fs", "let y =\n    x :> T\n        .U\n", []
+        "Review410158_nlp.fs",
+        "let y =\n    (x :> T\n     .U)\n",
+        [ "Review410158_nlp.fs(3,6): error FS0010: Unexpected symbol '.' in expression" ]
+        "Review410159_nlp2.fs", "let y =\n    (x :> T\n    .U)\n", []
+        "Review410160_nll.fs",
+        "let y =\n    [ x :> T\n      .U ]\n",
+        [
+            "Review410160_nll.fs(3,7): error FS0010: Unexpected symbol '.' in expression. Expected ']' or other token."
+            "Review410160_nll.fs(2,5): error FS0598: Unmatched '['"
+        ]
+        "Review410161_nlf.fs",
+        "let y =\n    f (x :> T\n       .U)\n",
+        [ "Review410161_nlf.fs(3,8): error FS0010: Unexpected symbol '.' in expression" ]
+        "Review410162_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :> T\n           .U\n    | B -> w\n",
+        [
+            "Review410162_nlm.fs(4,12): error FS0010: Unexpected symbol '.' in expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410163_nlb.fs",
+        "let y =\n    let v = x :> T\n    .U\n    v\n",
+        [ "Review410163_nlb.fs(3,5): error FS0010: Unexpected symbol '.' in expression" ]
+        "Review410164_nlb2.fs",
+        "let y =\n    let v =\n        x :> T\n        .U\n    v\n",
+        [
+            "Review410164_nlb2.fs(4,9): error FS0010: Unexpected symbol '.' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410166_nl.fs",
+        "let y =\n    x :> T\n   []\n",
+        [
+            "Review410166_nl.fs(3,4): error FS0010: Unexpected symbol '[' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410166_nl.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410167_nl.fs", "let y =\n    x :> T\n     []\n", []
+        "Review410168_nl.fs", "let y =\n    x :> T\n        []\n", []
+        "Review410170_nlp2.fs", "let y =\n    (x :> T\n    [])\n", []
+        "Review410173_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :> T\n           []\n    | B -> w\n",
+        []
+        "Review410176_nlt.fs", "let y =\n    x :> int *\n    int\n", []
+        "Review410177_nlt2.fs", "let y =\n    x :> int\n    *\n    int\n", []
+        "Review410178_nlt3.fs", "let y =\n    x :> T<int>\n    * U\n", []
+        "Review410179_nlt4.fs", "let y =\n    x :> T list\n    * U\n", []
+        "Review410180_nlt5.fs", "let y =\n    a + x :> T\n    * U\n", []
+        "Review410181_nlt6.fs", "let y =\n    x :> T\n    * 2\n", []
+        "Review410182_nlt7.fs", "let y =\n    x :> T\n    * (2)\n", []
+        "Review410183_nl.fs", "let y =\n    x :?> T\n    * U\n", []
+        "Review410184_nl.fs", "let y =\n    x :?> T\n   * U\n", []
+        "Review410185_nl.fs", "let y =\n    x :?> T\n     * U\n", []
+        "Review410186_nl.fs", "let y =\n    x :?> T\n        * U\n", []
+        "Review410187_nlp.fs", "let y =\n    (x :?> T\n     * U)\n", []
+        "Review410188_nlp2.fs", "let y =\n    (x :?> T\n    * U)\n", []
+        "Review410189_nll.fs", "let y =\n    [ x :?> T\n      * U ]\n", []
+        "Review410190_nlf.fs", "let y =\n    f (x :?> T\n       * U)\n", []
+        "Review410191_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :?> T\n           * U\n    | B -> w\n",
+        []
+        "Review410192_nlb.fs",
+        "let y =\n    let v = x :?> T\n    * U\n    v\n",
+        [
+            "Review410192_nlb.fs(3,7): error FS0010: Unexpected identifier in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410193_nlb2.fs", "let y =\n    let v =\n        x :?> T\n        * U\n    v\n", []
+        "Review410194_nl.fs", "let y =\n    x :?> T\n    / U\n", []
+        "Review410195_nl.fs", "let y =\n    x :?> T\n   / U\n", []
+        "Review410196_nl.fs", "let y =\n    x :?> T\n     / U\n", []
+        "Review410197_nl.fs", "let y =\n    x :?> T\n        / U\n", []
+        "Review410198_nlp.fs", "let y =\n    (x :?> T\n     / U)\n", []
+        "Review410199_nlp2.fs", "let y =\n    (x :?> T\n    / U)\n", []
+        "Review410200_nll.fs", "let y =\n    [ x :?> T\n      / U ]\n", []
+        "Review410201_nlf.fs", "let y =\n    f (x :?> T\n       / U)\n", []
+        "Review410202_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :?> T\n           / U\n    | B -> w\n",
+        []
+        "Review410203_nlb.fs",
+        "let y =\n    let v = x :?> T\n    / U\n    v\n",
+        [
+            "Review410203_nlb.fs(2,5): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+            "Review410203_nlb.fs(3,5): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410204_nlb2.fs", "let y =\n    let v =\n        x :?> T\n        / U\n    v\n", []
+        "Review410205_nl.fs",
+        "let y =\n    x :?> T\n    -> U\n",
+        [
+            "Review410205_nl.fs(3,5): error FS0596: The use of '->' in sequence and computation expressions is limited to the form 'for pat in expr -> expr'. Use the syntax 'for ... in ... do ... yield...' to generate elements in more complex sequence expressions."
+        ]
+        "Review410206_nl.fs",
+        "let y =\n    x :?> T\n   -> U\n",
+        [
+            "Review410206_nl.fs(3,4): error FS0010: Unexpected symbol '->' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410206_nl.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+            "Review410206_nl.fs(3,4): error FS0596: The use of '->' in sequence and computation expressions is limited to the form 'for pat in expr -> expr'. Use the syntax 'for ... in ... do ... yield...' to generate elements in more complex sequence expressions."
+        ]
+        "Review410207_nl.fs", "let y =\n    x :?> T\n     -> U\n", []
+        "Review410208_nl.fs", "let y =\n    x :?> T\n        -> U\n", []
+        "Review410209_nlp.fs",
+        "let y =\n    (x :?> T\n     -> U)\n",
+        [
+            "Review410209_nlp.fs(3,6): error FS0596: The use of '->' in sequence and computation expressions is limited to the form 'for pat in expr -> expr'. Use the syntax 'for ... in ... do ... yield...' to generate elements in more complex sequence expressions."
+        ]
+        "Review410210_nlp2.fs", "let y =\n    (x :?> T\n    -> U)\n", []
+        "Review410211_nll.fs",
+        "let y =\n    [ x :?> T\n      -> U ]\n",
+        [
+            "Review410211_nll.fs(3,7): error FS0596: The use of '->' in sequence and computation expressions is limited to the form 'for pat in expr -> expr'. Use the syntax 'for ... in ... do ... yield...' to generate elements in more complex sequence expressions."
+        ]
+        "Review410212_nlf.fs",
+        "let y =\n    f (x :?> T\n       -> U)\n",
+        [
+            "Review410212_nlf.fs(3,8): error FS0596: The use of '->' in sequence and computation expressions is limited to the form 'for pat in expr -> expr'. Use the syntax 'for ... in ... do ... yield...' to generate elements in more complex sequence expressions."
+        ]
+        "Review410213_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :?> T\n           -> U\n    | B -> w\n",
+        [
+            "Review410213_nlm.fs(4,12): error FS0596: The use of '->' in sequence and computation expressions is limited to the form 'for pat in expr -> expr'. Use the syntax 'for ... in ... do ... yield...' to generate elements in more complex sequence expressions."
+        ]
+        "Review410214_nlb.fs",
+        "let y =\n    let v = x :?> T\n    -> U\n    v\n",
+        [
+            "Review410214_nlb.fs(3,5): error FS0596: The use of '->' in sequence and computation expressions is limited to the form 'for pat in expr -> expr'. Use the syntax 'for ... in ... do ... yield...' to generate elements in more complex sequence expressions."
+        ]
+        "Review410215_nlb2.fs",
+        "let y =\n    let v =\n        x :?> T\n        -> U\n    v\n",
+        [
+            "Review410215_nlb2.fs(4,9): error FS0596: The use of '->' in sequence and computation expressions is limited to the form 'for pat in expr -> expr'. Use the syntax 'for ... in ... do ... yield...' to generate elements in more complex sequence expressions."
+        ]
+        "Review410216_nl.fs",
+        "let y =\n    x :?> T\n    ^ U\n",
+        [
+            "Review410216_nl.fs(3,7): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410217_nl.fs",
+        "let y =\n    x :?> T\n   ^ U\n",
+        [
+            "Review410217_nl.fs(3,6): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410218_nl.fs",
+        "let y =\n    x :?> T\n     ^ U\n",
+        [
+            "Review410218_nl.fs(3,8): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410219_nl.fs",
+        "let y =\n    x :?> T\n        ^ U\n",
+        [
+            "Review410219_nl.fs(3,11): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410220_nlp.fs",
+        "let y =\n    (x :?> T\n     ^ U)\n",
+        [
+            "Review410220_nlp.fs(3,8): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410221_nlp2.fs",
+        "let y =\n    (x :?> T\n    ^ U)\n",
+        [
+            "Review410221_nlp2.fs(3,7): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410222_nll.fs",
+        "let y =\n    [ x :?> T\n      ^ U ]\n",
+        [
+            "Review410222_nll.fs(3,9): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410223_nlf.fs",
+        "let y =\n    f (x :?> T\n       ^ U)\n",
+        [
+            "Review410223_nlf.fs(3,10): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410224_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :?> T\n           ^ U\n    | B -> w\n",
+        [
+            "Review410224_nlm.fs(4,14): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410225_nlb.fs", "let y =\n    let v = x :?> T\n    ^ U\n    v\n", []
+        "Review410226_nlb2.fs",
+        "let y =\n    let v =\n        x :?> T\n        ^ U\n    v\n",
+        [
+            "Review410226_nlb2.fs(4,11): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410227_nl.fs",
+        "let y =\n    x :?> T\n    @ U\n",
+        [
+            "Review410227_nl.fs(3,7): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410228_nl.fs",
+        "let y =\n    x :?> T\n   @ U\n",
+        [
+            "Review410228_nl.fs(3,6): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410229_nl.fs",
+        "let y =\n    x :?> T\n     @ U\n",
+        [
+            "Review410229_nl.fs(3,8): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410230_nl.fs",
+        "let y =\n    x :?> T\n        @ U\n",
+        [
+            "Review410230_nl.fs(3,11): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410231_nlp.fs",
+        "let y =\n    (x :?> T\n     @ U)\n",
+        [
+            "Review410231_nlp.fs(3,8): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410232_nlp2.fs",
+        "let y =\n    (x :?> T\n    @ U)\n",
+        [
+            "Review410232_nlp2.fs(3,7): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410233_nll.fs",
+        "let y =\n    [ x :?> T\n      @ U ]\n",
+        [
+            "Review410233_nll.fs(3,9): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410234_nlf.fs",
+        "let y =\n    f (x :?> T\n       @ U)\n",
+        [
+            "Review410234_nlf.fs(3,10): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410235_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :?> T\n           @ U\n    | B -> w\n",
+        [
+            "Review410235_nlm.fs(4,14): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410236_nlb.fs",
+        "let y =\n    let v = x :?> T\n    @ U\n    v\n",
+        [ "Review410236_nlb.fs(3,5): error FS1208: Invalid prefix operator" ]
+        "Review410237_nlb2.fs",
+        "let y =\n    let v =\n        x :?> T\n        @ U\n    v\n",
+        [
+            "Review410237_nlb2.fs(4,11): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410238_nl.fs",
+        "let y =\n    x :?> T\n    < U\n",
+        [
+            "Review410238_nl.fs(3,5): error FS0010: Unexpected symbol '<' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410239_nl.fs",
+        "let y =\n    x :?> T\n   < U\n",
+        [
+            "Review410239_nl.fs(3,4): error FS0010: Unexpected symbol '<' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410239_nl.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410240_nl.fs",
+        "let y =\n    x :?> T\n     < U\n",
+        [ "Review410240_nl.fs(4,1): error FS1241: Expected type argument or static argument" ]
+        "Review410241_nl.fs",
+        "let y =\n    x :?> T\n        < U\n",
+        [ "Review410241_nl.fs(4,1): error FS1241: Expected type argument or static argument" ]
+        "Review410242_nlp.fs",
+        "let y =\n    (x :?> T\n     < U)\n",
+        [ "Review410242_nlp.fs(3,6): error FS0010: Unexpected symbol '<' in expression" ]
+        "Review410243_nlp2.fs",
+        "let y =\n    (x :?> T\n    < U)\n",
+        [ "Review410243_nlp2.fs(3,8): error FS1241: Expected type argument or static argument" ]
+        "Review410244_nll.fs",
+        "let y =\n    [ x :?> T\n      < U ]\n",
+        [
+            "Review410244_nll.fs(3,7): error FS0010: Unexpected symbol '<' in expression. Expected ']' or other token."
+            "Review410244_nll.fs(2,5): error FS0598: Unmatched '['"
+        ]
+        "Review410245_nlf.fs",
+        "let y =\n    f (x :?> T\n       < U)\n",
+        [ "Review410245_nlf.fs(3,8): error FS0010: Unexpected symbol '<' in expression" ]
+        "Review410246_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :?> T\n           < U\n    | B -> w\n",
+        [
+            "Review410246_nlm.fs(4,12): error FS0010: Unexpected symbol '<' in expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410247_nlb.fs",
+        "let y =\n    let v = x :?> T\n    < U\n    v\n",
+        [ "Review410247_nlb.fs(3,5): error FS0010: Unexpected symbol '<' in expression" ]
+        "Review410248_nlb2.fs",
+        "let y =\n    let v =\n        x :?> T\n        < U\n    v\n",
+        [
+            "Review410248_nlb2.fs(4,9): error FS0010: Unexpected symbol '<' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410249_nl.fs", "let y =\n    x :?> T\n    ** U\n", []
+        "Review410250_nl.fs", "let y =\n    x :?> T\n   ** U\n", []
+        "Review410251_nl.fs", "let y =\n    x :?> T\n     ** U\n", []
+        "Review410252_nl.fs", "let y =\n    x :?> T\n        ** U\n", []
+        "Review410253_nlp.fs", "let y =\n    (x :?> T\n     ** U)\n", []
+        "Review410254_nlp2.fs", "let y =\n    (x :?> T\n    ** U)\n", []
+        "Review410255_nll.fs", "let y =\n    [ x :?> T\n      ** U ]\n", []
+        "Review410256_nlf.fs", "let y =\n    f (x :?> T\n       ** U)\n", []
+        "Review410257_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :?> T\n           ** U\n    | B -> w\n",
+        []
+        "Review410258_nlb.fs",
+        "let y =\n    let v = x :?> T\n    ** U\n    v\n",
+        [
+            "Review410258_nlb.fs(2,5): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+            "Review410258_nlb.fs(3,5): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410259_nlb2.fs", "let y =\n    let v =\n        x :?> T\n        ** U\n    v\n", []
+        "Review410260_nl.fs", "let y =\n    x :?> T\n    % U\n", []
+        "Review410261_nl.fs",
+        "let y =\n    x :?> T\n   % U\n",
+        [
+            "Review410261_nl.fs(3,4): error FS0010: Unexpected symbol '{0} in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410261_nl.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410262_nl.fs", "let y =\n    x :?> T\n     % U\n", []
+        "Review410263_nl.fs", "let y =\n    x :?> T\n        % U\n", []
+        "Review410264_nlp.fs", "let y =\n    (x :?> T\n     % U)\n", []
+        "Review410265_nlp2.fs", "let y =\n    (x :?> T\n    % U)\n", []
+        "Review410266_nll.fs", "let y =\n    [ x :?> T\n      % U ]\n", []
+        "Review410267_nlf.fs", "let y =\n    f (x :?> T\n       % U)\n", []
+        "Review410268_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :?> T\n           % U\n    | B -> w\n",
+        []
+        "Review410269_nlb.fs", "let y =\n    let v = x :?> T\n    % U\n    v\n", []
+        "Review410270_nlb2.fs", "let y =\n    let v =\n        x :?> T\n        % U\n    v\n", []
+        "Review410293_nl.fs", "let y =\n    x :?> T\n    *U\n", []
+        "Review410294_nl.fs", "let y =\n    x :?> T\n   *U\n", []
+        "Review410295_nl.fs", "let y =\n    x :?> T\n     *U\n", []
+        "Review410296_nl.fs", "let y =\n    x :?> T\n        *U\n", []
+        "Review410297_nlp.fs", "let y =\n    (x :?> T\n     *U)\n", []
+        "Review410298_nlp2.fs", "let y =\n    (x :?> T\n    *U)\n", []
+        "Review410299_nll.fs", "let y =\n    [ x :?> T\n      *U ]\n", []
+        "Review410300_nlf.fs", "let y =\n    f (x :?> T\n       *U)\n", []
+        "Review410301_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :?> T\n           *U\n    | B -> w\n",
+        []
+        "Review410302_nlb.fs",
+        "let y =\n    let v = x :?> T\n    *U\n    v\n",
+        [
+            "Review410302_nlb.fs(3,6): error FS0010: Unexpected identifier in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410303_nlb2.fs", "let y =\n    let v =\n        x :?> T\n        *U\n    v\n", []
+        "Review410304_nl.fs", "let y =\n    x :?> T\n    * U * V\n", []
+        "Review410305_nl.fs", "let y =\n    x :?> T\n   * U * V\n", []
+        "Review410306_nl.fs", "let y =\n    x :?> T\n     * U * V\n", []
+        "Review410307_nl.fs", "let y =\n    x :?> T\n        * U * V\n", []
+        "Review410308_nlp.fs", "let y =\n    (x :?> T\n     * U * V)\n", []
+        "Review410309_nlp2.fs", "let y =\n    (x :?> T\n    * U * V)\n", []
+        "Review410310_nll.fs", "let y =\n    [ x :?> T\n      * U * V ]\n", []
+        "Review410311_nlf.fs", "let y =\n    f (x :?> T\n       * U * V)\n", []
+        "Review410312_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :?> T\n           * U * V\n    | B -> w\n",
+        []
+        "Review410313_nlb.fs",
+        "let y =\n    let v = x :?> T\n    * U * V\n    v\n",
+        [
+            "Review410313_nlb.fs(3,7): error FS0010: Unexpected identifier in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410314_nlb2.fs",
+        "let y =\n    let v =\n        x :?> T\n        * U * V\n    v\n",
+        []
+        "Review410317_nl.fs", "let y =\n    x :?> T\n     list\n", []
+        "Review410318_nl.fs", "let y =\n    x :?> T\n        list\n", []
+        "Review410320_nlp2.fs", "let y =\n    (x :?> T\n    list)\n", []
+        "Review410323_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :?> T\n           list\n    | B -> w\n",
+        []
+        "Review410326_nl.fs",
+        "let y =\n    x :?> T\n    <int>\n",
+        [
+            "Review410326_nl.fs(3,5): error FS0010: Unexpected symbol '<' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410327_nl.fs",
+        "let y =\n    x :?> T\n   <int>\n",
+        [
+            "Review410327_nl.fs(3,4): error FS0010: Unexpected symbol '<' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410327_nl.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410328_nl.fs",
+        "let y =\n    x :?> T\n     <int>\n",
+        [
+            "Review410328_nl.fs(3,6): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+        "Review410329_nl.fs",
+        "let y =\n    x :?> T\n        <int>\n",
+        [
+            "Review410329_nl.fs(3,9): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+        "Review410330_nlp.fs",
+        "let y =\n    (x :?> T\n     <int>)\n",
+        [
+            "Review410330_nlp.fs(3,6): error FS0010: Unexpected symbol '<' in expression"
+            "Review410330_nlp.fs(3,10): error FS3156: Unexpected token '>' or incomplete expression"
+            "Review410330_nlp.fs(3,11): error FS0010: Unexpected symbol ')' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410331_nlp2.fs",
+        "let y =\n    (x :?> T\n    <int>)\n",
+        [
+            "Review410331_nlp2.fs(3,5): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+        "Review410332_nll.fs",
+        "let y =\n    [ x :?> T\n      <int> ]\n",
+        [
+            "Review410332_nll.fs(3,7): error FS0010: Unexpected symbol '<' in expression. Expected ']' or other token."
+            "Review410332_nll.fs(2,5): error FS0598: Unmatched '['"
+            "Review410332_nll.fs(3,13): error FS0010: Unexpected symbol ']' in expression"
+            "Review410332_nll.fs(3,11): error FS3156: Unexpected token '>' or incomplete expression"
+        ]
+        "Review410333_nlf.fs",
+        "let y =\n    f (x :?> T\n       <int>)\n",
+        [
+            "Review410333_nlf.fs(3,8): error FS0010: Unexpected symbol '<' in expression"
+            "Review410333_nlf.fs(3,12): error FS3156: Unexpected token '>' or incomplete expression"
+            "Review410333_nlf.fs(3,13): error FS0010: Unexpected symbol ')' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410334_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :?> T\n           <int>\n    | B -> w\n",
+        [
+            "Review410334_nlm.fs(4,12): error FS0010: Unexpected symbol '<' in expression. Expected incomplete structured construct at or before this point or other token."
+            "Review410334_nlm.fs(5,5): error FS0010: Incomplete structured construct at or before this point in expression"
+            "Review410334_nlm.fs(4,16): error FS3156: Unexpected token '>' or incomplete expression"
+        ]
+        "Review410335_nlb.fs",
+        "let y =\n    let v = x :?> T\n    <int>\n    v\n",
+        [
+            "Review410335_nlb.fs(3,5): error FS0010: Unexpected symbol '<' in expression"
+            "Review410335_nlb.fs(3,11): error FS0010: Incomplete structured construct at or before this point in expression"
+            "Review410335_nlb.fs(3,9): error FS3156: Unexpected token '>' or incomplete expression"
+        ]
+        "Review410336_nlb2.fs",
+        "let y =\n    let v =\n        x :?> T\n        <int>\n    v\n",
+        [
+            "Review410336_nlb2.fs(4,9): error FS0010: Unexpected symbol '<' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410337_nl.fs",
+        "let y =\n    x :?> T\n    .U\n",
+        [
+            "Review410337_nl.fs(3,5): error FS0010: Unexpected symbol '.' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410338_nl.fs",
+        "let y =\n    x :?> T\n   .U\n",
+        [
+            "Review410338_nl.fs(3,4): error FS0010: Unexpected symbol '.' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410338_nl.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410339_nl.fs", "let y =\n    x :?> T\n     .U\n", []
+        "Review410340_nl.fs", "let y =\n    x :?> T\n        .U\n", []
+        "Review410341_nlp.fs",
+        "let y =\n    (x :?> T\n     .U)\n",
+        [ "Review410341_nlp.fs(3,6): error FS0010: Unexpected symbol '.' in expression" ]
+        "Review410342_nlp2.fs", "let y =\n    (x :?> T\n    .U)\n", []
+        "Review410343_nll.fs",
+        "let y =\n    [ x :?> T\n      .U ]\n",
+        [
+            "Review410343_nll.fs(3,7): error FS0010: Unexpected symbol '.' in expression. Expected ']' or other token."
+            "Review410343_nll.fs(2,5): error FS0598: Unmatched '['"
+        ]
+        "Review410344_nlf.fs",
+        "let y =\n    f (x :?> T\n       .U)\n",
+        [ "Review410344_nlf.fs(3,8): error FS0010: Unexpected symbol '.' in expression" ]
+        "Review410345_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :?> T\n           .U\n    | B -> w\n",
+        [
+            "Review410345_nlm.fs(4,12): error FS0010: Unexpected symbol '.' in expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410346_nlb.fs",
+        "let y =\n    let v = x :?> T\n    .U\n    v\n",
+        [ "Review410346_nlb.fs(3,5): error FS0010: Unexpected symbol '.' in expression" ]
+        "Review410347_nlb2.fs",
+        "let y =\n    let v =\n        x :?> T\n        .U\n    v\n",
+        [
+            "Review410347_nlb2.fs(4,9): error FS0010: Unexpected symbol '.' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410349_nl.fs",
+        "let y =\n    x :?> T\n   []\n",
+        [
+            "Review410349_nl.fs(3,4): error FS0010: Unexpected symbol '[' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410349_nl.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410350_nl.fs", "let y =\n    x :?> T\n     []\n", []
+        "Review410351_nl.fs", "let y =\n    x :?> T\n        []\n", []
+        "Review410353_nlp2.fs", "let y =\n    (x :?> T\n    [])\n", []
+        "Review410356_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :?> T\n           []\n    | B -> w\n",
+        []
+        "Review410359_nlt.fs", "let y =\n    x :?> int *\n    int\n", []
+        "Review410360_nlt2.fs", "let y =\n    x :?> int\n    *\n    int\n", []
+        "Review410361_nlt3.fs", "let y =\n    x :?> T<int>\n    * U\n", []
+        "Review410362_nlt4.fs", "let y =\n    x :?> T list\n    * U\n", []
+        "Review410363_nlt5.fs", "let y =\n    a + x :?> T\n    * U\n", []
+        "Review410364_nlt6.fs", "let y =\n    x :?> T\n    * 2\n", []
+        "Review410365_nlt7.fs", "let y =\n    x :?> T\n    * (2)\n", []
+        "Review410366_nl.fs", "let y =\n    x :? T\n    * U\n", []
+        "Review410367_nl.fs", "let y =\n    x :? T\n   * U\n", []
+        "Review410368_nl.fs", "let y =\n    x :? T\n     * U\n", []
+        "Review410369_nl.fs", "let y =\n    x :? T\n        * U\n", []
+        "Review410370_nlp.fs", "let y =\n    (x :? T\n     * U)\n", []
+        "Review410371_nlp2.fs", "let y =\n    (x :? T\n    * U)\n", []
+        "Review410372_nll.fs", "let y =\n    [ x :? T\n      * U ]\n", []
+        "Review410373_nlf.fs", "let y =\n    f (x :? T\n       * U)\n", []
+        "Review410374_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :? T\n           * U\n    | B -> w\n",
+        []
+        "Review410375_nlb.fs",
+        "let y =\n    let v = x :? T\n    * U\n    v\n",
+        [
+            "Review410375_nlb.fs(3,7): error FS0010: Unexpected identifier in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410376_nlb2.fs", "let y =\n    let v =\n        x :? T\n        * U\n    v\n", []
+        "Review410377_nl.fs", "let y =\n    x :? T\n    / U\n", []
+        "Review410378_nl.fs", "let y =\n    x :? T\n   / U\n", []
+        "Review410379_nl.fs", "let y =\n    x :? T\n     / U\n", []
+        "Review410380_nl.fs", "let y =\n    x :? T\n        / U\n", []
+        "Review410381_nlp.fs", "let y =\n    (x :? T\n     / U)\n", []
+        "Review410382_nlp2.fs", "let y =\n    (x :? T\n    / U)\n", []
+        "Review410383_nll.fs", "let y =\n    [ x :? T\n      / U ]\n", []
+        "Review410384_nlf.fs", "let y =\n    f (x :? T\n       / U)\n", []
+        "Review410385_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :? T\n           / U\n    | B -> w\n",
+        []
+        "Review410386_nlb.fs",
+        "let y =\n    let v = x :? T\n    / U\n    v\n",
+        [
+            "Review410386_nlb.fs(2,5): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+            "Review410386_nlb.fs(3,5): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410387_nlb2.fs", "let y =\n    let v =\n        x :? T\n        / U\n    v\n", []
+        "Review410388_nl.fs",
+        "let y =\n    x :? T\n    -> U\n",
+        [
+            "Review410388_nl.fs(3,5): error FS0596: The use of '->' in sequence and computation expressions is limited to the form 'for pat in expr -> expr'. Use the syntax 'for ... in ... do ... yield...' to generate elements in more complex sequence expressions."
+        ]
+        "Review410389_nl.fs",
+        "let y =\n    x :? T\n   -> U\n",
+        [
+            "Review410389_nl.fs(3,4): error FS0010: Unexpected symbol '->' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410389_nl.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+            "Review410389_nl.fs(3,4): error FS0596: The use of '->' in sequence and computation expressions is limited to the form 'for pat in expr -> expr'. Use the syntax 'for ... in ... do ... yield...' to generate elements in more complex sequence expressions."
+        ]
+        "Review410390_nl.fs", "let y =\n    x :? T\n     -> U\n", []
+        "Review410391_nl.fs", "let y =\n    x :? T\n        -> U\n", []
+        "Review410392_nlp.fs",
+        "let y =\n    (x :? T\n     -> U)\n",
+        [
+            "Review410392_nlp.fs(3,6): error FS0596: The use of '->' in sequence and computation expressions is limited to the form 'for pat in expr -> expr'. Use the syntax 'for ... in ... do ... yield...' to generate elements in more complex sequence expressions."
+        ]
+        "Review410393_nlp2.fs", "let y =\n    (x :? T\n    -> U)\n", []
+        "Review410394_nll.fs",
+        "let y =\n    [ x :? T\n      -> U ]\n",
+        [
+            "Review410394_nll.fs(3,7): error FS0596: The use of '->' in sequence and computation expressions is limited to the form 'for pat in expr -> expr'. Use the syntax 'for ... in ... do ... yield...' to generate elements in more complex sequence expressions."
+        ]
+        "Review410395_nlf.fs",
+        "let y =\n    f (x :? T\n       -> U)\n",
+        [
+            "Review410395_nlf.fs(3,8): error FS0596: The use of '->' in sequence and computation expressions is limited to the form 'for pat in expr -> expr'. Use the syntax 'for ... in ... do ... yield...' to generate elements in more complex sequence expressions."
+        ]
+        "Review410396_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :? T\n           -> U\n    | B -> w\n",
+        [
+            "Review410396_nlm.fs(4,12): error FS0596: The use of '->' in sequence and computation expressions is limited to the form 'for pat in expr -> expr'. Use the syntax 'for ... in ... do ... yield...' to generate elements in more complex sequence expressions."
+        ]
+        "Review410397_nlb.fs",
+        "let y =\n    let v = x :? T\n    -> U\n    v\n",
+        [
+            "Review410397_nlb.fs(3,5): error FS0596: The use of '->' in sequence and computation expressions is limited to the form 'for pat in expr -> expr'. Use the syntax 'for ... in ... do ... yield...' to generate elements in more complex sequence expressions."
+        ]
+        "Review410398_nlb2.fs",
+        "let y =\n    let v =\n        x :? T\n        -> U\n    v\n",
+        [
+            "Review410398_nlb2.fs(4,9): error FS0596: The use of '->' in sequence and computation expressions is limited to the form 'for pat in expr -> expr'. Use the syntax 'for ... in ... do ... yield...' to generate elements in more complex sequence expressions."
+        ]
+        "Review410399_nl.fs",
+        "let y =\n    x :? T\n    ^ U\n",
+        [
+            "Review410399_nl.fs(3,7): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410400_nl.fs",
+        "let y =\n    x :? T\n   ^ U\n",
+        [
+            "Review410400_nl.fs(3,6): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410401_nl.fs",
+        "let y =\n    x :? T\n     ^ U\n",
+        [
+            "Review410401_nl.fs(3,8): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410402_nl.fs",
+        "let y =\n    x :? T\n        ^ U\n",
+        [
+            "Review410402_nl.fs(3,11): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410403_nlp.fs",
+        "let y =\n    (x :? T\n     ^ U)\n",
+        [
+            "Review410403_nlp.fs(3,8): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410404_nlp2.fs",
+        "let y =\n    (x :? T\n    ^ U)\n",
+        [
+            "Review410404_nlp2.fs(3,7): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410405_nll.fs",
+        "let y =\n    [ x :? T\n      ^ U ]\n",
+        [
+            "Review410405_nll.fs(3,9): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410406_nlf.fs",
+        "let y =\n    f (x :? T\n       ^ U)\n",
+        [
+            "Review410406_nlf.fs(3,10): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410407_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :? T\n           ^ U\n    | B -> w\n",
+        [
+            "Review410407_nlm.fs(4,14): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410408_nlb.fs", "let y =\n    let v = x :? T\n    ^ U\n    v\n", []
+        "Review410409_nlb2.fs",
+        "let y =\n    let v =\n        x :? T\n        ^ U\n    v\n",
+        [
+            "Review410409_nlb2.fs(4,11): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410410_nl.fs",
+        "let y =\n    x :? T\n    @ U\n",
+        [
+            "Review410410_nl.fs(3,7): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410411_nl.fs",
+        "let y =\n    x :? T\n   @ U\n",
+        [
+            "Review410411_nl.fs(3,6): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410412_nl.fs",
+        "let y =\n    x :? T\n     @ U\n",
+        [
+            "Review410412_nl.fs(3,8): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410413_nl.fs",
+        "let y =\n    x :? T\n        @ U\n",
+        [
+            "Review410413_nl.fs(3,11): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410414_nlp.fs",
+        "let y =\n    (x :? T\n     @ U)\n",
+        [
+            "Review410414_nlp.fs(3,8): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410415_nlp2.fs",
+        "let y =\n    (x :? T\n    @ U)\n",
+        [
+            "Review410415_nlp2.fs(3,7): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410416_nll.fs",
+        "let y =\n    [ x :? T\n      @ U ]\n",
+        [
+            "Review410416_nll.fs(3,9): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410417_nlf.fs",
+        "let y =\n    f (x :? T\n       @ U)\n",
+        [
+            "Review410417_nlf.fs(3,10): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410418_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :? T\n           @ U\n    | B -> w\n",
+        [
+            "Review410418_nlm.fs(4,14): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410419_nlb.fs",
+        "let y =\n    let v = x :? T\n    @ U\n    v\n",
+        [ "Review410419_nlb.fs(3,5): error FS1208: Invalid prefix operator" ]
+        "Review410420_nlb2.fs",
+        "let y =\n    let v =\n        x :? T\n        @ U\n    v\n",
+        [
+            "Review410420_nlb2.fs(4,11): error FS0010: Unexpected identifier in expression. Expected integer literal, '(', '-' or other token."
+        ]
+        "Review410421_nl.fs",
+        "let y =\n    x :? T\n    < U\n",
+        [
+            "Review410421_nl.fs(3,5): error FS0010: Unexpected symbol '<' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410422_nl.fs",
+        "let y =\n    x :? T\n   < U\n",
+        [
+            "Review410422_nl.fs(3,4): error FS0010: Unexpected symbol '<' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410422_nl.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410423_nl.fs",
+        "let y =\n    x :? T\n     < U\n",
+        [ "Review410423_nl.fs(4,1): error FS1241: Expected type argument or static argument" ]
+        "Review410424_nl.fs",
+        "let y =\n    x :? T\n        < U\n",
+        [ "Review410424_nl.fs(4,1): error FS1241: Expected type argument or static argument" ]
+        "Review410425_nlp.fs",
+        "let y =\n    (x :? T\n     < U)\n",
+        [ "Review410425_nlp.fs(3,6): error FS0010: Unexpected symbol '<' in expression" ]
+        "Review410426_nlp2.fs",
+        "let y =\n    (x :? T\n    < U)\n",
+        [ "Review410426_nlp2.fs(3,8): error FS1241: Expected type argument or static argument" ]
+        "Review410427_nll.fs",
+        "let y =\n    [ x :? T\n      < U ]\n",
+        [
+            "Review410427_nll.fs(3,7): error FS0010: Unexpected symbol '<' in expression. Expected ']' or other token."
+            "Review410427_nll.fs(2,5): error FS0598: Unmatched '['"
+        ]
+        "Review410428_nlf.fs",
+        "let y =\n    f (x :? T\n       < U)\n",
+        [ "Review410428_nlf.fs(3,8): error FS0010: Unexpected symbol '<' in expression" ]
+        "Review410429_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :? T\n           < U\n    | B -> w\n",
+        [
+            "Review410429_nlm.fs(4,12): error FS0010: Unexpected symbol '<' in expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410430_nlb.fs",
+        "let y =\n    let v = x :? T\n    < U\n    v\n",
+        [ "Review410430_nlb.fs(3,5): error FS0010: Unexpected symbol '<' in expression" ]
+        "Review410431_nlb2.fs",
+        "let y =\n    let v =\n        x :? T\n        < U\n    v\n",
+        [
+            "Review410431_nlb2.fs(4,9): error FS0010: Unexpected symbol '<' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410432_nl.fs", "let y =\n    x :? T\n    ** U\n", []
+        "Review410433_nl.fs", "let y =\n    x :? T\n   ** U\n", []
+        "Review410434_nl.fs", "let y =\n    x :? T\n     ** U\n", []
+        "Review410435_nl.fs", "let y =\n    x :? T\n        ** U\n", []
+        "Review410436_nlp.fs", "let y =\n    (x :? T\n     ** U)\n", []
+        "Review410437_nlp2.fs", "let y =\n    (x :? T\n    ** U)\n", []
+        "Review410438_nll.fs", "let y =\n    [ x :? T\n      ** U ]\n", []
+        "Review410439_nlf.fs", "let y =\n    f (x :? T\n       ** U)\n", []
+        "Review410440_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :? T\n           ** U\n    | B -> w\n",
+        []
+        "Review410441_nlb.fs",
+        "let y =\n    let v = x :? T\n    ** U\n    v\n",
+        [
+            "Review410441_nlb.fs(2,5): error FS0588: The block following this 'let' is unfinished. Every code block is an expression and must have a result. 'let' cannot be the final code element in a block. Consider giving this block an explicit result."
+            "Review410441_nlb.fs(3,5): error FS0010: Unexpected infix operator in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410442_nlb2.fs", "let y =\n    let v =\n        x :? T\n        ** U\n    v\n", []
+        "Review410443_nl.fs", "let y =\n    x :? T\n    % U\n", []
+        "Review410444_nl.fs",
+        "let y =\n    x :? T\n   % U\n",
+        [
+            "Review410444_nl.fs(3,4): error FS0010: Unexpected symbol '{0} in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410444_nl.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410445_nl.fs", "let y =\n    x :? T\n     % U\n", []
+        "Review410446_nl.fs", "let y =\n    x :? T\n        % U\n", []
+        "Review410447_nlp.fs", "let y =\n    (x :? T\n     % U)\n", []
+        "Review410448_nlp2.fs", "let y =\n    (x :? T\n    % U)\n", []
+        "Review410449_nll.fs", "let y =\n    [ x :? T\n      % U ]\n", []
+        "Review410450_nlf.fs", "let y =\n    f (x :? T\n       % U)\n", []
+        "Review410451_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :? T\n           % U\n    | B -> w\n",
+        []
+        "Review410452_nlb.fs", "let y =\n    let v = x :? T\n    % U\n    v\n", []
+        "Review410453_nlb2.fs", "let y =\n    let v =\n        x :? T\n        % U\n    v\n", []
+        "Review410476_nl.fs", "let y =\n    x :? T\n    *U\n", []
+        "Review410477_nl.fs", "let y =\n    x :? T\n   *U\n", []
+        "Review410478_nl.fs", "let y =\n    x :? T\n     *U\n", []
+        "Review410479_nl.fs", "let y =\n    x :? T\n        *U\n", []
+        "Review410480_nlp.fs", "let y =\n    (x :? T\n     *U)\n", []
+        "Review410481_nlp2.fs", "let y =\n    (x :? T\n    *U)\n", []
+        "Review410482_nll.fs", "let y =\n    [ x :? T\n      *U ]\n", []
+        "Review410483_nlf.fs", "let y =\n    f (x :? T\n       *U)\n", []
+        "Review410484_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :? T\n           *U\n    | B -> w\n",
+        []
+        "Review410485_nlb.fs",
+        "let y =\n    let v = x :? T\n    *U\n    v\n",
+        [
+            "Review410485_nlb.fs(3,6): error FS0010: Unexpected identifier in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410486_nlb2.fs", "let y =\n    let v =\n        x :? T\n        *U\n    v\n", []
+        "Review410487_nl.fs", "let y =\n    x :? T\n    * U * V\n", []
+        "Review410488_nl.fs", "let y =\n    x :? T\n   * U * V\n", []
+        "Review410489_nl.fs", "let y =\n    x :? T\n     * U * V\n", []
+        "Review410490_nl.fs", "let y =\n    x :? T\n        * U * V\n", []
+        "Review410491_nlp.fs", "let y =\n    (x :? T\n     * U * V)\n", []
+        "Review410492_nlp2.fs", "let y =\n    (x :? T\n    * U * V)\n", []
+        "Review410493_nll.fs", "let y =\n    [ x :? T\n      * U * V ]\n", []
+        "Review410494_nlf.fs", "let y =\n    f (x :? T\n       * U * V)\n", []
+        "Review410495_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :? T\n           * U * V\n    | B -> w\n",
+        []
+        "Review410496_nlb.fs",
+        "let y =\n    let v = x :? T\n    * U * V\n    v\n",
+        [
+            "Review410496_nlb.fs(3,7): error FS0010: Unexpected identifier in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410497_nlb2.fs", "let y =\n    let v =\n        x :? T\n        * U * V\n    v\n", []
+        "Review410500_nl.fs", "let y =\n    x :? T\n     list\n", []
+        "Review410501_nl.fs", "let y =\n    x :? T\n        list\n", []
+        "Review410503_nlp2.fs", "let y =\n    (x :? T\n    list)\n", []
+        "Review410506_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :? T\n           list\n    | B -> w\n",
+        []
+        "Review410509_nl.fs",
+        "let y =\n    x :? T\n    <int>\n",
+        [
+            "Review410509_nl.fs(3,5): error FS0010: Unexpected symbol '<' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410510_nl.fs",
+        "let y =\n    x :? T\n   <int>\n",
+        [
+            "Review410510_nl.fs(3,4): error FS0010: Unexpected symbol '<' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410510_nl.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410511_nl.fs",
+        "let y =\n    x :? T\n     <int>\n",
+        [
+            "Review410511_nl.fs(3,6): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+        "Review410512_nl.fs",
+        "let y =\n    x :? T\n        <int>\n",
+        [
+            "Review410512_nl.fs(3,9): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+        "Review410513_nlp.fs",
+        "let y =\n    (x :? T\n     <int>)\n",
+        [
+            "Review410513_nlp.fs(3,6): error FS0010: Unexpected symbol '<' in expression"
+            "Review410513_nlp.fs(3,10): error FS3156: Unexpected token '>' or incomplete expression"
+            "Review410513_nlp.fs(3,11): error FS0010: Unexpected symbol ')' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410514_nlp2.fs",
+        "let y =\n    (x :? T\n    <int>)\n",
+        [
+            "Review410514_nlp2.fs(3,5): warning FS1190: Remove spaces between the type name and type parameter, e.g. \"C<'T>\", not \"C <'T>\". Type parameters must be placed directly adjacent to the type name."
+        ]
+        "Review410515_nll.fs",
+        "let y =\n    [ x :? T\n      <int> ]\n",
+        [
+            "Review410515_nll.fs(3,7): error FS0010: Unexpected symbol '<' in expression. Expected ']' or other token."
+            "Review410515_nll.fs(2,5): error FS0598: Unmatched '['"
+            "Review410515_nll.fs(3,13): error FS0010: Unexpected symbol ']' in expression"
+            "Review410515_nll.fs(3,11): error FS3156: Unexpected token '>' or incomplete expression"
+        ]
+        "Review410516_nlf.fs",
+        "let y =\n    f (x :? T\n       <int>)\n",
+        [
+            "Review410516_nlf.fs(3,8): error FS0010: Unexpected symbol '<' in expression"
+            "Review410516_nlf.fs(3,12): error FS3156: Unexpected token '>' or incomplete expression"
+            "Review410516_nlf.fs(3,13): error FS0010: Unexpected symbol ')' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410517_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :? T\n           <int>\n    | B -> w\n",
+        [
+            "Review410517_nlm.fs(4,12): error FS0010: Unexpected symbol '<' in expression. Expected incomplete structured construct at or before this point or other token."
+            "Review410517_nlm.fs(5,5): error FS0010: Incomplete structured construct at or before this point in expression"
+            "Review410517_nlm.fs(4,16): error FS3156: Unexpected token '>' or incomplete expression"
+        ]
+        "Review410518_nlb.fs",
+        "let y =\n    let v = x :? T\n    <int>\n    v\n",
+        [
+            "Review410518_nlb.fs(3,5): error FS0010: Unexpected symbol '<' in expression"
+            "Review410518_nlb.fs(3,11): error FS0010: Incomplete structured construct at or before this point in expression"
+            "Review410518_nlb.fs(3,9): error FS3156: Unexpected token '>' or incomplete expression"
+        ]
+        "Review410519_nlb2.fs",
+        "let y =\n    let v =\n        x :? T\n        <int>\n    v\n",
+        [
+            "Review410519_nlb2.fs(4,9): error FS0010: Unexpected symbol '<' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410520_nl.fs",
+        "let y =\n    x :? T\n    .U\n",
+        [
+            "Review410520_nl.fs(3,5): error FS0010: Unexpected symbol '.' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410521_nl.fs",
+        "let y =\n    x :? T\n   .U\n",
+        [
+            "Review410521_nl.fs(3,4): error FS0010: Unexpected symbol '.' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410521_nl.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410522_nl.fs", "let y =\n    x :? T\n     .U\n", []
+        "Review410523_nl.fs", "let y =\n    x :? T\n        .U\n", []
+        "Review410524_nlp.fs",
+        "let y =\n    (x :? T\n     .U)\n",
+        [ "Review410524_nlp.fs(3,6): error FS0010: Unexpected symbol '.' in expression" ]
+        "Review410525_nlp2.fs", "let y =\n    (x :? T\n    .U)\n", []
+        "Review410526_nll.fs",
+        "let y =\n    [ x :? T\n      .U ]\n",
+        [
+            "Review410526_nll.fs(3,7): error FS0010: Unexpected symbol '.' in expression. Expected ']' or other token."
+            "Review410526_nll.fs(2,5): error FS0598: Unmatched '['"
+        ]
+        "Review410527_nlf.fs",
+        "let y =\n    f (x :? T\n       .U)\n",
+        [ "Review410527_nlf.fs(3,8): error FS0010: Unexpected symbol '.' in expression" ]
+        "Review410528_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :? T\n           .U\n    | B -> w\n",
+        [
+            "Review410528_nlm.fs(4,12): error FS0010: Unexpected symbol '.' in expression. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410529_nlb.fs",
+        "let y =\n    let v = x :? T\n    .U\n    v\n",
+        [ "Review410529_nlb.fs(3,5): error FS0010: Unexpected symbol '.' in expression" ]
+        "Review410530_nlb2.fs",
+        "let y =\n    let v =\n        x :? T\n        .U\n    v\n",
+        [
+            "Review410530_nlb2.fs(4,9): error FS0010: Unexpected symbol '.' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410532_nl.fs",
+        "let y =\n    x :? T\n   []\n",
+        [
+            "Review410532_nl.fs(3,4): error FS0010: Unexpected symbol '[' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410532_nl.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410533_nl.fs", "let y =\n    x :? T\n     []\n", []
+        "Review410534_nl.fs", "let y =\n    x :? T\n        []\n", []
+        "Review410536_nlp2.fs", "let y =\n    (x :? T\n    [])\n", []
+        "Review410539_nlm.fs",
+        "let y =\n    match z with\n    | A -> x :? T\n           []\n    | B -> w\n",
+        []
+        "Review410542_nlt.fs", "let y =\n    x :? int *\n    int\n", []
+        "Review410543_nlt2.fs", "let y =\n    x :? int\n    *\n    int\n", []
+        "Review410544_nlt3.fs", "let y =\n    x :? T<int>\n    * U\n", []
+        "Review410545_nlt4.fs", "let y =\n    x :? T list\n    * U\n", []
+        "Review410546_nlt5.fs", "let y =\n    a + x :? T\n    * U\n", []
+        "Review410547_nlt6.fs", "let y =\n    x :? T\n    * 2\n", []
+        "Review410548_nlt7.fs", "let y =\n    x :? T\n    * (2)\n", []
+        "Review410549_np.fs", "let y = x :> a: int\n", []
+        "Review410550_np.fs", "let y = (x :> a: int)\n", []
+        "Review410551_np.fs",
+        "let y = [ x :> a: int ]\n",
+        [
+            "Review410551_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410551_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410552_np.fs", "let y = f (x :> a: int) z\n", []
+        "Review410553_np.fs",
+        "let y = if x :> a: int then 1 else 2\n",
+        [
+            "Review410553_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression"
+            "Review410553_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410553_np.fs(1,31): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410553_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410554_np.fs",
+        "let y = { A = x :> a: int }\n",
+        [
+            "Review410554_np.fs(1,21): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410554_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410555_np.fs",
+        "let y = x :> a: int, 1\n",
+        [
+            "Review410555_np.fs(1,20): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410556_np.fs", "let y = 1, x :> a: int\n", []
+        "Review410557_np.fs",
+        "let y = x :> a: int = 1\n",
+        [
+            "Review410557_np.fs(1,21): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410558_np.fs",
+        "let y = x :> a: int && z\n",
+        [
+            "Review410558_np.fs(1,21): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410559_np.fs", "let y = x :> a:int\n", []
+        "Review410560_np.fs", "let y = (x :> a:int)\n", []
+        "Review410561_np.fs",
+        "let y = [ x :> a:int ]\n",
+        [
+            "Review410561_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410561_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410562_np.fs", "let y = f (x :> a:int) z\n", []
+        "Review410563_np.fs",
+        "let y = if x :> a:int then 1 else 2\n",
+        [
+            "Review410563_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression"
+            "Review410563_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410563_np.fs(1,30): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410563_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410564_np.fs",
+        "let y = { A = x :> a:int }\n",
+        [
+            "Review410564_np.fs(1,21): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410564_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410565_np.fs",
+        "let y = x :> a:int, 1\n",
+        [
+            "Review410565_np.fs(1,19): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410566_np.fs", "let y = 1, x :> a:int\n", []
+        "Review410567_np.fs",
+        "let y = x :> a:int = 1\n",
+        [
+            "Review410567_np.fs(1,20): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410568_np.fs",
+        "let y = x :> a:int && z\n",
+        [
+            "Review410568_np.fs(1,20): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410569_np.fs", "let y = x :> a: int -> int\n", []
+        "Review410570_np.fs", "let y = (x :> a: int -> int)\n", []
+        "Review410571_np.fs",
+        "let y = [ x :> a: int -> int ]\n",
+        [
+            "Review410571_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410571_np.fs(1,9): error FS0598: Unmatched '['"
+            "Review410571_np.fs(1,30): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410572_np.fs", "let y = f (x :> a: int -> int) z\n", []
+        "Review410573_np.fs",
+        "let y = if x :> a: int -> int then 1 else 2\n",
+        [
+            "Review410573_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression"
+            "Review410573_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410573_np.fs(1,31): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410574_np.fs",
+        "let y = { A = x :> a: int -> int }\n",
+        [
+            "Review410574_np.fs(1,21): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410574_np.fs(1,9): error FS0604: Unmatched '{'"
+            "Review410574_np.fs(1,34): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410575_np.fs",
+        "let y = x :> a: int -> int, 1\n",
+        [
+            "Review410575_np.fs(1,27): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410576_np.fs", "let y = 1, x :> a: int -> int\n", []
+        "Review410577_np.fs",
+        "let y = x :> a: int -> int = 1\n",
+        [
+            "Review410577_np.fs(1,28): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410578_np.fs",
+        "let y = x :> a: int -> int && z\n",
+        [
+            "Review410578_np.fs(1,28): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410579_np.fs", "let y = x :> int -> a: int\n", []
+        "Review410580_np.fs", "let y = (x :> int -> a: int)\n", []
+        "Review410581_np.fs",
+        "let y = [ x :> int -> a: int ]\n",
+        [
+            "Review410581_np.fs(1,24): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410581_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410582_np.fs", "let y = f (x :> int -> a: int) z\n", []
+        "Review410583_np.fs",
+        "let y = if x :> int -> a: int then 1 else 2\n",
+        [
+            "Review410583_np.fs(1,25): error FS0010: Unexpected symbol ':' in expression"
+            "Review410583_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410583_np.fs(1,38): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410583_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410584_np.fs",
+        "let y = { A = x :> int -> a: int }\n",
+        [
+            "Review410584_np.fs(1,28): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410584_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410585_np.fs",
+        "let y = x :> int -> a: int, 1\n",
+        [
+            "Review410585_np.fs(1,27): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410586_np.fs", "let y = 1, x :> int -> a: int\n", []
+        "Review410587_np.fs",
+        "let y = x :> int -> a: int = 1\n",
+        [
+            "Review410587_np.fs(1,28): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410588_np.fs",
+        "let y = x :> int -> a: int && z\n",
+        [
+            "Review410588_np.fs(1,28): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410589_np.fs", "let y = x :> a: int * int\n", []
+        "Review410590_np.fs", "let y = (x :> a: int * int)\n", []
+        "Review410591_np.fs",
+        "let y = [ x :> a: int * int ]\n",
+        [
+            "Review410591_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410591_np.fs(1,9): error FS0598: Unmatched '['"
+            "Review410591_np.fs(1,29): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410592_np.fs", "let y = f (x :> a: int * int) z\n", []
+        "Review410593_np.fs",
+        "let y = if x :> a: int * int then 1 else 2\n",
+        [
+            "Review410593_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression"
+            "Review410593_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410593_np.fs(1,30): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410594_np.fs",
+        "let y = { A = x :> a: int * int }\n",
+        [
+            "Review410594_np.fs(1,21): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410594_np.fs(1,9): error FS0604: Unmatched '{'"
+            "Review410594_np.fs(1,33): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410595_np.fs",
+        "let y = x :> a: int * int, 1\n",
+        [
+            "Review410595_np.fs(1,26): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410596_np.fs", "let y = 1, x :> a: int * int\n", []
+        "Review410597_np.fs",
+        "let y = x :> a: int * int = 1\n",
+        [
+            "Review410597_np.fs(1,27): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410598_np.fs",
+        "let y = x :> a: int * int && z\n",
+        [
+            "Review410598_np.fs(1,27): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410599_np.fs", "let y = x :> int * a: int\n", []
+        "Review410600_np.fs", "let y = (x :> int * a: int)\n", []
+        "Review410601_np.fs",
+        "let y = [ x :> int * a: int ]\n",
+        [
+            "Review410601_np.fs(1,23): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410601_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410602_np.fs", "let y = f (x :> int * a: int) z\n", []
+        "Review410603_np.fs",
+        "let y = if x :> int * a: int then 1 else 2\n",
+        [
+            "Review410603_np.fs(1,24): error FS0010: Unexpected symbol ':' in expression"
+            "Review410603_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410603_np.fs(1,37): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410603_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410604_np.fs",
+        "let y = { A = x :> int * a: int }\n",
+        [
+            "Review410604_np.fs(1,27): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410604_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410605_np.fs",
+        "let y = x :> int * a: int, 1\n",
+        [
+            "Review410605_np.fs(1,26): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410606_np.fs", "let y = 1, x :> int * a: int\n", []
+        "Review410607_np.fs",
+        "let y = x :> int * a: int = 1\n",
+        [
+            "Review410607_np.fs(1,27): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410608_np.fs",
+        "let y = x :> int * a: int && z\n",
+        [
+            "Review410608_np.fs(1,27): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410609_np.fs",
+        "let y = x :> (a: int)\n",
+        [
+            "Review410609_np.fs(1,16): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410610_np.fs",
+        "let y = (x :> (a: int))\n",
+        [
+            "Review410610_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410611_np.fs",
+        "let y = [ x :> (a: int) ]\n",
+        [
+            "Review410611_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410612_np.fs",
+        "let y = f (x :> (a: int)) z\n",
+        [
+            "Review410612_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410613_np.fs",
+        "let y = if x :> (a: int) then 1 else 2\n",
+        [
+            "Review410613_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410614_np.fs",
+        "let y = { A = x :> (a: int) }\n",
+        [
+            "Review410614_np.fs(1,22): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410615_np.fs",
+        "let y = x :> (a: int), 1\n",
+        [
+            "Review410615_np.fs(1,16): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410616_np.fs",
+        "let y = 1, x :> (a: int)\n",
+        [
+            "Review410616_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410617_np.fs",
+        "let y = x :> (a: int) = 1\n",
+        [
+            "Review410617_np.fs(1,16): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410618_np.fs",
+        "let y = x :> (a: int) && z\n",
+        [
+            "Review410618_np.fs(1,16): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410619_np.fs", "let y = x :> a: T<int>\n", []
+        "Review410620_np.fs", "let y = (x :> a: T<int>)\n", []
+        "Review410621_np.fs",
+        "let y = [ x :> a: T<int> ]\n",
+        [
+            "Review410621_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410621_np.fs(1,9): error FS0598: Unmatched '['"
+            "Review410621_np.fs(1,26): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410622_np.fs", "let y = f (x :> a: T<int>) z\n", []
+        "Review410623_np.fs",
+        "let y = if x :> a: T<int> then 1 else 2\n",
+        [
+            "Review410623_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression"
+            "Review410623_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410623_np.fs(1,27): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410624_np.fs",
+        "let y = { A = x :> a: T<int> }\n",
+        [
+            "Review410624_np.fs(1,21): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410624_np.fs(1,9): error FS0604: Unmatched '{'"
+            "Review410624_np.fs(1,30): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410625_np.fs",
+        "let y = x :> a: T<int>, 1\n",
+        [
+            "Review410625_np.fs(1,23): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410626_np.fs", "let y = 1, x :> a: T<int>\n", []
+        "Review410627_np.fs",
+        "let y = x :> a: T<int> = 1\n",
+        [
+            "Review410627_np.fs(1,24): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410628_np.fs",
+        "let y = x :> a: T<int> && z\n",
+        [
+            "Review410628_np.fs(1,24): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410629_np.fs", "let y = x :> a : int\n", []
+        "Review410630_np.fs", "let y = (x :> a : int)\n", []
+        "Review410631_np.fs",
+        "let y = [ x :> a : int ]\n",
+        [
+            "Review410631_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410631_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410632_np.fs", "let y = f (x :> a : int) z\n", []
+        "Review410633_np.fs",
+        "let y = if x :> a : int then 1 else 2\n",
+        [
+            "Review410633_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression"
+            "Review410633_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410633_np.fs(1,32): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410633_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410634_np.fs",
+        "let y = { A = x :> a : int }\n",
+        [
+            "Review410634_np.fs(1,22): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410634_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410635_np.fs",
+        "let y = x :> a : int, 1\n",
+        [
+            "Review410635_np.fs(1,21): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410636_np.fs", "let y = 1, x :> a : int\n", []
+        "Review410637_np.fs",
+        "let y = x :> a : int = 1\n",
+        [
+            "Review410637_np.fs(1,22): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410638_np.fs",
+        "let y = x :> a : int && z\n",
+        [
+            "Review410638_np.fs(1,22): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410639_np.fs",
+        "let y = x :> ?a: int\n",
+        [ "Review410639_np.fs(1,14): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410640_np.fs",
+        "let y = (x :> ?a: int)\n",
+        [ "Review410640_np.fs(1,15): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410641_np.fs",
+        "let y = [ x :> ?a: int ]\n",
+        [ "Review410641_np.fs(1,16): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410642_np.fs",
+        "let y = f (x :> ?a: int) z\n",
+        [ "Review410642_np.fs(1,17): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410643_np.fs",
+        "let y = if x :> ?a: int then 1 else 2\n",
+        [ "Review410643_np.fs(1,17): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410644_np.fs",
+        "let y = { A = x :> ?a: int }\n",
+        [ "Review410644_np.fs(1,20): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410645_np.fs",
+        "let y = x :> ?a: int, 1\n",
+        [ "Review410645_np.fs(1,14): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410646_np.fs",
+        "let y = 1, x :> ?a: int\n",
+        [ "Review410646_np.fs(1,17): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410647_np.fs",
+        "let y = x :> ?a: int = 1\n",
+        [ "Review410647_np.fs(1,14): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410648_np.fs",
+        "let y = x :> ?a: int && z\n",
+        [ "Review410648_np.fs(1,14): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410649_np.fs", "let y = x :> a: int list\n", []
+        "Review410650_np.fs", "let y = (x :> a: int list)\n", []
+        "Review410651_np.fs",
+        "let y = [ x :> a: int list ]\n",
+        [
+            "Review410651_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410651_np.fs(1,9): error FS0598: Unmatched '['"
+            "Review410651_np.fs(1,28): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410652_np.fs", "let y = f (x :> a: int list) z\n", []
+        "Review410653_np.fs",
+        "let y = if x :> a: int list then 1 else 2\n",
+        [
+            "Review410653_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression"
+            "Review410653_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410653_np.fs(1,29): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410654_np.fs",
+        "let y = { A = x :> a: int list }\n",
+        [
+            "Review410654_np.fs(1,21): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410654_np.fs(1,9): error FS0604: Unmatched '{'"
+            "Review410654_np.fs(1,32): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410655_np.fs",
+        "let y = x :> a: int list, 1\n",
+        [
+            "Review410655_np.fs(1,25): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410656_np.fs", "let y = 1, x :> a: int list\n", []
+        "Review410657_np.fs",
+        "let y = x :> a: int list = 1\n",
+        [
+            "Review410657_np.fs(1,26): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410658_np.fs",
+        "let y = x :> a: int list && z\n",
+        [
+            "Review410658_np.fs(1,26): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410659_np.fs", "let y = x :?> a: int\n", []
+        "Review410660_np.fs", "let y = (x :?> a: int)\n", []
+        "Review410661_np.fs",
+        "let y = [ x :?> a: int ]\n",
+        [
+            "Review410661_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410661_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410662_np.fs", "let y = f (x :?> a: int) z\n", []
+        "Review410663_np.fs",
+        "let y = if x :?> a: int then 1 else 2\n",
+        [
+            "Review410663_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression"
+            "Review410663_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410663_np.fs(1,32): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410663_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410664_np.fs",
+        "let y = { A = x :?> a: int }\n",
+        [
+            "Review410664_np.fs(1,22): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410664_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410665_np.fs",
+        "let y = x :?> a: int, 1\n",
+        [
+            "Review410665_np.fs(1,21): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410666_np.fs", "let y = 1, x :?> a: int\n", []
+        "Review410667_np.fs",
+        "let y = x :?> a: int = 1\n",
+        [
+            "Review410667_np.fs(1,22): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410668_np.fs",
+        "let y = x :?> a: int && z\n",
+        [
+            "Review410668_np.fs(1,22): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410669_np.fs", "let y = x :?> a:int\n", []
+        "Review410670_np.fs", "let y = (x :?> a:int)\n", []
+        "Review410671_np.fs",
+        "let y = [ x :?> a:int ]\n",
+        [
+            "Review410671_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410671_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410672_np.fs", "let y = f (x :?> a:int) z\n", []
+        "Review410673_np.fs",
+        "let y = if x :?> a:int then 1 else 2\n",
+        [
+            "Review410673_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression"
+            "Review410673_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410673_np.fs(1,31): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410673_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410674_np.fs",
+        "let y = { A = x :?> a:int }\n",
+        [
+            "Review410674_np.fs(1,22): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410674_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410675_np.fs",
+        "let y = x :?> a:int, 1\n",
+        [
+            "Review410675_np.fs(1,20): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410676_np.fs", "let y = 1, x :?> a:int\n", []
+        "Review410677_np.fs",
+        "let y = x :?> a:int = 1\n",
+        [
+            "Review410677_np.fs(1,21): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410678_np.fs",
+        "let y = x :?> a:int && z\n",
+        [
+            "Review410678_np.fs(1,21): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410679_np.fs", "let y = x :?> a: int -> int\n", []
+        "Review410680_np.fs", "let y = (x :?> a: int -> int)\n", []
+        "Review410681_np.fs",
+        "let y = [ x :?> a: int -> int ]\n",
+        [
+            "Review410681_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410681_np.fs(1,9): error FS0598: Unmatched '['"
+            "Review410681_np.fs(1,31): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410682_np.fs", "let y = f (x :?> a: int -> int) z\n", []
+        "Review410683_np.fs",
+        "let y = if x :?> a: int -> int then 1 else 2\n",
+        [
+            "Review410683_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression"
+            "Review410683_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410683_np.fs(1,32): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410684_np.fs",
+        "let y = { A = x :?> a: int -> int }\n",
+        [
+            "Review410684_np.fs(1,22): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410684_np.fs(1,9): error FS0604: Unmatched '{'"
+            "Review410684_np.fs(1,35): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410685_np.fs",
+        "let y = x :?> a: int -> int, 1\n",
+        [
+            "Review410685_np.fs(1,28): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410686_np.fs", "let y = 1, x :?> a: int -> int\n", []
+        "Review410687_np.fs",
+        "let y = x :?> a: int -> int = 1\n",
+        [
+            "Review410687_np.fs(1,29): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410688_np.fs",
+        "let y = x :?> a: int -> int && z\n",
+        [
+            "Review410688_np.fs(1,29): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410689_np.fs", "let y = x :?> int -> a: int\n", []
+        "Review410690_np.fs", "let y = (x :?> int -> a: int)\n", []
+        "Review410691_np.fs",
+        "let y = [ x :?> int -> a: int ]\n",
+        [
+            "Review410691_np.fs(1,25): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410691_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410692_np.fs", "let y = f (x :?> int -> a: int) z\n", []
+        "Review410693_np.fs",
+        "let y = if x :?> int -> a: int then 1 else 2\n",
+        [
+            "Review410693_np.fs(1,26): error FS0010: Unexpected symbol ':' in expression"
+            "Review410693_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410693_np.fs(1,39): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410693_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410694_np.fs",
+        "let y = { A = x :?> int -> a: int }\n",
+        [
+            "Review410694_np.fs(1,29): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410694_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410695_np.fs",
+        "let y = x :?> int -> a: int, 1\n",
+        [
+            "Review410695_np.fs(1,28): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410696_np.fs", "let y = 1, x :?> int -> a: int\n", []
+        "Review410697_np.fs",
+        "let y = x :?> int -> a: int = 1\n",
+        [
+            "Review410697_np.fs(1,29): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410698_np.fs",
+        "let y = x :?> int -> a: int && z\n",
+        [
+            "Review410698_np.fs(1,29): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410699_np.fs", "let y = x :?> a: int * int\n", []
+        "Review410700_np.fs", "let y = (x :?> a: int * int)\n", []
+        "Review410701_np.fs",
+        "let y = [ x :?> a: int * int ]\n",
+        [
+            "Review410701_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410701_np.fs(1,9): error FS0598: Unmatched '['"
+            "Review410701_np.fs(1,30): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410702_np.fs", "let y = f (x :?> a: int * int) z\n", []
+        "Review410703_np.fs",
+        "let y = if x :?> a: int * int then 1 else 2\n",
+        [
+            "Review410703_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression"
+            "Review410703_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410703_np.fs(1,31): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410704_np.fs",
+        "let y = { A = x :?> a: int * int }\n",
+        [
+            "Review410704_np.fs(1,22): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410704_np.fs(1,9): error FS0604: Unmatched '{'"
+            "Review410704_np.fs(1,34): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410705_np.fs",
+        "let y = x :?> a: int * int, 1\n",
+        [
+            "Review410705_np.fs(1,27): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410706_np.fs", "let y = 1, x :?> a: int * int\n", []
+        "Review410707_np.fs",
+        "let y = x :?> a: int * int = 1\n",
+        [
+            "Review410707_np.fs(1,28): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410708_np.fs",
+        "let y = x :?> a: int * int && z\n",
+        [
+            "Review410708_np.fs(1,28): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410709_np.fs", "let y = x :?> int * a: int\n", []
+        "Review410710_np.fs", "let y = (x :?> int * a: int)\n", []
+        "Review410711_np.fs",
+        "let y = [ x :?> int * a: int ]\n",
+        [
+            "Review410711_np.fs(1,24): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410711_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410712_np.fs", "let y = f (x :?> int * a: int) z\n", []
+        "Review410713_np.fs",
+        "let y = if x :?> int * a: int then 1 else 2\n",
+        [
+            "Review410713_np.fs(1,25): error FS0010: Unexpected symbol ':' in expression"
+            "Review410713_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410713_np.fs(1,38): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410713_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410714_np.fs",
+        "let y = { A = x :?> int * a: int }\n",
+        [
+            "Review410714_np.fs(1,28): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410714_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410715_np.fs",
+        "let y = x :?> int * a: int, 1\n",
+        [
+            "Review410715_np.fs(1,27): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410716_np.fs", "let y = 1, x :?> int * a: int\n", []
+        "Review410717_np.fs",
+        "let y = x :?> int * a: int = 1\n",
+        [
+            "Review410717_np.fs(1,28): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410718_np.fs",
+        "let y = x :?> int * a: int && z\n",
+        [
+            "Review410718_np.fs(1,28): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410719_np.fs",
+        "let y = x :?> (a: int)\n",
+        [
+            "Review410719_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410720_np.fs",
+        "let y = (x :?> (a: int))\n",
+        [
+            "Review410720_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410721_np.fs",
+        "let y = [ x :?> (a: int) ]\n",
+        [
+            "Review410721_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410722_np.fs",
+        "let y = f (x :?> (a: int)) z\n",
+        [
+            "Review410722_np.fs(1,20): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410723_np.fs",
+        "let y = if x :?> (a: int) then 1 else 2\n",
+        [
+            "Review410723_np.fs(1,20): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410724_np.fs",
+        "let y = { A = x :?> (a: int) }\n",
+        [
+            "Review410724_np.fs(1,23): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410725_np.fs",
+        "let y = x :?> (a: int), 1\n",
+        [
+            "Review410725_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410726_np.fs",
+        "let y = 1, x :?> (a: int)\n",
+        [
+            "Review410726_np.fs(1,20): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410727_np.fs",
+        "let y = x :?> (a: int) = 1\n",
+        [
+            "Review410727_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410728_np.fs",
+        "let y = x :?> (a: int) && z\n",
+        [
+            "Review410728_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410729_np.fs", "let y = x :?> a: T<int>\n", []
+        "Review410730_np.fs", "let y = (x :?> a: T<int>)\n", []
+        "Review410731_np.fs",
+        "let y = [ x :?> a: T<int> ]\n",
+        [
+            "Review410731_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410731_np.fs(1,9): error FS0598: Unmatched '['"
+            "Review410731_np.fs(1,27): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410732_np.fs", "let y = f (x :?> a: T<int>) z\n", []
+        "Review410733_np.fs",
+        "let y = if x :?> a: T<int> then 1 else 2\n",
+        [
+            "Review410733_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression"
+            "Review410733_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410733_np.fs(1,28): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410734_np.fs",
+        "let y = { A = x :?> a: T<int> }\n",
+        [
+            "Review410734_np.fs(1,22): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410734_np.fs(1,9): error FS0604: Unmatched '{'"
+            "Review410734_np.fs(1,31): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410735_np.fs",
+        "let y = x :?> a: T<int>, 1\n",
+        [
+            "Review410735_np.fs(1,24): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410736_np.fs", "let y = 1, x :?> a: T<int>\n", []
+        "Review410737_np.fs",
+        "let y = x :?> a: T<int> = 1\n",
+        [
+            "Review410737_np.fs(1,25): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410738_np.fs",
+        "let y = x :?> a: T<int> && z\n",
+        [
+            "Review410738_np.fs(1,25): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410739_np.fs", "let y = x :?> a : int\n", []
+        "Review410740_np.fs", "let y = (x :?> a : int)\n", []
+        "Review410741_np.fs",
+        "let y = [ x :?> a : int ]\n",
+        [
+            "Review410741_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410741_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410742_np.fs", "let y = f (x :?> a : int) z\n", []
+        "Review410743_np.fs",
+        "let y = if x :?> a : int then 1 else 2\n",
+        [
+            "Review410743_np.fs(1,20): error FS0010: Unexpected symbol ':' in expression"
+            "Review410743_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410743_np.fs(1,33): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410743_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410744_np.fs",
+        "let y = { A = x :?> a : int }\n",
+        [
+            "Review410744_np.fs(1,23): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410744_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410745_np.fs",
+        "let y = x :?> a : int, 1\n",
+        [
+            "Review410745_np.fs(1,22): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410746_np.fs", "let y = 1, x :?> a : int\n", []
+        "Review410747_np.fs",
+        "let y = x :?> a : int = 1\n",
+        [
+            "Review410747_np.fs(1,23): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410748_np.fs",
+        "let y = x :?> a : int && z\n",
+        [
+            "Review410748_np.fs(1,23): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410749_np.fs",
+        "let y = x :?> ?a: int\n",
+        [ "Review410749_np.fs(1,15): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410750_np.fs",
+        "let y = (x :?> ?a: int)\n",
+        [ "Review410750_np.fs(1,16): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410751_np.fs",
+        "let y = [ x :?> ?a: int ]\n",
+        [ "Review410751_np.fs(1,17): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410752_np.fs",
+        "let y = f (x :?> ?a: int) z\n",
+        [ "Review410752_np.fs(1,18): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410753_np.fs",
+        "let y = if x :?> ?a: int then 1 else 2\n",
+        [ "Review410753_np.fs(1,18): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410754_np.fs",
+        "let y = { A = x :?> ?a: int }\n",
+        [ "Review410754_np.fs(1,21): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410755_np.fs",
+        "let y = x :?> ?a: int, 1\n",
+        [ "Review410755_np.fs(1,15): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410756_np.fs",
+        "let y = 1, x :?> ?a: int\n",
+        [ "Review410756_np.fs(1,18): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410757_np.fs",
+        "let y = x :?> ?a: int = 1\n",
+        [ "Review410757_np.fs(1,15): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410758_np.fs",
+        "let y = x :?> ?a: int && z\n",
+        [ "Review410758_np.fs(1,15): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410759_np.fs", "let y = x :?> a: int list\n", []
+        "Review410760_np.fs", "let y = (x :?> a: int list)\n", []
+        "Review410761_np.fs",
+        "let y = [ x :?> a: int list ]\n",
+        [
+            "Review410761_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410761_np.fs(1,9): error FS0598: Unmatched '['"
+            "Review410761_np.fs(1,29): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410762_np.fs", "let y = f (x :?> a: int list) z\n", []
+        "Review410763_np.fs",
+        "let y = if x :?> a: int list then 1 else 2\n",
+        [
+            "Review410763_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression"
+            "Review410763_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410763_np.fs(1,30): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410764_np.fs",
+        "let y = { A = x :?> a: int list }\n",
+        [
+            "Review410764_np.fs(1,22): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410764_np.fs(1,9): error FS0604: Unmatched '{'"
+            "Review410764_np.fs(1,33): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410765_np.fs",
+        "let y = x :?> a: int list, 1\n",
+        [
+            "Review410765_np.fs(1,26): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410766_np.fs", "let y = 1, x :?> a: int list\n", []
+        "Review410767_np.fs",
+        "let y = x :?> a: int list = 1\n",
+        [
+            "Review410767_np.fs(1,27): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410768_np.fs",
+        "let y = x :?> a: int list && z\n",
+        [
+            "Review410768_np.fs(1,27): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410769_np.fs", "let y = x :? a: int\n", []
+        "Review410770_np.fs", "let y = (x :? a: int)\n", []
+        "Review410771_np.fs",
+        "let y = [ x :? a: int ]\n",
+        [
+            "Review410771_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410771_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410772_np.fs", "let y = f (x :? a: int) z\n", []
+        "Review410773_np.fs",
+        "let y = if x :? a: int then 1 else 2\n",
+        [
+            "Review410773_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression"
+            "Review410773_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410773_np.fs(1,31): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410773_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410774_np.fs",
+        "let y = { A = x :? a: int }\n",
+        [
+            "Review410774_np.fs(1,21): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410774_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410775_np.fs",
+        "let y = x :? a: int, 1\n",
+        [
+            "Review410775_np.fs(1,20): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410776_np.fs", "let y = 1, x :? a: int\n", []
+        "Review410777_np.fs",
+        "let y = x :? a: int = 1\n",
+        [
+            "Review410777_np.fs(1,21): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410778_np.fs",
+        "let y = x :? a: int && z\n",
+        [
+            "Review410778_np.fs(1,21): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410779_np.fs", "let y = x :? a:int\n", []
+        "Review410780_np.fs", "let y = (x :? a:int)\n", []
+        "Review410781_np.fs",
+        "let y = [ x :? a:int ]\n",
+        [
+            "Review410781_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410781_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410782_np.fs", "let y = f (x :? a:int) z\n", []
+        "Review410783_np.fs",
+        "let y = if x :? a:int then 1 else 2\n",
+        [
+            "Review410783_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression"
+            "Review410783_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410783_np.fs(1,30): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410783_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410784_np.fs",
+        "let y = { A = x :? a:int }\n",
+        [
+            "Review410784_np.fs(1,21): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410784_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410785_np.fs",
+        "let y = x :? a:int, 1\n",
+        [
+            "Review410785_np.fs(1,19): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410786_np.fs", "let y = 1, x :? a:int\n", []
+        "Review410787_np.fs",
+        "let y = x :? a:int = 1\n",
+        [
+            "Review410787_np.fs(1,20): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410788_np.fs",
+        "let y = x :? a:int && z\n",
+        [
+            "Review410788_np.fs(1,20): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410789_np.fs", "let y = x :? a: int -> int\n", []
+        "Review410790_np.fs", "let y = (x :? a: int -> int)\n", []
+        "Review410791_np.fs",
+        "let y = [ x :? a: int -> int ]\n",
+        [
+            "Review410791_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410791_np.fs(1,9): error FS0598: Unmatched '['"
+            "Review410791_np.fs(1,30): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410792_np.fs", "let y = f (x :? a: int -> int) z\n", []
+        "Review410793_np.fs",
+        "let y = if x :? a: int -> int then 1 else 2\n",
+        [
+            "Review410793_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression"
+            "Review410793_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410793_np.fs(1,31): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410794_np.fs",
+        "let y = { A = x :? a: int -> int }\n",
+        [
+            "Review410794_np.fs(1,21): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410794_np.fs(1,9): error FS0604: Unmatched '{'"
+            "Review410794_np.fs(1,34): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410795_np.fs",
+        "let y = x :? a: int -> int, 1\n",
+        [
+            "Review410795_np.fs(1,27): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410796_np.fs", "let y = 1, x :? a: int -> int\n", []
+        "Review410797_np.fs",
+        "let y = x :? a: int -> int = 1\n",
+        [
+            "Review410797_np.fs(1,28): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410798_np.fs",
+        "let y = x :? a: int -> int && z\n",
+        [
+            "Review410798_np.fs(1,28): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410799_np.fs", "let y = x :? int -> a: int\n", []
+        "Review410800_np.fs", "let y = (x :? int -> a: int)\n", []
+        "Review410801_np.fs",
+        "let y = [ x :? int -> a: int ]\n",
+        [
+            "Review410801_np.fs(1,24): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410801_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410802_np.fs", "let y = f (x :? int -> a: int) z\n", []
+        "Review410803_np.fs",
+        "let y = if x :? int -> a: int then 1 else 2\n",
+        [
+            "Review410803_np.fs(1,25): error FS0010: Unexpected symbol ':' in expression"
+            "Review410803_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410803_np.fs(1,38): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410803_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410804_np.fs",
+        "let y = { A = x :? int -> a: int }\n",
+        [
+            "Review410804_np.fs(1,28): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410804_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410805_np.fs",
+        "let y = x :? int -> a: int, 1\n",
+        [
+            "Review410805_np.fs(1,27): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410806_np.fs", "let y = 1, x :? int -> a: int\n", []
+        "Review410807_np.fs",
+        "let y = x :? int -> a: int = 1\n",
+        [
+            "Review410807_np.fs(1,28): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410808_np.fs",
+        "let y = x :? int -> a: int && z\n",
+        [
+            "Review410808_np.fs(1,28): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410809_np.fs", "let y = x :? a: int * int\n", []
+        "Review410810_np.fs", "let y = (x :? a: int * int)\n", []
+        "Review410811_np.fs",
+        "let y = [ x :? a: int * int ]\n",
+        [
+            "Review410811_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410811_np.fs(1,9): error FS0598: Unmatched '['"
+            "Review410811_np.fs(1,29): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410812_np.fs", "let y = f (x :? a: int * int) z\n", []
+        "Review410813_np.fs",
+        "let y = if x :? a: int * int then 1 else 2\n",
+        [
+            "Review410813_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression"
+            "Review410813_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410813_np.fs(1,30): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410814_np.fs",
+        "let y = { A = x :? a: int * int }\n",
+        [
+            "Review410814_np.fs(1,21): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410814_np.fs(1,9): error FS0604: Unmatched '{'"
+            "Review410814_np.fs(1,33): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410815_np.fs",
+        "let y = x :? a: int * int, 1\n",
+        [
+            "Review410815_np.fs(1,26): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410816_np.fs", "let y = 1, x :? a: int * int\n", []
+        "Review410817_np.fs",
+        "let y = x :? a: int * int = 1\n",
+        [
+            "Review410817_np.fs(1,27): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410818_np.fs",
+        "let y = x :? a: int * int && z\n",
+        [
+            "Review410818_np.fs(1,27): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410819_np.fs", "let y = x :? int * a: int\n", []
+        "Review410820_np.fs", "let y = (x :? int * a: int)\n", []
+        "Review410821_np.fs",
+        "let y = [ x :? int * a: int ]\n",
+        [
+            "Review410821_np.fs(1,23): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410821_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410822_np.fs", "let y = f (x :? int * a: int) z\n", []
+        "Review410823_np.fs",
+        "let y = if x :? int * a: int then 1 else 2\n",
+        [
+            "Review410823_np.fs(1,24): error FS0010: Unexpected symbol ':' in expression"
+            "Review410823_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410823_np.fs(1,37): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410823_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410824_np.fs",
+        "let y = { A = x :? int * a: int }\n",
+        [
+            "Review410824_np.fs(1,27): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410824_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410825_np.fs",
+        "let y = x :? int * a: int, 1\n",
+        [
+            "Review410825_np.fs(1,26): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410826_np.fs", "let y = 1, x :? int * a: int\n", []
+        "Review410827_np.fs",
+        "let y = x :? int * a: int = 1\n",
+        [
+            "Review410827_np.fs(1,27): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410828_np.fs",
+        "let y = x :? int * a: int && z\n",
+        [
+            "Review410828_np.fs(1,27): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410829_np.fs",
+        "let y = x :? (a: int)\n",
+        [
+            "Review410829_np.fs(1,16): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410830_np.fs",
+        "let y = (x :? (a: int))\n",
+        [
+            "Review410830_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410831_np.fs",
+        "let y = [ x :? (a: int) ]\n",
+        [
+            "Review410831_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410832_np.fs",
+        "let y = f (x :? (a: int)) z\n",
+        [
+            "Review410832_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410833_np.fs",
+        "let y = if x :? (a: int) then 1 else 2\n",
+        [
+            "Review410833_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410834_np.fs",
+        "let y = { A = x :? (a: int) }\n",
+        [
+            "Review410834_np.fs(1,22): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410835_np.fs",
+        "let y = x :? (a: int), 1\n",
+        [
+            "Review410835_np.fs(1,16): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410836_np.fs",
+        "let y = 1, x :? (a: int)\n",
+        [
+            "Review410836_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410837_np.fs",
+        "let y = x :? (a: int) = 1\n",
+        [
+            "Review410837_np.fs(1,16): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410838_np.fs",
+        "let y = x :? (a: int) && z\n",
+        [
+            "Review410838_np.fs(1,16): error FS0010: Unexpected symbol ':' in expression. Expected ',' or other token."
+        ]
+        "Review410839_np.fs", "let y = x :? a: T<int>\n", []
+        "Review410840_np.fs", "let y = (x :? a: T<int>)\n", []
+        "Review410841_np.fs",
+        "let y = [ x :? a: T<int> ]\n",
+        [
+            "Review410841_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410841_np.fs(1,9): error FS0598: Unmatched '['"
+            "Review410841_np.fs(1,26): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410842_np.fs", "let y = f (x :? a: T<int>) z\n", []
+        "Review410843_np.fs",
+        "let y = if x :? a: T<int> then 1 else 2\n",
+        [
+            "Review410843_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression"
+            "Review410843_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410843_np.fs(1,27): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410844_np.fs",
+        "let y = { A = x :? a: T<int> }\n",
+        [
+            "Review410844_np.fs(1,21): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410844_np.fs(1,9): error FS0604: Unmatched '{'"
+            "Review410844_np.fs(1,30): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410845_np.fs",
+        "let y = x :? a: T<int>, 1\n",
+        [
+            "Review410845_np.fs(1,23): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410846_np.fs", "let y = 1, x :? a: T<int>\n", []
+        "Review410847_np.fs",
+        "let y = x :? a: T<int> = 1\n",
+        [
+            "Review410847_np.fs(1,24): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410848_np.fs",
+        "let y = x :? a: T<int> && z\n",
+        [
+            "Review410848_np.fs(1,24): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410849_np.fs", "let y = x :? a : int\n", []
+        "Review410850_np.fs", "let y = (x :? a : int)\n", []
+        "Review410851_np.fs",
+        "let y = [ x :? a : int ]\n",
+        [
+            "Review410851_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410851_np.fs(1,9): error FS0598: Unmatched '['"
+        ]
+        "Review410852_np.fs", "let y = f (x :? a : int) z\n", []
+        "Review410853_np.fs",
+        "let y = if x :? a : int then 1 else 2\n",
+        [
+            "Review410853_np.fs(1,19): error FS0010: Unexpected symbol ':' in expression"
+            "Review410853_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410853_np.fs(1,32): error FS0010: Unexpected keyword 'else' in binding. Expected incomplete structured construct at or before this point or other token."
+            "Review410853_np.fs(1,1): error FS3118: Incomplete value or function definition. If this is in an expression, the body of the expression must be indented to the same column as the 'let' keyword."
+        ]
+        "Review410854_np.fs",
+        "let y = { A = x :? a : int }\n",
+        [
+            "Review410854_np.fs(1,22): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410854_np.fs(1,9): error FS0604: Unmatched '{'"
+        ]
+        "Review410855_np.fs",
+        "let y = x :? a : int, 1\n",
+        [
+            "Review410855_np.fs(1,21): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410856_np.fs", "let y = 1, x :? a : int\n", []
+        "Review410857_np.fs",
+        "let y = x :? a : int = 1\n",
+        [
+            "Review410857_np.fs(1,22): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410858_np.fs",
+        "let y = x :? a : int && z\n",
+        [
+            "Review410858_np.fs(1,22): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410859_np.fs",
+        "let y = x :? ?a: int\n",
+        [ "Review410859_np.fs(1,14): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410860_np.fs",
+        "let y = (x :? ?a: int)\n",
+        [ "Review410860_np.fs(1,15): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410861_np.fs",
+        "let y = [ x :? ?a: int ]\n",
+        [ "Review410861_np.fs(1,16): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410862_np.fs",
+        "let y = f (x :? ?a: int) z\n",
+        [ "Review410862_np.fs(1,17): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410863_np.fs",
+        "let y = if x :? ?a: int then 1 else 2\n",
+        [ "Review410863_np.fs(1,17): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410864_np.fs",
+        "let y = { A = x :? ?a: int }\n",
+        [ "Review410864_np.fs(1,20): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410865_np.fs",
+        "let y = x :? ?a: int, 1\n",
+        [ "Review410865_np.fs(1,14): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410866_np.fs",
+        "let y = 1, x :? ?a: int\n",
+        [ "Review410866_np.fs(1,17): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410867_np.fs",
+        "let y = x :? ?a: int = 1\n",
+        [ "Review410867_np.fs(1,14): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410868_np.fs",
+        "let y = x :? ?a: int && z\n",
+        [ "Review410868_np.fs(1,14): error FS0010: Unexpected symbol '?' in expression" ]
+        "Review410869_np.fs", "let y = x :? a: int list\n", []
+        "Review410870_np.fs", "let y = (x :? a: int list)\n", []
+        "Review410871_np.fs",
+        "let y = [ x :? a: int list ]\n",
+        [
+            "Review410871_np.fs(1,17): error FS0010: Unexpected symbol ':' in expression. Expected ']' or other token."
+            "Review410871_np.fs(1,9): error FS0598: Unmatched '['"
+            "Review410871_np.fs(1,28): error FS0010: Unexpected symbol ']' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410872_np.fs", "let y = f (x :? a: int list) z\n", []
+        "Review410873_np.fs",
+        "let y = if x :? a: int list then 1 else 2\n",
+        [
+            "Review410873_np.fs(1,18): error FS0010: Unexpected symbol ':' in expression"
+            "Review410873_np.fs(1,9): error FS0589: Incomplete conditional. Expected 'if <expr> then <expr>' or 'if <expr> then <expr> else <expr>'."
+            "Review410873_np.fs(1,29): error FS0010: Unexpected keyword 'then' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410874_np.fs",
+        "let y = { A = x :? a: int list }\n",
+        [
+            "Review410874_np.fs(1,21): error FS0010: Unexpected symbol ':' in expression. Expected '}' or other token."
+            "Review410874_np.fs(1,9): error FS0604: Unmatched '{'"
+            "Review410874_np.fs(1,32): error FS0010: Unexpected symbol '}' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410875_np.fs",
+        "let y = x :? a: int list, 1\n",
+        [
+            "Review410875_np.fs(1,25): error FS0010: Unexpected symbol ',' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410876_np.fs", "let y = 1, x :? a: int list\n", []
+        "Review410877_np.fs",
+        "let y = x :? a: int list = 1\n",
+        [
+            "Review410877_np.fs(1,26): error FS0010: Unexpected symbol '=' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+        "Review410878_np.fs",
+        "let y = x :? a: int list && z\n",
+        [
+            "Review410878_np.fs(1,26): error FS0010: Unexpected symbol '&&' in binding. Expected incomplete structured construct at or before this point or other token."
+        ]
+    ]
+
     let private unreadableSignedLiteralCases = [
         "SignedHexBignumSuffix.fs",
         "module A\nlet y = f -0x1FI\n",
         [
             "SignedHexBignumSuffix.fs(2,12): error FS1156: This is not a valid numeric literal. Valid numeric literals include 1, 0x1, 0o1, 0b1, 1l (int/int32), 1u (uint/uint32), 1L (int64), 1UL (uint64), 1s (int16), 1us (uint16), 1y (int8/sbyte), 1uy (uint8/byte), 1.0 (float/double), 1.0f (float32/single), 1.0m (decimal), 1I (bigint)."
         ]
-        "SignedHexWithFraction.fs",
-        "module A\nlet y = f -0x1.0\n",
-        [ "SignedHexWithFraction.fs(2,15): error FS0599: Missing qualification after '.'" ]
         "SignedLiteralSuffixLs.fs",
         "module A\nlet y = f -1ls\n",
         [
@@ -6976,6 +10795,26 @@ let items = [ origin.X; 1 ]
                             "The infix, prefix, and application ranges"
             ]
 
+            testList
+                "an identifier followed by '!' is one reserved token, and an escaped identifier is not (Oracle FS1141)"
+                [
+                    for logicalPath, text, expectedDeclarations, oracle in
+                        reservedBangIdentifierCases ->
+                        testCase logicalPath
+                        <| fun _ ->
+                            Expect.sequenceEqual
+                                (lexicalAndParserLines logicalPath text)
+                                oracle
+                                "The lexer and parser diagnostics match the Compatibility Oracle"
+
+                            Expect.sequenceEqual
+                                ((Seq.exactlyOne (parse logicalPath text).File.Contents)
+                                    .Declarations
+                                 |> Seq.map declarationShape)
+                                expectedDeclarations
+                                "The declarations with a reserved identifier"
+                ]
+
             testList "a '!' form the parser does not model stays explicit" [
                 for logicalPath, text, oracle in dereferenceExplicitCases ->
                     testCase logicalPath
@@ -7000,20 +10839,90 @@ let items = [ origin.X; 1 ]
                             (oracleLines logicalPath result)
             ]
 
-            testList "a signed literal the parser cannot read stays explicit" [
+            testList "a signed literal with an unreadable suffix reports the Oracle diagnostics" [
                 for logicalPath, text, oracle in unreadableSignedLiteralCases ->
                     testCase logicalPath
                     <| fun _ ->
-                        let result = parse logicalPath text
-
-                        SyntaxDiagnosticText.expectExplicitlyUnsupported
+                        Expect.sequenceEqual
+                            (lexicalAndParserLines logicalPath text)
                             oracle
-                            result.Diagnostics
-                            (oracleLines logicalPath result)
+                            "The lexer and parser diagnostics match the Compatibility Oracle"
             ]
 
-            testList "a signed literal that is not a valid numeric literal stays explicit" [
-                for logicalPath, text, oracle in invalidSignedLiteralCases ->
+            testList
+                "a signed literal that is not a valid numeric literal reports the Oracle diagnostics"
+                [
+                    for logicalPath, text, oracle in invalidSignedLiteralCases ->
+                        testCase logicalPath
+                        <| fun _ ->
+                            Expect.sequenceEqual
+                                (lexicalAndParserLines logicalPath text)
+                                oracle
+                                "The lexer and parser diagnostics match the Compatibility Oracle"
+                ]
+
+            testList "a numeric literal reports the Oracle form and range diagnostics" [
+                for logicalPath, text, expectedDeclarations, oracle in numericLiteralCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        Expect.sequenceEqual
+                            (lexicalAndParserLines logicalPath text)
+                            oracle
+                            "The lexer and parser diagnostics match the Compatibility Oracle"
+
+                        Expect.sequenceEqual
+                            ((Seq.exactlyOne (parse logicalPath text).File.Contents).Declarations
+                             |> Seq.map declarationShape)
+                            expectedDeclarations
+                            "The declarations with a numeric literal"
+            ]
+
+            testList "a '.' after a numeric literal reads member access or reports FS0599" [
+                for logicalPath, text, expectedDeclarations, oracle in numericLiteralDotCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        Expect.sequenceEqual
+                            (lexicalAndParserLines logicalPath text)
+                            oracle
+                            "The lexer and parser diagnostics match the Compatibility Oracle"
+
+                        Expect.sequenceEqual
+                            ((Seq.exactlyOne (parse logicalPath text).File.Contents).Declarations
+                             |> Seq.map declarationShape)
+                            expectedDeclarations
+                            "The declarations with a '.' after a numeric literal"
+            ]
+
+            testList "':>', ':?>', ':?', and member access read the FCS tree" [
+                for logicalPath, text, expectedDeclarations, expectedRanges in
+                    castAndMemberAccessCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let result = parse logicalPath text
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            (lexicalAndParserLines logicalPath text)
+                            []
+                            "The Compatibility Oracle reports no diagnostics"
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with casts, type tests, and member access"
+
+                        Expect.sequenceEqual
+                            (declarationBodies (Seq.exactlyOne result.File.Contents).Declarations
+                             |> List.collect (fun body ->
+                                 infixRanges body
+                                 @ applicationRanges body
+                             ))
+                            expectedRanges
+                            "The infix, cast, member access, and application ranges"
+            ]
+
+            testList "a cast or member access form the parser does not model stays explicit" [
+                for logicalPath, text, oracle in castAndMemberAccessExplicitCases ->
                     testCase logicalPath
                     <| fun _ ->
                         let result = parse logicalPath text
@@ -7021,8 +10930,65 @@ let items = [ origin.X; 1 ]
                         SyntaxDiagnosticText.expectExplicitlyUnsupported
                             oracle
                             result.Diagnostics
-                            (oracleLines logicalPath result)
+                            (lexicalAndParserLines logicalPath text)
             ]
+
+            testList "member access reports the Oracle diagnostics" [
+                for logicalPath, text, expectedDeclarations, oracle in memberAccessDiagnosticCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        Expect.sequenceEqual
+                            (lexicalAndParserLines logicalPath text)
+                            oracle
+                            "The lexer and parser diagnostics match the Compatibility Oracle"
+
+                        Expect.sequenceEqual
+                            ((Seq.exactlyOne (parse logicalPath text).File.Contents).Declarations
+                             |> Seq.map declarationShape)
+                            expectedDeclarations
+                            "The declarations with member access"
+            ]
+
+            testList "a cast before a later line reads the FCS tree" [
+                for logicalPath, text, expectedDeclarations in reviewCastTreeCases ->
+                    testCase logicalPath
+                    <| fun _ ->
+                        let declarations, _ = shapes logicalPath text
+
+                        Expect.sequenceEqual
+                            declarations
+                            expectedDeclarations
+                            "The declarations with a cast before a later line"
+            ]
+
+            testList
+                "a cast before an offside identifier line reports the Oracle parser diagnostics"
+                [
+                    for logicalPath, text, oracle in reviewCastDiagnosticCases ->
+                        testCase logicalPath
+                        <| fun _ ->
+                            let result = parse logicalPath text
+
+                            Expect.sequenceEqual
+                                (oracleLines logicalPath result
+                                 |> List.sort)
+                                (List.sort oracle)
+                                "The parser diagnostics match the Compatibility Oracle"
+                ]
+
+            testList
+                "a type continuation line or a named parameter type after a cast stays explicit"
+                [
+                    for logicalPath, text, oracle in reviewCastExplicitCases ->
+                        testCase logicalPath
+                        <| fun _ ->
+                            let result = parse logicalPath text
+
+                            SyntaxDiagnosticText.expectExplicitlyUnsupported
+                                oracle
+                                result.Diagnostics
+                                (oracleLines logicalPath result)
+                ]
 
             testList "an adjacent sign is a prefix operator and a spaced sign is subtraction" [
                 for logicalPath, text, expectedDeclarations, expectedRanges in prefixSignCases ->

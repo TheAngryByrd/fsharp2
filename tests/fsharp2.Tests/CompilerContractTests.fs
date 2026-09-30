@@ -1686,6 +1686,94 @@ let main _ =
                     ]
                     "The Compatibility Oracle reports both errors in source order"
 
+            testList
+                "a numeric literal outside its range or a reserved identifier is a lexical error"
+                [
+                    for text, code, message, position in
+                        [
+                            "module Program\nlet answer () = 2147483649\n",
+                            "FS1147",
+                            "This number is outside the allowable range for 32-bit signed integers",
+                            (2, 17)
+                            "module Program\nlet answer () = -0x123456789lf\n",
+                            "FS1155",
+                            "This number is outside the allowable range for 32-bit floats",
+                            (2, 18)
+                            "module Program\nlet answer x = x!\n",
+                            "FS1141",
+                            "Identifiers followed by '!' are reserved for future use",
+                            (2, 16)
+                        ] ->
+                        testCase code
+                        <| fun _ ->
+                            let result = compile text
+
+                            Expect.equal
+                                result.Outcome
+                                CompilationOutcome.Failed
+                                "A lexical error stops the compilation"
+
+                            Expect.sequenceEqual
+                                (result.Diagnostics
+                                 |> Seq.map (fun diagnostic ->
+                                     diagnostic.Code,
+                                     diagnostic.Message,
+                                     diagnostic.Range
+                                     |> Option.map (fun range ->
+                                         range.Start.Line, range.Start.Column
+                                     )
+                                 ))
+                                [ code, message, Some position ]
+                                "The diagnostic matches the Compatibility Oracle"
+                ]
+
+            testList
+                "a numeric literal that the prototype front end cannot read fails with a diagnostic, not an exception"
+                [
+                    for name, text, message in
+                        [
+                            "at the 32-bit limit (Oracle FS1147)",
+                            "module Program\nlet answer () = 2147483648\n",
+                            "integer literal outside the 32-bit range"
+                            "with a 64-bit suffix (Oracle accepts)",
+                            "module Program\nlet answer () = 2147483648L\n",
+                            "numeric literal other than a decimal integer"
+                            "with a radix prefix (Oracle accepts)",
+                            "module Program\nlet answer () = 0x1\n",
+                            "numeric literal other than a decimal integer"
+                            "before member access",
+                            "module Program\nlet answer () = 0x1.A\n",
+                            "numeric literal other than a decimal integer"
+                        ] ->
+                        testCase name
+                        <| fun _ ->
+                            let result = compile text
+
+                            Expect.equal
+                                result.Outcome
+                                CompilationOutcome.Failed
+                                "The prototype front end reads only decimal 32-bit integer literals"
+
+                            Expect.sequenceEqual
+                                (result.Diagnostics
+                                 |> Seq.map (fun diagnostic ->
+                                     diagnostic.Code,
+                                     diagnostic.Stage,
+                                     diagnostic.Message,
+                                     diagnostic.Range
+                                     |> Option.map (fun range ->
+                                         range.Start.Line, range.Start.Column
+                                     )
+                                 ))
+                                [
+                                    "FSC2P1001",
+                                    DiagnosticStage.Compilation CompilationPhase.Syntax,
+                                    message,
+                                    Some(2, 17)
+                                ]
+                                "The literal gets an explicit prototype diagnostic"
+                ]
+
             testCase "an invalid reference image fails with a diagnostic"
             <| fun _ ->
                 let baseline =

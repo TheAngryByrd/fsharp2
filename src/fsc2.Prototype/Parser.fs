@@ -377,6 +377,7 @@ module internal Parser =
            <> offsideCode
         && code
            <> typeArgumentSpaceCode
+        && not (NumericLiteral.rangeErrorCodes.Contains code)
 
     let private reportedAt state (token: LayoutToken) =
         state.ReportedStarts.Contains token.Range.Start.Offset
@@ -700,6 +701,7 @@ module internal Parser =
         | Open
         | Val
         | Type
+        | CastType
         | RecordField
         | UnionCase
         | Member
@@ -914,7 +916,11 @@ module internal Parser =
         || isEndOfFile token
         || isOffside context token
 
-    let private longIdentifierWith state (onTrailingDot: LayoutToken -> unit) =
+    let private longIdentifierUntil
+        state
+        (stops: LayoutToken -> bool)
+        (onTrailingDot: LayoutToken -> unit)
+        =
         let cursor = state.Cursor
         let parts = ImmutableArray.CreateBuilder<SyntaxIdentifier>()
         let mutable stop = false
@@ -922,7 +928,8 @@ module internal Parser =
         parts.Add(identifier (cursor.Advance()))
 
         while not stop
-              && isOperator "." cursor.Current do
+              && isOperator "." cursor.Current
+              && not (stops cursor.Current) do
             let dot = cursor.Advance()
 
             if
@@ -946,6 +953,9 @@ module internal Parser =
                           - 1]
                         .Range
         }
+
+    let private longIdentifierWith state onTrailingDot =
+        longIdentifierUntil state (fun _ -> false) onTrailingDot
 
     let private unsupportedTrailingDot state (_: LayoutToken) =
         reportUnsupported state state.Cursor.Current "a long identifier"
@@ -986,7 +996,7 @@ module internal Parser =
         | "&&" -> Some(2, false)
         | "::" -> Some(6, true)
         | "!=" -> Some(4, false)
-        | _ when text.StartsWith("**", StringComparison.Ordinal) -> Some(9, true)
+        | _ when text.StartsWith("**", StringComparison.Ordinal) -> Some(10, true)
         // The FCS lexer ignores leading '.' characters for the precedence, so '.||' and '.&&' are comparison operators.
         | _ when text.StartsWith('.') ->
             let rest = text.TrimStart '.'
@@ -1018,10 +1028,10 @@ module internal Parser =
             | '^'
             | '@' -> Some(5, true)
             | '+'
-            | '-' -> Some(7, false)
+            | '-' -> Some(8, false)
             | '*'
             | '/'
-            | '%' -> Some(8, false)
+            | '%' -> Some(9, false)
             | _ -> None
 
     let private infixPrecedence (token: LayoutToken) =
@@ -1030,6 +1040,35 @@ module internal Parser =
             || isKeyword "or" token
         then
             operatorPrecedence (tokenText token)
+        else
+            None
+
+    // FCS 'declExpr': ':>' and ':?>' bind between '&&' and the comparison operators, and ':?' binds between '::' and '+'.
+    let private castOperator (token: LayoutToken) =
+        if isKind LexicalTokenKind.Operator token then
+            match tokenText token with
+            | ":>" ->
+                Some(
+                    3,
+                    (fun target targetType range ->
+                        SyntaxExpression.Upcast(target, targetType, range)
+                    )
+                )
+            | ":?>" ->
+                Some(
+                    3,
+                    (fun target targetType range ->
+                        SyntaxExpression.Downcast(target, targetType, range)
+                    )
+                )
+            | ":?" ->
+                Some(
+                    7,
+                    (fun target targetType range ->
+                        SyntaxExpression.TypeTest(target, targetType, range)
+                    )
+                )
+            | _ -> None
         else
             None
 
@@ -1065,201 +1104,135 @@ module internal Parser =
         && not (
             cursor.Current.Range.Start.Offset = cursor.LastEnd.Offset
             && cursor.PreviousSource
-               |> Option.exists (fun token ->
-                   isIdentifier token
-                   || isKind LexicalTokenKind.Keyword token
-               )
+               |> Option.exists (isKind LexicalTokenKind.Keyword)
         )
 
     let private precedesWithoutSpace (token: LayoutToken) (next: LayoutToken) =
         next.Kind = LayoutTokenKind.SourceToken
         && next.Range.Start.Offset = token.Range.End.Offset
 
-    // FCS LexFilter merges an adjacent sign into a signed integer, float, decimal, or bignum literal, but not into an unsigned literal.
-    let private numericForms =
-        let decimalDigits = "[0-9](?:_*[0-9])*"
-
-        let radixDigits =
-            "(?:0[xX][0-9a-fA-F](?:_*[0-9a-fA-F])*|0[oO][0-7](?:_*[0-7])*|0[bB][01](?:_*[01])*)"
-
-        let floating =
-            $"(?:{decimalDigits}\\.(?:{decimalDigits})?(?:[eE][+-]?{decimalDigits})?|{decimalDigits}[eE][+-]?{decimalDigits})"
-
-        let form pattern =
-            Text.RegularExpressions.Regex(
-                $"^(?:{pattern})$",
-                Text.RegularExpressions.RegexOptions.CultureInvariant
-            )
-
-        {|
-            Unsigned = form $"(?:{decimalDigits}|{radixDigits})(?:u|uy|us|ul|uL|UL|un)"
-            Signed =
-                form (
-                    String.concat "|" [
-                        $"(?:{decimalDigits}|{radixDigits})(?:y|s|l|n|L)?"
-                        $"{decimalDigits}[QRZING]"
-                        $"{radixDigits}(?:lf|LF)"
-                        $"(?:{floating}|{decimalDigits})[fF]"
-                        floating
-                        $"(?:{floating}|{decimalDigits})[mM]"
-                    ]
-                )
-        |}
-
-    // FCS merges an adjacent sign into every numeric literal except an unsigned integer. The lexer does not check the literal form.
-    let private takesSign (token: LayoutToken) =
-        isKind LexicalTokenKind.NumericLiteral token
-        && not (numericForms.Unsigned.IsMatch(tokenText token))
-
-    // The lexer does not check literal ranges or digits, and the Oracle reports FS1142 to FS1156 for such a literal.
-    let private readsWithSign (sign: LayoutToken) (literal: LayoutToken) =
-        let text = (tokenText literal).Replace("_", "")
-
-        let suffix =
-            text[text.Length
-                 - 1]
-
-        let withoutSuffix =
-            text.Substring(
-                0,
-                text.Length
-                - 1
-            )
-
-        let radix =
-            match text with
-            | _ when text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) -> 16
-            | _ when text.StartsWith("0o", StringComparison.OrdinalIgnoreCase) -> 8
-            | _ when text.StartsWith("0b", StringComparison.OrdinalIgnoreCase) -> 2
-            | _ -> 10
-
-        if
-            radix = 10
-            && "mM".IndexOf suffix
-               >= 0
-        then
-            fst (
-                Decimal.TryParse(
-                    withoutSuffix,
-                    Globalization.NumberStyles.Float,
-                    Globalization.CultureInfo.InvariantCulture
-                )
-            )
-        elif
-            text.EndsWith("lf", StringComparison.OrdinalIgnoreCase)
-            || radix = 10
-               && (text.IndexOfAny [|
-                       '.'
-                       'e'
-                       'E'
-                   |]
-                   >= 0
-                   || "fFIQRZNG".IndexOf suffix
-                      >= 0)
-        then
-            true
+    let private numericLiteral (token: LayoutToken) =
+        if isKind LexicalTokenKind.NumericLiteral token then
+            NumericLiteral.tryParse (tokenText token)
         else
-            let bits, digits =
-                match suffix with
-                | 'y' -> 8, withoutSuffix
-                | 's' -> 16, withoutSuffix
-                | 'l' -> 32, withoutSuffix
-                | 'L'
-                | 'n' -> 64, withoutSuffix
-                | _ -> 32, text
+            None
 
-            let digitValues =
-                (if radix = 10 then digits else digits.Substring 2)
-                |> Seq.map (fun digit -> "0123456789abcdef".IndexOf(Char.ToLowerInvariant digit))
-                |> Seq.toList
+    let private takesSign (token: LayoutToken) =
+        numericLiteral token
+        |> Option.exists _.TakesSign
 
-            if
-                digitValues.IsEmpty
-                || digitValues
-                   |> List.exists (fun value ->
-                       value < 0
-                       || value
-                          >= radix
-                   )
-            then
-                false
-            else
-                let magnitude =
-                    digitValues
-                    |> List.fold
-                        (fun (value: Numerics.BigInteger) digit ->
-                            value
-                            * Numerics.BigInteger radix
-                            + Numerics.BigInteger digit
-                        )
-                        Numerics.BigInteger.Zero
+    // The lexer reports a literal outside its range. FCS reports a decimal literal at the signed limit when no adjacent '-' precedes it.
+    let private reportSignedLimit state (literal: LayoutToken) range =
+        match
+            numericLiteral literal
+            |> Option.map _.Range
+        with
+        | Some(NumericLiteralRange.FitsOnlyAfterMinus error) ->
+            report state error.Code error.Message range
+        | _ -> ()
 
-                let limit = Numerics.BigInteger.Pow(Numerics.BigInteger 2, bits - 1)
+    // FCS reads a token after the target type of a cast as part of the type, or reports FS0010, unless the token is in this set.
+    let private endsCastTypeAt (token: LayoutToken) (next: LayoutToken) (lastEnd: SourcePosition) =
+        let text = tokenText token
 
-                magnitude < limit
-                || radix = 10
-                   && isOperator "-" sign
-                   && magnitude = limit
+        isEndOfFile token
+        || [
+            ")"
+            "]"
+            "}"
+            ","
+            ";"
+           ]
+           |> List.exists (fun delimiter -> isDelimiter delimiter token)
+        || [
+            "then"
+            "else"
+            "elif"
+            "with"
+            "do"
+            "in"
+            "to"
+            "downto"
+           ]
+           |> List.exists (fun keyword -> isKeyword keyword token)
+        || isOperator ":=" token
+        || (castOperator token).IsSome
+        || (infixPrecedence token).IsSome
+           && not (
+               text = "<"
+               || text.StartsWith("<@", StringComparison.Ordinal)
+               || text.StartsWith('^')
+               || text.StartsWith('@')
+               || text.StartsWith('/')
+               || text.StartsWith('*')
+                  && not (text.StartsWith("**", StringComparison.Ordinal))
+           )
+           && not (
+               isSign token
+               && precedesWithoutSpace token next
+               && token.Range.Start.Offset
+                  <> lastEnd.Offset
+           )
 
-    let private fitsWithSign (sign: LayoutToken) (literal: LayoutToken) =
-        numericForms.Signed.IsMatch(tokenText literal)
-        && readsWithSign sign literal
+    // FCS continues the target type of a cast on a later line with an operator that can extend a type, also at the block column.
+    let private continuesCastTypeOnLaterLine (token: LayoutToken) =
+        let text = tokenText token
 
-    // FCS keeps an unsigned literal after a sign, and the Oracle reports FS1143 to FS1150 for one outside its range.
-    let private unsignedLiteralFits (literal: LayoutToken) =
-        let text = (tokenText literal).Replace("_", "")
-        let lower = text.ToLowerInvariant()
+        isKind LexicalTokenKind.Operator token
+        && [
+            "*"
+            "/"
+            "%"
+            "^"
+            "@"
+            "."
+            "<"
+            "->"
+            ":"
+           ]
+           |> List.exists (fun prefix -> text.StartsWith(prefix, StringComparison.Ordinal))
 
-        let bits, suffixLength =
-            if lower.EndsWith("uy", StringComparison.Ordinal) then
-                8, 2
-            elif lower.EndsWith("us", StringComparison.Ordinal) then
-                16, 2
-            elif
-                lower.EndsWith("ul", StringComparison.Ordinal)
-                || lower.EndsWith("un", StringComparison.Ordinal)
-            then
-                64, 2
-            else
-                32, 1
+    let private castTypeEnd context (cursor: Cursor) =
+        let offset, _ = nextSource cursor
+        let token = cursor.Peek offset
+        let next = cursor.Peek(offset + 1)
 
-        let digits =
-            lower.Substring(
-                0,
-                text.Length
-                - suffixLength
-            )
-
-        let radix, digits =
-            if digits.StartsWith("0x", StringComparison.Ordinal) then
-                16, digits.Substring 2
-            elif digits.StartsWith("0o", StringComparison.Ordinal) then
-                8, digits.Substring 2
-            elif digits.StartsWith("0b", StringComparison.Ordinal) then
-                2, digits.Substring 2
-            else
-                10, digits
-
-        let magnitude =
-            digits
-            |> Seq.fold
-                (fun (value: Numerics.BigInteger) digit ->
-                    value
-                    * Numerics.BigInteger radix
-                    + Numerics.BigInteger("0123456789abcdef".IndexOf digit)
-                )
-                Numerics.BigInteger.Zero
-
-        numericForms.Unsigned.IsMatch(tokenText literal)
-        && magnitude < Numerics.BigInteger.Pow(Numerics.BigInteger 2, bits)
-
-    let private reportUnsignedOperand state (token: LayoutToken) =
         if
-            isKind LexicalTokenKind.NumericLiteral token
-            && not (takesSign token)
-            && not (unsignedLiteralFits token)
+            offset = 0
+            && token.Range.Start.Line = cursor.LastEnd.Line
         then
-            reportUnsupported state token "an unsigned literal outside its range"
+            token, endsCastTypeAt token next cursor.LastEnd
+        else
+            token,
+            isEndOfFile token
+            || not (continuesCastTypeOnLaterLine token)
+               && (isOffside context token
+                   || offset > 0
+                      && not (isKind LexicalTokenKind.Operator token)
+                   || endsCastTypeAt token next cursor.LastEnd)
+
+    let private startsMemberAccess (cursor: Cursor) =
+        let dot = cursor.Current
+        let name = cursor.Peek 1
+
+        isOperator "." dot
+        && dot.Range.Start.Offset = cursor.LastEnd.Offset
+        && isIdentifier name
+        && tokenText name
+           <> "_"
+        && name.Range.Start.Offset = dot.Range.End.Offset
+
+    let private lacksQualification (cursor: Cursor) =
+        let dot = cursor.Current
+        let next = cursor.Peek 1
+
+        isOperator "." dot
+        && dot.Range.Start.Offset = cursor.LastEnd.Offset
+        && (next.Kind
+            <> LayoutTokenKind.SourceToken
+            || isEndOfFile next
+            || isKind LexicalTokenKind.NumericLiteral next
+               && next.Range.Start.Offset = dot.Range.End.Offset)
 
     let private isSignedLiteral (cursor: Cursor) =
         isSign cursor.Current
@@ -1422,6 +1395,8 @@ module internal Parser =
         if
             isIdentifier cursor.Current
             && isOperator ":" (cursor.Peek 1)
+            && context.Kind
+               <> FrameKind.CastType
         then
             let name = identifier (cursor.Advance())
 
@@ -1471,7 +1446,8 @@ module internal Parser =
                      && not (isOperator ":" (cursor.Peek 1))))
                 && not (isOffside context cursor.Current)
                 ->
-                let typeConstructor = parseTypeConstructor state (unsupportedTrailingDot state)
+                let typeConstructor =
+                    parseTypeConstructor state context (unsupportedTrailingDot state)
 
                 result <-
                     SyntaxType.Application(
@@ -1532,7 +1508,7 @@ module internal Parser =
         else
             parseTypeName state context (unsupportedTrailingDot state)
 
-    and private parseTypeConstructor state onTrailingDot =
+    and private parseTypeConstructor state context onTrailingDot =
         let cursor = state.Cursor
 
         if isKeyword "global" cursor.Current then
@@ -1546,7 +1522,7 @@ module internal Parser =
                     && tokenText cursor.Current
                        <> "_"
                 then
-                    let name = longIdentifierWith state onTrailingDot
+                    let name = longIdentifierUntil state (isOffside context) onTrailingDot
 
                     SyntaxType.GlobalLongIdentifier(
                         globalToken.Range,
@@ -1564,10 +1540,10 @@ module internal Parser =
             else
                 SyntaxType.GlobalLongIdentifier(globalToken.Range, None, globalToken.Range)
         else
-            SyntaxType.LongIdentifier(longIdentifierWith state onTrailingDot)
+            SyntaxType.LongIdentifier(longIdentifierUntil state (isOffside context) onTrailingDot)
 
     and private parseTypeName state context onTrailingDot =
-        match parseTypeConstructor state onTrailingDot with
+        match parseTypeConstructor state context onTrailingDot with
         | SyntaxType.LongIdentifier name ->
             parseTypeArguments state context (SyntaxTypeName.LongIdentifier name)
         | SyntaxType.GlobalLongIdentifier(globalKeyword, Some name, range) ->
@@ -1580,7 +1556,10 @@ module internal Parser =
     and private parseTypeArguments state context (name: SyntaxTypeName) =
         let cursor = state.Cursor
 
-        if isOperator "<" cursor.Current then
+        if
+            isOperator "<" cursor.Current
+            && not (isOffside context cursor.Current)
+        then
             let openToken = cursor.Advance()
 
             let arguments = ImmutableArray.CreateBuilder<SyntaxType>()
@@ -1833,6 +1812,7 @@ module internal Parser =
             cursor.Advance()
             |> ignore
 
+            reportSignedLimit state token token.Range
             SyntaxPattern.Constant(value, token.Range)
         | None when
             isIdentifier token
@@ -2145,8 +2125,15 @@ module internal Parser =
         let mutable stop = false
 
         while not stop do
-            match infixPrecedence cursor.Current with
-            | Some(precedence, rightAssociative) when
+            match infixPrecedence cursor.Current, castOperator cursor.Current with
+            | _, Some(precedence, cast) when
+                precedence
+                >= minimum
+                && cursor.Current.Range.Start.Line = cursor.LastEnd.Line
+                && not (reportedAt state cursor.Current)
+                ->
+                left <- parseCast state context cast left
+            | Some(precedence, rightAssociative), _ when
                 precedence
                 >= minimum
                 && not (isOffsideInfix state context cursor.Current (cursor.Peek 1))
@@ -2168,6 +2155,53 @@ module internal Parser =
             | _ -> stop <- true
 
         left
+
+    and private parseCast state context cast (target: SyntaxExpression) =
+        let cursor = state.Cursor
+        let operatorToken = cursor.Advance()
+
+        // Every token on a later line is offside of this frame, so the type parser stops at the end of the line.
+        let typeContext = {
+            Kind = FrameKind.CastType
+            StartToken = {
+                operatorToken.Range with
+                    Start = {
+                        operatorToken.Range.Start with
+                            Column = Int32.MaxValue
+                    }
+            }
+        }
+
+        let targetType =
+            if cursor.Current.Range.Start.Line > operatorToken.Range.Start.Line then
+                reportUnsupported state cursor.Current "a type on the line after a cast operator"
+                missingType cursor.Current
+            else
+                parseTypeOperand
+                    state
+                    typeContext
+                    (fun _ -> None)
+                    TypeGap.UnexpectedToken
+                    (fun () -> parseType state typeContext (fun _ -> None))
+
+        let endToken, ends = castTypeEnd context cursor
+
+        if
+            not ends
+            && not (reportedAt state endToken)
+        then
+            reportUnsupported state endToken "a token after the target type of a cast"
+
+        let castType =
+            match SyntaxCastType.tryCreate targetType with
+            | Some castType -> castType
+            | None ->
+                reportUnsupported state operatorToken "a named parameter type in a cast"
+
+                SyntaxCastType.tryCreate (missingType operatorToken)
+                |> Option.get
+
+        cast target castType (span target.Range targetType.Range)
 
     and private parseInfixOperator state =
         let cursor = state.Cursor
@@ -2231,7 +2265,6 @@ module internal Parser =
             && not (isSignedLiteral cursor)
         then
             let operatorToken = cursor.Advance()
-            reportUnsignedOperand state cursor.Current
 
             let operand =
                 if
@@ -2340,7 +2373,7 @@ module internal Parser =
         reportBangAfterOperand state
         prefixExpression state operatorToken operand
 
-    // The lexer splits 'x!=' into 'x' and '!=', and FCS reads 'x!' as one reserved token (FS1141).
+    // FCS reads a keyword and an adjacent '!' as one reserved token (FS1141). The lexer reads an identifier and its '!' as one token.
     and private reportBangAfterOperand state =
         let cursor = state.Cursor
 
@@ -2357,9 +2390,6 @@ module internal Parser =
         let cursor = state.Cursor
         let operatorToken = cursor.Advance()
 
-        if isSign operatorToken then
-            reportUnsignedOperand state cursor.Current
-
         let operand =
             if canStartAtom cursor.Current then
                 parseArgument state context (Some operatorToken.Range)
@@ -2373,22 +2403,67 @@ module internal Parser =
         prefixExpression state operatorToken operand
 
     and private parseArgument state context prefixRange =
-        match parseAtom state context with
-        | SyntaxExpression.Identifier _ as name ->
-            let argument = parsePostfix state context 1 name
+        let argument =
+            match parseAtom state context with
+            | SyntaxExpression.Identifier _ as name -> parsePostfix state context 1 name
+            | argument -> parseMemberAccess state argument
 
-            match argument with
-            | SyntaxExpression.Application(_, _, range) ->
-                report
-                    state
-                    successiveArgumentsCode
-                    "Successive arguments should be separated by spaces or tupled, and arguments involving function or method applications should be parenthesized"
-                    (prefixRange
-                     |> Option.defaultValue range)
-            | _ -> ()
+        match argument with
+        | SyntaxExpression.Application(_, _, range)
+        | SyntaxExpression.DotGet(SyntaxExpression.Application(_, _, range), _, _) ->
+            report
+                state
+                successiveArgumentsCode
+                "Successive arguments should be separated by spaces or tupled, and arguments involving function or method applications should be parenthesized"
+                (prefixRange
+                 |> Option.defaultValue range)
+        | _ -> ()
 
-            argument
-        | argument -> argument
+        match argument with
+        | SyntaxExpression.DotGet _ when
+            isAdjacentStep state state.Cursor.Current
+            && not (reportedAt state state.Cursor.Current)
+            ->
+            reportUnsupported
+                state
+                state.Cursor.Current
+                "an application after member access in an argument"
+        | _ -> ()
+
+        argument
+
+    // FCS 'atomicExpr': '.' after an atomic expression reads a long identifier (DotGet).
+    and private parseMemberAccess state (target: SyntaxExpression) =
+        let cursor = state.Cursor
+
+        if startsMemberAccess cursor then
+            let parts = ImmutableArray.CreateBuilder<SyntaxIdentifier>()
+
+            while startsMemberAccess cursor do
+                cursor.Advance()
+                |> ignore
+
+                parts.Add(identifier (cursor.Advance()))
+
+            let parts = parts.ToImmutable()
+
+            let members = {
+                Parts = parts
+                Range =
+                    span
+                        parts[0].Range
+                        parts[parts.Length
+                              - 1]
+                            .Range
+            }
+
+            SyntaxExpression.DotGet(target, members, span target.Range members.Range)
+        elif lacksQualification cursor then
+            let dot = cursor.Advance()
+            report state "FS0599" "Missing qualification after '.'" dot.Range
+            target
+        else
+            target
 
     and private isAdjacentStep state (token: LayoutToken) =
         token.Kind = LayoutTokenKind.SourceToken
@@ -2401,49 +2476,80 @@ module internal Parser =
         let mutable result = target
         let mutable steps = 0
         let mutable more = true
+        let mutable stepsSinceAccess = 0
+        let mutable accessible = true
 
         while more
-              && steps < maximumSteps
-              && isAdjacentStep state cursor.Current do
-            steps <- steps + 1
-
-            if isDelimiter "(" cursor.Current then
-                let argument = parseAtom state context
-
-                result <-
-                    SyntaxExpression.Application(result, argument, span result.Range argument.Range)
+              && (startsMemberAccess cursor
+                  || lacksQualification cursor
+                  || steps < maximumSteps
+                     && isAdjacentStep state cursor.Current) do
+            if
+                startsMemberAccess cursor
+                || lacksQualification cursor
+            then
+                if accessible then
+                    result <- parseMemberAccess state result
+                    stepsSinceAccess <- 0
+                else
+                    // FCS reads a second application, or an application of a parenthesized head, as a new argument that takes the '.'.
+                    reportUnsupported state cursor.Current "member access after an application"
+                    more <- false
             else
-                let openToken = cursor.Advance()
+                accessible <-
+                    stepsSinceAccess = 0
+                    && (result.IsIdentifier
+                        || result.IsDotGet)
 
-                let index =
-                    if canStartExpression cursor.Current then
-                        withinDelimiters
-                            state
-                            (fun () -> parseExpression state (frameAt FrameKind.Bracket openToken))
-                    else
-                        missingExpression cursor.Current
+                stepsSinceAccess <-
+                    stepsSinceAccess
+                    + 1
 
-                if isDelimiter "]" cursor.Current then
-                    let close = cursor.Advance()
+                steps <- steps + 1
+
+                if isDelimiter "(" cursor.Current then
+                    let argument = parseAtom state context
 
                     result <-
-                        SyntaxExpression.BracketApplication(
+                        SyntaxExpression.Application(
                             result,
-                            index,
-                            span result.Range close.Range
+                            argument,
+                            span result.Range argument.Range
                         )
                 else
-                    if not (reportedAt state cursor.Current) then
-                        reportUnsupported state cursor.Current "an index expression"
+                    let openToken = cursor.Advance()
 
-                    result <-
-                        SyntaxExpression.BracketApplication(
-                            result,
-                            index,
-                            span result.Range (emptyAt cursor.LastEnd)
-                        )
+                    let index =
+                        if canStartExpression cursor.Current then
+                            withinDelimiters
+                                state
+                                (fun () ->
+                                    parseExpression state (frameAt FrameKind.Bracket openToken)
+                                )
+                        else
+                            missingExpression cursor.Current
 
-                    more <- false
+                    if isDelimiter "]" cursor.Current then
+                        let close = cursor.Advance()
+
+                        result <-
+                            SyntaxExpression.BracketApplication(
+                                result,
+                                index,
+                                span result.Range close.Range
+                            )
+                    else
+                        if not (reportedAt state cursor.Current) then
+                            reportUnsupported state cursor.Current "an index expression"
+
+                        result <-
+                            SyntaxExpression.BracketApplication(
+                                result,
+                                index,
+                                span result.Range (emptyAt cursor.LastEnd)
+                            )
+
+                        more <- false
 
         result
 
@@ -2456,6 +2562,7 @@ module internal Parser =
             cursor.Advance()
             |> ignore
 
+            reportSignedLimit state token token.Range
             SyntaxExpression.Constant(value, token.Range)
         | None when
             isIdentifier token
@@ -2521,11 +2628,8 @@ module internal Parser =
 
             let literal = cursor.Advance()
 
-            if not (fitsWithSign token literal) then
-                reportUnsupported
-                    state
-                    literal
-                    "a signed literal that is outside its range or not readable"
+            if isOperator "+" token then
+                reportSignedLimit state literal (span token.Range literal.Range)
 
             SyntaxExpression.Constant(
                 SyntaxConstant.Numeric(
@@ -3132,8 +3236,9 @@ module internal Parser =
                             None
 
                     if not (isOperator "->" cursor.Current) then
-                        reportUnexpected state RecoveryPoint.ClauseArrow "a match clause"
-                        |> ignore
+                        if not (reportedAt state cursor.Current) then
+                            reportUnexpected state RecoveryPoint.ClauseArrow "a match clause"
+                            |> ignore
 
                         more <- false
                     else
