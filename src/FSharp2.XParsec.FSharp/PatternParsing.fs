@@ -1,0 +1,871 @@
+namespace XParsec.FSharp.Parser
+
+open System
+open System.Collections.Generic
+open System.Collections.Immutable
+open XParsec
+open XParsec.Parsers
+open XParsec.OperatorParsing
+open XParsec.FSharp
+open XParsec.FSharp.Lexer
+open XParsec.FSharp.Parser.SyntaxToken
+
+module Pat =
+
+    let private errNotPrefixPatOp: ErrorType<PositionedToken, ParseState> =
+        Message "Not a prefix pattern operator"
+
+    let private errNotValidRhsPatOp: ErrorType<PositionedToken, ParseState> =
+        Message "Not a valid RHS pattern operator"
+
+    let private errRecordPattern: ErrorType<PositionedToken, ParseState> =
+        Message "Record pattern"
+
+    let private errPositionalOnlyCtorPat: ErrorType<PositionedToken, ParseState> =
+        Message "positional-only ctor pattern"
+
+    [<RequireQualifiedAccess>]
+    type PatAux =
+        | Type of Type<SyntaxToken>
+        | AsIdent of SyntaxToken
+
+    // --- Shared Precedence / Helpers for pattern Pratt parsing ---
+    // These are referenced by both `PatOperatorParser` (which models F#'s
+    // `parenPattern` grammar, including `:` as a type-annotation operator) and
+    // `PatHeadOperatorParser` (which models `headBindingPattern`, where `:` is
+    // not part of the pattern and belongs to the binding's `optReturnType`).
+
+    let private tuplePrecedence = BindingPower.fromLevel (int PrecedenceLevel.Comma)
+    let private asPrecedence = BindingPower.fromLevel (int PrecedenceLevel.As)
+    let private semiPrecedence = BindingPower.fromLevel (int PrecedenceLevel.Semicolon)
+    let private pipePrecedence = BindingPower.fromLevel (int PrecedenceLevel.Pipe)
+    let private andPrecedence = BindingPower.fromLevel (int PrecedenceLevel.LogicalAnd)
+    let private colonPrecedence = BindingPower.fromLevel (int PrecedenceLevel.TypeTest)
+    let private consPrecedence = BindingPower.fromLevel (int PrecedenceLevel.Cons)
+    let private parenPrecedence = BindingPower.fromLevel (int PrecedenceLevel.Parens)
+
+    let private structPrecedence =
+        BindingPower.fromLevel (int PrecedenceLevel.HighApplication)
+
+    let private completeInfix (l: Pat<SyntaxToken>) (op: SyntaxToken) (r: Pat<SyntaxToken>) =
+        match op.Token with
+        | Token.OpBar -> Pat.Or(l, op, r)
+        | Token.OpAmp -> Pat.And(l, op, r)
+        | Token.KWColonColon -> Pat.Cons(l, op, r)
+        | _ -> failwithf "Unexpected infix pattern operator: %A" op
+
+    let private completeTuple (elements: ResizeArray<Pat<SyntaxToken>>) (ops: ResizeArray<SyntaxToken>) =
+        Pat.Tuple(ImmutableArray.CreateRange(elements), ImmutableArray.CreateRange(ops))
+
+    let private completeTyped (l: Pat<SyntaxToken>) (op: SyntaxToken) (aux: PatAux) =
+        match aux with
+        | PatAux.Type t -> Pat.Typed(l, op, t)
+        | _ -> failwith "Expected Type aux for Typed pattern"
+
+    let private completeAs (l: Pat<SyntaxToken>) (op: SyntaxToken) (aux: PatAux) =
+        match aux with
+        | PatAux.AsIdent ident -> Pat.As(l, op, ident)
+        | _ -> failwith "Expected Ident aux for As pattern"
+
+    let private completeParen (l: SyntaxToken) (p: Pat<SyntaxToken>) (r: SyntaxToken) =
+        Pat.EnclosedBlock(ParenKind.Paren l, p, r)
+
+    let private completeStruct (op: SyntaxToken) (r: Pat<SyntaxToken>) =
+        match r with
+        | Pat.EnclosedBlock(ParenKind.Paren l, Pat.Tuple(elements, ops), r) -> Pat.StructTuple(op, l, elements, ops, r)
+        | Pat.EnclosedBlock(ParenKind.Paren l, inner, r) ->
+            // `struct (x)` (one element in parens) — emit as 1-element StructTuple
+            // for downstream uniformity; the type checker rejects 1-element struct tuples.
+            Pat.StructTuple(op, l, ImmutableArray.Create(inner), ImmutableArray.Empty, r)
+        | _ ->
+            // `struct x` without parens — malformed but accepted per parser policy
+            // (defer to type checker). Synthesize virtual parens around the RHS.
+            let lParen = virtualToken (PositionedToken.Create(Token.KWLParen, op.StartIndex))
+            let rParen = virtualToken (PositionedToken.Create(Token.KWRParen, op.StartIndex))
+            Pat.StructTuple(op, lParen, ImmutableArray.Create(r), ImmutableArray.Empty, rParen)
+
+    let private completeElems (exprs: ResizeArray<Pat<_>>) ops =
+        Pat.Elems(ImmutableArray.CreateRange(exprs), ImmutableArray.CreateRange(ops))
+
+    /// Emits a virtual `;` in pattern SeqBlock contexts when the next non-trivia token
+    /// is at the current offside indent and can start a pattern. Mirrors `pSepVirt` in
+    /// ExpressionParsing.fs so list/array patterns accept newline-separated elements.
+    let private pSepVirtPat: FSParser<SyntaxToken> =
+        let failSep =
+            fail (Message "Expected ';' or newline at the same indent for pattern sequencing")
+
+        parser {
+            match! peekNextSyntaxToken with
+            | t when t.Token = Token.EOF -> return! failSep
+            | t when t.Token = Token.OpSemicolon -> return! failSep
+            | t ->
+                if TokenInfo.canStartPattern t.Token then
+                    let! indent = currentIndent
+                    let! state = getUserState
+
+                    let atContextIndent =
+                        match state.Context with
+                        | { Indent = ctxIndent } :: _ -> indent = ctxIndent
+                        | [] -> indent = 0
+
+                    if atContextIndent then
+                        return virtualToken (PositionedToken.Create(Token.OpSemicolon, t.StartIndex))
+                    else
+                        return! failSep
+                else
+                    return! failSep
+        }
+
+    /// Subsequent-separator parser for InfixNary tuple patterns.
+    let private pPatTupleComma: FSParser<SyntaxToken> =
+        nextSyntaxTokenSatisfiesLMsg (fun t -> t.Token = Token.OpComma) "','"
+
+    /// Subsequent-separator parser for InfixNary element patterns. Matches a
+    /// real `;` or a virtual one emitted by `pSepVirtPat`.
+    let private pPatSemicolon: FSParser<SyntaxToken> =
+        nextSyntaxTokenSatisfiesLMsg (fun t -> t.Token = Token.OpSemicolon) "';'"
+        <|> pSepVirtPat
+
+    let private pTypeRhs = Type.parse |>> PatAux.Type
+
+    let private pAsRhs =
+        parser {
+            // NOTE: the 'as' token was already consumed by rhsParser's nextSyntaxToken.
+            // We only need to consume the identifier that follows.
+            let! ident = nextSyntaxTokenSatisfiesLMsg (fun t -> t.Token.IsIdentifier) "identifier after 'as'"
+            return PatAux.AsIdent ident
+        }
+
+    let private patLhsParser =
+        parser {
+            let! token = nextSyntaxToken
+
+            match token.Token with
+            | Token.KWLParen ->
+                // Start of tuple pattern ( ... )
+                // This is a Prefix Operator on a pattern
+                let p = preturn token
+                let rParen = virtualToken (PositionedToken.Create(Token.KWRParen, 0))
+                let op = Enclosed(token, p, parenPrecedence, rParen, pRParen, completeParen)
+                return op
+            | Token.KWStruct ->
+                let p = preturn token
+                // Create Prefix operator
+                // This will parse the immediate next pattern (e.g. Paren, or erroneously Literal/List)
+                let op = Prefix(token, p, structPrecedence, completeStruct)
+                return op
+            | _ -> return! fail errNotPrefixPatOp
+        }
+
+    // RHS-operator constructors for pattern Pratt parsing. Hoisted as module-level
+    // `let private` functions (NOT closures) so the dispatch tables below hold
+    // direct method-group references rather than freshly-allocated closures.
+    let private mkOpBar (tok: SyntaxToken) =
+        InfixLeft(tok, preturn tok, pipePrecedence, completeInfix)
+
+    let private mkOpAmp (tok: SyntaxToken) =
+        InfixLeft(tok, preturn tok, andPrecedence, completeInfix)
+
+    let private mkColonColon (tok: SyntaxToken) =
+        InfixRight(tok, preturn tok, consPrecedence, completeInfix)
+
+    let private mkOpColon (tok: SyntaxToken) =
+        InfixMapped(tok, preturn tok, colonPrecedence, pTypeRhs, completeTyped)
+
+    let private mkKWAs (tok: SyntaxToken) =
+        InfixMapped(tok, preturn tok, asPrecedence, pAsRhs, completeAs)
+
+    let private mkOpComma (tok: SyntaxToken) =
+        InfixNary(tok, pPatTupleComma, tuplePrecedence, false, completeTuple)
+
+    let private mkSemiCompletes (tok: SyntaxToken) =
+        InfixNary(tok, pPatSemicolon, semiPrecedence, true, completeElems)
+
+    let private mkSemiBare (tok: SyntaxToken) =
+        InfixNary(tok, pPatSemicolon, semiPrecedence, false, completeElems)
+
+    // Static dispatch tables — one per parameterization. The `match` on Token enum
+    // values is compiled by F# into a chain of small range-`switch` IL opcodes
+    // (the values are non-contiguous: 136, 140, 159, 162, 183, 184, 40961…), which
+    // amounts to ~6 sequential conditional jumps. A linear scan over a 6-7 entry
+    // struct-tuple array is a tighter JIT-friendly loop and lets the branch
+    // predictor see the common patterns.
+    let private patRhsRoutesFull
+        : struct (Token *
+          (SyntaxToken -> RHSOperator<SyntaxToken, PatAux, Pat<SyntaxToken>, PositionedToken, ParseState, FSReadable>))[] =
+        [|
+            struct (Token.OpComma, mkOpComma)
+            struct (Token.OpBar, mkOpBar)
+            struct (Token.OpAmp, mkOpAmp)
+            struct (Token.OpSemicolon, mkSemiCompletes)
+            struct (Token.KWColonColon, mkColonColon)
+            struct (Token.OpColon, mkOpColon)
+            struct (Token.KWAs, mkKWAs)
+        |]
+
+    let private patRhsRoutesHead
+        : struct (Token *
+          (SyntaxToken -> RHSOperator<SyntaxToken, PatAux, Pat<SyntaxToken>, PositionedToken, ParseState, FSReadable>))[] =
+        [|
+            struct (Token.OpComma, mkOpComma)
+            struct (Token.OpBar, mkOpBar)
+            struct (Token.OpAmp, mkOpAmp)
+            struct (Token.OpSemicolon, mkSemiBare)
+            struct (Token.KWColonColon, mkColonColon)
+            struct (Token.KWAs, mkKWAs)
+        |]
+
+    // Specialist RHS dispatcher for pattern Pratt parsing. Peeks once, scans the
+    // (small, static) routes array, then advances + invokes the handler. The
+    // virtual-`;` slow path inlines `pSepVirtPat`'s offside check so it doesn't
+    // re-peek either. `semiCompletesElems` is needed by the slow path for the
+    // synthesized InfixNary.
+    let private patRhsParserSpecialist
+        (routes:
+            struct (Token *
+            (SyntaxToken -> RHSOperator<SyntaxToken, PatAux, Pat<SyntaxToken>, PositionedToken, ParseState, FSReadable>))[])
+        (semiCompletesElems: bool)
+        : FSParser<_> =
+        fun reader ->
+            match peekNextSyntaxToken reader with
+            | Error e -> Error e
+            | Ok t ->
+                let token = t.Token
+                let mutable handler = ValueNone
+                let mutable i = 0
+
+                while handler.IsNone && i < routes.Length do
+                    let struct (k, h) = routes.[i]
+
+                    if k = token then
+                        handler <- ValueSome h
+
+                    i <- i + 1
+
+                match handler with
+                | ValueSome h ->
+                    match consumePeeked t reader with
+                    | Error e -> Error e
+                    | Ok tok -> Ok(h tok)
+                | ValueNone ->
+                    if token = Token.EOF then
+                        fail errNotValidRhsPatOp reader
+                    elif TokenInfo.canStartPattern token then
+                        // Virtual `;` if the next pattern-starter sits at the current context indent.
+                        let state = reader.State
+                        let idx = int reader.Index * 1<token>
+                        let indent = ParseState.getIndent state idx
+
+                        let atContextIndent =
+                            match state.Context with
+                            | { Indent = ctxIndent } :: _ -> indent = ctxIndent
+                            | [] -> indent = 0
+
+                        if atContextIndent then
+                            let virt = virtualToken (PositionedToken.Create(Token.OpSemicolon, t.StartIndex))
+
+                            Ok(InfixNary(virt, pPatSemicolon, semiPrecedence, semiCompletesElems, completeElems))
+                        else
+                            fail errNotValidRhsPatOp reader
+                    else
+                        fail errNotValidRhsPatOp reader
+
+    /// Matches F#'s `parenPattern` grammar rule: includes `:` as a type-annotation
+    /// operator so that `(x : int)`, `(x : int, y : float)`, etc. parse as
+    /// per-element `Pat.Typed` inside the paren.
+    type PatOperatorParser() =
+        static let rhsParser = patRhsParserSpecialist patRhsRoutesFull true
+
+        interface Operators<SyntaxToken, PatAux, Pat<SyntaxToken>, PositionedToken, ParseState, FSReadable> with
+            member _.LhsParser = patLhsParser
+            member _.RhsParser = rhsParser
+
+    /// Matches F#'s `headBindingPattern` grammar rule: same operators as
+    /// `PatOperatorParser` except `:` is not consumed. In the F# grammar `:`
+    /// is a production of `parenPattern` (and `simplePat` for primary-ctor
+    /// arg lists), not of `headBindingPattern`; a top-level `let x : int = 5`
+    /// puts the `: int` into the binding's `optReturnType`, not the bound
+    /// pattern. Used by `Pat.parseHead` for a `let`-value's bound pattern.
+    type PatHeadOperatorParser() =
+        static let rhsParser = patRhsParserSpecialist patRhsRoutesHead false
+
+        interface Operators<SyntaxToken, PatAux, Pat<SyntaxToken>, PositionedToken, ParseState, FSReadable> with
+            member _.LhsParser = patLhsParser
+            member _.RhsParser = rhsParser
+
+    let private refPat = FSRefParser<Pat<SyntaxToken>>()
+    let private refPatSeqBlock = FSRefParser<Pat<SyntaxToken>>()
+    let private refFieldPat = FSRefParser<Pat<SyntaxToken>>()
+    let private refUnionFieldPat = FSRefParser<Pat<SyntaxToken>>()
+    let private refPatAtomic = FSRefParser<Pat<SyntaxToken>>()
+    let private refPatAtomicBindingArg = FSRefParser<Pat<SyntaxToken>>()
+
+    let private pEnclosed =
+        let completeEmpty l r = Pat.EmptyBlock(l, r)
+        let completeEnclosed l e r = Pat.EnclosedBlock(l, e, r)
+        let skipsTokens toks = Pat.SkipsTokens(toks)
+        pEnclosed completeEmpty completeEnclosed Pat.Missing skipsTokens
+
+    let pParenPat =
+        pEnclosed
+            pLParen
+            Token.KWRParen
+            ParenKind.Paren
+            OffsideContext.Paren
+            DiagnosticCode.ExpectedRParen
+            refPat.Parser
+
+    let pListPat =
+        pEnclosed
+            pLBracket
+            Token.KWRBracket
+            ParenKind.List
+            OffsideContext.Bracket
+            DiagnosticCode.ExpectedRBracket
+            refPatSeqBlock.Parser
+
+    let pArrayPat =
+        pEnclosed
+            pLArrayBracket
+            Token.KWRArrayBracket
+            ParenKind.Array
+            OffsideContext.BracketBar
+            DiagnosticCode.ExpectedRArrayBracket
+            refPatSeqBlock.Parser
+
+    // Shared '|' / 'as' chain handling for field-like patterns (record fields,
+    // union case args). The Pratt parsers for those contexts exclude '|' and
+    // 'as' via their min-binding-power cutoff, so we reapply them manually
+    // here around a parsed base pattern.
+    let private pBarToken =
+        nextSyntaxTokenSatisfiesLMsg (fun t -> t.Token = Token.OpBar) "'|'"
+
+    let private pOrAsChain (altParser: FSParser<Pat<SyntaxToken>>) (basePat: Pat<SyntaxToken>) =
+        parser {
+            let! orAlts =
+                many (
+                    parser {
+                        let! barTok = pBarToken
+                        // Each Or-alternative gets its own SeqBlock boundary so `pNamed`'s
+                        // optional parameter/arg parsers don't overrun past the alternative
+                        // into a following field at a lower column.
+                        let! altPat = withContext OffsideContext.SeqBlock altParser
+                        return struct (barTok, altPat)
+                    }
+                )
+
+            let p =
+                if orAlts.IsEmpty then
+                    basePat
+                else
+                    orAlts
+                    |> Seq.fold (fun acc struct (barTok, altPat) -> Pat.Or(acc, barTok, altPat)) basePat
+
+            let! asClause =
+                opt (
+                    parser {
+                        let! asTok = pAs
+
+                        let! ident =
+                            nextSyntaxTokenSatisfiesLMsg (fun t -> t.Token.IsIdentifier) "identifier after 'as'"
+
+                        return struct (asTok, ident)
+                    }
+                )
+
+            return
+                match asClause with
+                | ValueSome(asTok, ident) -> Pat.As(p, asTok, ident)
+                | ValueNone -> p
+        }
+
+    let pFieldPat =
+        parser {
+            let! lid = LongIdent.parse
+            let! eq = pEquals
+            let! basePat = withContext OffsideContext.SeqBlock refFieldPat.Parser
+            let! p = pOrAsChain refFieldPat.Parser basePat
+            return FieldPat(lid, eq, p)
+        }
+
+    let pRecordPat: FSParser<Pat<SyntaxToken>> =
+        fun reader ->
+            match pLBrace reader with
+            | Error e -> Error e
+            | Ok l ->
+                let savedState = reader.State
+
+                // Push Brace context (indent 0) so closing } is not blocked by offside check
+                let braceEntry: Offside =
+                    {
+                        Context = OffsideContext.Brace
+                        Indent = 0
+                        Token = l.PositionedToken
+                    }
+
+                reader.State <- ParseState.pushOffside braceEntry reader.State
+
+                let innerParser =
+                    parser {
+                        let! fields, seps = withContext OffsideContext.SeqBlock (sepEndBy1 pFieldPat pRecordFieldSep)
+                        let! r = pRBrace
+                        return Pat.Record(l, fields, seps, r)
+                    }
+
+                match innerParser reader with
+                | Ok result ->
+                    reader.State <- ParseState.popOffside braceEntry reader.State
+                    Ok result
+                | Error _ ->
+                    reader.State <- savedState
+                    fail errRecordPattern reader
+
+    /// Parse a single named field in a union case pattern: fieldName = pat (excludes comma).
+    let private pUnionNamedArgPat =
+        parser {
+            let! lid = LongIdent.parse
+            let! eq = pEquals
+            let! basePat = withContext OffsideContext.SeqBlock refUnionFieldPat.Parser
+            let! p = pOrAsChain refUnionFieldPat.Parser basePat
+            return UnionArgPat.Named(lid, eq, p)
+        }
+
+    /// Parse a single positional argument in a union case pattern: pat (excludes comma).
+    let private pUnionPositionalArgPat =
+        parser {
+            let! basePat = withContext OffsideContext.SeqBlock refUnionFieldPat.Parser
+            let! p = pOrAsChain refUnionFieldPat.Parser basePat
+            return UnionArgPat.Positional p
+        }
+
+    /// Parse a union case argument: either a named field (tried first) or a positional pattern.
+    let private pUnionArgPat = pUnionNamedArgPat <|> pUnionPositionalArgPat
+
+    /// Parse named field patterns AFTER a long-ident has already been consumed:
+    /// `( field1 = pat1, _, field2 = pat2, ... )`. Accepts an arbitrary mix of named
+    /// and positional args in any order, separated by commas, semicolons, or
+    /// newline-at-indent. Commits to this AST shape only when at least one argument
+    /// is a named field; otherwise fails (restoring state + position) so the caller
+    /// can fall back to the standard `Pat.Named(lid, args)` positional shape with
+    /// the same already-parsed lid.
+    let private tryNamedFieldPatsAfterLid
+        (lid: LongIdent<SyntaxToken>)
+        (postLidPos: Position<ParseState>)
+        : FSParser<Pat<SyntaxToken>> =
+        fun reader ->
+            match pLParen reader with
+            | Error e -> Error e
+            | Ok lParen ->
+                // Push Paren context (indent=0) so inner args can appear at any column
+                // relative to any enclosing SeqBlock — matches pParenPat/pRecordPat. Without
+                // this, a recursive call from inside a RHS `withContext SeqBlock` (set by
+                // pUnionNamedArgPat to the RHS column) would offside-fail on inner fields
+                // indented below the RHS column.
+                let parenEntry: Offside =
+                    {
+                        Context = OffsideContext.Paren
+                        Indent = 0
+                        Token = lParen.PositionedToken
+                    }
+
+                let savedState = reader.State
+                reader.State <- ParseState.pushOffside parenEntry reader.State
+
+                let innerParser =
+                    parser {
+                        let! args, seps =
+                            withContext OffsideContext.SeqBlock (sepBy1 pUnionArgPat (pComma <|> pRecordFieldSep))
+
+                        let! rParen = pRParen
+
+                        let hasNamed =
+                            args
+                            |> Seq.exists (
+                                function
+                                | UnionArgPat.Named _ -> true
+                                | _ -> false
+                            )
+
+                        if hasNamed then
+                            return Pat.NamedFieldPats(lid, lParen, args, seps, rParen)
+                        else
+                            return! fail errPositionalOnlyCtorPat
+                    }
+
+                match innerParser reader with
+                | Ok result ->
+                    reader.State <- ParseState.popOffside parenEntry reader.State
+                    Ok result
+                | Error _ as e ->
+                    // Roll back state + position so the caller's positional fallback can
+                    // re-parse the `(` as part of an atomic binding arg.
+                    reader.State <- savedState
+                    reader.Position <- postLidPos
+                    e
+
+    // pNamed shares one `LongIdent.parse` call between the named-field-pat path and the
+    // positional path — the prior `choiceL [pNamedFieldPats; …]` re-parsed the long-ident
+    // on backtrack (each alternative started with `let! lid = LongIdent.parse`). Every
+    // identifier-shaped pattern (match-arm variables, fn args, let-bound names, record
+    // fields) goes through here, so the duplicated long-ident parse was hot.
+    let pNamed: FSParser<Pat<SyntaxToken>> =
+        fun reader ->
+            match LongIdent.parse reader with
+            | Error e -> Error e
+            | Ok lid ->
+                let postLidPos = reader.Position
+
+                // Try named-field-pat shape first; on failure, fall through to positional
+                // with the same already-parsed lid (state + position restored to postLid).
+                match tryNamedFieldPatsAfterLid lid postLidPos reader with
+                | Ok result -> Ok result
+                | Error _ ->
+                    // Positional path: parses a curried list of atomic argument patterns.
+                    // This is what enables parameterized active patterns like
+                    // `CustomOpId (fn a) (fn b) boundVar`. `many` never fails — empty
+                    // results yield Pat.NamedSimple / Pat.Named with no args.
+                    match many refPatAtomicBindingArg.Parser reader with
+                    | Error e -> Error e
+                    | Ok args ->
+                        match lid.Idents.Length, args.IsEmpty with
+                        | 1, true -> Ok(Pat.NamedSimple(lid.Idents.[0]))
+                        | _ -> Ok(Pat.Named(lid, args))
+
+    // Parses `(op) atomicArg*` in pattern position. Enables parameterized
+    // active pattern calls whose parameter is an expression-shaped pattern, e.g.
+    // `| NLambdas ((-) n 1) (vs, b) -> ...`. F# parses the expression argument as a
+    // pattern and the type checker reinterprets it as an expression in active-pattern
+    // parameter positions (matching pars.fsy's `atomicPatternLongIdent` handling).
+    let private pParenOpHeadPat =
+        parser {
+            let! l = pLParen
+            let! op = OpName.parse
+            let! r = pRParen
+            let ident = IdentOrOp.ParenOp(l, op, r)
+            let! args = many refPatAtomicBindingArg.Parser
+
+            if args.IsEmpty then
+                return Pat.Op ident
+            else
+                return Pat.OpNamed(ident, args)
+        }
+
+    let private pParenOrOpHeadPat = pParenOpHeadPat <|> pParenPat
+
+    let pTypeTestPat =
+        parser {
+            let! op = pTypeTest
+            let! t = Type.parseAtomic
+            // Check optional 'as pat' — accepts any pattern, not just an identifier
+            let! asClause =
+                opt (
+                    parser {
+                        let! asTok = pAs
+                        let! pat = pNamed
+                        return struct (asTok, pat)
+                    }
+                )
+
+            match asClause with
+            | ValueSome(asTok, pat) -> return Pat.TypeTestAs(op, t, asTok, pat)
+            | ValueNone -> return Pat.TypeTest(op, t)
+        }
+
+    let pAttributesPat =
+        parser {
+            let! attrs = Attributes.parse
+            let! pat = refPat.Parser
+            return Pat.Attributed(attrs, pat)
+        }
+
+    let pConstPat =
+        parser {
+            let! c = Constant.parse
+            return Pat.Const c
+        }
+
+    let private isStringClose (tok: Token) =
+        match tok with
+        | Token.StringClose
+        | Token.ByteArrayClose
+        | Token.VerbatimStringClose
+        | Token.VerbatimByteArrayClose
+        | Token.String3Close
+        | Token.UnterminatedStringLiteral
+        | Token.UnterminatedVerbatimStringLiteral
+        | Token.UnterminatedString3Literal -> true
+        | _ -> false
+
+    let private isStringTextFragment (tok: Token) =
+        match tok with
+        | Token.StringFragment
+        | Token.EscapePercent
+        | Token.VerbatimEscapeQuote -> true
+        | _ -> false
+
+    let private stringKindOfToken (t: SyntaxToken) =
+        match t.Token with
+        | Token.StringOpen -> StringKind.String t
+        | Token.VerbatimStringOpen -> StringKind.VerbatimString t
+        | Token.String3Open -> StringKind.String3 t
+        | _ -> invalidOp $"Not a string open token: {t.Token}"
+
+    let pStringPat =
+        let rec loop (parts: ResizeArray<StringPart<SyntaxToken>>) reader =
+            match peekNextSyntaxToken reader with
+            | Error e -> Error e
+            | Ok t when isStringTextFragment t.Token ->
+                match consumePeeked t reader with
+                | Error e -> Error e
+                | Ok fragment ->
+                    parts.Add(StringPart.Text fragment)
+                    loop parts reader
+            | Ok t when t.Token = Token.EscapeSequence ->
+                match consumePeeked t reader with
+                | Error e -> Error e
+                | Ok esc ->
+                    parts.Add(StringPart.EscapeSequence esc)
+                    loop parts reader
+            | Ok t when t.Token = Token.FormatPlaceholder ->
+                match consumePeeked t reader with
+                | Error e -> Error e
+                | Ok fmt ->
+                    parts.Add(StringPart.FormatSpecifier fmt)
+                    loop parts reader
+            | Ok t when
+                t.Token = Token.InvalidFormatPlaceholder
+                || t.Token = Token.InvalidFormatPercents
+                ->
+                match consumePeeked t reader with
+                | Error e -> Error e
+                | Ok _ -> loop parts reader
+            | Ok _ -> Ok parts
+
+        parser {
+            let! opening =
+                nextSyntaxTokenSatisfiesLMsg
+                    (fun t ->
+                        match t.Token with
+                        | Token.StringOpen
+                        | Token.VerbatimStringOpen
+                        | Token.String3Open -> true
+                        | _ -> false
+                    )
+                    "Expected string literal open"
+
+            let kind = stringKindOfToken opening
+            let! parts = loop (ResizeArray())
+
+            let! closing = nextSyntaxTokenSatisfiesLMsg (fun t -> isStringClose t.Token) "Expected string close"
+
+            return Pat.String(kind, ImmutableArray.CreateRange(parts), closing)
+        }
+
+    let pWildcardPat = pWildcard |>> Pat.Wildcard
+    let pNullPat = pNull |>> Pat.Null
+
+    let private pStructPat =
+        parser {
+            let! structTok = pStruct
+            let! pat = pParenPat
+
+            match pat with
+            | Pat.EnclosedBlock(ParenKind.Paren l, Pat.Tuple(elements, ops), r) ->
+                return Pat.StructTuple(structTok, l, elements, ops, r)
+            | Pat.EnclosedBlock(ParenKind.Paren l, inner, r) ->
+                return Pat.StructTuple(structTok, l, ImmutableArray.Create(inner), ImmutableArray.Empty, r)
+            | _ ->
+                // pParenPat always returns Pat.EnclosedBlock(Paren …), so the
+                // recovery path is for Missing / SkipsTokens shapes.
+                let lParen =
+                    virtualToken (PositionedToken.Create(Token.KWLParen, structTok.StartIndex))
+
+                let rParen =
+                    virtualToken (PositionedToken.Create(Token.KWRParen, structTok.StartIndex))
+
+                return Pat.StructTuple(structTok, lParen, ImmutableArray.Create(pat), ImmutableArray.Empty, rParen)
+        }
+
+    let private pOptionalPat =
+        parser {
+            let! qmark = pQuestionMark
+            let! pat = pNamed
+            return Pat.Optional(qmark, pat)
+        }
+
+    // Active patterns can take quotation arguments: `MyPattern <@ x + 1 @> bound`.
+    // The quotation body is an *expression*; the type checker reinterprets it
+    // when binding the active-pattern parameter (spec patterns:60-61). The
+    // parser delegates to the existing expression-side seq-block parser and
+    // wraps the result in `Pat.Expr` so it can be carried inside a regular
+    // `Pat.EnclosedBlock(ParenKind.Quoted | ParenKind.DoubleQuoted, …)`.
+    let private pInnerQuotedExpr = refExprSeqBlock.Parser |>> Pat.Expr
+
+    let private pQuoteTypedPat =
+        pEnclosed
+            pQuotationTypedLeft
+            Token.OpQuotationTypedRight
+            ParenKind.Quoted
+            OffsideContext.Quote
+            DiagnosticCode.ExpectedQuotationTypedRight
+            pInnerQuotedExpr
+
+    let private pQuoteUntypedPat =
+        pEnclosed
+            pQuotationUntypedLeft
+            Token.OpQuotationUntypedRight
+            ParenKind.DoubleQuoted
+            OffsideContext.Quote
+            DiagnosticCode.ExpectedQuotationUntypedRight
+            pInnerQuotedExpr
+
+    /// Named pattern parser that does NOT consume trailing arguments.
+    /// Used for function/member binding argument positions where each
+    /// parameter should be an independent atomic pattern.
+    let private pNamedNoArgs =
+        parser {
+            let! lid = LongIdent.parse
+
+            match lid.Idents.Length with
+            | 1 -> return Pat.NamedSimple(lid.Idents.[0])
+            | _ -> return Pat.Named(lid, ImmutableArray.Empty)
+        }
+
+    let parseAtomic =
+        dispatchNextSyntaxTokenFallback
+            [
+                Token.Identifier, pNamed
+                Token.Wildcard, pWildcardPat
+                Token.KWLParen, pParenOrOpHeadPat
+                Token.KWLBracket, pListPat
+                Token.KWLAttrBracket, pAttributesPat
+                Token.KWLBrace, pRecordPat
+                Token.KWLArrayBracket, pArrayPat
+                Token.KWNull, pNullPat
+                Token.KWStruct, pStructPat
+                Token.StringOpen, pStringPat
+                Token.VerbatimStringOpen, pStringPat
+                Token.String3Open, pStringPat
+                Token.BacktickedIdentifier, pNamed
+                Token.OpTypeTest, pTypeTestPat
+                Token.OpDynamic, pOptionalPat
+                Token.UnterminatedBacktickedIdentifier, pNamed
+            ]
+            pConstPat
+
+    do refPatAtomic.Set parseAtomic
+
+    let parse = Operator.parser parseAtomic (PatOperatorParser())
+
+    let parseSeqBlock = withContext OffsideContext.SeqBlock parse
+
+    /// Matches F#'s `headBindingPattern` grammar rule. Same operators as `parse`
+    /// except `:` is not consumed (the surrounding binding's `optReturnType`
+    /// owns any trailing `: type`). Used by `Binding.parseValue` for a
+    /// `let`-value's bound pattern.
+    let parseHead = Operator.parser parseAtomic (PatHeadOperatorParser())
+
+    // For record field patterns, we want to allow the same operators as the top-level, but not semicolon since that separates fields.
+    let private parseFieldPat =
+        Operator.parserAt (BindingPower.fromLevel (int PrecedenceLevel.Semicolon + 1)) parseAtomic (PatOperatorParser())
+
+    // For named union case field patterns (comma-separated), exclude both comma and semicolon.
+    let private parseUnionFieldPat =
+        Operator.parserAt (BindingPower.fromLevel (int PrecedenceLevel.Comma + 1)) parseAtomic (PatOperatorParser())
+
+    let parseMany1 = many1 parse
+    let parseAtomicMany1 = many1 parseAtomic
+
+    /// Atomic pattern parser for function/member binding argument positions.
+    /// Identifiers are parsed as simple names without consuming trailing arguments.
+    let parseAtomicBindingArg =
+        dispatchNextSyntaxTokenFallback
+            [
+                Token.Identifier, pNamedNoArgs
+                Token.Wildcard, pWildcardPat
+                Token.KWLParen, pParenOrOpHeadPat
+                Token.KWLBracket, pListPat
+                Token.KWLAttrBracket, pAttributesPat
+                Token.KWLBrace, pRecordPat
+                Token.KWLArrayBracket, pArrayPat
+                Token.KWNull, pNullPat
+                Token.KWStruct, pStructPat
+                Token.StringOpen, pStringPat
+                Token.VerbatimStringOpen, pStringPat
+                Token.String3Open, pStringPat
+                Token.BacktickedIdentifier, pNamedNoArgs
+                Token.OpTypeTest, pTypeTestPat
+                Token.OpDynamic, pOptionalPat
+                Token.OpQuotationTypedLeft, pQuoteTypedPat
+                Token.OpQuotationUntypedLeft, pQuoteUntypedPat
+                Token.UnterminatedBacktickedIdentifier, pNamedNoArgs
+            ]
+            pConstPat
+
+    let parseAtomicBindingArgMany1 = many1 parseAtomicBindingArg
+
+    do refPat.Set parse
+    do refPatSeqBlock.Set parseSeqBlock
+    do refFieldPat.Set parseFieldPat
+    do refUnionFieldPat.Set parseUnionFieldPat
+    do refPatAtomicBindingArg.Set parseAtomicBindingArg
+
+
+[<RequireQualifiedAccess>]
+module PatternGuard =
+    let parse: FSParser<PatternGuard<SyntaxToken>> =
+        parser {
+            let! w = pWhen
+            // Use refExprGuard (bounded at Arrow precedence) so '->' is not consumed
+            // as part of the guard expression and remains for Rule.parse's pArrowRight.
+            let! e =
+                refExprGuard.Parser
+                |> recoverWith
+                    StoppingTokens.afterPattern
+                    DiagnosticCode.MissingExpression
+                    (missingOrSkipped Expr.Missing Expr.SkipsTokens)
+
+            return PatternGuard(w, e)
+        }
+
+[<RequireQualifiedAccess>]
+module Rule =
+    let parse: FSParser<Rule<SyntaxToken>> =
+        parser {
+            let! pat =
+                Pat.parse
+                |> recoverWith
+                    StoppingTokens.afterPattern
+                    DiagnosticCode.MissingPattern
+                    (missingOrSkipped Pat.Missing Pat.SkipsTokens)
+
+            let! guard = opt PatternGuard.parse
+            let! arrow = pArrowRight
+
+            // Grammar: patternAndGuard RARROW typedSeqExprBlock
+            let! expr =
+                refTypedSeqExprBlock.Parser
+                |> recoverWith
+                    StoppingTokens.afterRule
+                    DiagnosticCode.MissingExpression
+                    (missingOrSkipped Expr.Missing Expr.SkipsTokens)
+
+            return Rule.Rule(pat, guard, arrow, expr)
+        }
+
+[<RequireQualifiedAccess>]
+module Rules =
+    let private pRule =
+        recoverWith
+            StoppingTokens.afterRule
+            DiagnosticCode.MissingRule
+            (missingOrSkipped Rule.Missing Rule.SkipsTokens)
+            Rule.parse
+
+
+    let parse: FSParser<Rules<SyntaxToken>> =
+        parser {
+            let! firstBar = opt pBar
+            let! rules, bars = sepBy1 pRule pBar
+            return Rules(firstBar, rules, bars)
+        }

@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RuntimeIdentifiers>win-x64;linux-x64</RuntimeIdentifiers>
+    <AssemblyName>FSharp2.XParsec.FSharp</AssemblyName>
+    <RootNamespace>XParsec.FSharp</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsAotCompatible>true</IsAotCompatible>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="MoreParsers.fs" />
+    <Compile Include="UtilTypes.fs" />
+    <Compile Include="OperatorData.fs" />
+    <Compile Include="Token.fs" />
+    <Compile Include="Lexing.fs" />
+    <Compile Include="NumericLiterals.fs" />
+    <Compile Include="Expr.fs" />
+    <Compile Include="Declarations.fs" />
+    <Compile Include="Signatures.fs" />
+    <Compile Include="ProgramStructure.fs" />
+    <Compile Include="AstTraversal.fs" />
+    <Compile Include="ParsingTypes.fs" />
+    <Compile Include="ExprPatterns.fs" />
+    <Compile Include="Preprocessing.fs" />
+    <Compile Include="ParsingHelpers.fs" />
+    <Compile Include="KeywordParsing.fs" />
+    <Compile Include="ParserRefs.fs" />
+    <Compile Include="PrimitivesParsing.fs" />
+    <Compile Include="TypeParsing.fs" />
+    <Compile Include="MeasureParsing.fs" />
+    <Compile Include="ConstantParsing.fs" />
+    <Compile Include="PatternParsing.fs" />
+    <Compile Include="ExpressionParsing.fs" />
+    <Compile Include="TypeDefnParsing.fs" />
+    <Compile Include="DeclarationParsing.fs" />
+    <Compile Include="SignatureParsing.fs" />
+    <Compile Include="ProgramStructureParsing.fs" />
+    <Compile Include="FSharpErrorFormatting.fs" />
+    <Compile Include="Debug.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="LICENSE" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="FSharp.Core" />
+    <ProjectReference Include="../FSharp2.XParsec/FSharp2.XParsec.fsproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,279 @@
+namespace XParsec
+
+open System
+open System.Collections.Immutable
+open System.Text
+open XParsec.Parsers
+open XParsec.CharParsers
+
+[<AbstractClass; Sealed>]
+type LineEndings<'Input when 'Input :> IReadable<char, 'Input>>() =
+
+    static let lineEndingParser: Parser<_, _, _, 'Input> =
+        parser {
+            let! _ = skipManyTill pid newline
+            let! pos = getPosition
+            return pos.Index - 1
+        }
+
+    static let lineEndings: Parser<_, _, _, 'Input> = many lineEndingParser
+
+    static member Parser = lineEndings
+
+type LineIndex(endings: ImmutableArray<int>, maxIndex) =
+
+    member _.Indices = endings
+
+    /// Returns the 1-based line number and column number of the given 0-based index.
+    /// Accepts index = maxIndex + 1 (one past the end) to represent the EOF position.
+    member _.GetLineCol(index: int) =
+        if index < 0 then
+            invalidArg "index" "Index must be non-negative"
+
+        if index > maxIndex + 1 then
+            raise (IndexOutOfRangeException $"Index must be less than or equal to {maxIndex + 1}")
+        // Line and column are 1-based
+        if endings.IsEmpty then
+            struct (1, index + 1)
+        else
+            let minV = endings.[0]
+
+            if index <= minV then
+                struct (1, index + 1)
+            else
+                // Binary search for the line number
+                let rec findIndex low high =
+                    if low = high then
+                        low
+                    else
+                        match high - low with
+                        | 1 ->
+                            let highV = endings.[high]
+                            if highV <= index then high else low
+                        | diff ->
+                            let mid = low + diff / 2
+                            let midV = endings.[mid]
+
+                            if midV = index then mid
+                            elif midV < index then findIndex mid high
+                            else findIndex low mid
+
+                let iLine = findIndex 0 (endings.Length - 1)
+
+                match index - endings.[iLine] with
+                | 0 -> struct (iLine + 1, index - endings.[iLine - 1])
+                | col -> struct (iLine + 2, col)
+
+    member _.GetIndex(line: int, col: int) =
+        if line < 1 then
+            invalidArg "line" "Line must be greater than 0"
+
+        if col < 1 then
+            invalidArg "col" "Column must be greater than 0"
+
+        match line with
+        | 1 -> col - 1
+        | _ ->
+            let iLine = endings.[line - 2]
+            let i = iLine + col
+
+            if i > maxIndex then
+                raise (IndexOutOfRangeException $"Index must be less than or equal to {maxIndex}")
+
+            i
+
+    static member OfString(input: string) =
+        match LineEndings.Parser(Reader.ofString input ()) with
+        | Ok result -> LineIndex(result, input.Length - 1)
+        | Error _ -> invalidOp "LineIndex: Failed to parse line endings"
+
+    static member OfString(input: string, maxLength: int) =
+        if maxLength < 0 then
+            invalidArg "maxLength" "maxLength must be non-negative"
+
+        if maxLength > input.Length then
+            raise (ArgumentOutOfRangeException(nameof maxLength))
+
+        let reader = Reader.ofString input ()
+        let reader = reader.Slice(0, maxLength)
+
+        match LineEndings.Parser reader with
+        | Ok result -> LineIndex(result, maxLength - 1)
+        | Error _ -> invalidOp "LineIndex: Failed to parse line endings"
+
+
+module ErrorFormatting =
+    type StringBuilder with
+        member this.Append(input: #IReadable<char, _>, start: int, count: int) =
+            let span = input.AsSpan(start, count)
+#if !FABLE_COMPILER && NET8_0_OR_GREATER
+            this.Append(span)
+#else
+            for c in span do
+                this.Append c |> ignore
+
+            this
+#endif
+
+        member this.Append(input: #IReadable<char, _>) =
+            if input.Length > Int32.MaxValue then
+                invalidOp "StringBuilder.Append: input is too long"
+
+            let span = input.AsSpan()
+#if !FABLE_COMPILER && NET8_0_OR_GREATER
+            this.Append(span)
+#else
+            for c in span do
+                this.Append c |> ignore
+
+            this
+#endif
+
+    [<Literal>]
+    let private UpRight = '\u2514'
+
+    [<Literal>]
+    let private Horizontal = '\u2500'
+
+    [<Literal>]
+    let private Vertical = '\u2502'
+
+    [<Literal>]
+    let private VerticalRight = '\u251C'
+
+    let private findIndexBack (input: #IReadable<char, _>) (index: int) (backLimit: int) =
+        let backLimit = backLimit
+
+        let rec loop i =
+            if i <= 0 then
+                0
+            else
+                let i = min (input.Length - 1) i
+
+                match input.[i] with
+                | '\r'
+                | '\n' -> min (i + 1) index
+                | _ -> if index - i > backLimit then i else loop (i - 1)
+
+        loop index
+
+    let private findIndexForward (input: #IReadable<char, _>) (index: int) (forwardLimit: int) =
+        let forwardLimit = forwardLimit
+
+        let rec loop i =
+            if i >= input.Length then
+                input.Length
+            else
+                match input.[i] with
+                | '\r'
+                | '\n' -> max (i - 1) index
+                | _ -> if i - index > forwardLimit then i else loop (i + 1)
+
+        loop index
+
+    let private terminalSuberror = $"{UpRight}{Horizontal}{Horizontal}{Horizontal}"
+
+    let private nonTerminalSuberror =
+        $"{VerticalRight}{Horizontal}{Horizontal}{Horizontal}"
+
+    let private terminalIndent = "    "
+    let private nonTerminalIndent = $"{Vertical}   "
+
+    type private Prefix =
+        | T
+        | NT
+
+    let formatErrorsLine
+        (lineIndex: LineIndex)
+        (input: #IReadable<char, _>)
+        (index: int)
+        (sb: StringBuilder)
+        : StringBuilder =
+        let iBack = findIndexBack input index 25
+        let iForward = findIndexForward input index 40
+
+        let sb = sb.Append(input, iBack, int (iForward - iBack)).AppendLine()
+
+        let struct (ln, col) = lineIndex.GetLineCol index
+#if FABLE_COMPILER
+        // TODO: Fable doesn't support Append(char, int) overload
+        // Was added in 5.0.0-alpha.6
+        let spaces = String.replicate (int (index - iBack)) " "
+        sb.Append(spaces).Append('^').AppendLine($" At index {index} (Ln {ln}, Col {col})")
+#else
+        sb.Append(' ', int (index - iBack)).Append('^').AppendLine($" At index {index} (Ln {ln}, Col {col})")
+#endif
+
+    let formatParseError<'T, 'State>
+        (formatOne: 'T -> StringBuilder -> StringBuilder)
+        (formatSeq: 'T seq -> StringBuilder -> StringBuilder)
+        (error: ParseError<'T, 'State>)
+        (sb: StringBuilder)
+        =
+        let inline appendString (s: string) (sb: StringBuilder) = sb.Append s
+        let inline appendNewline (sb: StringBuilder) = sb.AppendLine()
+
+        let appendPrefixes prefixes (sb: StringBuilder) =
+            let rec appendIndent prefixes (sb: StringBuilder) =
+                match prefixes with
+                | [] -> sb
+                | T :: prefixes -> sb |> appendIndent prefixes |> appendString terminalIndent
+                | NT :: prefixes -> sb |> appendIndent prefixes |> appendString nonTerminalIndent
+
+            match prefixes with
+            | [] -> sb
+            | [ T ] -> sb |> appendString terminalSuberror
+            | [ NT ] -> sb |> appendString nonTerminalSuberror
+            | T :: prefixes -> sb |> appendIndent prefixes |> appendString terminalSuberror
+            | NT :: prefixes -> sb |> appendIndent prefixes |> appendString nonTerminalSuberror
+
+        let rec f prefixes pos errors sb =
+            match errors with
+            // Empty represents an unspecified failure (`pzero`); render nothing,
+            // not even the prefix. Aggregating combinators should already have
+            // filtered these out, but be defensive in case one slipped through.
+            | Empty -> sb
+            | EndOfInput -> sb |> appendPrefixes prefixes |> appendString "Unexpected end of input"
+            | Expected e -> sb |> appendPrefixes prefixes |> appendString "Expected " |> formatOne e
+            | ExpectedOneOf es -> sb |> appendPrefixes prefixes |> appendString "Expected one of " |> formatSeq es
+            | ExpectedSeqOneOf ess ->
+                sb |> appendPrefixes prefixes |> appendString "Expected one of " |> ignore
+                (sb, ess) ||> Seq.fold (fun sb es -> sb |> formatSeq es)
+
+            | ExpectedSeq es -> sb |> appendPrefixes prefixes |> appendString "Expected " |> formatSeq es
+            | Unexpected e -> sb |> appendPrefixes prefixes |> appendString "Unexpected " |> formatOne e
+            | UnexpectedSeq es -> sb |> appendPrefixes prefixes |> appendString "Unexpected " |> formatSeq es
+            | Nested(e, es) ->
+                sb |> f prefixes pos e |> appendNewline |> ignore
+
+                let rec g es =
+                    match es with
+                    | [] -> sb
+                    | [ { Errors = e; Position = pos } ] -> sb |> f (T :: prefixes) pos e
+                    | { Errors = e; Position = pos } :: es ->
+                        sb |> f (NT :: prefixes) pos e |> appendNewline |> ignore
+                        g es
+
+                g es
+
+            | Message m -> sb |> appendPrefixes prefixes |> appendString m
+
+        let { Errors = errors; Position = pos } = error
+        f [] pos errors sb
+
+    let formatStringError (input: string) (error: ParseError<char, 'State>) =
+        let index = LineIndex.OfString input
+        let readable = ReadableString(input, 0, input.Length)
+
+        let formatOne (x: char) (sb: StringBuilder) = sb.Append(''').Append(x).Append(''')
+
+        let formatSeq (xs: char seq) (sb: StringBuilder) =
+            sb.Append('"') |> ignore
+            (sb, xs) ||> Seq.fold (fun sb x -> sb.Append x) |> ignore
+            sb.Append('"')
+
+
+        StringBuilder()
+        |> formatErrorsLine index readable error.Position.Index
+        |> formatParseError formatOne formatSeq error
+        |> _.ToString()
