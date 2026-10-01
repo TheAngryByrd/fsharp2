@@ -382,6 +382,79 @@ let y = "
                     failtest
                         $"the source must give a named module and no diagnostic, not {diagnostics.Length}"
 
+            testCase "an adjacent bracket indexes only after an identifier, as in FCS"
+            <| fun () ->
+                let first source =
+                    match parseVendored source with
+                    | Ok(FSharpAst.ImplementationFile(ImplementationFile.AnonymousModule elements)),
+                      [] ->
+                        match elements[0] with
+                        | ModuleElem.FunctionOrValue(ModuleFunctionOrValueDefn.Let(
+                            bindings = bindings)) -> bindings[0].expr
+                        | other -> failtest $"{source} must start with a let, not {other}"
+                    | _, diagnostics ->
+                        failtest
+                            $"{source} must give a tree and no diagnostic, not {diagnostics.Length}"
+
+                // FCS 43.10.101 gives SynExpr.App with a list argument for these texts.
+                for source in
+                    [
+                        "let y = (f x)[0]\n"
+                        "let y = xs.[0][1]\n"
+                        "let y = [ 1 ][0]\n"
+                        "let y = u[i][j]\n"
+                        "let y = opt.Split([| 1 |])[0]\n"
+                    ] do
+                    match first source with
+                    | Expr.App(_, args) ->
+                        match
+                            args[args.Length
+                                 - 1]
+                        with
+                        | Expr.EnclosedBlock(ParenKind.List _, _, _) -> ()
+                        | other -> failtest $"{source} must apply to a list, not {other}"
+                    | other -> failtest $"{source} must give an application, not {other}"
+
+                // FCS 43.10.101 gives an index (fnorm B) for these texts.
+                for source in
+                    [
+                        "let y = a.b[0]\n"
+                        "let y = xs[0]\n"
+                    ] do
+                    match first source with
+                    | Expr.IndexedLookup(dot = ValueNone) -> ()
+                    | other -> failtest $"{source} must give an index, not {other}"
+
+            testCase "a multiline list argument next to a closing bracket gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0058 at (2,1) for the first text. It accepts the second text,
+                // but the FCS 43.10.101 `while` range ends before the `]`.
+                for source in
+                    [
+                        "let y = g (while c do xs[0][\n1])\n"
+                        "let y = g (while c do xs[0][\n            1])\n"
+                    ] do
+                    let _, diagnostics = parseVendored source
+
+                    match diagnostics with
+                    | [ diagnostic ] ->
+                        Expect.equal diagnostic.Code DiagnosticCode.MultilineAdjacentList source
+
+                        Expect.equal
+                            diagnostic.Token.StartIndex
+                            27
+                            "the diagnostic must point at the list bracket"
+
+                        Expect.equal
+                            (DiagnosticCode.fsharp2Code diagnostic.Code)
+                            (ValueSome "FSC2P1001")
+                            source
+                    | other -> failtest $"{source} must give one diagnostic, not {other.Length}"
+
+                let result, diagnostics = parseVendored "let y = (f x)[0]\n"
+                Expect.isOk result "a list argument on one line"
+                Expect.isEmpty diagnostics "a list argument on one line must give no diagnostic"
+
             testCase "nested records and computation expressions parse in time linear in depth"
             <| fun () ->
                 let shapes = [

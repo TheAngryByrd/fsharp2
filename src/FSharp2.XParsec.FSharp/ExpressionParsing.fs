@@ -1296,15 +1296,20 @@ module Expr =
 
             let pFail (reader: Reader<PositionedToken, ParseState, _>) = fail errMsg reader
 
-            parser {
-                let! canBeHighPrec = isPrevTokenSyntax >> Ok
+            // FCS LexFilter inserts HIGH_PRECEDENCE_BRACK_APP only after an identifier: `(f x)[0]` and
+            // `xs.[0][1]` apply the expression to a list.
+            let previousAllows (reader: Reader<PositionedToken, ParseState, _>) =
+                token <> Token.KWLBracket
+                || (match reader.Input[reader.Index - 1].TokenWithoutCommentFlags with
+                    | Token.Identifier
+                    | Token.BacktickedIdentifier -> true
+                    | _ -> false)
 
-                if canBeHighPrec then
-
-                    return! pSatisfy
+            fun (reader: Reader<PositionedToken, ParseState, _>) ->
+                if isPrevTokenSyntax reader && previousAllows reader then
+                    pSatisfy reader
                 else
-                    return! pFail
-            }
+                    pFail reader
 
         let pHighPrecLParen = pHighPrec Token.KWLParen '('
 
@@ -2259,6 +2264,46 @@ module Expr =
             DiagnosticCode.ExpectedEnd
             pTypedSeqExprBlock
 
+    // FCS applies `(f x)[`, `xs.[0][`, and `"s"[` to a list. When that list continues on a later line,
+    // the Compatibility Oracle reports FS0058 for some layouts and gives irregular ranges for others.
+    let private reportMultilineAdjacentList (expr: Expr<SyntaxToken>) (reader: Reader<PositionedToken, ParseState, _>) =
+        let brackets =
+            match expr with
+            | Expr.EnclosedBlock(ParenKind.List lBracket, _, rBracket)
+            | Expr.EmptyBlock(ParenKind.List lBracket, rBracket) -> ValueSome struct (lBracket, rBracket)
+            | _ -> ValueNone
+
+        match brackets with
+        | ValueSome struct (lBracket, rBracket) ->
+            match lBracket.Index, rBracket.Index with
+            | TokenIndex.Regular openIndex, TokenIndex.Regular closeIndex when openIndex > 0<token> ->
+                let state = reader.State
+                let previous = state.Lexed.Tokens[openIndex - 1<token>]
+
+                let adjacentToCloser =
+                    not (ParseState.isTriviaToken state previous)
+                    && (match previous.TokenWithoutCommentFlags with
+                        | Token.KWRParen
+                        | Token.KWRBracket
+                        | Token.KWRArrayBracket
+                        | Token.KWRBrace
+                        | Token.KWRBraceBar
+                        | Token.StringClose
+                        | Token.VerbatimStringClose
+                        | Token.String3Close -> true
+                        | token -> TokenInfo.isLiteral token)
+
+                if
+                    adjacentToCloser
+                    && ParseState.findLineNumber state openIndex
+                       <> ParseState.findLineNumber state closeIndex
+                then
+                    reader.State <- ParseState.addDiagnosticAt DiagnosticCode.MultilineAdjacentList lBracket state
+            | _ -> ()
+        | ValueNone -> ()
+
+        preturn expr reader
+
     let pList =
         pEnclosed
             pLBracket
@@ -2267,6 +2312,7 @@ module Expr =
             OffsideContext.Bracket
             DiagnosticCode.ExpectedRBracket
             refExprSeqBlock.Parser
+        >>= reportMultilineAdjacentList
 
     let pArray =
         pEnclosed

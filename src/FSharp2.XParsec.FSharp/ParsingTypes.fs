@@ -302,6 +302,8 @@ type DiagnosticCode =
     | SameLineBarEndsBody
     /// A module element starts at another column than the first element of its module.
     | MisalignedModuleElement
+    /// A list argument written next to a closing delimiter or literal continues on a later line.
+    | MultilineAdjacentList
 
 [<RequireQualifiedAccess>]
 type Syntax =
@@ -489,6 +491,7 @@ module DiagnosticCode =
         | DiagnosticCode.NestingLimitExceeded _ -> "NestingLimitExceeded"
         | DiagnosticCode.SameLineBarEndsBody -> "SameLineBarEndsBody"
         | DiagnosticCode.MisalignedModuleElement -> "MisalignedModuleElement"
+        | DiagnosticCode.MultilineAdjacentList -> "MultilineAdjacentList"
 
     /// The English it renders.
     let message (c: DiagnosticCode) : string =
@@ -515,6 +518,8 @@ module DiagnosticCode =
             "Wrong close for '" + string (spelling opened) + "': " + string (expecting expected)
         | DiagnosticCode.NestingLimitExceeded limit ->
             "The input nests deeper than the parser supports (" + string limit + " levels)"
+        | DiagnosticCode.MultilineAdjacentList ->
+            "A list argument next to a closing delimiter must close on the same line"
         | DiagnosticCode.MisalignedModuleElement ->
             "A module element must start at the column of the first element of its module"
         | DiagnosticCode.SameLineBarEndsBody ->
@@ -534,6 +539,7 @@ module DiagnosticCode =
             string name + "(" + string openedBase + ", " + string expectedBase + ")"
         | DiagnosticCode.SameLineBarEndsBody
         | DiagnosticCode.MisalignedModuleElement
+        | DiagnosticCode.MultilineAdjacentList
         | DiagnosticCode.TyparInConstant
         | DiagnosticCode.MissingExpression
         | DiagnosticCode.MissingPattern
@@ -556,7 +562,8 @@ module DiagnosticCode =
         match c with
         | DiagnosticCode.NestingLimitExceeded _
         | DiagnosticCode.SameLineBarEndsBody
-        | DiagnosticCode.MisalignedModuleElement -> ValueSome "FSC2P1001"
+        | DiagnosticCode.MisalignedModuleElement
+        | DiagnosticCode.MultilineAdjacentList -> ValueSome "FSC2P1001"
         | _ -> ValueNone
 
     /// What the secondary label on the OPENING delimiter says. Both delimiter diagnostics
