@@ -258,7 +258,14 @@ module XParsecComparison =
             )
             |> String.concat ";"
 
-        member this.Binding(binding: Binding<SyntaxToken>) = this.Expr binding.expr
+        // FCS wraps the body of a binding with a return type in `SynExpr.Typed` that has the body range.
+        member this.Binding(binding: Binding<SyntaxToken>) =
+            match binding.returnType with
+            | ValueSome(ReturnType(_, typ)) ->
+                let typeSpan = this.TypeSpan typ
+
+                $"TY({this.Expr binding.expr},{this.Text typeSpan}@{this.Range typeSpan})@{this.Range(this.ExprSpan binding.expr)}"
+            | ValueNone -> this.Expr binding.expr
 
         member this.Conditional
             (start: Span voption)
@@ -895,6 +902,8 @@ module XParsecComparison =
         "do ForIn(x@1:5-1:6,RG(C[1]@1:10-1:11,C[10]@1:15-1:17)@1:10-1:17,A(I[f]@1:21-1:22,I[x]@1:23-1:24)@1:21-1:24)@1:1-1:24"
         "let y = try f x with | e -> g e\n",
         "let y = TryW(A(I[f]@1:13-1:14,I[x]@1:15-1:16)@1:13-1:16,[e@1:24-1:25 A(I[g]@1:29-1:30,I[e]@1:31-1:32)@1:29-1:32])@1:9-1:32"
+        "let y : int list = let v = z in\n                   xs[0]\n",
+        "let y = TY(Let(I[z]@1:28-1:29;B(I[xs]@2:20-2:22,C[0]@2:23-2:24)@2:20-2:25)@1:20-2:25,int list@1:9-1:17)@1:20-2:25"
     ]
 
     let private adapterTests = [
