@@ -3,3 +3,7 @@ AssemblyInfo.fs
 
 # Preserve intentionally invalid diagnostic fixtures and their exact ranges.
 tests/FSharp2.Prototype.Diagnostics
+
+# Vendored XParsec source keeps its upstream layout (ADR 0028).
+src/FSharp2.XParsec
+src/FSharp2.XParsec.FSharp

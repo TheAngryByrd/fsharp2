@@ -1,0 +1,1458 @@
+namespace XParsec
+
+open System
+open System.Collections.Immutable
+
+[<AutoOpen>]
+module Combinators =
+    open Parsers
+
+    /// Applies the parser `p` and, if it succeeds, computes the parser `p2` of `binder` with the result of `p`.
+    /// Finally, it returns the result of `p2`.
+    let inline bind
+        ([<InlineIfLambda>] p: Parser<'A, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] binder: 'A -> Parser<'B, 'T, 'State, 'Input>)
+        (reader: Reader<_, _, _>)
+        =
+        match p reader with
+        | Ok success ->
+            let p2 = binder success
+            p2 reader
+        | Error err -> Error err
+
+    /// Applies the parser `p` and, if it succeeds, computes the parser `p2` of `binder` with the result of `p`.
+    /// Finally, it returns the result of `p2`.
+    let inline (>>=) ([<InlineIfLambda>] p) ([<InlineIfLambda>] binder) = bind p binder
+
+    /// Applies the parser `p` and, if it succeeds, returns the value `x`.
+    let inline (>>%) ([<InlineIfLambda>] p: Parser<'A, 'T, 'State, 'Input>) x (reader: Reader<_, _, _>) =
+        match p reader with
+        | Ok success -> preturn x reader
+        | Error err -> Error err
+
+    /// Applies the parsers `p1` and `p2` in sequence. If both succeed, returns the result of `p2`.
+    let inline (>>.)
+        ([<InlineIfLambda>] p1: Parser<'A, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p2: Parser<'B, 'T, 'State, 'Input>)
+        (reader: Reader<_, _, _>)
+        =
+        match p1 reader with
+        | Ok success -> p2 reader
+        | Error err -> Error err
+
+    /// Applies the parsers `p1` and `p2` in sequence. If both succeed, returns the result of `p1`.
+    let inline (.>>)
+        ([<InlineIfLambda>] p1: Parser<'A, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p2: Parser<'B, 'T, 'State, 'Input>)
+        (reader: Reader<_, _, _>)
+        =
+        match p1 reader with
+        | Ok success1 ->
+            match p2 reader with
+            | Ok success2 -> preturn success1 reader
+            | Error err -> Error err
+        | Error err -> Error err
+
+    /// Applies the parsers `p1` and `p2` in sequence. If both succeed, returns the result of `p1` and `p2`.
+    let inline (.>>.)
+        ([<InlineIfLambda>] p1: Parser<'A, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p2: Parser<'B, 'T, 'State, 'Input>)
+        (reader: Reader<_, _, _>)
+        =
+        match p1 reader with
+        | Ok success1 ->
+            match p2 reader with
+            | Ok success2 -> preturn struct (success1, success2) reader
+            | Error err -> Error err
+        | Error err -> Error err
+
+    /// Applies the parsers `pOpen`, `p` and `pClose` in sequence. If all succeed, returns the result of `p`.
+    let inline between
+        ([<InlineIfLambda>] pOpen: Parser<'A, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] pClose: Parser<'B, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p: Parser<'C, 'T, 'State, 'Input>)
+        (reader: Reader<_, _, _>)
+        =
+        match pOpen reader with
+        | Ok s1 ->
+            match p reader with
+            | Ok s2 ->
+                match pClose reader with
+                | Ok s3 -> preturn s2 reader
+                | Error err -> Error err
+            | Error err -> Error err
+        | Error err -> Error err
+
+    /// Applies the parser `p` and, if it succeeds, computes the function `mapping` with the result of `p`.
+    let inline (|>>)
+        ([<InlineIfLambda>] p: Parser<'A, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] mapping: 'A -> 'B)
+        (reader: Reader<_, _, _>)
+        =
+        match p reader with
+        | Ok success -> preturn (mapping success) reader
+        | Error err -> Error err
+
+    [<Sealed>]
+    type ParserCE() =
+        // We repeat lambdas and implementations here to give F# the best chance to inline and eliminate closures.
+        // In particular, the `Bind` implementation is critical to avoid heap allocations in CE bodies.
+        member inline _.Bind
+            (
+                [<InlineIfLambda>] p: Parser<'A, 'T, 'State, 'Input>,
+                [<InlineIfLambda>] binder: 'A -> Parser<'B, 'T, 'State, 'Input>
+            ) =
+            fun reader ->
+                match p reader with
+                | Ok success ->
+                    let p2 = binder success
+                    p2 reader
+                | Error err -> Error err
+
+        member inline _.Return(x) : Parser<'A, 'T, 'State, 'Input> = fun _reader -> Ok x
+        member inline _.ReturnFrom(p: Parser<'A, 'T, 'State, 'Input>) = p
+
+        member inline _.BindReturn
+            ([<InlineIfLambda>] p: Parser<'A, 'T, 'State, 'Input>, [<InlineIfLambda>] mapping: 'A -> 'B)
+            =
+            fun reader ->
+                match p reader with
+                | Ok success -> Ok(mapping success)
+                | Error err -> Error err
+
+        // The `fun reader -> (f ()) reader` wrapper is load-bearing: F# CE wraps
+        // `while`/`for` bodies (and Combine seconds) in Delay so they can be
+        // re-evaluated per iteration. In `For`, in particular, `binder enum.Current`
+        // must be deferred until AFTER `enum.MoveNext()` has advanced the enumerator
+        // — evaluating it at Delay-call time ("Enumeration has not started") crashes.
+        // So we eat the closure allocation for correctness.
+        member inline _.Delay([<InlineIfLambda>] f: unit -> Parser<'A, 'T, 'State, 'Input>) =
+            fun reader -> (f ()) reader
+
+        // `Zero` succeeds with unit so implicit insertions in imperative-style CE bodies
+        // (`if cond then stmt` without else, end of `while`/`for` body, etc.) don't
+        // short-circuit via `Combine`'s Error branch.
+        member inline _.Zero() : Parser<unit, 'T, 'State, 'Input> = fun _reader -> Ok()
+
+        member inline _.TryWith ([<InlineIfLambda>] p, [<InlineIfLambda>] cf) (reader: Reader<_, _, _>) =
+            try
+                p reader
+            with e ->
+                (cf e) reader
+
+        member inline _.TryFinally ([<InlineIfLambda>] p, [<InlineIfLambda>] ff) (reader: Reader<_, _, _>) =
+            try
+                p reader
+            finally
+                ff ()
+
+        member inline _.Using
+            (
+                resource: 'disposable :> IDisposable,
+                [<InlineIfLambda>] binder: 'disposable -> Parser<'A, 'T, 'State, 'Input>
+            ) : Parser<'A, 'T, 'State, 'Input> =
+            fun reader ->
+                use r = resource
+                binder r reader
+
+        // `While` / `For` have plain imperative semantics: the guard is evaluated
+        // normally and the body is run once per iteration as a side effect.
+        member inline _.While
+            ([<InlineIfLambda>] guard: unit -> bool, [<InlineIfLambda>] generator: Parser<unit, 'T, 'State, 'Input>)
+            : Parser<unit, 'T, 'State, 'Input> =
+            fun reader ->
+                let mutable doContinue = true
+                let mutable result = Ok()
+
+                while doContinue && guard () do
+                    // Typical usage is unit returning body implicitly wrapped in Zero (always Ok),
+                    // but we allow arbitrary bodies to give more control to the user.
+                    // If the body fails, we break the loop and return the error.
+
+                    // No checks that we advance the reader position here; if the body doesn't consume input (typically fine),
+                    // it's on the user to ensure termination via an explicit check in the guard.
+                    match generator reader with
+                    | Ok() -> ()
+                    | Error e ->
+                        doContinue <- false
+                        result <- Error e
+
+                result
+
+        member inline this.For
+            (sequence: #seq<'T>, [<InlineIfLambda>] binder: 'T -> Parser<unit, 'U, 'State, 'Input>)
+            : Parser<unit, 'U, 'State, 'Input> =
+            this.Using(
+                sequence.GetEnumerator(),
+                fun enum -> this.While((fun () -> enum.MoveNext()), this.Delay(fun () -> binder enum.Current))
+            )
+
+
+        member inline _.Combine
+            (
+                [<InlineIfLambda>] first: Parser<unit, 'T, 'State, 'Input>,
+                [<InlineIfLambda>] second: Parser<'Parsed, 'T, 'State, 'Input>
+            ) =
+            fun reader ->
+                match first reader with
+                | Ok() -> second reader
+                | Error e -> Error e
+
+
+    /// A computation expression builder for parsers.
+    let parser = ParserCE()
+
+    /// Applies the parsers `p1` and `p2` in sequence. If both succeed, returns the result of `f` applied to the results of `p1` and `p2`.
+    let inline pipe2
+        ([<InlineIfLambda>] p1: Parser<'A, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p2: Parser<'B, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] f: 'A -> 'B -> 'C)
+        (reader: Reader<_, _, _>)
+        =
+        match p1 reader with
+        | Ok s1 ->
+            match p2 reader with
+            | Ok s2 -> preturn (f s1 s2) reader
+            | Error err -> Error err
+        | Error err -> Error err
+
+    /// Applies the 3 parsers in sequence. If both succeed, returns the result of `f` applied to the results of the parsers.
+    let inline pipe3
+        ([<InlineIfLambda>] p1: Parser<'A, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p2: Parser<'B, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p3: Parser<'C, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] f: 'A -> 'B -> 'C -> 'D)
+        (reader: Reader<_, _, _>)
+        =
+        match p1 reader with
+        | Ok s1 ->
+            match p2 reader with
+            | Ok s2 ->
+                match p3 reader with
+                | Ok s3 -> preturn (f s1 s2 s3) reader
+                | Error err -> Error err
+            | Error err -> Error err
+        | Error err -> Error err
+
+    /// Applies the 4 parsers in sequence. If all succeed, returns the result of `f` applied to the results of the parsers.
+    let inline pipe4
+        ([<InlineIfLambda>] p1: Parser<'A, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p2: Parser<'B, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p3: Parser<'C, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p4: Parser<'D, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] f: 'A -> 'B -> 'C -> 'D -> 'E)
+        =
+        parser {
+            let! s1 = p1
+            let! s2 = p2
+            let! s3 = p3
+            let! s4 = p4
+            return f s1 s2 s3 s4
+        }
+
+    /// Applies the 5 parsers in sequence. If all succeed, returns the result of `f` applied to the results of the parsers.
+    let inline pipe5
+        ([<InlineIfLambda>] p1: Parser<'A, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p2: Parser<'B, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p3: Parser<'C, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p4: Parser<'D, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p5: Parser<'E, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] f: 'A -> 'B -> 'C -> 'D -> 'E -> 'F)
+        =
+        parser {
+            let! s1 = p1
+            let! s2 = p2
+            let! s3 = p3
+            let! s4 = p4
+            let! s5 = p5
+            return f s1 s2 s3 s4 s5
+        }
+
+    /// <summary>
+    /// Applies the parser <paramref name="p1"/> and, if it fails, restores the reader
+    /// position and applies <paramref name="p2"/>. Returns the result of the first
+    /// parser that succeeds, or both errors if both fail.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// XParsec's <c>&lt;|&gt;</c> <strong>always backtracks</strong> on failure of
+    /// <paramref name="p1"/> — regardless of how much input <paramref name="p1"/>
+    /// consumed before failing. This is unlike FParsec, where <c>&lt;|&gt;</c> only
+    /// tries the right-hand side if the LHS failed without consuming input.
+    /// </para>
+    /// <para>
+    /// As a consequence, XParsec has <strong>no <c>attempt</c> combinator</strong>:
+    /// every alternative already behaves like one. The position-save is a struct
+    /// copy, so the always-backtrack default is cheap. If you need "fail fast when
+    /// input was consumed", reach for <c>notFollowedBy</c> or <c>&lt;?&gt;</c> to
+    /// gate or relabel instead.
+    /// </para>
+    /// </remarks>
+    let inline (<|>)
+        ([<InlineIfLambda>] p1: Parser<'A, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p2: Parser<'A, 'T, 'State, 'Input>)
+        (reader: Reader<_, _, _>)
+        =
+        let p = reader.Position
+
+        match p1 reader with
+        | Ok s1 -> Ok s1
+        | Error err1 ->
+            reader.Position <- p
+
+            match p2 reader with
+            | Ok s2 -> Ok s2
+            | Error err2 ->
+                // Drop Empty children (e.g. from `pzero`) — they carry no info.
+                // If both sides are Empty, propagate Empty rather than wrap an empty list.
+                match ParseError.isEmpty err1.Errors, ParseError.isEmpty err2.Errors with
+                | true, true -> ParseError.create Empty p
+                | true, false -> Error err2
+                | false, true -> Error err1
+                | false, false -> ParseError.createNested ParseError.bothFailed [ err1; err2 ] p
+
+    /// <summary>
+    /// Applies the parsers <paramref name="ps"/> in order. Returns the result of
+    /// the first parser that succeeds, or a nested error containing every branch's
+    /// failure if all fail.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Like <c>&lt;|&gt;</c>, <c>choice</c> <strong>always backtracks</strong>:
+    /// if a branch fails after consuming input, the reader position is restored
+    /// before the next branch runs. There is no per-branch <c>attempt</c> needed
+    /// — XParsec has no <c>attempt</c> at all. This is unlike FParsec, where
+    /// <c>choice</c> only continues if a branch failed without consuming input.
+    /// </para>
+    /// <para>
+    /// Accumulating every branch's error allocates a list per call; prefer
+    /// <c>choiceL</c> when the per-branch detail isn't needed.
+    /// </para>
+    /// </remarks>
+    let choice (ps: Parser<'A, 'T, 'State, 'Input> seq) : Parser<'A, 'T, 'State, 'Input> =
+        let parsers = ps |> Seq.toArray
+
+        fun (reader: Reader<_, _, _>) ->
+            let mutable success = ValueNone
+            let errs = ResizeArray<_>()
+            let p = reader.Position
+            let mutable i = 0
+
+            while success.IsNone && i < parsers.Length do
+                match parsers.[i] reader with
+                | Ok x -> success <- ValueSome x
+                | Error err ->
+                    reader.Position <- p
+                    // Drop Empty children — they're noise in the nested error tree.
+                    if not (ParseError.isEmpty err.Errors) then
+                        errs.Add(err)
+
+                i <- i + 1
+
+            match success with
+            | ValueNone ->
+                if errs.Count = 0 then
+                    // All branches were Empty (or there were no branches) — propagate Empty.
+                    ParseError.create Empty p
+                else
+                    ParseError.createNested ParseError.allChoicesFailed (List.ofSeq errs) p
+            | ValueSome x -> Ok x
+
+    /// <summary>
+    /// Applies the parsers <paramref name="ps"/> in order. Returns the result of
+    /// the first parser that succeeds, or fails with the given <paramref name="message"/>
+    /// if all fail — discarding the per-branch errors that <c>choice</c> would have
+    /// accumulated.
+    /// </summary>
+    /// <remarks>
+    /// Same backtracking semantics as <c>choice</c> and <c>&lt;|&gt;</c>: every
+    /// branch is tried with the reader rewound to the entry position. Use this
+    /// over <c>choice</c> when you can supply a clearer top-level error than the
+    /// nested per-branch tree.
+    /// </remarks>
+    let choiceL (ps: Parser<'A, 'T, 'State, 'Input> seq) message : Parser<'A, 'T, 'State, 'Input> =
+        let parsers = ps |> Seq.toArray
+
+        fun (reader: Reader<_, _, _>) ->
+            let mutable success = ValueNone
+            let p = reader.Position
+            let mutable i = 0
+
+            while success.IsNone && i < parsers.Length do
+                match parsers.[i] reader with
+                | Ok x -> success <- ValueSome x
+                | Error _ -> reader.Position <- p
+
+                i <- i + 1
+
+            match success with
+            | ValueNone -> fail (Message message) reader
+            | ValueSome x -> Ok x
+
+    /// Applies the parser `p1` and, if it fails, returns the value `x`.
+    /// If `p1` succeeds, the input is consumed. If `p1` fails, no input is consumed.
+    let inline (<|>%) ([<InlineIfLambda>] p1: Parser<'A, 'T, 'State, 'Input>) x (reader: Reader<_, _, _>) =
+        let p = reader.Position
+
+        match p1 reader with
+        | Ok s1 -> Ok s1
+        | Error _ ->
+            reader.Position <- p
+            preturn x reader
+
+    /// Applies the parser `p1` and, if it fails, returns `ValueNone`.
+    /// If `p1` succeeds, the input is consumed. If `p1` fails, no input is consumed.
+    let inline opt ([<InlineIfLambda>] p1: Parser<'A, 'T, 'State, 'Input>) (reader: Reader<_, _, _>) =
+        let p = reader.Position
+
+        match p1 reader with
+        | Ok s1 -> preturn (ValueSome s1) reader
+        | Error _ ->
+            reader.Position <- p
+            preturn ValueNone reader
+
+    /// Attempts to apply the parser `p1`. Always succeeds, returning `()`.
+    /// If `p1` succeeds, the input is consumed. If `p1` fails, no input is consumed.
+    let inline optional ([<InlineIfLambda>] p1: Parser<'A, 'T, 'State, 'Input>) (reader: Reader<_, _, _>) =
+        let p = reader.Position
+
+        match p1 reader with
+        | Ok s1 -> preturn () reader
+        | Error _ ->
+            reader.Position <- p
+            preturn () reader
+
+    /// Applies the parser `p1`, if it succeeds, ensures that the parser has changed the input position.
+    let inline notEmpty ([<InlineIfLambda>] p1: Parser<'A, 'T, 'State, 'Input>) (reader: Reader<_, _, _>) =
+        let pos = reader.Position
+
+        match p1 reader with
+        | Ok s1 ->
+            if reader.Position = pos then
+                fail ParseError.shouldConsume reader
+            else
+                Ok s1
+        | Error err -> Error err
+
+    /// Applies the parser `p1`, if it succeeds, ensures that the parser has not changed the input position.
+    /// If `p1` fails, no input is consumed.
+    let inline followedBy ([<InlineIfLambda>] p1: Parser<'A, 'T, 'State, 'Input>) (reader: Reader<_, _, _>) =
+        let pos = reader.Position
+
+        match p1 reader with
+        | Ok s1 ->
+            if reader.Position = pos then
+                preturn () reader
+            else
+                reader.Position <- pos
+                fail ParseError.shouldNotConsume reader
+        | Error err ->
+            reader.Position <- pos
+            Error err
+
+    /// Applies the parser `p1`, if it succeeds, ensures that the parser has not changed the input position.
+    /// If `p1` fails, no input is consumed.
+    /// If `p1` succeeds and consumes input, the parser fails with the given `message`.
+    let inline followedByL ([<InlineIfLambda>] p1: Parser<'A, 'T, 'State, 'Input>) message (reader: Reader<_, _, _>) =
+        let pos = reader.Position
+
+        match p1 reader with
+        | Ok s1 ->
+            if reader.Position = pos then
+                preturn () reader
+            else
+                reader.Position <- pos
+                fail (Message message) reader
+        | Error err ->
+            reader.Position <- pos
+            Error err
+
+    /// Applies the parser `p1`, if it succeeds, this parser fails without consuming input.
+    /// If `p1` fails without consuming input, the parser succeeds.
+    /// If `p1` fails and consumes input, this parser fails without consuming input.
+    let inline notFollowedBy ([<InlineIfLambda>] p1: Parser<'A, 'T, 'State, 'Input>) (reader: Reader<_, _, _>) =
+        let pos = reader.Position
+
+        match p1 reader with
+        | Ok s1 ->
+            reader.Position <- pos
+            fail ParseError.shouldNotSucceed reader
+        | Error err ->
+            if reader.Position = pos then
+                preturn () reader
+            else
+                reader.Position <- pos
+                ParseError.createNested ParseError.shouldFailInPlace [ err ] pos
+
+    /// Applies the parser `p1`, if it succeeds, this parser fails without consuming input, with the given `message`.
+    /// If `p1` fails without consuming input, the parser succeeds.
+    /// If `p1` fails and consumes input, this parser fails without consuming input, with the given `message`.
+    let inline notFollowedByL
+        ([<InlineIfLambda>] p1: Parser<'A, 'T, 'State, 'Input>)
+        message
+        (reader: Reader<_, _, _>)
+        =
+        let pos = reader.Position
+
+        match p1 reader with
+        | Ok s1 ->
+            reader.Position <- pos
+            fail (Message message) reader
+        | Error err ->
+            if reader.Position = pos then
+                preturn () reader
+            else
+                reader.Position <- pos
+                ParseError.createNested (Message message) [ err ] pos
+
+    /// Applies the parser `p1`, if it succeeds, returns the result of `p1` without consuming input.
+    let inline lookAhead ([<InlineIfLambda>] p1: Parser<'A, 'T, 'State, 'Input>) (reader: Reader<_, _, _>) =
+        let pos = reader.Position
+
+        match p1 reader with
+        | Ok s1 ->
+            reader.Position <- pos
+            Ok s1
+        | Error err ->
+            reader.Position <- pos
+            Error err
+
+    /// Applies the parser `p1`, if it succeeds, returns the result of `p1`.
+    /// If `p1` fails without consuming input, the parser fails with the given `message`.
+    /// If `p1` fails and consumes input, the parser fails with the result of `p1`.
+    let inline (<?>) ([<InlineIfLambda>] p1: Parser<'A, 'T, 'State, 'Input>) message (reader: Reader<_, _, _>) =
+        let pos = reader.Position
+
+        match p1 reader with
+        | Ok s1 -> Ok s1
+        | Error err ->
+            if pos = reader.Position then
+                fail (Message message) reader
+            else
+                Error err
+
+    /// Applies the parser `p1`, if it succeeds, returns the result of `p1`.
+    /// If `p1` fails without consuming input, the parser fails with the given `message`.
+    /// If `p1` fails and consumes input, the parser fails with a nested error of the given `message` and the result of `p1`.
+    let inline (<??>) ([<InlineIfLambda>] p1: Parser<'A, 'T, 'State, 'Input>) message (reader: Reader<_, _, _>) =
+        let pos = reader.Position
+
+        match p1 reader with
+        | Ok s1 -> Ok s1
+        | Error err ->
+            if pos = reader.Position then
+                fail (Message message) reader
+            else
+                ParseError.createNested (Message message) [ err ] pos
+
+    /// Applies the parsers `p1` and `p2` in sequence. If both succeed, returns the results in a tuple.
+    let inline tuple2
+        ([<InlineIfLambda>] p1: Parser<'A, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p2: Parser<'B, 'T, 'State, 'Input>)
+        =
+        parser {
+            let! s1 = p1
+            let! s2 = p2
+            return struct (s1, s2)
+        }
+
+    /// Applies the parsers `p1`, `p2` and `p3` in sequence. If all succeed, returns the results in a tuple.
+    let inline tuple3
+        ([<InlineIfLambda>] p1: Parser<'A, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p2: Parser<'B, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p3: Parser<'C, 'T, 'State, 'Input>)
+        =
+        parser {
+            let! s1 = p1
+            let! s2 = p2
+            let! s3 = p3
+            return struct (s1, s2, s3)
+        }
+
+    /// Applies the parsers `p1`, `p2`, `p3` and `p4` in sequence. If all succeed, returns the results in a tuple.
+    let inline tuple4
+        ([<InlineIfLambda>] p1: Parser<'A, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p2: Parser<'B, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p3: Parser<'C, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p4: Parser<'D, 'T, 'State, 'Input>)
+        =
+        parser {
+            let! s1 = p1
+            let! s2 = p2
+            let! s3 = p3
+            let! s4 = p4
+            return struct (s1, s2, s3, s4)
+        }
+
+    /// Applies the parsers `p1`, `p2`, `p3`, `p4` and `p5` in sequence. If all succeed, returns the results in a tuple.
+    let inline tuple5
+        ([<InlineIfLambda>] p1: Parser<'A, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p2: Parser<'B, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p3: Parser<'C, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p4: Parser<'D, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] p5: Parser<'E, 'T, 'State, 'Input>)
+        =
+        parser {
+            let! s1 = p1
+            let! s2 = p2
+            let! s3 = p3
+            let! s4 = p4
+            let! s5 = p5
+            return struct (s1, s2, s3, s4, s5)
+        }
+
+    /// <summary>
+    /// Applies the parser <paramref name="p"/> exactly <paramref name="n"/> times.
+    /// If every application succeeds, returns the results as an <c>ImmutableArray</c>
+    /// of length <paramref name="n"/>. Stops and propagates the inner error on the
+    /// first failure.
+    /// </summary>
+    /// <remarks>
+    /// Builds via <see cref="SmallArrayBuilder{T}"/>, so counts ≤ 4 avoid
+    /// allocating an <c>ImmutableArray.Builder</c>. Use
+    /// <see cref="skipArray"/> when you only need the side effect.
+    /// </remarks>
+    let parray n (p: Parser<'A, 'T, 'State, 'Input>) (reader: Reader<_, _, _>) =
+        let xs = ImmutableArray.CreateBuilder n
+        let mutable i = 0
+        let mutable err = ValueNone
+
+        while err.IsNone && i < n do
+            match p reader with
+            | Ok s ->
+                xs.Add(s)
+                i <- i + 1
+            | Error e -> err <- ValueSome e
+
+        if i = n then
+            preturn (xs.MoveToImmutable()) reader
+        else
+            match err with
+            | ValueNone -> failwith "Unreachable"
+            | ValueSome err -> Error err
+
+    /// <summary>
+    /// Applies the parser <paramref name="p"/> exactly <paramref name="n"/> times,
+    /// discarding the results. Returns <c>unit</c> on full success, or propagates
+    /// the inner error on the first failure.
+    /// </summary>
+    /// <remarks>
+    /// Equivalent to <c>parray n p |>> ignore</c> but without allocating the
+    /// intermediate result array. Use this when you only need to advance the reader.
+    /// </remarks>
+    let skipArray n (p: Parser<'A, 'T, 'State, 'Input>) (reader: Reader<_, _, _>) =
+        let mutable i = 0
+        let mutable err = ValueNone
+
+        while err.IsNone && i < n do
+            match p reader with
+            | Ok s -> i <- i + 1
+            | Error e -> err <- ValueSome e
+
+        if i = n then
+            preturn () reader
+        else
+            match err with
+            | ValueNone -> failwith "Unreachable"
+            | ValueSome err -> Error err
+
+    let inline private pOneThen
+        ([<InlineIfLambda>] p1: Parser<_, _, _, _>)
+        ([<InlineIfLambda>] andThen: _ -> Parser<_, _, _, _>)
+        (reader: Reader<_, _, _>)
+        =
+        let pos = reader.Position
+
+        match p1 reader with
+        | Ok s1 -> andThen s1 reader
+        | Error e -> ParseError.createNested ParseError.expectedAtLeastOne [ e ] pos
+
+    /// Applies the parser `p` zero or more times. If it succeeds, returns the results as an ImmutableArray.
+    /// This parser always succeeds.
+    let many (p: Parser<'A, 'T, 'State, 'Input>) (reader: Reader<_, _, _>) =
+        let mutable xs = SmallArrayBuilder<_>()
+        let mutable ok = true
+
+        while ok do
+            let pos = reader.Position
+
+            match p reader with
+            | Ok s ->
+                if reader.Position = pos then
+                    raise (InfiniteLoopException pos)
+
+                xs.Add(s)
+            | Error e ->
+                reader.Position <- pos
+                ok <- false
+
+        preturn (xs.ToImmutable()) reader
+
+    /// Applies the parser `p` one or more times. If it succeeds, returns the results as an ImmutableArray.
+    /// If `p` fails on the first attempt, this parser fails.
+    let many1 (p: Parser<'A, 'T, 'State, 'Input>) (reader: Reader<_, _, _>) =
+        pOneThen
+            p
+            (fun x0 ->
+                let mutable xs = SmallArrayBuilder<_>()
+                xs.Add(x0)
+                let mutable ok = true
+
+                while ok do
+                    let pos = reader.Position
+
+                    match p reader with
+                    | Ok s ->
+                        if reader.Position = pos then
+                            raise (InfiniteLoopException pos)
+
+                        xs.Add(s)
+                    | Error e ->
+                        reader.Position <- pos
+                        ok <- false
+
+                preturn (xs.ToImmutable())
+            )
+            reader
+
+    /// Applies the parser `p` zero or more times. If it succeeds, returns unit.
+    /// This parser always succeeds.
+    let skipMany (p: Parser<'A, 'T, 'State, 'Input>) (reader: Reader<_, _, _>) =
+        let mutable ok = true
+
+        while ok do
+            let pos = reader.Position
+
+            match p reader with
+            | Ok s ->
+                if reader.Position = pos then
+                    raise (InfiniteLoopException pos)
+            | Error e ->
+                reader.Position <- pos
+                ok <- false
+
+        preturn () reader
+
+    /// Applies the parser `p` one or more times. If it succeeds, returns unit.
+    /// If `p` fails on the first attempt, this parser fails.
+    let skipMany1 (p: Parser<'A, 'T, 'State, 'Input>) (reader: Reader<_, _, _>) =
+        pOneThen
+            p
+            (fun x0 ->
+                let mutable ok = true
+
+                while ok do
+                    let pos = reader.Position
+
+                    match p reader with
+                    | Ok s ->
+                        if reader.Position = pos then
+                            raise (InfiniteLoopException pos)
+                    | Error e ->
+                        reader.Position <- pos
+                        ok <- false
+
+                preturn ()
+            )
+            reader
+
+    let private countManySatisfiesImpl (predicate: 'T -> bool) (reader: Reader<'T, 'State, 'Input>) =
+        let mutable length = 0L
+        let mutable doContinue = true
+
+        while doContinue do
+            match reader.Peek() with
+            | ValueSome c when predicate c ->
+                length <- length + 1L
+                reader.Skip()
+            | _ -> doContinue <- false
+
+        length
+
+    /// <summary>
+    /// Applies a predicate to the input zero or more times and returns the number of successful matches.
+    /// </summary>
+    /// <remarks>
+    /// This parser always succeeds. It is more efficient than `many (satisfy predicate)` when only the count is needed.
+    /// </remarks>
+    let countManySatisfies predicate reader =
+        let length = countManySatisfiesImpl predicate reader
+        preturn length reader
+
+    /// <summary>
+    /// Applies a predicate to the input one or more times and returns the number of successful matches.
+    /// </summary>
+    /// <remarks>
+    /// If the predicate fails on the first element, this parser fails. It is more efficient than `many1 (satisfy predicate)` when only the count is needed.
+    /// </remarks>
+    let countMany1Satisfies predicate reader =
+        pOneThen
+            (satisfy predicate)
+            (fun _ reader ->
+                let length = countManySatisfiesImpl predicate reader
+                preturn (length + 1L) reader
+            )
+            reader
+
+    /// <summary>
+    /// Skips zero or more input elements that satisfy the given predicate.
+    /// </summary>
+    /// <remarks>
+    /// This parser always succeeds. It is a highly efficient way to skip input like whitespace or comments.
+    /// </remarks>
+    let skipManySatisfies predicate reader =
+        let _ = countManySatisfiesImpl predicate reader
+        preturn () reader
+
+    /// <summary>
+    /// Skips one or more input elements that satisfy the given predicate.
+    /// </summary>
+    /// <remarks>
+    /// If the predicate fails on the first element, this parser fails.
+    /// </remarks>
+    let skipMany1Satisfies predicate reader =
+        pOneThen
+            (satisfy predicate)
+            (fun _ reader ->
+                let _ = countManySatisfiesImpl predicate reader
+                preturn () reader
+            )
+            reader
+
+    /// Applies the parser `p` zero or more times, separated by `pSep`. If it succeeds, returns the results as an ImmutableArray.
+    /// This parser always succeeds.
+    let sepBy (p: Parser<'A, 'T, 'State, 'Input>) (pSep: Parser<'B, 'T, 'State, 'Input>) (reader: Reader<_, _, _>) =
+        let pos = reader.Position
+
+        match p reader with
+        | Ok s ->
+            let mutable xs = SmallArrayBuilder<_>()
+            let mutable seps = SmallArrayBuilder<_>()
+            xs.Add(s)
+
+            let mutable ok = true
+
+            while ok do
+                let pos = reader.Position
+
+                match pSep reader with
+                | Ok sep ->
+                    match p reader with
+                    | Ok s ->
+                        if reader.Position = pos then
+                            raise (InfiniteLoopException pos)
+
+                        seps.Add(sep)
+                        xs.Add(s)
+                    | Error _ ->
+                        reader.Position <- pos
+                        ok <- false
+                | Error e ->
+                    reader.Position <- pos
+                    ok <- false
+
+            preturn struct (xs.ToImmutable(), seps.ToImmutable()) reader
+        | Error e ->
+            reader.Position <- pos
+            preturn struct (ImmutableArray.Empty, ImmutableArray.Empty) reader
+
+    /// Applies the parser `p` one or more times, separated by `pSep`. If it succeeds, returns the results as an ImmutableArray.
+    /// If `p` fails on the first attempt, this parser fails.
+    let sepBy1 (p: Parser<'A, 'T, 'State, 'Input>) (pSep: Parser<'B, 'T, 'State, 'Input>) (reader: Reader<_, _, _>) =
+        // Manually inlined `pOneThen p (fun s -> ...) reader` — sepBy1 itself is not inline,
+        // so the InlineIfLambda on pOneThen's binder does not reach it and the lambda
+        // would otherwise be emitted as a closure class (hot allocation site).
+        let startPos = reader.Position
+
+        match p reader with
+        | Error e -> ParseError.createNested ParseError.expectedAtLeastOne [ e ] startPos
+        | Ok s ->
+            let mutable xs = SmallArrayBuilder<_>()
+            let mutable seps = SmallArrayBuilder<_>()
+            xs.Add(s)
+
+            let mutable ok = true
+
+            while ok do
+                let pos = reader.Position
+
+                match pSep reader with
+                | Ok sep ->
+                    match p reader with
+                    | Ok s ->
+                        if reader.Position = pos then
+                            raise (InfiniteLoopException pos)
+
+                        seps.Add(sep)
+                        xs.Add(s)
+                    | Error _ ->
+                        reader.Position <- pos
+                        ok <- false
+                | Error e ->
+                    reader.Position <- pos
+                    ok <- false
+
+            preturn struct (xs.ToImmutable(), seps.ToImmutable()) reader
+
+    /// Applies the parser `p` zero or more times, separated by `pSep`. If it succeeds, returns unit.
+    /// This parser always succeeds.
+    let skipSepBy (p: Parser<'A, 'T, 'State, 'Input>) (pSep: Parser<'B, 'T, 'State, 'Input>) (reader: Reader<_, _, _>) =
+        let pos = reader.Position
+
+        match p reader with
+        | Ok s ->
+            let mutable ok = true
+
+            while ok do
+                let pos = reader.Position
+
+                match pSep reader with
+                | Ok sep ->
+                    match p reader with
+                    | Ok s ->
+                        if reader.Position = pos then
+                            raise (InfiniteLoopException pos)
+                    | Error _ ->
+                        reader.Position <- pos
+                        ok <- false
+                | Error e ->
+                    reader.Position <- pos
+                    ok <- false
+
+            preturn () reader
+        | Error e ->
+            reader.Position <- pos
+            preturn () reader
+
+    /// Applies the parser `p` one or more times, separated by `pSep`. If it succeeds, returns unit.
+    /// If `p` fails on the first attempt, this parser fails.
+    let skipSepBy1
+        (p: Parser<'A, 'T, 'State, 'Input>)
+        (pSep: Parser<'B, 'T, 'State, 'Input>)
+        (reader: Reader<_, _, _>)
+        =
+        pOneThen
+            p
+            (fun s ->
+                let mutable ok = true
+
+                while ok do
+                    let pos = reader.Position
+
+                    match pSep reader with
+                    | Ok sep ->
+                        match p reader with
+                        | Ok s ->
+                            if reader.Position = pos then
+                                raise (InfiniteLoopException pos)
+                        | Error _ ->
+                            reader.Position <- pos
+                            ok <- false
+                    | Error e ->
+                        reader.Position <- pos
+                        ok <- false
+
+                preturn ()
+            )
+            reader
+
+    /// Applies the parser `p` zero or more times, separated and optionally ended by `pSep`. If it succeeds, returns the results as an ImmutableArray.
+    /// This parser always succeeds.
+    let sepEndBy (p: Parser<'A, 'T, 'State, 'Input>) (pSep: Parser<'B, 'T, 'State, 'Input>) (reader: Reader<_, _, _>) =
+        let pos = reader.Position
+
+        match p reader with
+        | Ok s ->
+            let mutable xs = SmallArrayBuilder<_>()
+            let mutable seps = SmallArrayBuilder<_>()
+            xs.Add(s)
+
+            let mutable ok = true
+
+            while ok do
+                let pos = reader.Position
+
+                match pSep reader with
+                | Ok sep ->
+                    seps.Add(sep)
+                    let posSep = reader.Position
+
+                    match p reader with
+                    | Ok s ->
+                        if reader.Position = pos then
+                            raise (InfiniteLoopException pos)
+
+                        xs.Add(s)
+                    | Error _ ->
+                        reader.Position <- posSep
+                        ok <- false
+                | Error e ->
+                    reader.Position <- pos
+                    ok <- false
+
+            preturn struct (xs.ToImmutable(), seps.ToImmutable()) reader
+        | Error e ->
+            reader.Position <- pos
+            preturn struct (ImmutableArray.Empty, ImmutableArray.Empty) reader
+
+    /// Applies the parser `p` one or more times, separated and optionally ended by `pSep`. If it succeeds, returns the results as an ImmutableArray.
+    /// If `p` fails on the first attempt, this parser fails.
+    let sepEndBy1 (p: Parser<'A, 'T, 'State, 'Input>) (pSep: Parser<'B, 'T, 'State, 'Input>) (reader: Reader<_, _, _>) =
+        pOneThen
+            p
+            (fun s ->
+                let mutable xs = SmallArrayBuilder<_>()
+                let mutable seps = SmallArrayBuilder<_>()
+                xs.Add(s)
+
+                let mutable ok = true
+
+                while ok do
+                    let pos = reader.Position
+
+                    match pSep reader with
+                    | Ok sep ->
+                        seps.Add(sep)
+                        let posSep = reader.Position
+
+                        match p reader with
+                        | Ok s ->
+                            if reader.Position = pos then
+                                raise (InfiniteLoopException pos)
+
+                            xs.Add(s)
+                        | Error _ ->
+                            reader.Position <- posSep
+                            ok <- false
+                    | Error e ->
+                        reader.Position <- pos
+                        ok <- false
+
+                preturn struct (xs.ToImmutable(), seps.ToImmutable())
+            )
+            reader
+
+    /// Applies the parser `p` zero or more times, separated and optionally ended by `pSep`. If it succeeds, returns unit.
+    /// This parser always succeeds.
+    let skipSepEndBy
+        (p: Parser<'A, 'T, 'State, 'Input>)
+        (pSep: Parser<'B, 'T, 'State, 'Input>)
+        (reader: Reader<_, _, _>)
+        =
+        let pos = reader.Position
+
+        match p reader with
+        | Ok s ->
+            let mutable ok = true
+
+            while ok do
+                let pos = reader.Position
+
+                match pSep reader with
+                | Ok sep ->
+                    let posSep = reader.Position
+
+                    match p reader with
+                    | Ok s ->
+                        if reader.Position = pos then
+                            raise (InfiniteLoopException pos)
+                    | Error _ ->
+                        reader.Position <- posSep
+                        ok <- false
+                | Error e ->
+                    reader.Position <- pos
+                    ok <- false
+
+            preturn () reader
+        | Error e ->
+            reader.Position <- pos
+            preturn () reader
+
+    /// Applies the parser `p` one or more times, separated and optionally ended by `pSep`. If it succeeds, returns unit.
+    /// If `p` fails on the first attempt, this parser fails.
+    let skipSepEndBy1
+        (p: Parser<'A, 'T, 'State, 'Input>)
+        (pSep: Parser<'B, 'T, 'State, 'Input>)
+        (reader: Reader<_, _, _>)
+        =
+        pOneThen
+            p
+            (fun s ->
+                let mutable ok = true
+
+                while ok do
+                    let pos = reader.Position
+
+                    match pSep reader with
+                    | Ok sep ->
+                        let posSep = reader.Position
+
+                        match p reader with
+                        | Ok s ->
+                            if reader.Position = pos then
+                                raise (InfiniteLoopException pos)
+                        | Error _ ->
+                            reader.Position <- posSep
+                            ok <- false
+                    | Error e ->
+                        reader.Position <- pos
+                        ok <- false
+
+                preturn ()
+            )
+            reader
+
+    /// Applies the parser `p` zero or more times, until `pEnd` succeeds. If it succeeds, returns the results as an ImmutableArray and the result of `pEnd`.
+    /// This parser fails if `pEnd` fails.
+    let manyTill (p: Parser<'A, 'T, 'State, 'Input>) (pEnd: Parser<'B, 'T, 'State, 'Input>) (reader: Reader<_, _, _>) =
+        let pos = reader.Position
+
+        match pEnd reader with
+        | Ok s -> preturn struct (ImmutableArray.Empty, s) reader
+        | Error eEnd ->
+            let ePos = reader.Position
+            reader.Position <- pos
+
+            match p reader with
+            | Ok s1 ->
+                let mutable xs = SmallArrayBuilder<_>()
+                xs.Add(s1)
+                let mutable endTok = ValueNone
+                let mutable err = []
+                // Captures the position at which the loop got stuck — both p and pEnd
+                // failed there. Reported instead of `pos` (manyTill's start), which
+                // would mis-locate the error to before any items were consumed.
+                let mutable errPos = reader.Position
+
+                while endTok.IsNone && err = [] do
+                    let pos = reader.Position
+
+                    match pEnd reader with
+                    | Ok s -> endTok <- ValueSome s
+                    | Error eEnd ->
+                        reader.Position <- pos
+
+                        match p reader with
+                        | Ok s ->
+                            if reader.Position = pos then
+                                raise (InfiniteLoopException pos)
+
+                            xs.Add(s)
+                        | Error e ->
+                            reader.Position <- pos
+                            errPos <- pos
+                            err <- [ eEnd; e ]
+
+                match err with
+                | [] -> preturn struct (xs.ToImmutable(), endTok.Value) reader
+                | err ->
+                    let kept = err |> List.filter (fun e -> not (ParseError.isEmpty e.Errors))
+
+                    match kept with
+                    | [] -> ParseError.create Empty errPos
+                    | _ -> ParseError.createNested ParseError.bothFailed kept errPos
+            | Error _ ->
+                reader.Position <- ePos
+                Error eEnd
+
+    /// Applies the parser `p` one or more times, until `pEnd` succeeds. If it succeeds, returns the results as an ImmutableArray and the result of `pEnd`.
+    /// If `p` fails on the first attempt, this parser fails.
+    /// This parser also fails if `pEnd` fails.
+    let many1Till (p: Parser<'A, 'T, 'State, 'Input>) (pEnd: Parser<'B, 'T, 'State, 'Input>) (reader: Reader<_, _, _>) =
+        pOneThen
+            p
+            (fun s1 reader ->
+                let mutable xs = SmallArrayBuilder<_>()
+                xs.Add(s1)
+                let mutable endTok = ValueNone
+                let mutable err = []
+                let errPos = reader.Position
+
+                while endTok.IsNone && err = [] do
+                    let pos = reader.Position
+
+                    match pEnd reader with
+                    | Ok s -> endTok <- ValueSome s
+                    | Error eEnd ->
+                        reader.Position <- pos
+
+                        match p reader with
+                        | Ok s ->
+                            if reader.Position = pos then
+                                raise (InfiniteLoopException pos)
+
+                            xs.Add(s)
+                        | Error e ->
+                            reader.Position <- pos
+                            err <- [ eEnd; e ]
+
+                match err with
+                | [] -> preturn struct (xs.ToImmutable(), endTok.Value) reader
+                | err ->
+                    let kept = err |> List.filter (fun e -> not (ParseError.isEmpty e.Errors))
+
+                    match kept with
+                    | [] -> ParseError.create Empty errPos
+                    | _ -> ParseError.createNested ParseError.bothFailed kept errPos
+            )
+            reader
+
+    /// Applies the parser `p` zero or more times, until `pEnd` succeeds. If it succeeds, returns unit.
+    /// This parser fails if `pEnd` fails.
+    let skipManyTill
+        (p: Parser<'A, 'T, 'State, 'Input>)
+        (pEnd: Parser<'B, 'T, 'State, 'Input>)
+        (reader: Reader<_, _, _>)
+        : ParseResult<unit, 'T, 'State> =
+        let pos = reader.Position
+
+        match pEnd reader with
+        | Ok s -> preturn () reader
+        | Error eEnd ->
+            let ePos = reader.Position
+            reader.Position <- pos
+
+            match p reader with
+            | Ok s1 ->
+                let mutable endTok = ValueNone
+                let mutable err = []
+                // Position where p AND pEnd both failed; reported instead of the
+                // skipManyTill start position, which would mis-locate the error.
+                let mutable errPos = reader.Position
+
+                while endTok.IsNone && err = [] do
+                    let pos = reader.Position
+
+                    match pEnd reader with
+                    | Ok s -> endTok <- ValueSome s
+                    | Error eEnd ->
+                        reader.Position <- pos
+
+                        match p reader with
+                        | Ok s ->
+                            if reader.Position = pos then
+                                raise (InfiniteLoopException pos)
+                        | Error e ->
+                            reader.Position <- pos
+                            errPos <- pos
+                            err <- [ eEnd; e ]
+
+                match err with
+                | [] -> preturn () reader
+                | err ->
+                    let kept = err |> List.filter (fun e -> not (ParseError.isEmpty e.Errors))
+
+                    match kept with
+                    | [] -> ParseError.create Empty errPos
+                    | _ -> ParseError.createNested ParseError.bothFailed kept errPos
+            | Error e ->
+                reader.Position <- ePos
+
+                let kept =
+                    [ eEnd; e ] |> List.filter (fun err -> not (ParseError.isEmpty err.Errors))
+
+                match kept with
+                | [] -> ParseError.create Empty pos
+                | _ -> ParseError.createNested ParseError.bothFailed kept pos
+
+    /// Applies the parser `p` one or more times, until `pEnd` succeeds. If it succeeds, returns unit.
+    /// If `p` fails on the first attempt, this parser fails.
+    /// This parser also fails if `pEnd` fails.
+    let skipMany1Till
+        (p: Parser<'A, 'T, 'State, 'Input>)
+        (pEnd: Parser<'B, 'T, 'State, 'Input>)
+        (reader: Reader<_, _, _>)
+        =
+        pOneThen
+            p
+            (fun _ reader ->
+                let mutable endTok = ValueNone
+                let mutable err = []
+                let errPos = reader.Position
+
+                while endTok.IsNone && err = [] do
+                    let pos = reader.Position
+
+                    match pEnd reader with
+                    | Ok s -> endTok <- ValueSome s
+                    | Error eEnd ->
+                        reader.Position <- pos
+
+                        match p reader with
+                        | Ok _ ->
+                            if reader.Position = pos then
+                                raise (InfiniteLoopException pos)
+                        | Error e ->
+                            reader.Position <- pos
+                            err <- [ eEnd; e ]
+
+                match err with
+                | [] -> preturn () reader
+                | err ->
+                    let kept = err |> List.filter (fun e -> not (ParseError.isEmpty e.Errors))
+
+                    match kept with
+                    | [] -> ParseError.create Empty errPos
+                    | _ -> ParseError.createNested ParseError.bothFailed kept errPos
+            )
+            reader
+
+    /// Applies the parser `p` one or more times, separated by `pOp`. If `pOp` succeeds, combines the results of `p` before and after in a left-associative manner.
+    /// If `p` fails on the first attempt, this parser fails.
+    let inline chainl1
+        ([<InlineIfLambda>] p: Parser<'A, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] pOp: Parser<'A -> 'A -> 'A, 'T, 'State, 'Input>)
+        (reader: Reader<_, _, _>)
+        : ParseResult<'A, 'T, 'State> =
+        let rec parseLeft acc (reader: Reader<_, _, _>) =
+            let pos = reader.Position
+
+            match pOp reader with
+            | Ok sOp ->
+                match p reader with
+                | Ok s ->
+                    if reader.Position = pos then
+                        raise (InfiniteLoopException pos)
+
+                    let acc' = sOp acc s
+                    parseLeft acc' reader
+                | Error e -> Error e
+            | Error _ ->
+                reader.Position <- pos
+                preturn acc reader
+
+        match p reader with
+        | Ok s -> parseLeft s reader
+        | Error e -> Error e
+
+    /// Applies the parser `p` zero or more times, separated by `pOp`. If `pOp` succeeds, combines the results of `p` before and after in a left-associative manner.
+    /// If `p` fails on the first attempt, this parser returns the result of `orElse`.
+    /// This parser always succeeds.
+    let chainl p pOp orElse reader = (chainl1 p pOp <|>% orElse) reader
+
+    /// Applies the parser `p` one or more times, separated by `pOp`. If `pOp` succeeds, combines the results of `p` before and after in a right-associative manner.
+    /// If `p` fails on the first attempt, this parser fails.
+    let inline chainr1
+        ([<InlineIfLambda>] p: Parser<'A, 'T, 'State, 'Input>)
+        ([<InlineIfLambda>] pOp: Parser<'A -> 'A -> 'A, 'T, 'State, 'Input>)
+        (reader: Reader<_, _, _>)
+        : ParseResult<'A, 'T, 'State> =
+        let rec fold acc pLast =
+            match acc with
+            | [] -> preturn pLast
+            | (op, p) :: rest -> fold rest (op p pLast)
+
+        let rec parseRight prevPos acc (reader: Reader<_, _, _>) =
+            match p reader with
+            | Ok s ->
+                if reader.Position = prevPos then
+                    raise (InfiniteLoopException prevPos)
+
+                let pos = reader.Position
+
+                match pOp reader with
+                | Ok sOp ->
+                    let acc = (sOp, s) :: acc
+                    parseRight reader.Position acc reader
+                | Error _ ->
+                    reader.Position <- pos
+                    preturn (acc, s) reader
+            | Error e -> Error e
+
+        match p reader with
+        | Ok s ->
+            let pos = reader.Position
+
+            match pOp reader with
+            | Ok sOp ->
+                let acc = [ (sOp, s) ]
+
+                match parseRight reader.Position acc reader with
+                | Ok stack ->
+                    let (acc, pLast) = stack
+                    (fold acc pLast) reader
+                | Error e -> Error e
+            | Error _ ->
+                reader.Position <- pos
+                preturn s reader
+        | Error e -> Error e
+
+    /// Applies the parser `p` zero or more times, separated by `pOp`. If `pOp` succeeds, combines the results of `p` before and after in a right-associative manner.
+    /// If `p` fails on the first attempt, this parser returns the result of `orElse`.
+    /// This parser always succeeds.
+    let chainr p pOp orElse reader = (chainr1 p pOp <|>% orElse) reader
+
+    /// Applies the parser `p1` followed by `p` zero or more times. If it succeeds, returns the results as an ImmutableArray.
+    /// If `p1` fails, this parser fails.
+    let many1Items2 (p1: Parser<'A, 'T, 'State, 'Input>) (p: Parser<'A, 'T, 'State, 'Input>) (reader: Reader<_, _, _>) =
+        pOneThen
+            p1
+            (fun s1 ->
+                let mutable xs = SmallArrayBuilder<_>()
+                xs.Add(s1)
+                let mutable ok = true
+
+                while ok do
+                    let pos = reader.Position
+
+                    match p reader with
+                    | Ok sx ->
+                        if reader.Position = pos then
+                            raise (InfiniteLoopException pos)
+
+                        xs.Add(sx)
+                    | Error _ ->
+                        reader.Position <- pos
+                        ok <- false
+
+                preturn (xs.ToImmutable())
+            )
+            reader
+
+    /// <summary>
+    /// Peeks at the next token (without consuming it) and uses it to select
+    /// the next parser to run.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This combinator is ideal for implementing <strong>LL(1) grammars</strong> (predictive parsing).
+    /// It allows the parser to branch deterministically based on a single lookahead token.
+    /// </para>
+    /// <para>
+    /// Use <c>dispatch</c> instead of <c>choice</c> when the next token uniquely identifies
+    /// which parser to use. This avoids the overhead of sequential trial-and-error and
+    /// prevents unnecessary backtracking.
+    /// </para>
+    /// </remarks>
+    /// <param name="f">A function that maps the lookahead token (or ValueNone at the end of input) to a parser.</param>
+    let inline dispatch
+        ([<InlineIfLambda>] f: 'T voption -> Parser<'Parsed, 'T, 'State, 'Input>)
+        (reader: Reader<'T, 'State, 'Input>)
+        =
+        let t = reader.Peek()
+        let p = f t
+        p reader
+
+    /// <summary>
+    /// Peeks at the next token (without consuming it) and retrieves the current user state,
+    /// using both to select the next parser to run.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is an optimization for <strong>Context-Sensitive LL(1) grammars</strong>.
+    /// </para>
+    /// <para>
+    /// It avoids the overhead of <c>getUserState >>= ...</c> by passing the state directly
+    /// to the dispatch function. This is particularly useful for parsers that need to switch
+    /// behavior based on a context.
+    /// </para>
+    /// </remarks>
+    /// <param name="f">A function that maps the current state and lookahead token to a parser.</param>
+    let inline dispatchWithState
+        ([<InlineIfLambda>] f: 'State -> 'T voption -> Parser<'Parsed, 'T, 'State, 'Input>)
+        (reader: Reader<'T, 'State, 'Input>)
+        =
+        let s = reader.State
+        let t = reader.Peek()
+        let p = f s t
+        p reader
