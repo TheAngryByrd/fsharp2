@@ -197,3 +197,6 @@ module Measure =
         Operator.parser atomMeasureParser measureOperatorParser
 
     do refMeasure.Set parse
+
+    let mutable private x = 0
+    let init () = x <- x + 1

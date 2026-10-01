@@ -187,6 +187,23 @@ let y = "
 
                     Expect.equal parse.ExitCode 0 parse.Output
                     Expect.equal (parse.Output.Trim()) "Sample.fs tree diagnostics=0" parse.Output
+
+                    // The process must parse a measure type argument before it parses any measure constant.
+                    let measureSource = Path.Combine(output, "Measure.fs")
+
+                    File.WriteAllText(
+                        measureSource,
+                        "module Measure\n\nlet speed : float<m/s> = 1.0<m/s>\n"
+                    )
+
+                    let measureParse = run (TimeSpan.FromMinutes 1.0) executable [ measureSource ]
+
+                    Expect.equal measureParse.ExitCode 0 measureParse.Output
+
+                    Expect.equal
+                        (measureParse.Output.Trim())
+                        "Measure.fs tree diagnostics=0"
+                        measureParse.Output
                 finally
                     Directory.Delete(output, true)
 

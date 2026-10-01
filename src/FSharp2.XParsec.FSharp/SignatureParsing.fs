@@ -542,6 +542,7 @@ module ModuleSignature =
 module ModuleSignatureElement =
     // Needed for Attributes.parse
     do ObjectConstruction.init ()
+    do Measure.init ()
 
     /// Type sig group: `type [<Attrs>] Foo = ...` optionally followed by `and Bar = ...`.
     let private pTypeGroup =
