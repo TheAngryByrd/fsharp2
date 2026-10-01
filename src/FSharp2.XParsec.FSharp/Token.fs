@@ -2034,7 +2034,7 @@ module internal Token =
                     | "~&&" -> ofUInt16 (KindOperator ||| CanBePrefix ||| Precedence.Prefix)
                     | _ -> Token.InvalidPrefixOperator
 
-            | _ -> invalidArg "span" (sprintf "Invalid custom operator: %s" (span.ToString()))
+            | _ -> invalidArg "span" ("Invalid custom operator: " + string (span.ToString()))
 
 module internal TokenInfo =
 
@@ -2357,7 +2357,7 @@ module internal TokenInfo =
             | Token.KWRBrace -> PrecedenceLevel.Parens
             | Token.VirtualApp -> PrecedenceLevel.Application
             | Token.VirtualTyApp -> PrecedenceLevel.HighTypeApplication
-            | t -> raise (new NotImplementedException($"{t}"))
+            | t -> raise (new NotImplementedException(string t))
         // elif isSpecial token then
         //     match token with
         //     | Token.Whitespace -> PrecedenceLevel.Application
@@ -2403,7 +2403,7 @@ type PositionedToken =
         | TokenKind.NumericLiteral
         | TokenKind.Special
         | TokenKind.Invalid
-        | TokenKind.Spare -> sprintf "%d, %O%s%s" this.StartIndex tokNoFlags inComment isVirtual
+        | TokenKind.Spare -> string this.StartIndex + ", " + string tokNoFlags + string inComment + string isVirtual
         | TokenKind.Operator ->
             // Named operators (non-zero OpFamily ID) have unique enum values, so %O resolves
             // to the F# case name (e.g. "OpAddition"). Generic-slot ops share enum values
@@ -2412,7 +2412,7 @@ type PositionedToken =
             let opFamily = uint16 tokNoFlags &&& OpFamilyMask
 
             if opFamily <> 0us then
-                sprintf "%d, %O%s%s" this.StartIndex tokNoFlags inComment isVirtual
+                string this.StartIndex + ", " + string tokNoFlags + string inComment + string isVirtual
             else
                 let precedence = TokenInfo.operatorPrecedence this.Token
 
@@ -2422,15 +2422,9 @@ type PositionedToken =
                     else
                         ""
 
-                sprintf
-                    "%d, Operator 0b%016B %O%s%s%s"
-                    this.StartIndex
-                    (uint16 tokNoFlags)
-                    precedence
-                    maybePrefix
-                    inComment
-                    isVirtual
-        | _ -> sprintf "%d, %O%s%s" this.StartIndex tokNoFlags inComment isVirtual
+                let bits = Convert.ToString(int (uint16 tokNoFlags), 2).PadLeft(16, '0')
+                string this.StartIndex + ", Operator 0b" + string bits + " " + string precedence + string maybePrefix + string inComment + string isVirtual
+        | _ -> string this.StartIndex + ", " + string tokNoFlags + string inComment + string isVirtual
 
 [<AutoOpen>]
 module TokenExtensions =
@@ -2497,7 +2491,7 @@ type NumericInfo =
         if TokenInfo.isNumeric token.Token then
             { _token = token }
         else
-            invalidArg "token" (sprintf "Token %A is not a numeric literal." token)
+            invalidArg "token" ("Token " + string token + " is not a numeric literal.")
 
 module internal OperatorInfo =
 
@@ -2532,7 +2526,7 @@ module internal OperatorInfo =
         | PrecedenceLevel.HighApplication -> Associativity.Left
         | PrecedenceLevel.HighTypeApplication -> Associativity.Left
         | PrecedenceLevel.Parens -> Associativity.Non
-        | _ -> invalidOp $"Unknown precedence level {p}."
+        | _ -> invalidOp ("Unknown precedence level " + string p + ".")
 
 [<Struct>]
 type OperatorInfo =
@@ -2608,4 +2602,4 @@ type OperatorInfo =
     static member Create(token: PositionedToken) =
         match OperatorInfo.TryCreate token with
         | ValueSome opInfo -> opInfo
-        | ValueNone -> invalidArg "token" (sprintf "Token %A is not an operator." token)
+        | ValueNone -> invalidArg "token" ("Token " + string token + " is not an operator.")

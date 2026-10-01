@@ -5,7 +5,7 @@ open Parsers
 open System.Buffers.Binary
 
 let private gotFewerBytes (expected: int) (actual: int) =
-    Message(sprintf "Expected %d bytes but only %d bytes are available." expected actual)
+    Message ("Expected " + string expected + " bytes but only " + string actual + " bytes are available.")
 
 #if NET8_0_OR_GREATER
 /// Parses a 16-bit half-precision floating-point number in big-endian format.

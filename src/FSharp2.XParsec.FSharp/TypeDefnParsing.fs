@@ -216,10 +216,7 @@ module MethodOrPropDefn =
                     | text -> text
 
                 let msg =
-                    sprintf
-                        "Expected 'get' or 'set' after 'with' on '%s' but got '%s'"
-                        (tokenString propIdent state)
-                        shown
+                    "Expected 'get' or 'set' after 'with' on '" + string (tokenString propIdent state) + "' but got '" + string shown + "'"
 
                 return!
                     recoverWith

@@ -35,7 +35,7 @@ let formatTokenError (error: ParseError<PositionedToken, ParseState>) =
         sb.Append('`').Append(x.Token.ToString()).Append('`')
 
     let formatSeq (xs: PositionedToken seq) (sb: StringBuilder) =
-        let formattedTokens = xs |> Seq.map (fun x -> $"`{x.Token}`") |> String.concat ", "
+        let formattedTokens = xs |> Seq.map (fun x -> "`" + string x.Token + "`") |> String.concat ", "
 
         sb.Append(formattedTokens)
 

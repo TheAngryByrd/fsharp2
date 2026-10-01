@@ -7,6 +7,7 @@
     <IsPackable>false</IsPackable>
     <IsAotCompatible>true</IsAotCompatible>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <OtherFlags>$(OtherFlags) --reflectionfree</OtherFlags>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="FableTypes.fs" />

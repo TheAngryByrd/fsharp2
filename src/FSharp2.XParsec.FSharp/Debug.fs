@@ -79,7 +79,7 @@ type PrintContext(indentSize: int) =
                 let labelPadded = (indentStr + row.Label).PadRight(maxLabelColWidth)
 
                 writer.WriteLine(
-                    $"{labelPadded}  {row.QuotedLit, -16}  {row.Kind, -18}  {row.TokIdx, -8}  {row.CharPos}"
+                    string labelPadded + "  " + (string row.QuotedLit).PadRight(16) + "  " + (string row.Kind).PadRight(18) + "  " + (string row.TokIdx).PadRight(8) + "  " + string row.CharPos
                 )
 
     member ctx.FlushToString() =
@@ -97,7 +97,7 @@ let inline indent (ctx: PrintContext) (f: unit -> unit) =
 
 /// Writes "header:" then runs `f` indented by one level.
 let printSection (ctx: PrintContext) (header: string) (f: unit -> unit) =
-    ctx.WriteLine($"{header}:")
+    ctx.WriteLine(string header + ":")
     indent ctx f
 
 let tokenKindString (lexed: Lexed) (token: PositionedToken) (i: int<token>) =
@@ -108,13 +108,13 @@ let tokenKindString (lexed: Lexed) (token: PositionedToken) (i: int<token>) =
     // `^` and `-`), use the rewritten kind name directly instead of deriving an operator
     // name from the original raw literal.
     if rawToken.Token <> token.Token || rawToken.StartIndex <> token.StartIndex then
-        $"{TokenInfo.withoutFlags token.Token}"
+        string (TokenInfo.withoutFlags token.Token)
     else
         let s = lexed.GetTokenString(i)
 
         match OperatorInfo.TryCreate token with
         | ValueSome opInfo -> opInfo.GetName(s)
-        | ValueNone -> $"{TokenInfo.withoutFlags rawToken.Token}"
+        | ValueNone -> string (TokenInfo.withoutFlags rawToken.Token)
 
 /// Adds a single token row to the print buffer.
 let printTokenRow (label: string) (ctx: PrintContext) (lexed: Lexed) (token: SyntaxToken) =
@@ -122,9 +122,9 @@ let printTokenRow (label: string) (ctx: PrintContext) (lexed: Lexed) (token: Syn
 
     match token.Index with
     | TokenIndex.Virtual ->
-        let kind = $"{TokenInfo.withoutFlags pt.Token}"
+        let kind = string (TokenInfo.withoutFlags pt.Token)
         let charPos = pt.StartIndex
-        ctx.AddTokenRow(label, "<virt>", kind, "tok=virt", $"pos=%4i{charPos}")
+        ctx.AddTokenRow(label, "<virt>", kind, "tok=virt", "pos=" + (string charPos).PadLeft(4))
     | TokenIndex.Regular iT ->
         let t1 = lexed.Tokens.[iT + 1<_>]
         let charPos = pt.StartIndex
@@ -141,7 +141,7 @@ let printTokenRow (label: string) (ctx: PrintContext) (lexed: Lexed) (token: Syn
             rawLit.Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t")
 
         let kind = tokenKindString lexed pt iT
-        ctx.AddTokenRow(label, $"'{lit}'", kind, $"tok=%4i{int iT}", $"pos=%4i{charPos}")
+        ctx.AddTokenRow(label, "'" + string lit + "'", kind, "tok=" + (string (int iT)).PadLeft(4), "pos=" + (string charPos).PadLeft(4))
 
 // ---- Visitor factory ----
 
@@ -154,7 +154,7 @@ let makeDebugVisitor (ctx: PrintContext) (lexed: Lexed) : AstVisitor<SyntaxToken
         EnterSection =
             fun name ->
                 if name <> "" then
-                    ctx.WriteLine($"{name}:")
+                    ctx.WriteLine(string name + ":")
 
                 ctx.Indent <- ctx.Indent + 1
         ExitSection = fun _ -> ctx.Indent <- ctx.Indent - 1
@@ -319,12 +319,12 @@ let sprintDiagnosticCode (code: DiagnosticCode) : string =
     let name = DiagnosticCode.code code
 
     match code with
-    | DiagnosticCode.Other msg -> $"{name}({msg})"
+    | DiagnosticCode.Other msg -> string name + "(" + string msg + ")"
     | DiagnosticCode.UnclosedDelimiter(opened = opened; expected = expected)
     | DiagnosticCode.MismatchedDelimiter(opened = opened; expected = expected) ->
         let openedBase = TokenInfo.withoutFlags opened
         let expectedBase = TokenInfo.withoutFlags expected
-        $"{name}({openedBase}, {expectedBase})"
+        string name + "(" + string openedBase + ", " + string expectedBase + ")"
     | DiagnosticCode.TyparInConstant
     | DiagnosticCode.MissingExpression
     | DiagnosticCode.MissingPattern
@@ -357,7 +357,7 @@ let printDiagnostics (ctx: PrintContext) (input: string) (diagnostics: Diagnosti
                 for diag in List.rev diagnostics do
                     let pos = diag.Token.StartIndex
                     let struct (ln, col) = lineIndex.GetLineCol(min pos (input.Length))
-                    ctx.WriteLine($"{sprintDiagnosticCode diag.Code} at {pos} (Ln {ln}, Col {col})")
+                    ctx.WriteLine(string (sprintDiagnosticCode diag.Code) + " at " + string pos + " (Ln " + string ln + ", Col " + string col + ")")
 
                     match diag.Error with
                     | Some err ->
@@ -383,5 +383,5 @@ let printWarnDirectives (ctx: PrintContext) (warnDirectives: WarnDirective list)
                 // Print in source order (reverse of accumulation order)
                 for d in List.rev warnDirectives do
                     let kind = if d.Suppress then "#nowarn" else "#warnon"
-                    ctx.WriteLine($"{kind} {d.WarningNumber} (Ln {d.Line})")
+                    ctx.WriteLine(string kind + " " + string d.WarningNumber + " (Ln " + string d.Line + ")")
             )

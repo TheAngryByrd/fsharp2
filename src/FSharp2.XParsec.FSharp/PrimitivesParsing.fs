@@ -12,7 +12,7 @@ open XParsec.FSharp.Lexer
 module AttributeTarget =
     let private pContextualKeyword s ctor =
         // Hoist err out of the parser CE body — allocated once per (s) at module load.
-        let err: ErrorType<PositionedToken, ParseState> = Message(sprintf "Expected '%s'" s)
+        let err: ErrorType<PositionedToken, ParseState> = Message ("Expected '" + string s + "'")
 
         parser {
             let! state = getUserState
@@ -26,7 +26,7 @@ module AttributeTarget =
         }
 
     let private pKw k ctor =
-        nextSyntaxTokenIsLMsg k (sprintf "Expected '%A'" k) |>> ctor
+        nextSyntaxTokenIsLMsg k ("Expected '" + string k + "'") |>> ctor
 
     let parse: FSParser<AttributeTarget<SyntaxToken>> =
         choiceL

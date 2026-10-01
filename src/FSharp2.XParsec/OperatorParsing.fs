@@ -126,7 +126,7 @@ type OperatorLookup<'Key, 'Value when 'Key: equality> =
         with get op =
             let rec f this i =
                 if i >= this.Ops.Length then
-                    invalidOp $"Operator {op} not found"
+                    invalidOp ("Operator " + string op + " not found")
                 elif this.Ops.[i] = op then
                     this.Operators.[i]
                 else
@@ -560,7 +560,7 @@ module internal rec Pratt =
             | Error e ->
                 let expectedMsg =
                     { e with
-                        Errors = Message $"Expected closing operator '{closeOp}'"
+                        Errors = Message ("Expected closing operator '" + string closeOp + "'")
                     }
 
                 let hard = ParseError.createNested failure [ expectedMsg; e ] e.Position
@@ -601,7 +601,7 @@ module internal rec Pratt =
             | Error e ->
                 let expectedMsg =
                     { e with
-                        Errors = Message $"Expected delimiter '{delim}'"
+                        Errors = Message ("Expected delimiter '" + string delim + "'")
                     }
 
                 let hard = ParseError.createNested failure [ expectedMsg; e ] e.Position

@@ -199,6 +199,39 @@ type OffsideContext =
     /// Pushed after `=` in Let/Member, after Then/Else/Try/Finally/Do contexts, after `->` in MatchClauses, etc.
     | SeqBlock
 
+    override this.ToString() =
+        match this with
+        | Let -> "Let"
+        | If -> "If"
+        | Try -> "Try"
+        | Lazy -> "Lazy"
+        | Fun -> "Fun"
+        | Function -> "Function"
+        | WithLet -> "WithLet"
+        | WithAugment -> "WithAugment"
+        | Match -> "Match"
+        | For -> "For"
+        | While -> "While"
+        | Then -> "Then"
+        | Else -> "Else"
+        | Do -> "Do"
+        | Type -> "Type"
+        | Namespace -> "Namespace"
+        | Module -> "Module"
+        | Member -> "Member"
+        | Paren -> "Paren"
+        | Bracket -> "Bracket"
+        | Brace -> "Brace"
+        | BracketBar -> "BracketBar"
+        | BraceBar -> "BraceBar"
+        | Begin -> "Begin"
+        | Struct -> "Struct"
+        | Sig -> "Sig"
+        | Quote -> "Quote"
+        | MatchClauses -> "MatchClauses"
+        | Vanilla -> "Vanilla"
+        | SeqBlock -> "SeqBlock"
+
 type Offside =
     {
         Context: OffsideContext
@@ -417,7 +450,7 @@ module DiagnosticCode =
     /// "Expected 'X'", spelling `t` the way a reader wrote it. THE one phrasing of that
     /// sentence, so a diagnostic built ad hoc from a token cannot print the enum name
     /// (`Expected 'KWRParen'`) where the seam prints the glyph.
-    let expecting (t: Token) = $"Expected '{spelling t}'"
+    let expecting (t: Token) = "Expected '" + string (spelling t) + "'"
 
     // How a parse diagnostic presents on the FAR side of the parser boundary. THE SEAM —
     // the parser owns its own error vocabulary, and these are the one place that vocabulary
@@ -467,9 +500,9 @@ module DiagnosticCode =
         | DiagnosticCode.ExpectedQuotationTypedRight -> expecting Token.OpQuotationTypedRight
         | DiagnosticCode.ExpectedQuotationUntypedRight -> expecting Token.OpQuotationUntypedRight
         | DiagnosticCode.UnclosedDelimiter(opened = opened; expected = expected) ->
-            $"Unclosed '{spelling opened}': {expecting expected}"
+            "Unclosed '" + string (spelling opened) + "': " + string (expecting expected)
         | DiagnosticCode.MismatchedDelimiter(opened = opened; expected = expected) ->
-            $"Wrong close for '{spelling opened}': {expecting expected}"
+            "Wrong close for '" + string (spelling opened) + "': " + string (expecting expected)
 
     /// What the secondary label on the OPENING delimiter says. Both delimiter diagnostics
     /// point back at the same thing, so the wording is decided once rather than per code.
@@ -572,7 +605,7 @@ module ParseState =
         | [] -> invalidOp "Attempted to pop empty context"
         | top :: tail ->
             if top <> current then
-                invalidOp $"Attempted to pop context {current} but top of stack was {top}"
+                invalidOp ("Attempted to pop context " + string current + " but top of stack was " + string top)
 
             ifTrace state (fun t -> t.ContextPop(top.Context, state.Context.Length))
             { state with Context = tail }
@@ -747,46 +780,46 @@ type WriterTraceCallback(lexed: Lexed, writer: System.IO.TextWriter) =
     default _.Write(line) = writer.WriteLine(line)
 
     override this.ContextPush(ctx, indent, token, depth) =
-        this.Write($"PUSH {ctx} indent={indent} token={token.Token} @{token.StartIndex} depth={depth}")
+        this.Write("PUSH " + string ctx + " indent=" + string indent + " token=" + string token.Token + " @" + string token.StartIndex + " depth=" + string depth)
 
-    override this.ContextPop(ctx, depth) = this.Write($"POP {ctx} depth={depth}")
+    override this.ContextPop(ctx, depth) = this.Write("POP " + string ctx + " depth=" + string depth)
 
     override this.TokenConsumed(token, index, col) =
         let line = lexed.GetLineForToken(index * 1<token>)
-        this.Write($"CONSUME {token.Token} @{token.StartIndex} index={index} col={col} line={line}")
+        this.Write("CONSUME " + string token.Token + " @" + string token.StartIndex + " index=" + string index + " col=" + string col + " line=" + string line)
 
     override this.TokenPeeked(token, index, col) =
         let line = lexed.GetLineForToken(index * 1<token>)
-        this.Write($"PEEK {token.Token} @{token.StartIndex} index={index} col={col} line={line}")
+        this.Write("PEEK " + string token.Token + " @" + string token.StartIndex + " index=" + string index + " col=" + string col + " line=" + string line)
 
     override this.VirtualToken(token, startIndex) =
-        this.Write($"VIRTUAL {token} @{startIndex}")
+        this.Write("VIRTUAL " + string token + " @" + string startIndex)
 
     override this.OffsideOk(token, tokenCol, contextIndent, ctx) =
-        this.Write($"OFFSIDE_OK {token.Token} col={tokenCol} >= indent={contextIndent} ctx={ctx}")
+        this.Write("OFFSIDE_OK " + string token.Token + " col=" + string tokenCol + " >= indent=" + string contextIndent + " ctx=" + string ctx)
 
     override this.OffsideFail(token, tokenCol, contextIndent, ctx) =
-        this.Write($"OFFSIDE_FAIL {token.Token} col={tokenCol} < indent={contextIndent} ctx={ctx}")
+        this.Write("OFFSIDE_FAIL " + string token.Token + " col=" + string tokenCol + " < indent=" + string contextIndent + " ctx=" + string ctx)
 
     override this.PermittedUndentation(token, tokenCol, contextIndent, rule) =
-        this.Write($"UNDENT_OK {token.Token} col={tokenCol} < indent={contextIndent} rule={rule}")
+        this.Write("UNDENT_OK " + string token.Token + " col=" + string tokenCol + " < indent=" + string contextIndent + " rule=" + string rule)
 
     override this.DiagnosticEmitted(code, token) =
-        this.Write($"DIAGNOSTIC {code} @{token.StartIndex}")
+        this.Write("DIAGNOSTIC " + string (DiagnosticCode.code code) + " @" + string token.StartIndex)
 
     override this.SplitRAttrBracketSet(startIndex) =
-        this.Write($"SPLIT_RATTR_SET @{startIndex}")
+        this.Write("SPLIT_RATTR_SET @" + string startIndex)
 
     override this.SplitRAttrBracketConsumed(startIndex) =
-        this.Write($"SPLIT_RATTR_CONSUMED @{startIndex}")
+        this.Write("SPLIT_RATTR_CONSUMED @" + string startIndex)
 
     override this.SplitPowerMinusSet(startIndex) =
-        this.Write($"SPLIT_POW_MINUS_SET @{startIndex}")
+        this.Write("SPLIT_POW_MINUS_SET @" + string startIndex)
 
     override this.SplitPowerMinusConsumed(startIndex) =
-        this.Write($"SPLIT_POW_MINUS_CONSUMED @{startIndex}")
+        this.Write("SPLIT_POW_MINUS_CONSUMED @" + string startIndex)
 
-    override this.Message(msg) = this.Write($"MSG: {msg}")
+    override this.Message(msg) = this.Write("MSG: " + string msg)
 
 [<RequireQualifiedAccess>]
 module Reader =

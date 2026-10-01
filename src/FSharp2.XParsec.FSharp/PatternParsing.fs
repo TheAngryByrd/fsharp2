@@ -52,7 +52,7 @@ module Pat =
         | Token.OpBar -> Pat.Or(l, op, r)
         | Token.OpAmp -> Pat.And(l, op, r)
         | Token.KWColonColon -> Pat.Cons(l, op, r)
-        | _ -> failwithf "Unexpected infix pattern operator: %A" op
+        | _ -> failwith ("Unexpected infix pattern operator: " + string op.PositionedToken)
 
     let private completeTuple (elements: ResizeArray<Pat<SyntaxToken>>) (ops: ResizeArray<SyntaxToken>) =
         Pat.Tuple(ImmutableArray.CreateRange(elements), ImmutableArray.CreateRange(ops))
@@ -300,11 +300,23 @@ module Pat =
     let private refPatAtomic = FSRefParser<Pat<SyntaxToken>>()
     let private refPatAtomicBindingArg = FSRefParser<Pat<SyntaxToken>>()
 
-    let private pEnclosed =
+    // A partial application here makes callers use FSharpFunc.InvokeFast, which NativeAOT reports as IL3054.
+    let private pEnclosed pLeft expectedRightTok parenKindConstructor offsideCtx diagCode pInner =
         let completeEmpty l r = Pat.EmptyBlock(l, r)
         let completeEnclosed l e r = Pat.EnclosedBlock(l, e, r)
         let skipsTokens toks = Pat.SkipsTokens(toks)
-        pEnclosed completeEmpty completeEnclosed Pat.Missing skipsTokens
+
+        pEnclosed
+            completeEmpty
+            completeEnclosed
+            Pat.Missing
+            skipsTokens
+            pLeft
+            expectedRightTok
+            parenKindConstructor
+            offsideCtx
+            diagCode
+            pInner
 
     let pParenPat =
         pEnclosed
@@ -608,7 +620,7 @@ module Pat =
         | Token.StringOpen -> StringKind.String t
         | Token.VerbatimStringOpen -> StringKind.VerbatimString t
         | Token.String3Open -> StringKind.String3 t
-        | _ -> invalidOp $"Not a string open token: {t.Token}"
+        | _ -> invalidOp ("Not a string open token: " + string t.Token)
 
     let pStringPat =
         let rec loop (parts: ResizeArray<StringPart<SyntaxToken>>) reader =

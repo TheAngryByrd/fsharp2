@@ -39,12 +39,12 @@ module Measure =
             match op.Token with
             | Token.OpMultiply -> Measure.Product(l, op, r)
             | Token.OpDivision -> Measure.Quotient(l, op, r)
-            | _ -> failwithf "Unexpected infix measure operator: %A" op
+            | _ -> failwith ("Unexpected infix measure operator: " + string op.PositionedToken)
 
         static let completePrefix (op: SyntaxToken) (e: Measure<SyntaxToken>) =
             match op.Token with
             | Token.OpDivision -> Measure.Reciprocal(op, e)
-            | _ -> failwithf "Unexpected prefix measure operator: %A" op
+            | _ -> failwith ("Unexpected prefix measure operator: " + string op.PositionedToken)
 
         static let completePower (l: Measure<SyntaxToken>) (op: SyntaxToken) (aux: MeasureAux) =
             match aux with

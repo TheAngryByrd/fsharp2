@@ -315,7 +315,7 @@ let anyOf (chars: char seq) =
         | :? string as s -> s
         | _ -> new String(Array.ofSeq chars)
 
-    let err = $"Any character: '{chars}'"
+    let err = "Any character: '" + string chars + "'"
 
 #if NET5_0_OR_GREATER
     satisfyL (chars.Contains: char -> bool) err
@@ -733,11 +733,11 @@ let pbigint (reader: Reader<char, 'State, 'Input>) =
 
 module internal FloatParsers =
     let convertToFloat (significand: bigint) (exponent: int) reader =
-        let value = $"{significand}e{exponent}" // We use a string and the .NET parse method to avoid precision loss due to rounding.
+        let value = string significand + "e" + string exponent // We use a string and the .NET parse method to avoid precision loss due to rounding.
 
         match Double.TryParse value with
         | true, v -> preturn v reader
-        | _ -> invalidOp $"Failed to parse float from '{value}'. This is likely an issue with XParsec."
+        | _ -> invalidOp ("Failed to parse float from '" + string value + "'. This is likely an issue with XParsec.")
 
     let int0 = int '0'
     let inta = int 'a'

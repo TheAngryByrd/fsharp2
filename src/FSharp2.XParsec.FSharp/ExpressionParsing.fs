@@ -1024,8 +1024,8 @@ module Expr =
                          struct (forTok, indent))
                         reader
 
-                | Ok t -> invalidOp $"Expected 'for' keyword. Got {t.Token} at position {t.StartIndex}"
-                | Error e -> invalidOp $"Expected 'for' keyword. Failed to peek next token: {e}"
+                | Ok t -> invalidOp ("Expected 'for' keyword. Got " + string t.Token + " at position " + string t.StartIndex)
+                | Error e -> invalidOp ("Expected 'for' keyword. Failed to peek next token: " + string e)
 
             parser {
                 let! (forTok, indent) = assertFor
@@ -1112,7 +1112,7 @@ module Expr =
                     | Token.KWUse -> LetOrUseKeyword.Use kwTok
                     | Token.KWLetBang -> LetOrUseKeyword.LetBang kwTok
                     | Token.KWUseBang -> LetOrUseKeyword.UseBang kwTok
-                    | t -> failwith $"Unexpected keyword token for let/use body {t}"
+                    | t -> failwith ("Unexpected keyword token for let/use body " + string t)
 
                 result <- ValueSome(Expr.LetOrUse(kw, recTok, defs, ands, ValueSome inTok, result))
 
@@ -1169,7 +1169,7 @@ module Expr =
                         | _ ->
                             if bindings.Count = 0 then
                                 error <-
-                                    Parsers.fail (Message $"Expected let/use keyword but got {peeked.Token}") reader
+                                    Parsers.fail (Message ("Expected let/use keyword but got " + string peeked.Token)) reader
 
                             cont <- false
 
@@ -1225,7 +1225,7 @@ module Expr =
                             | Token.KWReturnBang -> ControlFlowKeyword.ReturnBang kwTok
                             | Token.KWYield -> ControlFlowKeyword.Yield kwTok
                             | Token.KWYieldBang -> ControlFlowKeyword.YieldBang kwTok
-                            | t -> failwith $"Unexpected keyword token for yield/return body {t}"
+                            | t -> failwith ("Unexpected keyword token for yield/return body " + string t)
 
                         Expr.ControlFlow(kw, expr)
                     )
@@ -1281,7 +1281,7 @@ module Expr =
             // confirming true adjacency (e.g. f(x), not f (x) or a newline-separated expression).
             // Hoist the error message into a single ErrorType.Message value so the failure
             // paths below don't allocate per invocation.
-            let errMsg = Message $"Expected '{char}' for high precedence"
+            let errMsg = Message ("Expected '" + string char + "' for high precedence")
 
             let pSatisfy =
                 fun (reader: Reader<PositionedToken, ParseState, _>) ->
@@ -1555,8 +1555,9 @@ module Expr =
 
     type ExprOperatorParser() =
         let printOpInfo (op: OperatorInfo) =
-            printfn
-                $"Operator: {op.PositionedToken}({op.StartIndex}), Precedence: {op.Precedence}, Associativity: %A{op.Associativity}"
+            stdout.WriteLine(
+                "Operator: " + string op.PositionedToken + "(" + string op.StartIndex + "), Precedence: " + string op.Precedence + ", Associativity: " + string op.Associativity
+            )
 
         let pIdentAfterDot = nextSyntaxIdentifierLMsg "Expected identifier after '.'"
 
@@ -1689,7 +1690,7 @@ module Expr =
                     | pl ->
                         (fun op ->
                             invalidOp
-                                $"No operator handler for precedence level {pl}. Got op {op.Token} at position {op.StartIndex}"
+                                ("No operator handler for precedence level " + string pl + ". Got op " + string op.Token + " at position " + string op.StartIndex)
                         )
                 )
 
@@ -2026,7 +2027,7 @@ module Expr =
         | Token.InterpolatedStringOpen -> StringKind.InterpolatedString t
         | Token.VerbatimInterpolatedStringOpen -> StringKind.VerbatimInterpolatedString t
         | Token.Interpolated3StringOpen -> StringKind.Interpolated3String t
-        | _ -> invalidOp $"Not a string open token: {t.Token}"
+        | _ -> invalidOp ("Not a string open token: " + string t.Token)
 
     let private isStringOpen (tok: Token) =
         match tok with
@@ -2147,11 +2148,23 @@ module Expr =
 
     let pIdentExpr = nextSyntaxIdentifierLMsg "Expected identifier" |>> Expr.Ident
 
-    let private pEnclosed =
+    // A partial application here makes callers use FSharpFunc.InvokeFast, which NativeAOT reports as IL3054.
+    let private pEnclosed pLeft expectedRightTok parenKindConstructor offsideCtx diagCode pInner =
         let completeEmpty l r = Expr.EmptyBlock(l, r)
         let completeEnclosed l e r = Expr.EnclosedBlock(l, e, r)
         let skipsTokens toks = Expr.SkipsTokens(toks)
-        pEnclosed completeEmpty completeEnclosed Expr.Missing skipsTokens
+
+        pEnclosed
+            completeEmpty
+            completeEnclosed
+            Expr.Missing
+            skipsTokens
+            pLeft
+            expectedRightTok
+            parenKindConstructor
+            offsideCtx
+            diagCode
+            pInner
 
     let private pExprOrTypedPat =
         let pInnerExpr = refExprSeqBlock.Parser

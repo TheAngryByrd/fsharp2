@@ -43,6 +43,7 @@
         <Compile Include="CorpusNeutralBuilderTests.fs" />
         <Compile Include="Tests.fs" />
         <Compile Include="ParserProbe.fs" />
+        <Compile Include="XParsecVendorTests.fs" />
         <Compile Include="Main.fs" />
     </ItemGroup>
 </Project>

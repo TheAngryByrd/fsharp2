@@ -31,7 +31,7 @@ type LineIndex(endings: ImmutableArray<int>, maxIndex) =
             invalidArg "index" "Index must be non-negative"
 
         if index > maxIndex + 1 then
-            raise (IndexOutOfRangeException $"Index must be less than or equal to {maxIndex + 1}")
+            raise (IndexOutOfRangeException ("Index must be less than or equal to " + string (maxIndex + 1)))
         // Line and column are 1-based
         if endings.IsEmpty then
             struct (1, index + 1)
@@ -78,7 +78,7 @@ type LineIndex(endings: ImmutableArray<int>, maxIndex) =
             let i = iLine + col
 
             if i > maxIndex then
-                raise (IndexOutOfRangeException $"Index must be less than or equal to {maxIndex}")
+                raise (IndexOutOfRangeException ("Index must be less than or equal to " + string maxIndex))
 
             i
 
@@ -171,13 +171,13 @@ module ErrorFormatting =
 
         loop index
 
-    let private terminalSuberror = $"{UpRight}{Horizontal}{Horizontal}{Horizontal}"
+    let private terminalSuberror = string UpRight + string Horizontal + string Horizontal + string Horizontal
 
     let private nonTerminalSuberror =
-        $"{VerticalRight}{Horizontal}{Horizontal}{Horizontal}"
+        string VerticalRight + string Horizontal + string Horizontal + string Horizontal
 
     let private terminalIndent = "    "
-    let private nonTerminalIndent = $"{Vertical}   "
+    let private nonTerminalIndent = string Vertical + "   "
 
     type private Prefix =
         | T
@@ -199,9 +199,9 @@ module ErrorFormatting =
         // TODO: Fable doesn't support Append(char, int) overload
         // Was added in 5.0.0-alpha.6
         let spaces = String.replicate (int (index - iBack)) " "
-        sb.Append(spaces).Append('^').AppendLine($" At index {index} (Ln {ln}, Col {col})")
+        sb.Append(spaces).Append('^').AppendLine(" At index " + string index + " (Ln " + string ln + ", Col " + string col + ")")
 #else
-        sb.Append(' ', int (index - iBack)).Append('^').AppendLine($" At index {index} (Ln {ln}, Col {col})")
+        sb.Append(' ', int (index - iBack)).Append('^').AppendLine(" At index " + string index + " (Ln " + string ln + ", Col " + string col + ")")
 #endif
 
     let formatParseError<'T, 'State>

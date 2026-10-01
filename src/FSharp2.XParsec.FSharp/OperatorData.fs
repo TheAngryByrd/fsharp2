@@ -270,6 +270,6 @@ module OperatorData =
                 for c in s do
                     match Array.tryFind (fun (ch, _) -> ch = c) charNames with
                     | Some(_, spelling) -> sb.Append(spelling) |> ignore
-                    | None -> invalidArg (nameof s) (sprintf "Operator %s contains invalid character '%c'." s c)
+                    | None -> invalidArg (nameof s) ("Operator " + string s + " contains invalid character '" + string c + "'.")
 
                 sb.ToString()

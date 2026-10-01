@@ -67,12 +67,12 @@ module IfExpr =
             match op.Token with
             | Token.OpBarBar -> IfExpr.Or(l, op, r)
             | Token.OpAmpAmp -> IfExpr.And(l, op, r)
-            | _ -> failwithf "Unexpected infix if operator: %A" op
+            | _ -> failwith ("Unexpected infix if operator: " + string op.PositionedToken)
 
         static let completePrefix (op: SyntaxToken) (e: IfExpr<SyntaxToken>) =
             match op.Token with
             | Token.OpDereference -> IfExpr.Not(op, e)
-            | _ -> failwithf "Unexpected prefix if operator: %A" op
+            | _ -> failwith ("Unexpected prefix if operator: " + string op.PositionedToken)
 
         static let completeParen (l: SyntaxToken) (m: IfExpr<SyntaxToken>) (r: SyntaxToken) = IfExpr.Paren(l, m, r)
 

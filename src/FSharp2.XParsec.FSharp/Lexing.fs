@@ -2522,7 +2522,7 @@ module Lexing =
                 invalidArg "operatorText" "Operator text cannot be empty."
 
             if not t.IsOperator then
-                invalidArg "t" (sprintf "Token %A is not an operator token." t)
+                invalidArg "t" ("Token " + string t + " is not an operator token.")
 
             if t.IsKeyword then
                 operatorText // Keywords are not renamed
@@ -3245,7 +3245,7 @@ module Lexing =
             match p reader with
             | Ok() -> lex reader
             // Each dispatched parser is total for its precondition
-            | Error e -> invalidOp $"Unreachable lex failure at index {reader.Position.Index}: {e}"
+            | Error e -> invalidOp ("Unreachable lex failure at index " + string reader.Position.Index + ": " + string e)
 
     /// Lexes `input` into a token stream. Total over `string`.
     let lexString (input: string) : Lexed =

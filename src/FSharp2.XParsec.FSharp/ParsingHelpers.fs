@@ -112,7 +112,7 @@ module Parsing =
                 nextSyntaxToken reader
         | Error e ->
             // Invalid #if expression: record a diagnostic and treat the whole block as inactive
-            let msg = $"Invalid #if expression: {e}"
+            let msg = "Invalid #if expression: " + string e
 
             reader.State <- addDiagnosticAt (DiagnosticCode.Other msg) ifToken reader.State
 
@@ -725,11 +725,11 @@ module Parsing =
                  let indent =
                      match kwTok.Index with
                      | TokenIndex.Regular iT -> ParseState.getIndent reader.State iT
-                     | TokenIndex.Virtual -> invalidOp $"Virtual tokens should not be used for '{expected}' keyword"
+                     | TokenIndex.Virtual -> invalidOp ("Virtual tokens should not be used for '" + string expected + "' keyword")
 
                  struct (kwTok, indent))
                 reader
-        | Ok t -> fail (Message $"Expected '{expected}' keyword") reader
+        | Ok t -> fail (Message ("Expected '" + string expected + "' keyword")) reader
         | Error e -> Error e
 
     let assertKeywordTokens (expected1: Token) (expected2: Token) (reader: Reader<PositionedToken, ParseState, _>) =
@@ -741,11 +741,11 @@ module Parsing =
                      match kwTok.Index with
                      | TokenIndex.Regular iT -> ParseState.getIndent reader.State iT
                      | TokenIndex.Virtual ->
-                         invalidOp $"Virtual tokens should not be used for '{expected1}'|'{expected2}' keyword"
+                         invalidOp ("Virtual tokens should not be used for '" + string expected1 + "'|'" + string expected2 + "' keyword")
 
                  struct (kwTok, indent))
                 reader
-        | Ok _ -> fail (Message $"Expected '{expected1}' or '{expected2}' keyword") reader
+        | Ok _ -> fail (Message ("Expected '" + string expected1 + "' or '" + string expected2 + "' keyword")) reader
         | Error e -> Error e
 
     /// The token a refusal at the reader's current position is reported at. `peeked` is what
@@ -872,7 +872,7 @@ module Parsing =
         | Token.StringOpen -> StringKind.String t
         | Token.VerbatimStringOpen -> StringKind.VerbatimString t
         | Token.String3Open -> StringKind.String3 t
-        | _ -> invalidOp $"Not a plain string open token: {t.Token}"
+        | _ -> invalidOp ("Not a plain string open token: " + string t.Token)
 
     let plainStringPartOfToken (t: SyntaxToken) =
         match t.Token with
@@ -894,7 +894,7 @@ module Parsing =
         // keep it; only a printf-family consumer would interpret format validity.
         | Token.InvalidFormatPlaceholder
         | Token.InvalidFormatPercents -> StringPart.InvalidText t
-        | _ -> invalidOp $"Not a string fragment token: {t.Token}"
+        | _ -> invalidOp ("Not a string fragment token: " + string t.Token)
 
     /// Parses a plain (non-interpolated) string literal into StringKind * StringPart list * closing token.
     let parsePlainStringLiteral msg (reader: Reader<PositionedToken, ParseState, _>) =
@@ -1324,7 +1324,7 @@ module Parsing =
         let indent =
             match anchor.Index with
             | TokenIndex.Regular iT -> ParseState.getIndent reader.State iT
-            | TokenIndex.Virtual -> failwithf "Attempted to set indent context with a virtual token %A" anchor
+            | TokenIndex.Virtual -> failwith ("Attempted to set indent context with a virtual token " + string anchor.PositionedToken)
 
         withContextAt ctx indent anchor.PositionedToken innerParser reader
 
@@ -1359,7 +1359,7 @@ module Parsing =
         match peekNextSyntaxToken reader with
         | Ok tok when tok.Token = t ->
             reader.Position <- pos
-            fail (Message(sprintf "Named module cannot be followed by '%A'" t)) reader
+            fail (Message ("Named module cannot be followed by '" + string t + "'")) reader
         | _ ->
             reader.Position <- pos
             preturn () reader
