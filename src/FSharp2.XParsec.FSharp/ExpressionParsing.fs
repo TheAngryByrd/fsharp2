@@ -1060,6 +1060,16 @@ module Expr =
                     | [] -> indent = 0 || indent = letIndent
 
                 if atContextIndent then
+                    // The Compatibility Oracle reports FS0010 at a body that is not at the `let` column,
+                    // for example the next line after `a; let x = 1`.
+                    match state.Context with
+                    | { Indent = ctxIndent } :: _ when
+                        ctxIndent > 0
+                        && indent <> letIndent
+                        ->
+                        reader.State <- ParseState.addDiagnosticAt DiagnosticCode.MisalignedLetBody t reader.State
+                    | _ -> ()
+
                     Ok(virtualToken (PositionedToken.Create(Token.VirtualIn, t.StartIndex)))
                 else
                     // TODO: Consider parser recovery here instead of hard failure,

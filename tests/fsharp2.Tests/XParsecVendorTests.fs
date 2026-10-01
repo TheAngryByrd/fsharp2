@@ -455,6 +455,36 @@ let y = "
                 Expect.isOk result "a list argument on one line"
                 Expect.isEmpty diagnostics "a list argument on one line must give no diagnostic"
 
+            testCase "a let body that is not at the let column gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: error FS0010: Unexpected identifier in expression. Expected 'in' or other token, at (3,5).
+                let source = "let f () =\n    a; let x = 1\n    x\n"
+
+                match parseVendored source with
+                | _, [ diagnostic ] ->
+                    Expect.equal diagnostic.Code DiagnosticCode.MisalignedLetBody source
+
+                    Expect.equal
+                        diagnostic.Token.StartIndex
+                        32
+                        "the diagnostic must point at the body at (3,5)"
+
+                    Expect.equal
+                        (DiagnosticCode.fsharp2Code diagnostic.Code)
+                        (ValueSome "FSC2P1001")
+                        source
+                | _, other -> failtest $"{source} must give one diagnostic, not {other.Length}"
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "let f () =\n    let x = 1\n    x\n"
+                        "let f () =\n    match y with\n    | A ->\n        let x = 1\n        x\n    | B -> 0\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
             testCase "nested records and computation expressions parse in time linear in depth"
             <| fun () ->
                 let shapes = [

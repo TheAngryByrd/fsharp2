@@ -302,6 +302,8 @@ type DiagnosticCode =
     | SameLineBarEndsBody
     /// A module element starts at another column than the first element of its module.
     | MisalignedModuleElement
+    /// The body of a `let` without `in` starts at another column than the `let`.
+    | MisalignedLetBody
     /// A list argument written next to a closing delimiter or literal continues on a later line.
     | MultilineAdjacentList
 
@@ -491,6 +493,7 @@ module DiagnosticCode =
         | DiagnosticCode.NestingLimitExceeded _ -> "NestingLimitExceeded"
         | DiagnosticCode.SameLineBarEndsBody -> "SameLineBarEndsBody"
         | DiagnosticCode.MisalignedModuleElement -> "MisalignedModuleElement"
+        | DiagnosticCode.MisalignedLetBody -> "MisalignedLetBody"
         | DiagnosticCode.MultilineAdjacentList -> "MultilineAdjacentList"
 
     /// The English it renders.
@@ -520,6 +523,8 @@ module DiagnosticCode =
             "The input nests deeper than the parser supports (" + string limit + " levels)"
         | DiagnosticCode.MultilineAdjacentList ->
             "A list argument next to a closing delimiter must close on the same line"
+        | DiagnosticCode.MisalignedLetBody ->
+            "The body of a 'let' without 'in' must start at the column of the 'let'"
         | DiagnosticCode.MisalignedModuleElement ->
             "A module element must start at the column of the first element of its module"
         | DiagnosticCode.SameLineBarEndsBody ->
@@ -539,6 +544,7 @@ module DiagnosticCode =
             string name + "(" + string openedBase + ", " + string expectedBase + ")"
         | DiagnosticCode.SameLineBarEndsBody
         | DiagnosticCode.MisalignedModuleElement
+        | DiagnosticCode.MisalignedLetBody
         | DiagnosticCode.MultilineAdjacentList
         | DiagnosticCode.TyparInConstant
         | DiagnosticCode.MissingExpression
@@ -563,6 +569,7 @@ module DiagnosticCode =
         | DiagnosticCode.NestingLimitExceeded _
         | DiagnosticCode.SameLineBarEndsBody
         | DiagnosticCode.MisalignedModuleElement
+        | DiagnosticCode.MisalignedLetBody
         | DiagnosticCode.MultilineAdjacentList -> ValueSome "FSC2P1001"
         | _ -> ValueNone
 
