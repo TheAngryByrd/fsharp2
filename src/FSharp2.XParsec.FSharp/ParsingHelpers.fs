@@ -564,6 +564,30 @@ module Parsing =
 
     let private errOffside: ErrorType<PositionedToken, ParseState> = Message "Offside"
 
+    /// True when a syntax token comes before `token` on its line.
+    let followsTokenOnSameLine (state: ParseState) (token: SyntaxToken) =
+        match token.Index with
+        | TokenIndex.Virtual -> false
+        | TokenIndex.Regular index ->
+            let tokens = state.Lexed.Tokens
+            let mutable i = index - 1<token>
+            let mutable result = ValueNone
+
+            while result.IsNone do
+                if i < 0<token> then
+                    result <- ValueSome false
+                else
+                    let previous = tokens[i]
+
+                    if previous.TokenWithoutCommentFlags = Token.Newline then
+                        result <- ValueSome false
+                    elif isTriviaToken state previous then
+                        i <- i - 1<token>
+                    else
+                        result <- ValueSome true
+
+            result.Value
+
     let rec private nextSyntaxTokenImpl isPeek (reader: Reader<PositionedToken, ParseState, _>) =
         match reader.Peek() with
         | ValueNone -> fail EndOfInput reader

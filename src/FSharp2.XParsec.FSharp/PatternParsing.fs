@@ -893,29 +893,6 @@ module Rules =
         | Expr.LetOrUse(body = ValueSome right) -> endsInOpenBody right
         | _ -> false
 
-    let private followsTokenOnSameLine (state: ParseState) (bar: SyntaxToken) =
-        match bar.Index with
-        | TokenIndex.Virtual -> false
-        | TokenIndex.Regular index ->
-            let tokens = state.Lexed.Tokens
-            let mutable i = index - 1<token>
-            let mutable result = ValueNone
-
-            while result.IsNone do
-                if i < 0<token> then
-                    result <- ValueSome false
-                else
-                    let token = tokens[i]
-
-                    if token.TokenWithoutCommentFlags = Token.Newline then
-                        result <- ValueSome false
-                    elif ParseState.isTriviaToken state token then
-                        i <- i - 1<token>
-                    else
-                        result <- ValueSome true
-
-            result.Value
-
     // The Compatibility Oracle reports FS0010 for a `|` on the same line after a rule body that ends
     // in an open `then`, `else`, `do`, `finally`, or lambda body: that body does not end at the `|`.
     let private reportSameLineBars (rules: ImmutableArray<Rule<SyntaxToken>>) (bars: ImmutableArray<SyntaxToken>) =

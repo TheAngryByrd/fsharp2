@@ -166,9 +166,39 @@ module ModuleDefn =
 module ModuleElem =
     let private refModuleElem = RefParser<ModuleElem<SyntaxToken>, _, _, _>()
 
+    // The Compatibility Oracle rejects a module element that is not aligned with the first element of its module.
+    // `firstColumn` is -1 until the first element. `afterLetIn` is true after `let ... in`, whose body
+    // the parser returns as the next element.
+    let private alignedElem (firstColumn: int ref) (afterLetIn: bool ref) : Parser<ModuleElem<SyntaxToken>, _, _, _> =
+        fun reader ->
+            match peekNextSyntaxToken reader with
+            | Error e -> Error e
+            | Ok start ->
+                match refModuleElem.Parser reader with
+                | Error e -> Error e
+                | Ok elem ->
+                    match start.Index with
+                    | TokenIndex.Regular index when not (followsTokenOnSameLine reader.State start) ->
+                        let column = ParseState.getIndent reader.State index
+
+                        if firstColumn.Value < 0 then
+                            firstColumn.Value <- column
+                        elif column <> firstColumn.Value && not afterLetIn.Value then
+                            reader.State <-
+                                ParseState.addDiagnosticAt DiagnosticCode.MisalignedModuleElement start reader.State
+                    | _ -> ()
+
+                    afterLetIn.Value <-
+                        match elem with
+                        | ModuleElem.FunctionOrValue(ModuleFunctionOrValueDefn.Let(inToken = ValueSome _)) -> true
+                        | _ -> false
+
+                    Ok elem
+
     // Forward reference setup to handle: ModuleElem -> ModuleDefn -> ModuleElem
     /// Plain parseElems: no recovery. Used in AnonymousModule where backtracking must remain possible.
-    let parseElems = many refModuleElem.Parser
+    let parseElems: Parser<ModuleElems<SyntaxToken>, _, _, _> =
+        fun reader -> many (alignedElem (ref -1) (ref false)) reader
 
     /// parseElems with recovery: after `many` stops on failure, skips tokens to the next
     /// module-elem boundary and resumes. Only safe in committed contexts (after namespace/module keyword).
@@ -177,10 +207,12 @@ module ModuleElem =
         fun reader ->
             let result = ResizeArray<ModuleElem<SyntaxToken>>()
             let mutable keepGoing = true
+            let firstColumn = ref -1
+            let afterLetIn = ref false
 
             while keepGoing do
                 // Run many to collect as many module elements as possible
-                match many refModuleElem.Parser reader with
+                match many (alignedElem firstColumn afterLetIn) reader with
                 | Ok elems ->
                     for e in elems do
                         result.Add(e)

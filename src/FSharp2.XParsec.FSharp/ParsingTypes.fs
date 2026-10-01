@@ -300,6 +300,8 @@ type DiagnosticCode =
     | NestingLimitExceeded of limit: int
     /// A `|` on the same line ends a `then`, `else`, `do`, `finally`, or lambda body.
     | SameLineBarEndsBody
+    /// A module element starts at another column than the first element of its module.
+    | MisalignedModuleElement
 
 [<RequireQualifiedAccess>]
 type Syntax =
@@ -486,6 +488,7 @@ module DiagnosticCode =
         | DiagnosticCode.MismatchedDelimiter _ -> "MismatchedDelimiter"
         | DiagnosticCode.NestingLimitExceeded _ -> "NestingLimitExceeded"
         | DiagnosticCode.SameLineBarEndsBody -> "SameLineBarEndsBody"
+        | DiagnosticCode.MisalignedModuleElement -> "MisalignedModuleElement"
 
     /// The English it renders.
     let message (c: DiagnosticCode) : string =
@@ -512,6 +515,8 @@ module DiagnosticCode =
             "Wrong close for '" + string (spelling opened) + "': " + string (expecting expected)
         | DiagnosticCode.NestingLimitExceeded limit ->
             "The input nests deeper than the parser supports (" + string limit + " levels)"
+        | DiagnosticCode.MisalignedModuleElement ->
+            "A module element must start at the column of the first element of its module"
         | DiagnosticCode.SameLineBarEndsBody ->
             "A '|' on the same line cannot end a 'then', 'else', 'do', 'finally', or lambda body"
 
@@ -528,6 +533,7 @@ module DiagnosticCode =
             let expectedBase = TokenInfo.withoutFlags expected
             string name + "(" + string openedBase + ", " + string expectedBase + ")"
         | DiagnosticCode.SameLineBarEndsBody
+        | DiagnosticCode.MisalignedModuleElement
         | DiagnosticCode.TyparInConstant
         | DiagnosticCode.MissingExpression
         | DiagnosticCode.MissingPattern
@@ -549,7 +555,8 @@ module DiagnosticCode =
     let fsharp2Code (c: DiagnosticCode) : string voption =
         match c with
         | DiagnosticCode.NestingLimitExceeded _
-        | DiagnosticCode.SameLineBarEndsBody -> ValueSome "FSC2P1001"
+        | DiagnosticCode.SameLineBarEndsBody
+        | DiagnosticCode.MisalignedModuleElement -> ValueSome "FSC2P1001"
         | _ -> ValueNone
 
     /// What the secondary label on the OPENING delimiter says. Both delimiter diagnostics

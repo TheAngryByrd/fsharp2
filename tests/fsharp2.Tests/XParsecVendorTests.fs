@@ -326,6 +326,62 @@ let y = "
                     Expect.isOk result source
                     Expect.isEmpty diagnostics source
 
+            testCase "a module element at another column than the first element gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle (SDK 10.0.110 fsc --parseonly): FS0010 at (4,3) with FS3118, and FS0010 at (5,7) with FS3118.
+                let rejected = [
+                    "module A\nlet f =\n    g\n  1\n", 4, 3
+                    "module N\nmodule M =\n    let f =\n        g\n      1\n    let h = 2\n", 5, 7
+                ]
+
+                for source, line, column in rejected do
+                    let _, diagnostics = parseVendored source
+
+                    let misaligned =
+                        diagnostics
+                        |> List.filter (fun diagnostic ->
+                            diagnostic.Code = DiagnosticCode.MisalignedModuleElement
+                        )
+
+                    match misaligned with
+                    | [ diagnostic ] ->
+                        let lines = source.Substring(0, diagnostic.Token.StartIndex).Split('\n')
+
+                        Expect.equal
+                            (lines.Length,
+                             lines[lines.Length
+                                   - 1]
+                                 .Length
+                             + 1)
+                            (line, column)
+                            source
+
+                        Expect.equal
+                            (DiagnosticCode.fsharp2Code diagnostic.Code)
+                            (ValueSome "FSC2P1001")
+                            source
+                    | other ->
+                        failtest
+                            $"{source} must give one MisalignedModuleElement diagnostic, not {other.Length}"
+
+            testCase "an IL intrinsic on its own line stays in the function body"
+            <| fun () ->
+                // FSharp.Core array2.fs `zeroCreate` has this layout. Only FSharp.Core may use `(# ... #)`.
+                let source =
+                    "module M\nlet z (a: int) =\n    if a < 0 then f a\n    (# \"newarr\" type (int) a : int[] #)\n"
+
+                match parseVendored source with
+                | Ok(FSharpAst.ImplementationFile(ImplementationFile.NamedModule(NamedModule.NamedModule(
+                    elements = elements)))),
+                  [] ->
+                    Expect.equal
+                        elements.Length
+                        1
+                        "the IL intrinsic must not become a second module element"
+                | _, diagnostics ->
+                    failtest
+                        $"the source must give a named module and no diagnostic, not {diagnostics.Length}"
+
             testCase "nested records and computation expressions parse in time linear in depth"
             <| fun () ->
                 let shapes = [
