@@ -510,6 +510,34 @@ module DiagnosticCode =
         | DiagnosticCode.NestingLimitExceeded limit ->
             "The input nests deeper than the parser supports (" + string limit + " levels)"
 
+    /// The code name plus the payload of each case that carries one.
+    let describe (c: DiagnosticCode) : string =
+        let name = code c
+
+        match c with
+        | DiagnosticCode.Other msg -> string name + "(" + string msg + ")"
+        | DiagnosticCode.NestingLimitExceeded limit -> name + "(" + string limit + ")"
+        | DiagnosticCode.UnclosedDelimiter(opened = opened; expected = expected)
+        | DiagnosticCode.MismatchedDelimiter(opened = opened; expected = expected) ->
+            let openedBase = TokenInfo.withoutFlags opened
+            let expectedBase = TokenInfo.withoutFlags expected
+            string name + "(" + string openedBase + ", " + string expectedBase + ")"
+        | DiagnosticCode.TyparInConstant
+        | DiagnosticCode.MissingExpression
+        | DiagnosticCode.MissingPattern
+        | DiagnosticCode.MissingType
+        | DiagnosticCode.MissingRule
+        | DiagnosticCode.MissingTypeDefn
+        | DiagnosticCode.MissingModuleElem
+        | DiagnosticCode.UnexpectedTopLevel
+        | DiagnosticCode.ExpectedEnd
+        | DiagnosticCode.ExpectedRParen
+        | DiagnosticCode.ExpectedRBracket
+        | DiagnosticCode.ExpectedRArrayBracket
+        | DiagnosticCode.ExpectedRBraceBar
+        | DiagnosticCode.ExpectedQuotationTypedRight
+        | DiagnosticCode.ExpectedQuotationUntypedRight -> name
+
     /// The FSharp2 diagnostic code for a parser code that FSharp2 reports as unsupported input.
     /// The Compatibility Oracle accepts nesting at these depths, so the code is `FSC2P1001`.
     let fsharp2Code (c: DiagnosticCode) : string voption =
@@ -818,7 +846,7 @@ type WriterTraceCallback(lexed: Lexed, writer: System.IO.TextWriter) =
         this.Write("UNDENT_OK " + string token.Token + " col=" + string tokenCol + " < indent=" + string contextIndent + " rule=" + string rule)
 
     override this.DiagnosticEmitted(code, token) =
-        this.Write("DIAGNOSTIC " + string (DiagnosticCode.code code) + " @" + string token.StartIndex)
+        this.Write("DIAGNOSTIC " + DiagnosticCode.describe code + " @" + string token.StartIndex)
 
     override this.SplitRAttrBracketSet(startIndex) =
         this.Write("SPLIT_RATTR_SET @" + string startIndex)

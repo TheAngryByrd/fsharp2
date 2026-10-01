@@ -112,7 +112,24 @@ module Parsing =
                 nextSyntaxToken reader
         | Error e ->
             // Invalid #if expression: record a diagnostic and treat the whole block as inactive
-            let msg = "Invalid #if expression: " + string e
+            let formatToken (token: PositionedToken) (sb: Text.StringBuilder) =
+                sb.Append(string token.TokenWithoutCommentFlags)
+
+            let formatTokens (tokens: PositionedToken seq) (sb: Text.StringBuilder) =
+                sb.Append(String.Join(" ", tokens |> Seq.map (fun token -> string token.TokenWithoutCommentFlags)))
+
+            let formatted =
+                Text.StringBuilder()
+                |> ErrorFormatting.formatParseError formatToken formatTokens e
+                |> string
+
+            let detail =
+                formatted.Split('\n')
+                |> Array.map (fun line -> line.TrimStart(' ', '└', '─', '│', '├').TrimEnd())
+                |> Array.filter (fun line -> line <> "")
+                |> String.concat ": "
+
+            let msg = "Invalid #if expression: " + detail
 
             reader.State <- addDiagnosticAt (DiagnosticCode.Other msg) ifToken reader.State
 

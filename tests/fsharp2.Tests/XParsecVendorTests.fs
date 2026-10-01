@@ -215,6 +215,44 @@ let y = "
                 Expect.isOk result "90 nested parentheses must give a tree"
                 Expect.isEmpty diagnostics "90 nested parentheses must give no diagnostic"
 
+            testCase "diagnostic text and trace lines keep the diagnostic payload"
+            <| fun () ->
+                let source = "module M\n\nlet x = { A = 1 |}\nlet y = (1\n#if (A &&\n#endif\n"
+                let lexed = (Lexing.lexString source).WithDefines Set.empty
+                use traceText = new StringWriter()
+                let trace = WriterTraceCallback(lexed.Lexed, traceText)
+                let reader = Reader.ofParseInputWithTracing lexed trace
+
+                FSharpAst.parse reader
+                |> ignore
+
+                let invalidIf =
+                    "Invalid #if expression: Operator parsing failed: Not a valid LHS #if operator: Not a valid #if term"
+
+                Expect.contains
+                    (reader.State.Diagnostics
+                     |> List.map _.Code)
+                    (DiagnosticCode.Other invalidIf)
+                    "the #if diagnostic must describe the failure, not print a type name"
+
+                let diagnosticLines =
+                    traceText.ToString().Split('\n')
+                    |> Array.map _.TrimEnd()
+                    |> Array.filter _.StartsWith("DIAGNOSTIC ")
+                    |> Array.distinct
+                    |> List.ofArray
+
+                Expect.equal
+                    diagnosticLines
+                    [
+                        "DIAGNOSTIC MismatchedDelimiter(KWLBrace, KWRBrace) @26"
+                        "DIAGNOSTIC Other("
+                        + invalidIf
+                        + ") @40"
+                        "DIAGNOSTIC UnclosedDelimiter(KWLParen, KWRParen) @57"
+                    ]
+                    "trace lines must keep the payload of each diagnostic"
+
             testCase "nested records and computation expressions parse in time linear in depth"
             <| fun () ->
                 let shapes = [
