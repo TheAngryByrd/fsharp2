@@ -70,6 +70,23 @@ type Position<'State> =
     }
 
 /// <summary>
+/// Raised when a parser nests deeper than <c>Reader.MaxNestingDepth</c>, or when the
+/// thread stack has too little space for one more nesting level.
+/// </summary>
+/// <remarks>
+/// A stack overflow ends the process and cannot become a diagnostic, so a top-level
+/// parser catches this exception and reports the input as unsupported.
+/// </remarks>
+type NestingLimitException(index: int, depth: int) =
+    inherit Exception("The input nests deeper than the parser supports.")
+
+    /// The reader index at which the parser could not go deeper.
+    member _.Index = index
+
+    /// The nesting depth at which the parser stopped.
+    member _.Depth = depth
+
+/// <summary>
 /// A cursor that tracks the current position in the input and the user state.
 /// It is used by the parser to read from the input and manage state.
 /// </summary>
@@ -78,10 +95,37 @@ type Reader<'T, 'State, 'Input when 'Input :> IReadable<'T, 'Input>>(input: 'Inp
 
     let mutable index = index
     let mutable state = state
+    let mutable nestingDepth = 0
+    let mutable maxNestingDepth = Int32.MaxValue
     let id = nextId ()
 
     member _.Id = id
     member _.Input = input
+
+    /// The number of recursive parser levels that are active on this reader. A parser that
+    /// catches <c>NestingLimitException</c> sets it back to the depth it had before.
+    member _.NestingDepth
+        with get () = nestingDepth
+        and set v = nestingDepth <- v
+
+    /// The deepest recursion that <c>EnterNesting</c> permits.
+    member _.MaxNestingDepth
+        with get () = maxNestingDepth
+        and set v = maxNestingDepth <- v
+
+    /// Starts one recursive parser level. Raises <c>NestingLimitException</c> when the
+    /// level would exceed <c>MaxNestingDepth</c> or the thread stack is almost full.
+    member _.EnterNesting() =
+        if
+            nestingDepth >= maxNestingDepth
+            || not (System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack())
+        then
+            raise (NestingLimitException(index, nestingDepth))
+
+        nestingDepth <- nestingDepth + 1
+
+    /// Ends the recursive parser level that the last <c>EnterNesting</c> started.
+    member _.ExitNesting() = nestingDepth <- nestingDepth - 1
 
     member _.State
         with get () = state

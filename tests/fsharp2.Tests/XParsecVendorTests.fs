@@ -4,7 +4,11 @@ open System
 open System.Diagnostics
 open System.IO
 open System.Runtime.InteropServices
+open System.Threading
 open Expecto
+open XParsec.FSharp
+open XParsec.FSharp.Lexer
+open XParsec.FSharp.Parser
 
 module XParsecVendorTests =
 
@@ -92,6 +96,53 @@ module XParsecVendorTests =
 
         output, executable, publish.Output
 
+    let private deepSource (open': string) (body: string) (close: string) depth =
+        "module Deep
+
+let y = "
+        + String.replicate depth open'
+        + body
+        + String.replicate depth close
+        + "
+"
+
+    // The Compatibility Oracle (SDK 10.0.110 fsc --parseonly) accepts these three inputs with no error.
+    let private evaluationDepths = [
+        "Parentheses300.fs", deepSource "(" "1" ")" 300
+        "Lists500.fs", deepSource "[" "1" "]" 500
+        "Lambdas1000.fs", deepSource "fun x -> " "0" "" 1000
+    ]
+
+    let private onLargeStack (work: unit -> 'T) =
+        let mutable outcome = Unchecked.defaultof<Result<'T, exn>>
+
+        let thread =
+            Thread(
+                (fun () ->
+                    outcome <-
+                        try
+                            Ok(work ())
+                        with failure ->
+                            Error failure
+                ),
+                64
+                * 1024
+                * 1024
+            )
+
+        thread.Start()
+        thread.Join()
+
+        match outcome with
+        | Ok value -> value
+        | Error failure -> raise failure
+
+    let private parseVendored (source: string) =
+        let lexed = Lexing.lexString source
+        let reader = Reader.ofParseInput (lexed.WithDefines Set.empty)
+        let result = FSharpAst.parse reader
+        result, List.rev reader.State.Diagnostics
+
     [<Tests>]
     let tests =
         testSequenced
@@ -121,7 +172,61 @@ module XParsecVendorTests =
                     let parse = run (TimeSpan.FromMinutes 1.0) executable [ source ]
 
                     Expect.equal parse.ExitCode 0 parse.Output
-                    Expect.equal (parse.Output.Trim()) "Sample.fs diagnostics=0" parse.Output
+                    Expect.equal (parse.Output.Trim()) "Sample.fs tree diagnostics=0" parse.Output
+                finally
+                    Directory.Delete(output, true)
+
+            testCase "input that nests deeper than the limit gives FSC2P1001 and no tree"
+            <| fun () ->
+                for name, source in evaluationDepths do
+                    let result, diagnostics = onLargeStack (fun () -> parseVendored source)
+
+                    Expect.isError result $"{name} must give no tree"
+
+                    match diagnostics with
+                    | [ diagnostic ] ->
+                        Expect.equal
+                            diagnostic.Code
+                            (DiagnosticCode.NestingLimitExceeded Reader.MaxNestingDepth)
+                            name
+
+                        Expect.equal
+                            (DiagnosticCode.fsharp2Code diagnostic.Code)
+                            (ValueSome "FSC2P1001")
+                            name
+
+                        Expect.notEqual
+                            diagnostic.Token.Index
+                            TokenIndex.Virtual
+                            $"{name} must point at a token"
+                    | other -> failtest $"{name} must give one diagnostic, not {other.Length}"
+
+            testCase "nesting inside the limit still gives a tree"
+            <| fun () ->
+                let result, diagnostics =
+                    onLargeStack (fun () -> parseVendored (deepSource "(" "1" ")" 90))
+
+                Expect.isOk result "90 nested parentheses must give a tree"
+                Expect.isEmpty diagnostics "90 nested parentheses must give no diagnostic"
+
+            testCase
+                "the NativeAOT parse host reports the nesting limit instead of a stack overflow"
+            <| fun () ->
+                let output, executable, _ = publishNativeParseHost ()
+
+                try
+                    for name, source in evaluationDepths do
+                        let path = Path.Combine(output, name)
+                        File.WriteAllText(path, source)
+
+                        let parse = run (TimeSpan.FromMinutes 1.0) executable [ path ]
+
+                        Expect.equal parse.ExitCode 0 $"{name}: {parse.Output}"
+
+                        Expect.equal
+                            (parse.Output.Trim().Replace("\r\n", "\n"))
+                            $"{name} no-tree diagnostics=1\n  NestingLimitExceeded FSC2P1001"
+                            name
                 finally
                     Directory.Delete(output, true)
         ]

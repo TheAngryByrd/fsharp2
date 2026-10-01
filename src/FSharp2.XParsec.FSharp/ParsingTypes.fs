@@ -295,6 +295,9 @@ type DiagnosticCode =
     /// as the close rather than inserting anything, so that token IS the mistake and there
     /// is no hole to point at — which is why this is not `UnclosedDelimiter`.
     | MismatchedDelimiter of opened: Token * openedAt: Site * expected: Token
+    /// The input nests deeper than `limit` parser levels, or deeper than the thread stack
+    /// permits. A stack overflow ends the process, so the parse stops here and gives no tree.
+    | NestingLimitExceeded of limit: int
 
 [<RequireQualifiedAccess>]
 type Syntax =
@@ -479,6 +482,7 @@ module DiagnosticCode =
         | DiagnosticCode.ExpectedQuotationUntypedRight -> "ExpectedQuotationUntypedRight"
         | DiagnosticCode.UnclosedDelimiter _ -> "UnclosedDelimiter"
         | DiagnosticCode.MismatchedDelimiter _ -> "MismatchedDelimiter"
+        | DiagnosticCode.NestingLimitExceeded _ -> "NestingLimitExceeded"
 
     /// The English it renders.
     let message (c: DiagnosticCode) : string =
@@ -503,6 +507,15 @@ module DiagnosticCode =
             "Unclosed '" + string (spelling opened) + "': " + string (expecting expected)
         | DiagnosticCode.MismatchedDelimiter(opened = opened; expected = expected) ->
             "Wrong close for '" + string (spelling opened) + "': " + string (expecting expected)
+        | DiagnosticCode.NestingLimitExceeded limit ->
+            "The input nests deeper than the parser supports (" + string limit + " levels)"
+
+    /// The FSharp2 diagnostic code for a parser code that FSharp2 reports as unsupported input.
+    /// The Compatibility Oracle accepts nesting at these depths, so the code is `FSC2P1001`.
+    let fsharp2Code (c: DiagnosticCode) : string voption =
+        match c with
+        | DiagnosticCode.NestingLimitExceeded _ -> ValueSome "FSC2P1001"
+        | _ -> ValueNone
 
     /// What the secondary label on the OPENING delimiter says. Both delimiter diagnostics
     /// point back at the same thing, so the wording is decided once rather than per code.
@@ -823,10 +836,20 @@ type WriterTraceCallback(lexed: Lexed, writer: System.IO.TextWriter) =
 
 [<RequireQualifiedAccess>]
 module Reader =
+    /// The deepest parser recursion that a reader from this module permits. Each nesting level
+    /// of the source uses one or more parser levels. The limit must stay below the depth at
+    /// which a 1 MB thread stack overflows, so the result does not depend on the host thread.
+    [<Literal>]
+    let MaxNestingDepth = 200
+
+    let private withNestingLimit (reader: Reader<_, ParseState, _>) =
+        reader.MaxNestingDepth <- MaxNestingDepth
+        reader
+
     let ofParseInput (input: ParseInput) : Reader<_, ParseState, _> =
         let initialState = ParseState.create input
-        Reader((input.Lexed.Tokens.AsReadableArray()), initialState, 0)
+        withNestingLimit (Reader((input.Lexed.Tokens.AsReadableArray()), initialState, 0))
 
     let ofParseInputWithTracing (input: ParseInput) (trace: TraceCallback) : Reader<_, ParseState, _> =
         let initialState = ParseState.createWithTracing input trace
-        Reader((input.Lexed.Tokens.AsReadableArray()), initialState, 0)
+        withNestingLimit (Reader((input.Lexed.Tokens.AsReadableArray()), initialState, 0))

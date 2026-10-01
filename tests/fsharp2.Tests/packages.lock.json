@@ -124,6 +124,19 @@
           "FSharp.Core": "[10.0.100, )"
         }
       },
+      "fsharp2.xparsec": {
+        "type": "Project",
+        "dependencies": {
+          "FSharp.Core": "[10.0.100, )"
+        }
+      },
+      "fsharp2.xparsec.fsharp": {
+        "type": "Project",
+        "dependencies": {
+          "FSharp.Core": "[10.0.100, )",
+          "FSharp2.XParsec": "[1.0.0, )"
+        }
+      },
       "FSharp.Core": {
         "type": "CentralTransitive",
         "requested": "[10.0.100, )",

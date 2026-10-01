@@ -320,6 +320,7 @@ let sprintDiagnosticCode (code: DiagnosticCode) : string =
 
     match code with
     | DiagnosticCode.Other msg -> string name + "(" + string msg + ")"
+    | DiagnosticCode.NestingLimitExceeded limit -> name + "(" + string limit + ")"
     | DiagnosticCode.UnclosedDelimiter(opened = opened; expected = expected)
     | DiagnosticCode.MismatchedDelimiter(opened = opened; expected = expected) ->
         let openedBase = TokenInfo.withoutFlags opened

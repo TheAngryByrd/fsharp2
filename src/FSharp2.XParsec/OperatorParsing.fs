@@ -690,6 +690,12 @@ module internal rec Pratt =
             preturn (PrattParsed.withError lhs eRhs) reader
 
     let private parseLhsInternal pExpr ops minBinding reader : ParseResult<PrattParsed<'Expr, 'T, 'State>, _, _> =
+        reader.EnterNesting()
+        let result = parseLhsLevel pExpr ops minBinding reader
+        reader.ExitNesting()
+        result
+
+    let private parseLhsLevel pExpr ops minBinding reader : ParseResult<PrattParsed<'Expr, 'T, 'State>, _, _> =
         let pos = reader.Position
 
         match pExpr reader with

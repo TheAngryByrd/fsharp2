@@ -8,6 +8,7 @@
     <ItemGroup>
         <ProjectReference Include="../../src/fsharp2/fsharp2.fsproj" />
         <ProjectReference Include="../../src/FSharp2.Compiler.Prototype.Core/FSharp2.Compiler.Prototype.Core.fsproj" />
+        <ProjectReference Include="../../src/FSharp2.XParsec.FSharp/FSharp2.XParsec.FSharp.fsproj" />
         <ProjectReference Include="../../src/fsc2.Prototype/fsc2.Prototype.fsproj" ReferenceOutputAssembly="false" />
         <ProjectReference Include="../FSharp2.Prototype.Consumer/FSharp2.Prototype.Consumer.csproj" ReferenceOutputAssembly="false" />
     </ItemGroup>

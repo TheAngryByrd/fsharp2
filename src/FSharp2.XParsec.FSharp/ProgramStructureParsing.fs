@@ -140,9 +140,30 @@ module FSharpAst =
             SignatureFile.Namespaces(decls.SetItem(lastIdx, updatedLast))
         | SignatureFile.Namespaces _ -> SignatureFile.AnonymousModule(ImmutableArray.Create(skipElem))
 
+    /// Runs a top-level parser and turns `NestingLimitException` into the single
+    /// `NestingLimitExceeded` diagnostic and an `Error`, so input that nests too deep gives no tree.
+    let private stopAtNestingLimit
+        (parser: Parser<FSharpAst<SyntaxToken>, PositionedToken, ParseState, _>)
+        : Parser<FSharpAst<SyntaxToken>, PositionedToken, ParseState, _> =
+        fun reader ->
+            let startPos = reader.Position
+            let startDepth = reader.NestingDepth
+
+            try
+                parser reader
+            with :? NestingLimitException as e ->
+                reader.Position <- startPos
+                reader.NestingDepth <- startDepth
+                reader.Index <- e.Index
+                let token = diagnosticToken (peekNextSyntaxToken reader) reader
+                reader.Position <- startPos
+                let code = DiagnosticCode.NestingLimitExceeded reader.MaxNestingDepth
+                reader.State <- addDiagnosticAt code token reader.State
+                fail (Message(DiagnosticCode.message code)) reader
+
     /// Infallible top-level signature-file parser. Always returns Ok with errors captured as diagnostics.
     /// Use for `.fsi` files; `.fs` files go through `parse`.
-    let parseSignature: Parser<FSharpAst<SyntaxToken>, PositionedToken, ParseState, _> =
+    let private parseSignatureUnguarded: Parser<FSharpAst<SyntaxToken>, PositionedToken, ParseState, _> =
         fun reader ->
             let startPos = reader.Position
 
@@ -208,8 +229,12 @@ module FSharpAst =
 
                     Ok(FSharpAst.SignatureFile(SignatureFile.AnonymousModule elems))
 
+    /// Signature-file parser. Returns Ok with errors captured as diagnostics, except for input that
+    /// nests too deep, which returns Error with a `NestingLimitExceeded` diagnostic.
+    let parseSignature = stopAtNestingLimit parseSignatureUnguarded
+
     /// Infallible top-level parser. Always returns Ok with errors captured as diagnostics.
-    let parse: Parser<FSharpAst<SyntaxToken>, PositionedToken, ParseState, _> =
+    let private parseUnguarded: Parser<FSharpAst<SyntaxToken>, PositionedToken, ParseState, _> =
         fun reader ->
             let startPos = reader.Position
 
@@ -301,3 +326,7 @@ module FSharpAst =
                                 ImmutableArray.Empty
 
                         Ok(FSharpAst.ImplementationFile(ImplementationFile.AnonymousModule elems))
+
+    /// Top-level parser. Returns Ok with errors captured as diagnostics, except for input that
+    /// nests too deep, which returns Error with a `NestingLimitExceeded` diagnostic.
+    let parse = stopAtNestingLimit parseUnguarded

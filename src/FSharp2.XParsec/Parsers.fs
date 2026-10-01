@@ -461,4 +461,8 @@ type RefParser<'Parsed, 'T, 'State, 'Input when 'Input :> IReadable<'T, 'Input>>
     new() = RefParser(fun _ -> invalidOp "RefParser was not initialized.")
 
     member _.Set(parser) = p <- parser
-    member _.Parser(reader: Reader<'T, 'State, 'Input>) = p reader
+    member _.Parser(reader: Reader<'T, 'State, 'Input>) =
+        reader.EnterNesting()
+        let result = p reader
+        reader.ExitNesting()
+        result

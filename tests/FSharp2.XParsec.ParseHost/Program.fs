@@ -10,26 +10,31 @@ let private parseFile (path: string) =
     let lexed = Lexing.lexString input
     let reader = Reader.ofParseInput (lexed.WithDefines Set.empty)
 
-    match FSharpAst.parse reader with
-    | Ok _ ->
-        let diagnostics = reader.State.Diagnostics
+    let outcome =
+        match FSharpAst.parse reader with
+        | Ok _ -> "tree"
+        | Error _ -> "no-tree"
+
+    let diagnostics = reader.State.Diagnostics
+
+    stdout.WriteLine(
+        Path.GetFileName path
+        + " "
+        + outcome
+        + " diagnostics="
+        + string diagnostics.Length
+    )
+
+    for diagnostic in List.rev diagnostics do
+        let fsharp2Code =
+            match DiagnosticCode.fsharp2Code diagnostic.Code with
+            | ValueSome code -> " " + code
+            | ValueNone -> ""
 
         stdout.WriteLine(
-            Path.GetFileName path
-            + " diagnostics="
-            + string diagnostics.Length
-        )
-
-        for diagnostic in List.rev diagnostics do
-            stdout.WriteLine(
-                "  "
-                + DiagnosticCode.code diagnostic.Code
-            )
-    | Error error ->
-        stdout.WriteLine(
-            Path.GetFileName path
-            + " error="
-            + ErrorFormatting.splitAndFormatTokenErrors error
+            "  "
+            + DiagnosticCode.code diagnostic.Code
+            + fsharp2Code
         )
 
 [<EntryPoint>]
