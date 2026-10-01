@@ -298,6 +298,8 @@ type DiagnosticCode =
     /// The input nests deeper than `limit` parser levels, or deeper than the thread stack
     /// permits. A stack overflow ends the process, so the parse stops here and gives no tree.
     | NestingLimitExceeded of limit: int
+    /// A `|` on the same line ends a `then`, `else`, `do`, `finally`, or lambda body.
+    | SameLineBarEndsBody
 
 [<RequireQualifiedAccess>]
 type Syntax =
@@ -483,6 +485,7 @@ module DiagnosticCode =
         | DiagnosticCode.UnclosedDelimiter _ -> "UnclosedDelimiter"
         | DiagnosticCode.MismatchedDelimiter _ -> "MismatchedDelimiter"
         | DiagnosticCode.NestingLimitExceeded _ -> "NestingLimitExceeded"
+        | DiagnosticCode.SameLineBarEndsBody -> "SameLineBarEndsBody"
 
     /// The English it renders.
     let message (c: DiagnosticCode) : string =
@@ -509,6 +512,8 @@ module DiagnosticCode =
             "Wrong close for '" + string (spelling opened) + "': " + string (expecting expected)
         | DiagnosticCode.NestingLimitExceeded limit ->
             "The input nests deeper than the parser supports (" + string limit + " levels)"
+        | DiagnosticCode.SameLineBarEndsBody ->
+            "A '|' on the same line cannot end a 'then', 'else', 'do', 'finally', or lambda body"
 
     /// The code name plus the payload of each case that carries one.
     let describe (c: DiagnosticCode) : string =
@@ -522,6 +527,7 @@ module DiagnosticCode =
             let openedBase = TokenInfo.withoutFlags opened
             let expectedBase = TokenInfo.withoutFlags expected
             string name + "(" + string openedBase + ", " + string expectedBase + ")"
+        | DiagnosticCode.SameLineBarEndsBody
         | DiagnosticCode.TyparInConstant
         | DiagnosticCode.MissingExpression
         | DiagnosticCode.MissingPattern
@@ -542,7 +548,8 @@ module DiagnosticCode =
     /// The Compatibility Oracle accepts nesting at these depths, so the code is `FSC2P1001`.
     let fsharp2Code (c: DiagnosticCode) : string voption =
         match c with
-        | DiagnosticCode.NestingLimitExceeded _ -> ValueSome "FSC2P1001"
+        | DiagnosticCode.NestingLimitExceeded _
+        | DiagnosticCode.SameLineBarEndsBody -> ValueSome "FSC2P1001"
         | _ -> ValueNone
 
     /// What the secondary label on the OPENING delimiter says. Both delimiter diagnostics

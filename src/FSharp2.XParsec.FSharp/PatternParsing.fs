@@ -875,9 +875,66 @@ module Rules =
             Rule.parse
 
 
+    let rec private endsInOpenBody (expr: Expr<SyntaxToken>) =
+        match expr with
+        | Expr.IfThenElse _
+        | Expr.While _
+        | Expr.ForTo _
+        | Expr.ForIn _
+        | Expr.Fun _
+        | Expr.TryFinally _ -> true
+        | Expr.Sequential(items, _)
+        | Expr.Tuple(items, _) when items.Length > 0 -> endsInOpenBody items[items.Length - 1]
+        | Expr.App(_, args) when args.Length > 0 -> endsInOpenBody args[args.Length - 1]
+        | Expr.InfixApp(_, _, right)
+        | Expr.Assignment(_, _, right)
+        | Expr.PrefixApp(_, right)
+        | Expr.ControlFlow(_, right)
+        | Expr.LetOrUse(body = ValueSome right) -> endsInOpenBody right
+        | _ -> false
+
+    let private followsTokenOnSameLine (state: ParseState) (bar: SyntaxToken) =
+        match bar.Index with
+        | TokenIndex.Virtual -> false
+        | TokenIndex.Regular index ->
+            let tokens = state.Lexed.Tokens
+            let mutable i = index - 1<token>
+            let mutable result = ValueNone
+
+            while result.IsNone do
+                if i < 0<token> then
+                    result <- ValueSome false
+                else
+                    let token = tokens[i]
+
+                    if token.TokenWithoutCommentFlags = Token.Newline then
+                        result <- ValueSome false
+                    elif ParseState.isTriviaToken state token then
+                        i <- i - 1<token>
+                    else
+                        result <- ValueSome true
+
+            result.Value
+
+    // The Compatibility Oracle reports FS0010 for a `|` on the same line after a rule body that ends
+    // in an open `then`, `else`, `do`, `finally`, or lambda body: that body does not end at the `|`.
+    let private reportSameLineBars (rules: ImmutableArray<Rule<SyntaxToken>>) (bars: ImmutableArray<SyntaxToken>) =
+        fun (reader: Reader<PositionedToken, ParseState, _>) ->
+            for i = 0 to bars.Length - 1 do
+                match rules[i] with
+                | Rule.Rule(expr = body) when
+                    endsInOpenBody body
+                    && followsTokenOnSameLine reader.State bars[i]
+                    ->
+                    reader.State <- ParseState.addDiagnosticAt DiagnosticCode.SameLineBarEndsBody bars[i] reader.State
+                | _ -> ()
+
+            preturn () reader
+
     let parse: FSParser<Rules<SyntaxToken>> =
         parser {
             let! firstBar = opt pBar
             let! rules, bars = sepBy1 pRule pBar
+            do! reportSameLineBars rules bars
             return Rules(firstBar, rules, bars)
         }

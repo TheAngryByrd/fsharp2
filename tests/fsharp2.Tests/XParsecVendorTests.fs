@@ -278,6 +278,54 @@ let y = "
                     ]
                     "trace lines must keep the payload of each diagnostic"
 
+            testCase "a same-line bar after an open rule body gives FSC2P1001 at the bar"
+            <| fun () ->
+                // Compatibility Oracle (SDK 10.0.110 fsc --parseonly): the first error of each text is FS0010 at this column.
+                let rejected = [
+                    "let y = match x with A -> f x |> fun y -> y | B -> 0\n", 45
+                    "let y = match x with A -> while c do d | B -> 0\n", 40
+                    "let y = match x with A -> z <- if c then 1 else 2 | B -> 0\n", 51
+                    "let y = match x with A -> try a finally b | B -> 0\n", 43
+                    "let y = match x with A -> f x, if c then 1 else 2 | B -> 0\n", 51
+                    "let y = match x with A -> if c then d else e |> f | B -> 0\n", 51
+                ]
+
+                for source, column in rejected do
+                    let _, diagnostics = parseVendored source
+
+                    let bars =
+                        diagnostics
+                        |> List.filter (fun diagnostic ->
+                            diagnostic.Code = DiagnosticCode.SameLineBarEndsBody
+                        )
+
+                    match bars with
+                    | [ diagnostic ] ->
+                        Expect.equal diagnostic.Token.StartIndex (column - 1) source
+
+                        Expect.equal
+                            (DiagnosticCode.fsharp2Code diagnostic.Code)
+                            (ValueSome "FSC2P1001")
+                            source
+                    | other ->
+                        failtest
+                            $"{source} must give one SameLineBarEndsBody diagnostic, not {other.Length}"
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                let accepted = [
+                    "let y = match x with A -> let z = 1 in z | B -> 0\n"
+                    "let y = match x with A -> lazy (if c then 1 else 2) | B -> 0\n"
+                    "let y = match x with A -> try a with _ -> b | B -> 0\n"
+                    "let y = match x with A -> if c then d else e\n                   | B -> 0\n"
+                    "let y = match x with A -> (fun z -> z) | B -> id\n"
+                    "let y =\n    try f () with | _ -> ()\n"
+                ]
+
+                for source in accepted do
+                    let result, diagnostics = parseVendored source
+                    Expect.isOk result source
+                    Expect.isEmpty diagnostics source
+
             testCase "nested records and computation expressions parse in time linear in depth"
             <| fun () ->
                 let shapes = [
