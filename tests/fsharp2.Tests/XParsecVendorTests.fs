@@ -81,9 +81,17 @@ module XParsecVendorTests =
                 runtime
                 "--output"
                 output
+                "-p:NativeIntermediateOutputPath="
+                + Path.Combine(output, "ilc")
+                + string Path.DirectorySeparatorChar
             ]
 
         Expect.equal publish.ExitCode 0 publish.Output
+
+        Expect.stringContains
+            publish.Output
+            "Generating native code"
+            "the publish must run the ILC compiler, so that its warnings are visible"
 
         let executable =
             Path.Combine(
