@@ -113,7 +113,7 @@ let y = "
         "Lambdas1000.fs", deepSource "fun x -> " "0" "" 1000
     ]
 
-    let private onLargeStack (work: unit -> 'T) =
+    let private onLargeStackWithin (timeout: TimeSpan) (work: unit -> 'T) =
         let mutable outcome = Unchecked.defaultof<Result<'T, exn>>
 
         let thread =
@@ -130,12 +130,18 @@ let y = "
                 * 1024
             )
 
+        thread.IsBackground <- true
         thread.Start()
-        thread.Join()
+
+        if not (thread.Join(timeout)) then
+            failtest $"The parse did not finish within {timeout.TotalSeconds} seconds"
 
         match outcome with
         | Ok value -> value
         | Error failure -> raise failure
+
+    let private onLargeStack work =
+        onLargeStackWithin (TimeSpan.FromMinutes 2.0) work
 
     let private parseVendored (source: string) =
         let lexed = Lexing.lexString source
@@ -208,6 +214,25 @@ let y = "
 
                 Expect.isOk result "90 nested parentheses must give a tree"
                 Expect.isEmpty diagnostics "90 nested parentheses must give no diagnostic"
+
+            testCase "nested records and computation expressions parse in time linear in depth"
+            <| fun () ->
+                let shapes = [
+                    "record", deepSource "{ A = " "1" " }" 60
+                    "anonymous record", deepSource "{| A = " "1" " |}" 60
+                    "record copy", deepSource "{ r with A = " "1" " }" 60
+                    "seq", deepSource "seq { " "1" " }" 60
+                    "seq in record", deepSource "{ A = seq { " "1" " } }" 30
+                ]
+
+                for name, source in shapes do
+                    let result, diagnostics =
+                        onLargeStackWithin
+                            (TimeSpan.FromSeconds 10.0)
+                            (fun () -> parseVendored source)
+
+                    Expect.isOk result $"{name} must give a tree"
+                    Expect.isEmpty diagnostics $"{name} must give no diagnostic"
 
             testCase
                 "the NativeAOT parse host reports the nesting limit instead of a stack overflow"

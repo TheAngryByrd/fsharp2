@@ -2359,6 +2359,50 @@ module Expr =
             return struct (fields, seps, rClose)
         }
 
+    /// Succeeds when a `with` token occurs before the close of the enclosing delimiter,
+    /// outside any nested delimiter. Consumes no input.
+    let private pWithBeforeClose (reader: Reader<PositionedToken, ParseState, _>) =
+        let mutable index = reader.Index
+        let mutable depth = 0
+        let mutable found = ValueNone
+
+        while found.IsNone
+              && index < reader.Length do
+            let token = reader.Input[index]
+
+            if not (ParseState.isTriviaToken reader.State token) then
+                match token.TokenWithoutCommentFlags with
+                | Token.KWWith when depth = 0 -> found <- ValueSome true
+                | Token.KWLParen
+                | Token.KWLBracket
+                | Token.KWLArrayBracket
+                | Token.KWLAttrBracket
+                | Token.KWLBrace
+                | Token.KWLBraceBar
+                | Token.KWLHashParen
+                | Token.OpQuotationTypedLeft
+                | Token.OpQuotationUntypedLeft -> depth <- depth + 1
+                | Token.KWRParen
+                | Token.KWRBracket
+                | Token.KWRArrayBracket
+                | Token.KWRAttrBracket
+                | Token.KWRBrace
+                | Token.KWRBraceBar
+                | Token.KWRHashParen
+                | Token.OpQuotationTypedRight
+                | Token.OpQuotationUntypedRight ->
+                    if depth = 0 then
+                        found <- ValueSome false
+                    else
+                        depth <- depth - 1
+                | _ -> ()
+
+            index <- index + 1
+
+        match found with
+        | ValueSome true -> preturn () reader
+        | _ -> fail (Message "No record copy") reader
+
     /// Parses the inner content of a record or anonymous record expression,
     /// given the opening token and its ParenKind.
     let private pRecordInner
@@ -2371,6 +2415,7 @@ module Expr =
             [
                 // { expr with Field = val; ... } — record clone/update
                 parser {
+                    do! pWithBeforeClose
                     let! baseExpr = refExprInRecords.Parser
                     let! withTok = pWith
 
