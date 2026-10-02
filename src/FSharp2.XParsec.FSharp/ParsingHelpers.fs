@@ -364,7 +364,8 @@ module Parsing =
             | OffsideContext.Brace
             | OffsideContext.Begin
             | OffsideContext.Fun
-            | OffsideContext.Function -> findFunBodyEnclosingIndent tokenCol deeper
+            | OffsideContext.Function
+            | OffsideContext.MatchClauses -> findFunBodyEnclosingIndent tokenCol deeper
             | _ -> tokenCol >= ctx.Indent
 
     // MatchClauses-body undentation: same skip-past-containers rule, but also skips
@@ -502,7 +503,8 @@ module Parsing =
             | _ -> false
 
     /// Walk the context stack skipping SeqBlock+Paren pairs to find the enclosing
-    /// expression's offside line for collection/CE undentation (F# spec 15.1.10.4).
+    /// expression's offside line for collection/CE undentation (F# spec 15.1.10.4). As in FCS, match
+    /// clauses give no limit, and the `match` or `try` below them does.
     let rec private checkCollectionUndent (tokenCol: int) (stack: Offside list) : bool =
         match stack with
         | [] -> true // Walked past all paren-like/SeqBlock contexts; no enclosing offside line to violate
@@ -510,7 +512,8 @@ module Parsing =
             match (ctx: Offside).Context with
             | OffsideContext.SeqBlock
             | OffsideContext.Fun
-            | OffsideContext.Function -> checkCollectionUndent tokenCol deeper
+            | OffsideContext.Function
+            | OffsideContext.MatchClauses -> checkCollectionUndent tokenCol deeper
             | c when isParenLike c -> checkCollectionUndent tokenCol deeper
             | _ ->
                 // Found the enclosing non-paren context; check if token is within its indent
