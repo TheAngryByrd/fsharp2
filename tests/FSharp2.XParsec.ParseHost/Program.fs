@@ -5,13 +5,15 @@ open XParsec.FSharp
 open XParsec.FSharp.Lexer
 open XParsec.FSharp.Parser
 
-let private parseFile (path: string) =
+let private parseFile (printTree: bool) (path: string) =
     let input = File.ReadAllText(path).Replace("\r\n", "\n")
     let lexed = Lexing.lexString input
     let reader = Reader.ofParseInput (lexed.WithDefines Set.empty)
 
+    let result = FSharpAst.parse reader
+
     let outcome =
-        match FSharpAst.parse reader with
+        match result with
         | Ok _ -> "tree"
         | Error _ -> "no-tree"
 
@@ -37,9 +39,23 @@ let private parseFile (path: string) =
             + fsharp2Code
         )
 
+    if printTree then
+        let context = Debug.PrintContext(2)
+
+        match result with
+        | Ok ast -> Debug.printFSharpAst context lexed ast
+        | Error _ -> ()
+
+        Debug.printDiagnostics context input diagnostics
+        context.Flush(stdout)
+
 [<EntryPoint>]
 let main argv =
-    for path in argv do
-        parseFile path
+    let printTree =
+        argv.Length > 0
+        && argv[0] = "--tree"
+
+    for path in (if printTree then argv[1..] else argv) do
+        parseFile printTree path
 
     0

@@ -1060,6 +1060,16 @@ module Expr =
                     | [] -> indent = 0 || indent = letIndent
 
                 if atContextIndent then
+                    // The Compatibility Oracle reports FS0010 at a body that is not at the `let` column,
+                    // for example the next line after `a; let x = 1`.
+                    match state.Context with
+                    | { Indent = ctxIndent } :: _ when
+                        ctxIndent > 0
+                        && indent <> letIndent
+                        ->
+                        reader.State <- ParseState.addDiagnosticAt DiagnosticCode.MisalignedLetBody t reader.State
+                    | _ -> ()
+
                     Ok(virtualToken (PositionedToken.Create(Token.VirtualIn, t.StartIndex)))
                 else
                     // TODO: Consider parser recovery here instead of hard failure,
@@ -1296,15 +1306,20 @@ module Expr =
 
             let pFail (reader: Reader<PositionedToken, ParseState, _>) = fail errMsg reader
 
-            parser {
-                let! canBeHighPrec = isPrevTokenSyntax >> Ok
+            // FCS LexFilter inserts HIGH_PRECEDENCE_BRACK_APP only after an identifier: `(f x)[0]` and
+            // `xs.[0][1]` apply the expression to a list.
+            let previousAllows (reader: Reader<PositionedToken, ParseState, _>) =
+                token <> Token.KWLBracket
+                || (match reader.Input[reader.Index - 1].TokenWithoutCommentFlags with
+                    | Token.Identifier
+                    | Token.BacktickedIdentifier -> true
+                    | _ -> false)
 
-                if canBeHighPrec then
-
-                    return! pSatisfy
+            fun (reader: Reader<PositionedToken, ParseState, _>) ->
+                if isPrevTokenSyntax reader && previousAllows reader then
+                    pSatisfy reader
                 else
-                    return! pFail
-            }
+                    pFail reader
 
         let pHighPrecLParen = pHighPrec Token.KWLParen '('
 
@@ -2259,6 +2274,46 @@ module Expr =
             DiagnosticCode.ExpectedEnd
             pTypedSeqExprBlock
 
+    // FCS applies `(f x)[`, `xs.[0][`, and `"s"[` to a list. When that list continues on a later line,
+    // the Compatibility Oracle reports FS0058 for some layouts and gives irregular ranges for others.
+    let private reportMultilineAdjacentList (expr: Expr<SyntaxToken>) (reader: Reader<PositionedToken, ParseState, _>) =
+        let brackets =
+            match expr with
+            | Expr.EnclosedBlock(ParenKind.List lBracket, _, rBracket)
+            | Expr.EmptyBlock(ParenKind.List lBracket, rBracket) -> ValueSome struct (lBracket, rBracket)
+            | _ -> ValueNone
+
+        match brackets with
+        | ValueSome struct (lBracket, rBracket) ->
+            match lBracket.Index, rBracket.Index with
+            | TokenIndex.Regular openIndex, TokenIndex.Regular closeIndex when openIndex > 0<token> ->
+                let state = reader.State
+                let previous = state.Lexed.Tokens[openIndex - 1<token>]
+
+                let adjacentToCloser =
+                    not (ParseState.isTriviaToken state previous)
+                    && (match previous.TokenWithoutCommentFlags with
+                        | Token.KWRParen
+                        | Token.KWRBracket
+                        | Token.KWRArrayBracket
+                        | Token.KWRBrace
+                        | Token.KWRBraceBar
+                        | Token.StringClose
+                        | Token.VerbatimStringClose
+                        | Token.String3Close -> true
+                        | token -> TokenInfo.isLiteral token)
+
+                if
+                    adjacentToCloser
+                    && ParseState.findLineNumber state openIndex
+                       <> ParseState.findLineNumber state closeIndex
+                then
+                    reader.State <- ParseState.addDiagnosticAt DiagnosticCode.MultilineAdjacentList lBracket state
+            | _ -> ()
+        | ValueNone -> ()
+
+        preturn expr reader
+
     let pList =
         pEnclosed
             pLBracket
@@ -2267,6 +2322,7 @@ module Expr =
             OffsideContext.Bracket
             DiagnosticCode.ExpectedRBracket
             refExprSeqBlock.Parser
+        >>= reportMultilineAdjacentList
 
     let pArray =
         pEnclosed
@@ -2359,6 +2415,50 @@ module Expr =
             return struct (fields, seps, rClose)
         }
 
+    /// Succeeds when a `with` token occurs before the close of the enclosing delimiter,
+    /// outside any nested delimiter. Consumes no input.
+    let private pWithBeforeClose (reader: Reader<PositionedToken, ParseState, _>) =
+        let mutable index = reader.Index
+        let mutable depth = 0
+        let mutable found = ValueNone
+
+        while found.IsNone
+              && index < reader.Length do
+            let token = reader.Input[index]
+
+            if not (ParseState.isTriviaToken reader.State token) then
+                match token.TokenWithoutCommentFlags with
+                | Token.KWWith when depth = 0 -> found <- ValueSome true
+                | Token.KWLParen
+                | Token.KWLBracket
+                | Token.KWLArrayBracket
+                | Token.KWLAttrBracket
+                | Token.KWLBrace
+                | Token.KWLBraceBar
+                | Token.KWLHashParen
+                | Token.OpQuotationTypedLeft
+                | Token.OpQuotationUntypedLeft -> depth <- depth + 1
+                | Token.KWRParen
+                | Token.KWRBracket
+                | Token.KWRArrayBracket
+                | Token.KWRAttrBracket
+                | Token.KWRBrace
+                | Token.KWRBraceBar
+                | Token.KWRHashParen
+                | Token.OpQuotationTypedRight
+                | Token.OpQuotationUntypedRight ->
+                    if depth = 0 then
+                        found <- ValueSome false
+                    else
+                        depth <- depth - 1
+                | _ -> ()
+
+            index <- index + 1
+
+        match found with
+        | ValueSome true -> preturn () reader
+        | _ -> fail (Message "No record copy") reader
+
     /// Parses the inner content of a record or anonymous record expression,
     /// given the opening token and its ParenKind.
     let private pRecordInner
@@ -2371,6 +2471,7 @@ module Expr =
             [
                 // { expr with Field = val; ... } — record clone/update
                 parser {
+                    do! pWithBeforeClose
                     let! baseExpr = refExprInRecords.Parser
                     let! withTok = pWith
 

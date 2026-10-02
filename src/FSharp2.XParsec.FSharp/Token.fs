@@ -2125,6 +2125,7 @@ module internal TokenInfo =
         | Token.KWLArrayBracket
         | Token.KWLBraceBar
         | Token.KWLBrace
+        | Token.KWLHashParen
         | Token.KWBegin
         | Token.KWStruct
         // Keyword expression starters (control flow, binding, computation)

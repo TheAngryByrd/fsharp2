@@ -14,6 +14,7 @@ module ImplementationFile =
     let private pNamedModule =
         let notFollowedByEquals = notFollowedBySyntaxToken Token.OpEquality
         do ObjectConstruction.init () // Force static constructor to run and initialize refObjectConstruction
+        do Measure.init ()
 
         parser {
             let! attrs = opt Attributes.parse

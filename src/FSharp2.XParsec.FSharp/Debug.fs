@@ -315,32 +315,7 @@ let printFSharpAst (ctx: PrintContext) (lexed: Lexed) (ast: FSharpAst<SyntaxToke
 /// case would print a bare name into a golden — passing, while silently showing nothing of
 /// what it carries. A delimiter code's `openedAt` is deliberately NOT printed: the golden
 /// already carries the diagnostic's own resolved position on the same line.
-let sprintDiagnosticCode (code: DiagnosticCode) : string =
-    let name = DiagnosticCode.code code
-
-    match code with
-    | DiagnosticCode.Other msg -> string name + "(" + string msg + ")"
-    | DiagnosticCode.NestingLimitExceeded limit -> name + "(" + string limit + ")"
-    | DiagnosticCode.UnclosedDelimiter(opened = opened; expected = expected)
-    | DiagnosticCode.MismatchedDelimiter(opened = opened; expected = expected) ->
-        let openedBase = TokenInfo.withoutFlags opened
-        let expectedBase = TokenInfo.withoutFlags expected
-        string name + "(" + string openedBase + ", " + string expectedBase + ")"
-    | DiagnosticCode.TyparInConstant
-    | DiagnosticCode.MissingExpression
-    | DiagnosticCode.MissingPattern
-    | DiagnosticCode.MissingType
-    | DiagnosticCode.MissingRule
-    | DiagnosticCode.MissingTypeDefn
-    | DiagnosticCode.MissingModuleElem
-    | DiagnosticCode.UnexpectedTopLevel
-    | DiagnosticCode.ExpectedEnd
-    | DiagnosticCode.ExpectedRParen
-    | DiagnosticCode.ExpectedRBracket
-    | DiagnosticCode.ExpectedRArrayBracket
-    | DiagnosticCode.ExpectedRBraceBar
-    | DiagnosticCode.ExpectedQuotationTypedRight
-    | DiagnosticCode.ExpectedQuotationUntypedRight -> name
+let sprintDiagnosticCode (code: DiagnosticCode) : string = DiagnosticCode.describe code
 
 /// Appends a "---\nDiagnostics:" section to the buffer when there are diagnostics.
 /// Diagnostics are emitted in source order (reversed from the accumulation order).

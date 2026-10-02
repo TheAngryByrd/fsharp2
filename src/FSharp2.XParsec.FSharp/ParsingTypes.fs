@@ -298,6 +298,14 @@ type DiagnosticCode =
     /// The input nests deeper than `limit` parser levels, or deeper than the thread stack
     /// permits. A stack overflow ends the process, so the parse stops here and gives no tree.
     | NestingLimitExceeded of limit: int
+    /// A `|` on the same line ends a `then`, `else`, `do`, `finally`, or lambda body.
+    | SameLineBarEndsBody
+    /// A module element starts at another column than the first element of its module.
+    | MisalignedModuleElement
+    /// The body of a `let` without `in` starts at another column than the `let`.
+    | MisalignedLetBody
+    /// A list argument written next to a closing delimiter or literal continues on a later line.
+    | MultilineAdjacentList
 
 [<RequireQualifiedAccess>]
 type Syntax =
@@ -483,6 +491,10 @@ module DiagnosticCode =
         | DiagnosticCode.UnclosedDelimiter _ -> "UnclosedDelimiter"
         | DiagnosticCode.MismatchedDelimiter _ -> "MismatchedDelimiter"
         | DiagnosticCode.NestingLimitExceeded _ -> "NestingLimitExceeded"
+        | DiagnosticCode.SameLineBarEndsBody -> "SameLineBarEndsBody"
+        | DiagnosticCode.MisalignedModuleElement -> "MisalignedModuleElement"
+        | DiagnosticCode.MisalignedLetBody -> "MisalignedLetBody"
+        | DiagnosticCode.MultilineAdjacentList -> "MultilineAdjacentList"
 
     /// The English it renders.
     let message (c: DiagnosticCode) : string =
@@ -509,12 +521,56 @@ module DiagnosticCode =
             "Wrong close for '" + string (spelling opened) + "': " + string (expecting expected)
         | DiagnosticCode.NestingLimitExceeded limit ->
             "The input nests deeper than the parser supports (" + string limit + " levels)"
+        | DiagnosticCode.MultilineAdjacentList ->
+            "A list argument next to a closing delimiter must close on the same line"
+        | DiagnosticCode.MisalignedLetBody ->
+            "The body of a 'let' without 'in' must start at the column of the 'let'"
+        | DiagnosticCode.MisalignedModuleElement ->
+            "A module element must start at the column of the first element of its module"
+        | DiagnosticCode.SameLineBarEndsBody ->
+            "A '|' on the same line cannot end a 'then', 'else', 'do', 'finally', or lambda body"
+
+    /// The code name plus the payload of each case that carries one.
+    let describe (c: DiagnosticCode) : string =
+        let name = code c
+
+        match c with
+        | DiagnosticCode.Other msg -> string name + "(" + string msg + ")"
+        | DiagnosticCode.NestingLimitExceeded limit -> name + "(" + string limit + ")"
+        | DiagnosticCode.UnclosedDelimiter(opened = opened; expected = expected)
+        | DiagnosticCode.MismatchedDelimiter(opened = opened; expected = expected) ->
+            let openedBase = TokenInfo.withoutFlags opened
+            let expectedBase = TokenInfo.withoutFlags expected
+            string name + "(" + string openedBase + ", " + string expectedBase + ")"
+        | DiagnosticCode.SameLineBarEndsBody
+        | DiagnosticCode.MisalignedModuleElement
+        | DiagnosticCode.MisalignedLetBody
+        | DiagnosticCode.MultilineAdjacentList
+        | DiagnosticCode.TyparInConstant
+        | DiagnosticCode.MissingExpression
+        | DiagnosticCode.MissingPattern
+        | DiagnosticCode.MissingType
+        | DiagnosticCode.MissingRule
+        | DiagnosticCode.MissingTypeDefn
+        | DiagnosticCode.MissingModuleElem
+        | DiagnosticCode.UnexpectedTopLevel
+        | DiagnosticCode.ExpectedEnd
+        | DiagnosticCode.ExpectedRParen
+        | DiagnosticCode.ExpectedRBracket
+        | DiagnosticCode.ExpectedRArrayBracket
+        | DiagnosticCode.ExpectedRBraceBar
+        | DiagnosticCode.ExpectedQuotationTypedRight
+        | DiagnosticCode.ExpectedQuotationUntypedRight -> name
 
     /// The FSharp2 diagnostic code for a parser code that FSharp2 reports as unsupported input.
     /// The Compatibility Oracle accepts nesting at these depths, so the code is `FSC2P1001`.
     let fsharp2Code (c: DiagnosticCode) : string voption =
         match c with
-        | DiagnosticCode.NestingLimitExceeded _ -> ValueSome "FSC2P1001"
+        | DiagnosticCode.NestingLimitExceeded _
+        | DiagnosticCode.SameLineBarEndsBody
+        | DiagnosticCode.MisalignedModuleElement
+        | DiagnosticCode.MisalignedLetBody
+        | DiagnosticCode.MultilineAdjacentList -> ValueSome "FSC2P1001"
         | _ -> ValueNone
 
     /// What the secondary label on the OPENING delimiter says. Both delimiter diagnostics
@@ -818,7 +874,7 @@ type WriterTraceCallback(lexed: Lexed, writer: System.IO.TextWriter) =
         this.Write("UNDENT_OK " + string token.Token + " col=" + string tokenCol + " < indent=" + string contextIndent + " rule=" + string rule)
 
     override this.DiagnosticEmitted(code, token) =
-        this.Write("DIAGNOSTIC " + string (DiagnosticCode.code code) + " @" + string token.StartIndex)
+        this.Write("DIAGNOSTIC " + DiagnosticCode.describe code + " @" + string token.StartIndex)
 
     override this.SplitRAttrBracketSet(startIndex) =
         this.Write("SPLIT_RATTR_SET @" + string startIndex)
