@@ -1072,6 +1072,30 @@ module Parsing =
 
         preturn () reader
 
+    /// For an `else` left of its `if`: the Compatibility Oracle reports FS0010 when the `else` is left of the
+    /// block that holds the `if`, and FS0058 when that block is directly inside a delimiter and the `else`
+    /// is left of the enclosing offside line, where LexFilter pushes CtxtElse.
+    let reportUndentedElse (elseTok: SyntaxToken) (reader: Reader<PositionedToken, ParseState, _>) =
+        match elseTok.Index with
+        | TokenIndex.Regular elseIndex ->
+            let state = reader.State
+            let column = ParseState.getIndent state elseIndex
+
+            let undented =
+                match state.Context with
+                | { Context = OffsideContext.SeqBlock; Indent = blockColumn } :: { Context = ctx } :: _ when
+                    not (isParenLike ctx)
+                    ->
+                    column < blockColumn
+                | _ ->
+                    match delimitedBlockLimit state (elseIndex - 1<token>) state.Context with
+                    | ValueSome limit -> column < limit
+                    | ValueNone -> false
+
+            if undented then
+                reader.State <- ParseState.addDiagnosticAt DiagnosticCode.UndentedBlockStart elseTok state
+        | TokenIndex.Virtual -> ()
+
     /// The Compatibility Oracle reports FS0058 when the first token after an opening delimiter is left
     /// of the enclosing offside line, where LexFilter pushes CtxtSeqBlock.
     let reportUndentedBlockStart (reader: Reader<PositionedToken, ParseState, _>) =

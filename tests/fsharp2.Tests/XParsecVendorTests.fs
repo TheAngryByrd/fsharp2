@@ -473,6 +473,8 @@ let y = "
                         "let y = match x with A -> g (if c then a else\n        b) | B -> z\n",
                         DiagnosticCode.UndentedBlockStart,
                         54
+                        // Compatibility Oracle: FS0058 at (2,1).
+                        "let y = (if c then a\nelse b)\n", DiagnosticCode.UndentedBlockStart, 21
                     ] do
                     match parseVendored source with
                     | _, diagnostic :: _ ->

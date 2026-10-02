@@ -125,7 +125,8 @@ module ElifBranches =
 
         | Ok(ElIfTok.Else elseTok) ->
             // FCS LexFilter limits the block after `else` to the `if` column (CtxtElse :: CtxtIf) when `else` is
-            // not left of the `if`. The Compatibility Oracle reports FS0058 at a first token left of it.
+            // not left of the `if`. The Compatibility Oracle reports FS0058 at a first token left of it. An `else`
+            // left of the `if` has the enclosing limit instead.
             match peekNextSyntaxToken reader with
             | Ok first ->
                 match first.Index with
@@ -134,6 +135,7 @@ module ElifBranches =
                     && ParseState.getIndent reader.State firstIndex < ifColumn
                     ->
                     reader.State <- ParseState.addDiagnosticAt DiagnosticCode.UndentedBlockStart first reader.State
+                | _ when getIndent reader elseTok < ifColumn -> reportUndentedElse elseTok reader
                 | _ -> ()
             | Error _ -> ()
 
