@@ -303,6 +303,19 @@ module XParsecComparison =
             let span () = this.ExprSpan expr
             let range () = this.Range(span ())
 
+            // FCS ends a loop at its `done`. A virtual `done` before the last loop token marks an earlier end,
+            // and a virtual `done` after a `;` marks a later end.
+            let loopSpan (doneTok: SyntaxToken) =
+                match span (), doneTok.Index with
+                | ValueSome loop, TokenIndex.Virtual when doneTok.StartIndex < loop.End ->
+                    ValueSome { loop with End = doneTok.StartIndex }
+                | ValueSome loop, TokenIndex.Virtual when
+                    doneTok.StartIndex > loop.End
+                    && source.Text(loop.End, doneTok.StartIndex) = ";"
+                    ->
+                    ValueSome { loop with End = doneTok.StartIndex }
+                | loop, _ -> loop
+
             match expr with
             | Expr.Const _ -> $"C[{this.Text(span ())}]@{range ()}"
             | Expr.String(kind, _, _) ->
@@ -500,16 +513,16 @@ module XParsecComparison =
                         (List.ofSeq elifBranches)
                         elseBranch
                 )
-            | Expr.While(_, condition, _, body, _) ->
-                $"While({this.Expr condition},{this.Expr body})@{range ()}"
-            | Expr.ForTo(_, ident, _, startExpr, toToken, endExpr, _, body, _) ->
+            | Expr.While(_, condition, _, body, doneTok) ->
+                $"While({this.Expr condition},{this.Expr body})@{this.Range(loopSpan doneTok)}"
+            | Expr.ForTo(_, ident, _, startExpr, toToken, endExpr, _, body, doneTok) ->
                 let direction = if this.TokenText toToken = "downto" then "downto" else "to"
 
-                $"For({identText (this.TokenText ident)},{this.Expr startExpr},{direction},{this.Expr endExpr},{this.Expr body})@{range ()}"
-            | Expr.ForIn(_, pat, _, enumerable, _, body, _) ->
+                $"For({identText (this.TokenText ident)},{this.Expr startExpr},{direction},{this.Expr endExpr},{this.Expr body})@{this.Range(loopSpan doneTok)}"
+            | Expr.ForIn(_, pat, _, enumerable, _, body, doneTok) ->
                 let patSpan = this.PatSpan pat
 
-                $"ForIn({this.Text patSpan}@{this.Range patSpan},{this.Expr enumerable},{this.Expr body})@{range ()}"
+                $"ForIn({this.Text patSpan}@{this.Range patSpan},{this.Expr enumerable},{this.Expr body})@{this.Range(loopSpan doneTok)}"
             | Expr.IndexedLookup(target, dot, _, index, _) ->
                 match dot with
                 | ValueSome _ -> $"DI({this.Expr target},{this.Expr index})@{range ()}"

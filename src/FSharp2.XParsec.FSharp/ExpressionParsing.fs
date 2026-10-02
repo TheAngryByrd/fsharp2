@@ -102,7 +102,7 @@ module ElifBranches =
         | TokenIndex.Regular iT -> ParseState.getIndent reader.State iT
         | TokenIndex.Virtual -> 0
 
-    let rec private parseBranches (acc: ResizeArray<_>) (reader: Reader<PositionedToken, ParseState, _>) =
+    let rec private parseBranches (ifColumn: int) (acc: ResizeArray<_>) (reader: Reader<PositionedToken, ParseState, _>) =
         match pElifOrElseIf reader with
         | Ok(ElIfTok.Elif elifTok) ->
             let indent = getIndent reader elifTok
@@ -110,7 +110,7 @@ module ElifBranches =
             match pConditionThen indent elifTok reader with
             | Ok(condition, thenTok, expr) ->
                 acc.Add(ElifBranch.Elif(elifTok, condition, thenTok, expr))
-                parseBranches acc reader
+                parseBranches ifColumn acc reader
             | Error e -> Error e
 
         | Ok(ElIfTok.ElseIf(elseTok, ifTok)) ->
@@ -120,17 +120,33 @@ module ElifBranches =
             match pConditionThen indent elseTok reader with
             | Ok(condition, thenTok, expr) ->
                 acc.Add(ElifBranch.ElseIf(elseTok, ifTok, condition, thenTok, expr))
-                parseBranches acc reader
+                parseBranches ifColumn acc reader
             | Error e -> Error e
 
         | Ok(ElIfTok.Else elseTok) ->
+            // FCS LexFilter limits the block after `else` to the `if` column (CtxtElse :: CtxtIf) when `else` is
+            // not left of the `if`. The Compatibility Oracle reports FS0058 at a first token left of it. An `else`
+            // left of the `if` has the enclosing limit instead.
+            match peekNextSyntaxToken reader with
+            | Ok first ->
+                match first.Index with
+                | TokenIndex.Regular firstIndex when
+                    getIndent reader elseTok >= ifColumn
+                    && ParseState.getIndent reader.State firstIndex < ifColumn
+                    ->
+                    reader.State <- ParseState.addDiagnosticAt DiagnosticCode.UndentedBlockStart first reader.State
+                | _ when getIndent reader elseTok < ifColumn -> reportUndentedElse elseTok reader
+                | _ -> ()
+            | Error _ -> ()
+
             match pElseExpr reader with
             | Ok expr -> Ok struct (ImmutableArray.CreateRange acc, ValueSome(ElseBranch.ElseBranch(elseTok, expr)))
             | Error e -> Error e
 
         | Error e -> Ok struct (ImmutableArray.CreateRange acc, ValueNone)
 
-    let parse: FSParser<_> = fun reader -> parseBranches (ResizeArray()) reader
+    let parse (ifColumn: int) : FSParser<_> =
+        fun reader -> parseBranches ifColumn (ResizeArray()) reader
 
 module Binding =
     let private errNoTrailingTypeAnnotation: ErrorType<PositionedToken, ParseState> =
@@ -713,6 +729,95 @@ module Expr =
                     // So, we throw here
                     failwith "Unexpected end of input while looking for 'done' or virtual 'done'"
 
+        // FCS LexFilter ends a loop with ODECLEND at the first token that is offside of the body block and of
+        // CtxtDo (at or left of the `do` column). Inside the body, only the closer of a delimiter that the body opens at its
+        // top level can be there. The loop range then ends at the token before it, so the virtual `done` goes there.
+        // A final `;` of the body is the last token before the offside token, so the loop range includes it.
+        let pLoopDone (bodyStart: int64) (reader: Reader<PositionedToken, ParseState, _>) =
+            match peekNextSyntaxToken reader with
+            | Ok t when t.Token = Token.KWDone -> consumePeeked t reader
+            | _ ->
+                let state = reader.State
+                let tokens = state.Lexed.Tokens
+                let first = int bodyStart * 1<token>
+                let finish = int reader.Index * 1<token>
+
+                let mutable doIndex = first - 1<token>
+
+                while doIndex > 0<token>
+                      && ParseState.isTriviaToken state tokens[doIndex] do
+                    doIndex <- doIndex - 1<token>
+
+                let doColumn = ParseState.getIndent state doIndex
+                let mutable bodyIndex = first
+
+                while bodyIndex < finish
+                      && ParseState.isTriviaToken state tokens[bodyIndex] do
+                    bodyIndex <- bodyIndex + 1<token>
+
+                let bodyColumn = ParseState.getIndent state bodyIndex
+                let mutable i = first
+                let openers = System.Collections.Generic.Stack<int<token>>()
+                let mutable closer = ValueNone
+
+                while closer.IsNone && i < finish do
+                    let token = tokens[i]
+
+                    if not (ParseState.isTriviaToken state token) then
+                        match token.TokenWithoutCommentFlags with
+                        | Token.KWLParen
+                        | Token.KWLBracket
+                        | Token.KWLArrayBracket
+                        | Token.KWLBrace
+                        | Token.KWLBraceBar
+                        | Token.KWBegin -> openers.Push i
+                        | Token.KWRParen
+                        | Token.KWRBracket
+                        | Token.KWRArrayBracket
+                        | Token.KWRBrace
+                        | Token.KWRBraceBar
+                        | Token.KWEnd when openers.Count > 0 ->
+                            let opener = openers.Pop()
+                            let column = ParseState.getIndent state i
+
+                            if
+                                openers.Count = 0
+                                && column <= doColumn
+                                && column < bodyColumn
+                                && ParseState.findLineNumber state opener
+                                   < ParseState.findLineNumber state i
+                            then
+                                closer <- ValueSome i
+                        | _ -> ()
+
+                    i <- i + 1<token>
+
+                match closer with
+                | ValueSome closerIndex ->
+                    let mutable last = closerIndex - 1<token>
+
+                    while last > first
+                          && ParseState.isTriviaToken state tokens[last] do
+                        last <- last - 1<token>
+
+                    let endIndex = tokens[last + 1<token>].StartIndex
+                    Ok(virtualToken (PositionedToken.Create(Token.VirtualDone, endIndex)))
+                | ValueNone ->
+                    let mutable last = finish - 1<token>
+
+                    while last > first
+                          && ParseState.isTriviaToken state tokens[last] do
+                        last <- last - 1<token>
+
+                    if
+                        last >= first
+                        && tokens[last].TokenWithoutCommentFlags = Token.OpSemicolon
+                    then
+                        let endIndex = tokens[last + 1<token>].StartIndex
+                        Ok(virtualToken (PositionedToken.Create(Token.VirtualDone, endIndex)))
+                    else
+                        pDoneVirt reader
+
         let pIfExpr =
             parser {
                 let! (ifTok, indent) = assertKeywordToken Token.KWIf
@@ -730,7 +835,7 @@ module Expr =
                         withContextAt OffsideContext.Then (indent + 1) ifTok.PositionedToken refTypedSeqExprBlock.Parser
                     )
 
-                let! elifs, elseBranch = ElifBranches.parse
+                let! elifs, elseBranch = ElifBranches.parse indent
 
                 return ExprAux.ForExpr(Expr.IfThenElse(ifTok, cond, thenTok, thenExpr, elifs, elseBranch))
             }
@@ -859,9 +964,36 @@ module Expr =
                 return ExprAux.ForExpr result
             }
 
+        // The Compatibility Oracle rejects `try try a with _ -> b with _ -> c` and `try try a finally b with ...`
+        // when the outer `with` or `finally` is on the line of the inner one. FCS LexFilter gives that
+        // token to the inner `try`. A parenthesized inner `try` and an inner `match` are accepted.
+        let rec endsInTry (expr: Expr<SyntaxToken>) =
+            match expr with
+            | Expr.TryWith _
+            | Expr.TryFinally _ -> true
+            | Expr.Sequential(items, _)
+            | Expr.Tuple(items, _) when items.Length > 0 -> endsInTry items[items.Length - 1]
+            | Expr.App(_, args) when args.Length > 0 -> endsInTry args[args.Length - 1]
+            | Expr.InfixApp(_, _, right)
+            | Expr.PrefixApp(_, right)
+            | Expr.LetOrUse(body = ValueSome right) -> endsInTry right
+            | _ -> false
+
         let pTryExpr =
-            let pTryMatchRules indent tryTok =
-                withContextAt OffsideContext.MatchClauses indent tryTok Rules.parse
+            // FCS starts the clauses at the first token after `with`, but not left of the `try` column.
+            let pTryClauses tryIndent (reader: Reader<PositionedToken, ParseState, _>) =
+                match peekNextSyntaxToken reader with
+                | Error e -> Error e
+                | Ok first ->
+                    let indent =
+                        match first.Index with
+                        | TokenIndex.Regular index -> max tryIndent (ParseState.getIndent reader.State index)
+                        | TokenIndex.Virtual -> tryIndent
+
+                    withContextAt OffsideContext.MatchClauses indent first.PositionedToken Rules.parse reader
+
+            let pTryMatchRules tryIndent =
+                pTryClauses tryIndent
                 |> recoverWith
                     StoppingTokens.afterRule
                     DiagnosticCode.MissingRule
@@ -921,8 +1053,7 @@ module Expr =
                             parser {
                                 let! withTok = pWith
                                 // | permitted at try_col via contextPermitsToken (Try context still active)
-                                // MatchClauses at try_col so clause bodies can be at try_col
-                                let! rules = pTryMatchRules indent tryTok.PositionedToken
+                                let! rules = pTryMatchRules indent
                                 return Expr.TryWith(tryTok, tryExpr, withTok, rules)
                             }
 
@@ -945,6 +1076,17 @@ module Expr =
                             Error e
                         | Ok result ->
                             reader.State <- ParseState.popOffside tryEntry reader.State
+
+                            match result with
+                            | Expr.TryWith(expr = body; withToken = continuation)
+                            | Expr.TryFinally(tryExpr = body; finallyToken = continuation) when
+                                endsInTry body
+                                && followsTokenOnSameLine reader.State continuation
+                                ->
+                                reader.State <-
+                                    ParseState.addDiagnosticAt DiagnosticCode.SameLineNestedTry continuation reader.State
+                            | _ -> ()
+
                             Ok(ExprAux.ForExpr result)
 
         let pWhileExpr =
@@ -967,12 +1109,14 @@ module Expr =
                         (withContextAt OffsideContext.While (indent + 1) whileTok.PositionedToken pDo)
                 // Body at while_col
                 // Grammar: WHILE _ DO typedSeqExprBlock
+                let! bodyStart = getPosition
+
                 let! body =
                     recoverExprMissing (
                         withContextAt OffsideContext.Do indent whileTok.PositionedToken refTypedSeqExprBlock.Parser
                     )
 
-                let! doneTok = pDoneVirt
+                let! doneTok = pLoopDone bodyStart.Index
                 return ExprAux.ForExpr(Expr.While(whileTok, cond, doTok, body, doneTok))
             }
 
@@ -1035,14 +1179,16 @@ module Expr =
                 let bodyMinIndent = indent
                 let! forBuilder = withContextAt OffsideContext.For headerMinIndent forTok.PositionedToken pForHeader
                 // Grammar: FOR _ IN _ DO typedSeqExprBlock (and FOR _ = _ TO _ DO typedSeqExprBlock)
+                let! bodyStart = getPosition
+
                 let! body =
                     withContextAt OffsideContext.Do bodyMinIndent forTok.PositionedToken refTypedSeqExprBlock.Parser
 
-                let! doneTok = pDoneVirt
+                let! doneTok = pLoopDone bodyStart.Index
                 return ExprAux.ForExpr(forBuilder forTok body doneTok)
             }
 
-        let pLetOrUseIn letIndent (reader: Reader<PositionedToken, ParseState, _>) =
+        let pLetOrUseIn letIndent (letTok: SyntaxToken) (reader: Reader<PositionedToken, ParseState, _>) =
             match peekNextSyntaxToken reader with
             | Ok t when t.Token = Token.KWIn -> consumePeeked t reader
             | Ok t ->
@@ -1062,10 +1208,30 @@ module Expr =
                 if atContextIndent then
                     // The Compatibility Oracle reports FS0010 at a body that is not at the `let` column,
                     // for example the next line after `a; let x = 1`.
+                    // It also reports FS0010 at a body on a later line when a `;` or `,` comes before the `let` on its line.
+                    let afterSeparator () =
+                        match letTok.Index, t.Index with
+                        | TokenIndex.Regular letIndex, TokenIndex.Regular bodyIndex when
+                            ParseState.findLineNumber state letIndex
+                            <> ParseState.findLineNumber state bodyIndex
+                            ->
+                            let tokens = state.Lexed.Tokens
+                            let mutable i = letIndex - 1<token>
+
+                            while i > 0<token>
+                                  && ParseState.isTriviaToken state tokens[i]
+                                  && tokens[i].TokenWithoutCommentFlags <> Token.Newline do
+                                i <- i - 1<token>
+
+                            i >= 0<token>
+                            && (tokens[i].TokenWithoutCommentFlags = Token.OpSemicolon
+                                || tokens[i].TokenWithoutCommentFlags = Token.OpComma)
+                        | _ -> false
+
                     match state.Context with
                     | { Indent = ctxIndent } :: _ when
                         ctxIndent > 0
-                        && indent <> letIndent
+                        && (indent <> letIndent || afterSeparator ())
                         ->
                         reader.State <- ParseState.addDiagnosticAt DiagnosticCode.MisalignedLetBody t reader.State
                     | _ -> ()
@@ -1171,7 +1337,7 @@ module Expr =
                                     error <- Error e
                                     cont <- false
                                 | Ok(recTok, defs, ands) ->
-                                    match pLetOrUseIn indent reader with
+                                    match pLetOrUseIn indent kwTok reader with
                                     | Error e ->
                                         error <- Error e
                                         cont <- false
@@ -1340,6 +1506,7 @@ module Expr =
                 let! pos = getPosition
                 let! lBracket = pHighPrecLBracket
                 let lBracket = syntaxToken lBracket pos.Index
+                do! reportUndentedBlockStart
                 // Special case: f[] with empty brackets → treat as f [] (application to empty list)
                 match! peekNextSyntaxToken with
                 | t when t.Token = Token.KWRBracket ->
@@ -1357,6 +1524,7 @@ module Expr =
                 let! pos = getPosition
                 let! lParen = pHighPrecLParen
                 let lParen = syntaxToken lParen pos.Index
+                do! reportUndentedBlockStart
 
                 // Handle f() — empty argument list
                 match! peekNextSyntaxToken with
@@ -1583,6 +1751,7 @@ module Expr =
                     // .[expr] — indexed access (e.g. xs.[0])
                     parser {
                         let! lBracket = pLBracket
+                        do! reportUndentedBlockStart
                         let! indexExpr = refExpr.Parser
                         let! rBracket = pRBracket
                         return ExprAux.DotIndex(lBracket, indexExpr, rBracket)
@@ -2174,12 +2343,18 @@ module Expr =
             completeEnclosed
             Expr.Missing
             skipsTokens
-            pLeft
+            (pLeft
+             >>= fun l -> withContextAt offsideCtx 0 l.PositionedToken reportUndentedBlockStart >>% l)
             expectedRightTok
             parenKindConstructor
             offsideCtx
             diagCode
             pInner
+        >>= fun expr ->
+            match expr with
+            | Expr.EnclosedBlock(_, _, closeTok)
+            | Expr.EmptyBlock(_, closeTok) -> reportTokenAfterUndentedClose closeTok >>% expr
+            | _ -> preturn expr
 
     let private pExprOrTypedPat =
         let pInnerExpr = refExprSeqBlock.Parser
@@ -2274,46 +2449,6 @@ module Expr =
             DiagnosticCode.ExpectedEnd
             pTypedSeqExprBlock
 
-    // FCS applies `(f x)[`, `xs.[0][`, and `"s"[` to a list. When that list continues on a later line,
-    // the Compatibility Oracle reports FS0058 for some layouts and gives irregular ranges for others.
-    let private reportMultilineAdjacentList (expr: Expr<SyntaxToken>) (reader: Reader<PositionedToken, ParseState, _>) =
-        let brackets =
-            match expr with
-            | Expr.EnclosedBlock(ParenKind.List lBracket, _, rBracket)
-            | Expr.EmptyBlock(ParenKind.List lBracket, rBracket) -> ValueSome struct (lBracket, rBracket)
-            | _ -> ValueNone
-
-        match brackets with
-        | ValueSome struct (lBracket, rBracket) ->
-            match lBracket.Index, rBracket.Index with
-            | TokenIndex.Regular openIndex, TokenIndex.Regular closeIndex when openIndex > 0<token> ->
-                let state = reader.State
-                let previous = state.Lexed.Tokens[openIndex - 1<token>]
-
-                let adjacentToCloser =
-                    not (ParseState.isTriviaToken state previous)
-                    && (match previous.TokenWithoutCommentFlags with
-                        | Token.KWRParen
-                        | Token.KWRBracket
-                        | Token.KWRArrayBracket
-                        | Token.KWRBrace
-                        | Token.KWRBraceBar
-                        | Token.StringClose
-                        | Token.VerbatimStringClose
-                        | Token.String3Close -> true
-                        | token -> TokenInfo.isLiteral token)
-
-                if
-                    adjacentToCloser
-                    && ParseState.findLineNumber state openIndex
-                       <> ParseState.findLineNumber state closeIndex
-                then
-                    reader.State <- ParseState.addDiagnosticAt DiagnosticCode.MultilineAdjacentList lBracket state
-            | _ -> ()
-        | ValueNone -> ()
-
-        preturn expr reader
-
     let pList =
         pEnclosed
             pLBracket
@@ -2322,7 +2457,6 @@ module Expr =
             OffsideContext.Bracket
             DiagnosticCode.ExpectedRBracket
             refExprSeqBlock.Parser
-        >>= reportMultilineAdjacentList
 
     let pArray =
         pEnclosed
@@ -2415,8 +2549,9 @@ module Expr =
             return struct (fields, seps, rClose)
         }
 
-    /// Succeeds when a `with` token occurs before the close of the enclosing delimiter,
-    /// outside any nested delimiter. Consumes no input.
+    /// Succeeds when a `with` token occurs before the close of the enclosing delimiter
+    /// and before an `=`, outside any nested delimiter. Consumes no input.
+    /// FCS reads only an application expression before the copy `with`, so a field `=` comes first otherwise.
     let private pWithBeforeClose (reader: Reader<PositionedToken, ParseState, _>) =
         let mutable index = reader.Index
         let mutable depth = 0
@@ -2429,6 +2564,7 @@ module Expr =
             if not (ParseState.isTriviaToken reader.State token) then
                 match token.TokenWithoutCommentFlags with
                 | Token.KWWith when depth = 0 -> found <- ValueSome true
+                | Token.OpEquality when depth = 0 -> found <- ValueSome false
                 | Token.KWLParen
                 | Token.KWLBracket
                 | Token.KWLArrayBracket

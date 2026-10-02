@@ -364,7 +364,8 @@ module Parsing =
             | OffsideContext.Brace
             | OffsideContext.Begin
             | OffsideContext.Fun
-            | OffsideContext.Function -> findFunBodyEnclosingIndent tokenCol deeper
+            | OffsideContext.Function
+            | OffsideContext.MatchClauses -> findFunBodyEnclosingIndent tokenCol deeper
             | _ -> tokenCol >= ctx.Indent
 
     // MatchClauses-body undentation: same skip-past-containers rule, but also skips
@@ -387,6 +388,104 @@ module Parsing =
             | OffsideContext.MatchClauses -> findMatchBodyEnclosingIndent tokenCol deeper
             | _ -> tokenCol >= ctx.Indent
 
+    /// Scans back from the token at `index` to the token that started `clauses`. Returns whether a
+    /// delimiter that opens after that token is still open or a conditional directive makes the
+    /// active tokens unknown, whether the previous syntax token is `->`,
+    /// and the column of the previous rule body when the `|` before this rule does not end its block.
+    let private scanMatchClause (state: ParseState) (clauses: Offside) (index: int<token>) =
+        let tokens = state.Lexed.Tokens
+        let mutable i = index - 1<token>
+        let mutable depth = 0
+        let mutable insideDelimiter = false
+        let mutable unknownRegion = false
+        let mutable stop = false
+        let mutable previous = ValueNone
+        let mutable bar = ValueNone
+        let mutable bodyStart = ValueNone
+        let mutable previousBodyColumn = ValueNone
+
+        while not stop
+              && i >= 0<token>
+              && tokens[i].StartIndex >= clauses.Token.StartIndex do
+            let token = tokens[i]
+
+            if not (ParseState.isTriviaToken state token) then
+                let kind = token.TokenWithoutCommentFlags
+
+                if previous.IsNone then
+                    previous <- ValueSome kind
+
+                match kind with
+                | Token.IfDirective
+                | Token.ElseDirective
+                | Token.EndIfDirective ->
+                    unknownRegion <- true
+                    stop <- true
+                | Token.KWRParen
+                | Token.KWRBracket
+                | Token.KWRArrayBracket
+                | Token.KWRBrace
+                | Token.KWRBraceBar
+                | Token.KWRHashParen
+                | Token.KWEnd
+                | Token.OpQuotationTypedRight
+                | Token.OpQuotationUntypedRight -> depth <- depth + 1
+                | Token.KWLParen
+                | Token.KWLBracket
+                | Token.KWLArrayBracket
+                | Token.KWLBrace
+                | Token.KWLBraceBar
+                | Token.KWLHashParen
+                | Token.KWBegin
+                | Token.OpQuotationTypedLeft
+                | Token.OpQuotationUntypedLeft ->
+                    if depth > 0 then
+                        depth <- depth - 1
+                    else
+                        insideDelimiter <- bar.IsNone
+                        stop <- true
+                | Token.OpBar when depth = 0 && bar.IsNone -> bar <- ValueSome i
+                | Token.OpArrowRight when depth = 0 && bar.IsSome ->
+                    match bar, bodyStart with
+                    | ValueSome barIndex, ValueSome startIndex ->
+                        let bodyColumn = ParseState.getIndent state startIndex
+
+                        if ParseState.getIndent state barIndex >= bodyColumn then
+                            previousBodyColumn <- ValueSome bodyColumn
+                    | _ -> ()
+
+                    stop <- true
+                | _ -> ()
+
+                if bar.IsSome then
+                    bodyStart <- ValueSome i
+
+            i <- i - 1<token>
+
+        struct (insideDelimiter || unknownRegion, previous = ValueSome Token.OpArrowRight, previousBodyColumn)
+
+    let private columnOfToken (state: ParseState) (token: PositionedToken) (before: int<token>) =
+        let tokens = state.Lexed.Tokens
+        let mutable i = before - 1<token>
+
+        while i > 0<token>
+              && tokens[i].StartIndex > token.StartIndex do
+            i <- i - 1<token>
+
+        ParseState.getIndent state i
+
+    /// The leftmost column of the first token of a rule body: the `match` column or an enclosing
+    /// `(` or `begin` before it, or the `try` column (FCS LexFilter `undentationLimit` with RelaxWhitespace2).
+    let private matchRuleBodyLimit (state: ParseState) (index: int<token>) (enclosing: Offside list) =
+        match enclosing with
+        | ({ Context = OffsideContext.Match } as matchCtx) :: { Context = OffsideContext.SeqBlock } :: ({
+                                                                                                         Context = OffsideContext.Paren | OffsideContext.Begin
+                                                                                                     } as paren) :: _ ->
+            ValueSome(min matchCtx.Indent (columnOfToken state paren.Token index))
+        | ({ Context = OffsideContext.Match } as matchCtx) :: _ -> ValueSome matchCtx.Indent
+        | ({ Context = OffsideContext.Try } as tryCtx) :: _ -> ValueSome tryCtx.Indent
+        | _ -> ValueNone
+
     // Used by the Match/Function/Try aligned-token rule (15.1.10 extended).
     // Walks past Match/MatchClauses/Function/Try/SeqBlock frames looking for an
     // enclosing paren-like frame.
@@ -404,7 +503,8 @@ module Parsing =
             | _ -> false
 
     /// Walk the context stack skipping SeqBlock+Paren pairs to find the enclosing
-    /// expression's offside line for collection/CE undentation (F# spec 15.1.10.4).
+    /// expression's offside line for collection/CE undentation (F# spec 15.1.10.4). As in FCS, match
+    /// clauses give no limit, and the `match` or `try` below them does.
     let rec private checkCollectionUndent (tokenCol: int) (stack: Offside list) : bool =
         match stack with
         | [] -> true // Walked past all paren-like/SeqBlock contexts; no enclosing offside line to violate
@@ -412,7 +512,8 @@ module Parsing =
             match (ctx: Offside).Context with
             | OffsideContext.SeqBlock
             | OffsideContext.Fun
-            | OffsideContext.Function -> checkCollectionUndent tokenCol deeper
+            | OffsideContext.Function
+            | OffsideContext.MatchClauses -> checkCollectionUndent tokenCol deeper
             | c when isParenLike c -> checkCollectionUndent tokenCol deeper
             | _ ->
                 // Found the enclosing non-paren context; check if token is within its indent
@@ -502,16 +603,44 @@ module Parsing =
                 else
                     ValueNone
 
-            // 15.1.10.1 extended: MatchClauses body undentation
-            // MatchClauses governs only `|` bar alignment; non-`|` tokens inside
-            // a rule (guard continuations, ->, etc.) should be bounded by the
-            // enclosing Function/Match context, not the pattern column. Apply the
-            // same skip-past-containers rule as FunBody.
+            // MatchClauses: FCS permits no clause token left of the clause column, except the first
+            // token of a rule body. A `|` on the line of the previous rule body leaves that body block
+            // open in FCS, and the block column is then the limit. A delimiter opened in the clause,
+            // the end of input, and a token that ends the `match` or `try` keep the enclosing limit. Without a leading `|`, FCS permits one
+            // column left of the clause column (LexFilter `CtxtMatchClauses (leadingBar, offsidePos)`).
             elif current.Context = OffsideContext.MatchClauses && token <> Token.OpBar then
-                if findMatchBodyEnclosingIndent tokenCol enclosing then
-                    ValueSome "15.1.10.1 MatchBody"
+                let index = int readerIndex * 1<token>
+                let struct (insideDelimiter, startsBody, previousBodyColumn) =
+                    scanMatchClause state current index
+
+                if
+                    current.Token.Token <> Token.OpBar
+                    && not startsBody
+                    && tokenCol + 1 >= current.Indent
+                then
+                    ValueSome "15.1.9 MatchClausesWithoutBar"
+                elif
+                    insideDelimiter
+                    || token = Token.EOF
+                    || (not startsBody
+                        && (match enclosing with
+                            | owner :: _ -> tokenCol <= owner.Indent
+                            | [] -> true))
+                then
+                    if findMatchBodyEnclosingIndent tokenCol enclosing then
+                        ValueSome "15.1.10.1 MatchBody"
+                    else
+                        ValueNone
+                elif startsBody then
+                    match matchRuleBodyLimit state index enclosing, previousBodyColumn with
+                    | ValueSome limit, ValueSome bodyColumn when tokenCol >= limit && tokenCol > bodyColumn ->
+                        ValueSome "15.1.10.1 MatchRuleBody"
+                    | ValueSome limit, ValueNone when tokenCol >= limit -> ValueSome "15.1.10.1 MatchRuleBody"
+                    | _ -> ValueNone
                 else
-                    ValueNone
+                    match previousBodyColumn with
+                    | ValueSome bodyColumn when tokenCol >= bodyColumn -> ValueSome "15.1.10.1 MatchRuleAfterBody"
+                    | _ -> ValueNone
 
             // 15.1.10.2 (if/then/else + paren/begin undentation) and 15.1.10.3 (module/class
             // body undentation inside begin/end) are intentionally omitted. Both spec rules
@@ -738,6 +867,268 @@ module Parsing =
     /// Advanced the reader to the next non-trivia token and returns it without consuming it.
     /// Allows parser to avoid re-skipping trivia tokens when it needs to look ahead at the next token to decide what to parse.
     let peekNextSyntaxToken (reader: Reader<PositionedToken, ParseState, _>) = nextSyntaxTokenImpl true reader
+
+    /// The FCS limit at a module element: the column of the element, plus one for `let` (LexFilter
+    /// CtxtLetDecl). CtxtDo gives no limit of its own. The element is the last line start at `elementColumn`.
+    let private moduleElementLimit (state: ParseState) (elementColumn: int) (index: int<token>) =
+        let tokens = state.Lexed.Tokens
+        let mutable i = index
+        let mutable found = ValueNone
+
+        while found.IsNone && i >= 0<token> do
+            let token = tokens[i]
+
+            if
+                not (ParseState.isTriviaToken state token)
+                && ParseState.getIndent state i = elementColumn
+                && not (followsTokenOnSameLine state (syntaxToken token (int i)))
+            then
+                found <- ValueSome token.TokenWithoutCommentFlags
+
+            i <- i - 1<token>
+
+        match found with
+        | ValueSome Token.KWLet -> ValueSome(elementColumn + 1)
+        | ValueSome _ -> ValueSome elementColumn
+        | ValueNone -> ValueNone
+
+    /// The FCS LexFilter `undentationLimit` for the block after an opening delimiter at `index`, from
+    /// the frames below it. A frame that this function does not model gives no limit.
+    let rec private delimitedBlockLimit (state: ParseState) (index: int<token>) (stack: Offside list) =
+        match stack with
+        | [] -> ValueNone
+        | { Context = OffsideContext.SeqBlock; Indent = elementColumn } :: ([]
+                                                                         | { Context = OffsideContext.Module | OffsideContext.Namespace } :: _) ->
+            moduleElementLimit state elementColumn index
+        | ctx :: deeper ->
+            match ctx.Context with
+            | OffsideContext.SeqBlock
+            | OffsideContext.Paren
+            | OffsideContext.Bracket
+            | OffsideContext.BracketBar
+            | OffsideContext.Brace
+            | OffsideContext.BraceBar
+            | OffsideContext.Begin
+            | OffsideContext.Fun
+            | OffsideContext.Function
+            | OffsideContext.Else
+            | OffsideContext.Vanilla -> delimitedBlockLimit state index deeper
+            | OffsideContext.MatchClauses ->
+                match deeper with
+                | ({ Context = OffsideContext.Try | OffsideContext.Match } as owner) :: _ -> ValueSome owner.Indent
+                | _ -> ValueSome(columnOfToken state ctx.Token index)
+            | OffsideContext.Then
+            | OffsideContext.If
+            | OffsideContext.Do
+            | OffsideContext.Try
+            | OffsideContext.Match -> ValueSome ctx.Indent
+            | OffsideContext.Let -> ValueSome(ctx.Indent + 1)
+            | _ -> ValueNone
+
+    let private previousSyntaxColumn (state: ParseState) (token: PositionedToken) =
+        let tokens = state.Lexed.Tokens
+        let mutable i = tokens.LengthM - 1<token>
+
+        while i > 0<token>
+              && tokens[i].StartIndex >= token.StartIndex do
+            i <- i - 1<token>
+
+        while i > 0<token>
+              && ParseState.isTriviaToken state tokens[i] do
+            i <- i - 1<token>
+
+        ParseState.getIndent state i
+
+    /// The frames that remain after a closing delimiter at `column`: FCS ends a loop body block and
+    /// its CtxtDo at a token left of the body and not right of the `do`.
+    let rec private framesAfterClose (state: ParseState) (column: int) (stack: Offside list) =
+        match stack with
+        | ({ Context = OffsideContext.SeqBlock } as body) :: { Context = OffsideContext.Do } :: rest when
+            column < body.Indent
+            && column <= previousSyntaxColumn state body.Token
+            ->
+            framesAfterClose state column rest
+        | _ -> stack
+
+    let private isCloser (token: Token) =
+        match token with
+        | Token.KWRParen
+        | Token.KWRBracket
+        | Token.KWRArrayBracket
+        | Token.KWRBrace
+        | Token.KWRBraceBar
+        | Token.KWEnd -> true
+        | _ -> false
+
+    /// When only closing delimiters come before the token at `index` on its line, the first of them.
+    let private firstCloserOfLine (state: ParseState) (index: int<token>) =
+        let tokens = state.Lexed.Tokens
+        let mutable i = index - 1<token>
+        let mutable first = index
+        let mutable result = ValueNone
+
+        while result.IsNone do
+            if i < 0<token> then
+                result <- ValueSome(ValueSome first)
+            else
+                let token = tokens[i]
+
+                if token.TokenWithoutCommentFlags = Token.Newline then
+                    result <- ValueSome(ValueSome first)
+                elif ParseState.isTriviaToken state token then
+                    i <- i - 1<token>
+                elif isCloser token.TokenWithoutCommentFlags then
+                    first <- i
+                    i <- i - 1<token>
+                else
+                    result <- ValueSome ValueNone
+
+        result.Value
+
+    /// The Compatibility Oracle reports FS0010 at a token that follows, on the same line, closing
+    /// delimiters where the first starts its line left of the enclosing block. The last closer of the run
+    /// checks the token, with the frames that remain after it. A block directly inside
+    /// a delimiter has no such limit. A token that aligns with an enclosing construct, such as `else` or `with`,
+    /// has the column of that construct as its limit.
+    let reportTokenAfterUndentedClose (closeTok: SyntaxToken) (reader: Reader<PositionedToken, ParseState, _>) =
+        let state = reader.State
+
+        match closeTok.Index with
+        | TokenIndex.Regular closeIndex ->
+          match firstCloserOfLine state closeIndex with
+          | ValueSome firstIndex ->
+            let column = ParseState.getIndent state firstIndex
+            let tokens = state.Lexed.Tokens
+            let mutable i = closeIndex + 1<token>
+            let mutable next = ValueNone
+
+            while next.IsNone && i < tokens.LengthM do
+                let token = tokens[i]
+
+                match token.TokenWithoutCommentFlags with
+                | Token.Newline
+                | Token.EOF -> i <- tokens.LengthM
+                | Token.KWRParen
+                | Token.KWRBracket
+                | Token.KWRArrayBracket
+                | Token.KWRBrace
+                | Token.KWRBraceBar
+                | Token.KWEnd -> i <- tokens.LengthM
+                | _ when ParseState.isTriviaToken state token -> i <- i + 1<token>
+                | _ -> next <- ValueSome(token, i)
+
+            // FCS LexFilter gives no limit for the block after `fun`, `function`, `->` of a rule, `then`,
+            // `else`, or `do`, and uses the frames below it.
+            let opensBlock (ctx: OffsideContext) =
+                match ctx with
+                | OffsideContext.Fun
+                | OffsideContext.Function
+                | OffsideContext.MatchClauses
+                | OffsideContext.Then
+                | OffsideContext.Else
+                | OffsideContext.Do -> true
+                | _ -> false
+
+            // A `fun` that starts the block below it keeps its body block as the limit, unless the closer is
+            // also left of that block, which FCS then ends too.
+            let startsBlockBelow (rest: Offside list) =
+                match rest with
+                | ({ Context = OffsideContext.Fun } as lambda) :: { Context = OffsideContext.SeqBlock
+                                                                    Token = start
+                                                                    Indent = startColumn } :: _ ->
+                    start.StartIndex = lambda.Token.StartIndex
+                    && column >= startColumn
+                | _ -> false
+
+            let rec limitingBlock (stack: Offside list) =
+                match stack with
+                | { Context = OffsideContext.SeqBlock } :: ({ Context = ctx } :: _ as rest) when
+                    opensBlock ctx && not (startsBlockBelow rest)
+                    ->
+                    rest
+                    |> List.skipWhile (fun frame ->
+                        frame.Context <> OffsideContext.SeqBlock
+                        && not (isParenLike frame.Context)
+                    )
+                    |> limitingBlock
+                | _ -> stack
+
+            match next, limitingBlock (framesAfterClose state column state.Context) with
+            | ValueSome(token, index),
+              { Context = OffsideContext.SeqBlock; Indent = blockColumn } :: enclosing ->
+                let kind = token.TokenWithoutCommentFlags
+
+                let limit =
+                    let pairs (frame: Offside) =
+                        match frame.Context, kind with
+                        | OffsideContext.Then, (Token.KWElse | Token.KWElif) -> ValueSome(frame.Indent - 1)
+                        | _ when contextPermitsToken kind System.Int32.MaxValue frame -> ValueSome frame.Indent
+                        | _ -> ValueNone
+
+                    match enclosing |> List.tryPick (pairs >> ValueOption.toOption) with
+                    | Some ownerColumn -> ValueSome ownerColumn
+                    | None ->
+                        match enclosing with
+                        | { Context = ctx } :: _ when isParenLike ctx -> ValueNone
+                        | _ -> ValueSome blockColumn
+
+                match limit with
+                | ValueSome limit when column < limit ->
+                    reader.State <-
+                        ParseState.addDiagnosticAt
+                            DiagnosticCode.TokenAfterUndentedClose
+                            (syntaxToken token (int index))
+                            state
+                | _ -> ()
+            | _ -> ()
+          | ValueNone -> ()
+        | TokenIndex.Virtual -> ()
+
+        preturn () reader
+
+    /// For an `else` left of its `if`: the Compatibility Oracle reports FS0010 when the `else` is left of the
+    /// block that holds the `if`, and FS0058 when that block is directly inside a delimiter and the `else`
+    /// is left of the enclosing offside line, where LexFilter pushes CtxtElse.
+    let reportUndentedElse (elseTok: SyntaxToken) (reader: Reader<PositionedToken, ParseState, _>) =
+        match elseTok.Index with
+        | TokenIndex.Regular elseIndex ->
+            let state = reader.State
+            let column = ParseState.getIndent state elseIndex
+
+            let undented =
+                match state.Context with
+                | { Context = OffsideContext.SeqBlock; Indent = blockColumn } :: { Context = ctx } :: _ when
+                    not (isParenLike ctx)
+                    ->
+                    column < blockColumn
+                | _ ->
+                    match delimitedBlockLimit state (elseIndex - 1<token>) state.Context with
+                    | ValueSome limit -> column < limit
+                    | ValueNone -> false
+
+            if undented then
+                reader.State <- ParseState.addDiagnosticAt DiagnosticCode.UndentedBlockStart elseTok state
+        | TokenIndex.Virtual -> ()
+
+    /// The Compatibility Oracle reports FS0058 when the first token after an opening delimiter is left
+    /// of the enclosing offside line, where LexFilter pushes CtxtSeqBlock.
+    let reportUndentedBlockStart (reader: Reader<PositionedToken, ParseState, _>) =
+        let openIndex = int reader.Index * 1<token> - 1<token>
+
+        match peekNextSyntaxToken reader with
+        | Ok first when openIndex >= 0<token> ->
+            match first.Index with
+            | TokenIndex.Regular firstIndex ->
+                let state = reader.State
+
+                match delimitedBlockLimit state openIndex state.Context with
+                | ValueSome limit when ParseState.getIndent state firstIndex < limit ->
+                    reader.State <- ParseState.addDiagnosticAt DiagnosticCode.UndentedBlockStart first state
+                | _ -> ()
+            | TokenIndex.Virtual -> ()
+        | _ -> ()
+
+        preturn () reader
 
     /// Emits a trace message. Use with `do!` inside a `parser { }` CE for debugging.
     let trace (msg: string) (reader: Reader<PositionedToken, ParseState, _>) =
