@@ -502,7 +502,8 @@ module LexBuilder =
             | Token.KWLArrayBracket
             | Token.KWLBrace
             | Token.KWLAttrBracket
-            | Token.KWBegin -> true
+            | Token.KWBegin
+            | Token.OpRange -> true
             | _ -> false
 
     /// Check if the current numeric token should be merged with a preceding `-` token
@@ -2194,6 +2195,32 @@ module Lexing =
                         rawLen
                 else
                     rawLen
+
+            // FCS lexes `int '.' '.'` as INT32_DOT_DOT, so `1..-1` is `1`, `..`, `-1`, and `1 ..-1` keeps `..-`.
+            let afterDecimalInt () =
+                let source = state.Source
+                let mutable i = startIdx - 1
+
+                while i >= 0
+                      && (Char.IsAsciiDigit source[i] || source[i] = '_') do
+                    i <- i - 1
+
+                i < startIdx - 1
+                && Char.IsAsciiDigit source[i + 1]
+                && (i < 0
+                    || not (Char.IsLetterOrDigit source[i] || source[i] = '_' || source[i] = '.' || source[i] = '''))
+
+            let len =
+                if
+                    len > 2
+                    && fullSpan[0] = '.'
+                    && fullSpan[1] = '.'
+                    && fullSpan[2] <> '.'
+                    && afterDecimalInt ()
+                then
+                    2
+                else
+                    len
 
             if len = 0 then
                 fail expectedOperator reader

@@ -530,6 +530,37 @@ let y = "
                     Expect.isOk result accepted
                     Expect.isEmpty diagnostics accepted
 
+            testCase "a range after an integer literal splits a signed operator, as FCS does"
+            <| fun () ->
+                // FCS 43.10.101: L(RG(C[1],C[-1])) and AR(RG(C[1],C[+1])). The Compatibility Oracle accepts both.
+                for source, signedStart in
+                    [
+                        "let y = [1..-1]\n", 12
+                        "let y = [| 1..+1 |]\n", 14
+                    ] do
+                    let lexed = Lexing.lexString source
+
+                    let tokens =
+                        lexed.Tokens
+                        |> Seq.filter (fun token ->
+                            token.TokenWithoutCommentFlags
+                            <> Token.Whitespace
+                        )
+                        |> Seq.map (fun token -> token.StartIndex, token.TokenWithoutCommentFlags)
+                        |> List.ofSeq
+
+                    Expect.contains
+                        tokens
+                        (signedStart
+                         - 2,
+                         Token.OpRange)
+                        $"{source} must give a range token"
+
+                    Expect.isTrue
+                        (tokens
+                         |> List.exists (fun (start, _) -> start = signedStart))
+                        $"{source} must start a new token at the sign"
+
             testCase "a loop ends before a closing delimiter left of its body and do, as in FCS"
             <| fun () ->
                 // FCS 43.10.101: While(...)@1:9-1:23, so the loop ends after `1`, before `]` at (2,1).
