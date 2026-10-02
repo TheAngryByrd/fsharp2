@@ -1152,7 +1152,7 @@ module Expr =
                 return ExprAux.ForExpr(forBuilder forTok body doneTok)
             }
 
-        let pLetOrUseIn letIndent (reader: Reader<PositionedToken, ParseState, _>) =
+        let pLetOrUseIn letIndent (letTok: SyntaxToken) (reader: Reader<PositionedToken, ParseState, _>) =
             match peekNextSyntaxToken reader with
             | Ok t when t.Token = Token.KWIn -> consumePeeked t reader
             | Ok t ->
@@ -1172,10 +1172,30 @@ module Expr =
                 if atContextIndent then
                     // The Compatibility Oracle reports FS0010 at a body that is not at the `let` column,
                     // for example the next line after `a; let x = 1`.
+                    // It also reports FS0010 at a body on a later line when a `;` or `,` comes before the `let` on its line.
+                    let afterSeparator () =
+                        match letTok.Index, t.Index with
+                        | TokenIndex.Regular letIndex, TokenIndex.Regular bodyIndex when
+                            ParseState.findLineNumber state letIndex
+                            <> ParseState.findLineNumber state bodyIndex
+                            ->
+                            let tokens = state.Lexed.Tokens
+                            let mutable i = letIndex - 1<token>
+
+                            while i > 0<token>
+                                  && ParseState.isTriviaToken state tokens[i]
+                                  && tokens[i].TokenWithoutCommentFlags <> Token.Newline do
+                                i <- i - 1<token>
+
+                            i >= 0<token>
+                            && (tokens[i].TokenWithoutCommentFlags = Token.OpSemicolon
+                                || tokens[i].TokenWithoutCommentFlags = Token.OpComma)
+                        | _ -> false
+
                     match state.Context with
                     | { Indent = ctxIndent } :: _ when
                         ctxIndent > 0
-                        && indent <> letIndent
+                        && (indent <> letIndent || afterSeparator ())
                         ->
                         reader.State <- ParseState.addDiagnosticAt DiagnosticCode.MisalignedLetBody t reader.State
                     | _ -> ()
@@ -1281,7 +1301,7 @@ module Expr =
                                     error <- Error e
                                     cont <- false
                                 | Ok(recTok, defs, ands) ->
-                                    match pLetOrUseIn indent reader with
+                                    match pLetOrUseIn indent kwTok reader with
                                     | Error e ->
                                         error <- Error e
                                         cont <- false
