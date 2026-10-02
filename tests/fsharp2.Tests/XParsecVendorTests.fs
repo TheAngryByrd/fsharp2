@@ -496,6 +496,40 @@ let y = "
                     Expect.isOk result accepted
                     Expect.isEmpty diagnostics accepted
 
+            testCase "a with or finally after a nested try on the same line gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 at (2,1), the end of the input, for both texts.
+                for source, offset in
+                    [
+                        "let y = try try g with _ -> z with _ -> z\n", 30
+                        "let y = try try g finally z with _ -> z\n", 28
+                    ] do
+                    match parseVendored source with
+                    | _, [ diagnostic ] ->
+                        Expect.equal diagnostic.Code DiagnosticCode.SameLineNestedTry source
+
+                        Expect.equal
+                            diagnostic.Token.StartIndex
+                            offset
+                            "the diagnostic must point at the outer 'with'"
+
+                        Expect.equal
+                            (DiagnosticCode.fsharp2Code diagnostic.Code)
+                            (ValueSome "FSC2P1001")
+                            source
+                    | _, other -> failtest $"{source} must give one diagnostic, not {other.Length}"
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "let y = try match x with A -> z with _ -> z\n"
+                        "let y = try try g with _ -> z\n        with _ -> z\n"
+                        "let y = try (try g with _ -> z) with _ -> z\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
             testCase "a loop ends before a closing delimiter left of its body and do, as in FCS"
             <| fun () ->
                 // FCS 43.10.101: While(...)@1:9-1:23, so the loop ends after `1`, before `]` at (2,1).

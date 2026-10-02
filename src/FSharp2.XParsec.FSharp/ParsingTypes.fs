@@ -302,6 +302,8 @@ type DiagnosticCode =
     | SameLineBarEndsBody
     /// A `|` follows a match rule whose tokens went left of the clause column, which ends the clauses in FCS.
     | BarAfterUndentedRule
+    /// A `with` or `finally` follows, on the same line, a `try` body that ends in another `try` construct.
+    | SameLineNestedTry
     /// A module element starts at another column than the first element of its module.
     | MisalignedModuleElement
     /// The body of a `let` without `in` starts at another column than the `let`.
@@ -497,6 +499,7 @@ module DiagnosticCode =
         | DiagnosticCode.NestingLimitExceeded _ -> "NestingLimitExceeded"
         | DiagnosticCode.SameLineBarEndsBody -> "SameLineBarEndsBody"
         | DiagnosticCode.BarAfterUndentedRule -> "BarAfterUndentedRule"
+        | DiagnosticCode.SameLineNestedTry -> "SameLineNestedTry"
         | DiagnosticCode.MisalignedModuleElement -> "MisalignedModuleElement"
         | DiagnosticCode.MisalignedLetBody -> "MisalignedLetBody"
         | DiagnosticCode.UndentedBlockStart -> "UndentedBlockStart"
@@ -535,6 +538,8 @@ module DiagnosticCode =
             "The body of a 'let' without 'in' must start at the column of the 'let'"
         | DiagnosticCode.MisalignedModuleElement ->
             "A module element must start at the column of the first element of its module"
+        | DiagnosticCode.SameLineNestedTry ->
+            "A 'with' or 'finally' cannot follow a nested 'try' on the same line"
         | DiagnosticCode.BarAfterUndentedRule ->
             "A '|' cannot follow a rule whose tokens are left of the first rule"
         | DiagnosticCode.SameLineBarEndsBody ->
@@ -554,6 +559,7 @@ module DiagnosticCode =
             string name + "(" + string openedBase + ", " + string expectedBase + ")"
         | DiagnosticCode.SameLineBarEndsBody
         | DiagnosticCode.BarAfterUndentedRule
+        | DiagnosticCode.SameLineNestedTry
         | DiagnosticCode.MisalignedModuleElement
         | DiagnosticCode.MisalignedLetBody
         | DiagnosticCode.UndentedBlockStart
@@ -581,6 +587,7 @@ module DiagnosticCode =
         | DiagnosticCode.NestingLimitExceeded _
         | DiagnosticCode.SameLineBarEndsBody
         | DiagnosticCode.BarAfterUndentedRule
+        | DiagnosticCode.SameLineNestedTry
         | DiagnosticCode.MisalignedModuleElement
         | DiagnosticCode.MisalignedLetBody
         | DiagnosticCode.UndentedBlockStart

@@ -954,6 +954,21 @@ module Expr =
                 return ExprAux.ForExpr result
             }
 
+        // The Compatibility Oracle rejects `try try a with _ -> b with _ -> c` and `try try a finally b with ...`
+        // when the outer `with` or `finally` is on the line of the inner one. FCS LexFilter gives that
+        // token to the inner `try`. A parenthesized inner `try` and an inner `match` are accepted.
+        let rec endsInTry (expr: Expr<SyntaxToken>) =
+            match expr with
+            | Expr.TryWith _
+            | Expr.TryFinally _ -> true
+            | Expr.Sequential(items, _)
+            | Expr.Tuple(items, _) when items.Length > 0 -> endsInTry items[items.Length - 1]
+            | Expr.App(_, args) when args.Length > 0 -> endsInTry args[args.Length - 1]
+            | Expr.InfixApp(_, _, right)
+            | Expr.PrefixApp(_, right)
+            | Expr.LetOrUse(body = ValueSome right) -> endsInTry right
+            | _ -> false
+
         let pTryExpr =
             // FCS starts the clauses at the first token after `with`, but not left of the `try` column.
             let pTryClauses tryIndent (reader: Reader<PositionedToken, ParseState, _>) =
@@ -1051,6 +1066,17 @@ module Expr =
                             Error e
                         | Ok result ->
                             reader.State <- ParseState.popOffside tryEntry reader.State
+
+                            match result with
+                            | Expr.TryWith(expr = body; withToken = continuation)
+                            | Expr.TryFinally(tryExpr = body; finallyToken = continuation) when
+                                endsInTry body
+                                && followsTokenOnSameLine reader.State continuation
+                                ->
+                                reader.State <-
+                                    ParseState.addDiagnosticAt DiagnosticCode.SameLineNestedTry continuation reader.State
+                            | _ -> ()
+
                             Ok(ExprAux.ForExpr result)
 
         let pWhileExpr =
