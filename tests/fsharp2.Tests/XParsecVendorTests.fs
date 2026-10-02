@@ -491,6 +491,8 @@ let y = "
                         "let y = match x with A when c ->\n         0 + 1 | _ -> 1\n"
                         "let f () =\n    match x with\n    | P p ->\n        [ 1\n          ]\n      |> g\n    | _ -> []\n"
                         "let f () =\n    match x with\n    | A -> f {\n        a = 1 }\n    | _ -> z\n"
+                        "let y = [| if c then 1\n   else 2 |]\n"
+                        "let y = [| if c then 1\n   else\n  2 |]\n"
                     ] do
                     let result, diagnostics = parseVendored accepted
                     Expect.isOk result accepted
