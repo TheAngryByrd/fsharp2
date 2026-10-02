@@ -485,6 +485,32 @@ let y = "
                     Expect.isOk result accepted
                     Expect.isEmpty diagnostics accepted
 
+            testCase "a match clause token left of the clause column gives a diagnostic"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 at (2,9), (2,13), (2,9), and (2,10) with (2,15).
+                for rejected in
+                    [
+                        "let y = g (match x with A -> a | B ->\n        b)\n"
+                        "let y = g (try a with _\n            -> b)\n"
+                        "let y = g (match x with A -> a |\n        B -> b)\n"
+                        "let y = match x with A when c\n         && d -> 0 | _ -> 1\n"
+                    ] do
+                    let _, diagnostics = parseVendored rejected
+                    Expect.isNonEmpty diagnostics rejected
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "let y = match x with A ->\n        b\n"
+                        "let y = g (match x with A ->\n          b)\n"
+                        "let y = match x with A when c ->\n         0 + 1 | _ -> 1\n"
+                        "let y = match x with A when xs[\n                    0] -> 0\n"
+                        "let f () =\n    try\n        a\n    with e\n        when c -> b\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
             testCase "nested records and computation expressions parse in time linear in depth"
             <| fun () ->
                 let shapes = [

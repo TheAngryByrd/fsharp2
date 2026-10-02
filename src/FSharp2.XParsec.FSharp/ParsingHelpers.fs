@@ -387,6 +387,104 @@ module Parsing =
             | OffsideContext.MatchClauses -> findMatchBodyEnclosingIndent tokenCol deeper
             | _ -> tokenCol >= ctx.Indent
 
+    /// Scans back from the token at `index` to the token that started `clauses`. Returns whether a
+    /// delimiter that opens after that token is still open or a conditional directive makes the
+    /// active tokens unknown, whether the previous syntax token is `->`,
+    /// and the column of the previous rule body when the `|` before this rule does not end its block.
+    let private scanMatchClause (state: ParseState) (clauses: Offside) (index: int<token>) =
+        let tokens = state.Lexed.Tokens
+        let mutable i = index - 1<token>
+        let mutable depth = 0
+        let mutable insideDelimiter = false
+        let mutable unknownRegion = false
+        let mutable stop = false
+        let mutable previous = ValueNone
+        let mutable bar = ValueNone
+        let mutable bodyStart = ValueNone
+        let mutable previousBodyColumn = ValueNone
+
+        while not stop
+              && i >= 0<token>
+              && tokens[i].StartIndex >= clauses.Token.StartIndex do
+            let token = tokens[i]
+
+            if not (ParseState.isTriviaToken state token) then
+                let kind = token.TokenWithoutCommentFlags
+
+                if previous.IsNone then
+                    previous <- ValueSome kind
+
+                match kind with
+                | Token.IfDirective
+                | Token.ElseDirective
+                | Token.EndIfDirective ->
+                    unknownRegion <- true
+                    stop <- true
+                | Token.KWRParen
+                | Token.KWRBracket
+                | Token.KWRArrayBracket
+                | Token.KWRBrace
+                | Token.KWRBraceBar
+                | Token.KWRHashParen
+                | Token.KWEnd
+                | Token.OpQuotationTypedRight
+                | Token.OpQuotationUntypedRight -> depth <- depth + 1
+                | Token.KWLParen
+                | Token.KWLBracket
+                | Token.KWLArrayBracket
+                | Token.KWLBrace
+                | Token.KWLBraceBar
+                | Token.KWLHashParen
+                | Token.KWBegin
+                | Token.OpQuotationTypedLeft
+                | Token.OpQuotationUntypedLeft ->
+                    if depth > 0 then
+                        depth <- depth - 1
+                    else
+                        insideDelimiter <- bar.IsNone
+                        stop <- true
+                | Token.OpBar when depth = 0 && bar.IsNone -> bar <- ValueSome i
+                | Token.OpArrowRight when depth = 0 && bar.IsSome ->
+                    match bar, bodyStart with
+                    | ValueSome barIndex, ValueSome startIndex ->
+                        let bodyColumn = ParseState.getIndent state startIndex
+
+                        if ParseState.getIndent state barIndex >= bodyColumn then
+                            previousBodyColumn <- ValueSome bodyColumn
+                    | _ -> ()
+
+                    stop <- true
+                | _ -> ()
+
+                if bar.IsSome then
+                    bodyStart <- ValueSome i
+
+            i <- i - 1<token>
+
+        struct (insideDelimiter || unknownRegion, previous = ValueSome Token.OpArrowRight, previousBodyColumn)
+
+    let private columnOfToken (state: ParseState) (token: PositionedToken) (before: int<token>) =
+        let tokens = state.Lexed.Tokens
+        let mutable i = before - 1<token>
+
+        while i > 0<token>
+              && tokens[i].StartIndex > token.StartIndex do
+            i <- i - 1<token>
+
+        ParseState.getIndent state i
+
+    /// The leftmost column of the first token of a rule body: the `match` column or an enclosing
+    /// `(` or `begin` before it, or the `try` column (FCS LexFilter `undentationLimit` with RelaxWhitespace2).
+    let private matchRuleBodyLimit (state: ParseState) (index: int<token>) (enclosing: Offside list) =
+        match enclosing with
+        | ({ Context = OffsideContext.Match } as matchCtx) :: { Context = OffsideContext.SeqBlock } :: ({
+                                                                                                         Context = OffsideContext.Paren | OffsideContext.Begin
+                                                                                                     } as paren) :: _ ->
+            ValueSome(min matchCtx.Indent (columnOfToken state paren.Token index))
+        | ({ Context = OffsideContext.Match } as matchCtx) :: _ -> ValueSome matchCtx.Indent
+        | ({ Context = OffsideContext.Try } as tryCtx) :: _ -> ValueSome tryCtx.Indent
+        | _ -> ValueNone
+
     // Used by the Match/Function/Try aligned-token rule (15.1.10 extended).
     // Walks past Match/MatchClauses/Function/Try/SeqBlock frames looking for an
     // enclosing paren-like frame.
@@ -502,16 +600,44 @@ module Parsing =
                 else
                     ValueNone
 
-            // 15.1.10.1 extended: MatchClauses body undentation
-            // MatchClauses governs only `|` bar alignment; non-`|` tokens inside
-            // a rule (guard continuations, ->, etc.) should be bounded by the
-            // enclosing Function/Match context, not the pattern column. Apply the
-            // same skip-past-containers rule as FunBody.
+            // MatchClauses: FCS permits no clause token left of the clause column, except the first
+            // token of a rule body. A `|` on the line of the previous rule body leaves that body block
+            // open in FCS, and the block column is then the limit. A delimiter opened in the clause,
+            // the end of input, and a token that ends the `match` or `try` keep the enclosing limit. Without a leading `|`, FCS permits one
+            // column left of the clause column (LexFilter `CtxtMatchClauses (leadingBar, offsidePos)`).
             elif current.Context = OffsideContext.MatchClauses && token <> Token.OpBar then
-                if findMatchBodyEnclosingIndent tokenCol enclosing then
-                    ValueSome "15.1.10.1 MatchBody"
+                let index = int readerIndex * 1<token>
+                let struct (insideDelimiter, startsBody, previousBodyColumn) =
+                    scanMatchClause state current index
+
+                if
+                    current.Token.Token <> Token.OpBar
+                    && not startsBody
+                    && tokenCol + 1 >= current.Indent
+                then
+                    ValueSome "15.1.9 MatchClausesWithoutBar"
+                elif
+                    insideDelimiter
+                    || token = Token.EOF
+                    || (not startsBody
+                        && (match enclosing with
+                            | owner :: _ -> tokenCol <= owner.Indent
+                            | [] -> true))
+                then
+                    if findMatchBodyEnclosingIndent tokenCol enclosing then
+                        ValueSome "15.1.10.1 MatchBody"
+                    else
+                        ValueNone
+                elif startsBody then
+                    match matchRuleBodyLimit state index enclosing, previousBodyColumn with
+                    | ValueSome limit, ValueSome bodyColumn when tokenCol >= limit && tokenCol > bodyColumn ->
+                        ValueSome "15.1.10.1 MatchRuleBody"
+                    | ValueSome limit, ValueNone when tokenCol >= limit -> ValueSome "15.1.10.1 MatchRuleBody"
+                    | _ -> ValueNone
                 else
-                    ValueNone
+                    match previousBodyColumn with
+                    | ValueSome bodyColumn when tokenCol >= bodyColumn -> ValueSome "15.1.10.1 MatchRuleAfterBody"
+                    | _ -> ValueNone
 
             // 15.1.10.2 (if/then/else + paren/begin undentation) and 15.1.10.3 (module/class
             // body undentation inside begin/end) are intentionally omitted. Both spec rules

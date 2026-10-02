@@ -860,8 +860,20 @@ module Expr =
             }
 
         let pTryExpr =
-            let pTryMatchRules indent tryTok =
-                withContextAt OffsideContext.MatchClauses indent tryTok Rules.parse
+            // FCS starts the clauses at the first token after `with`, but not left of the `try` column.
+            let pTryClauses tryIndent (reader: Reader<PositionedToken, ParseState, _>) =
+                match peekNextSyntaxToken reader with
+                | Error e -> Error e
+                | Ok first ->
+                    let indent =
+                        match first.Index with
+                        | TokenIndex.Regular index -> max tryIndent (ParseState.getIndent reader.State index)
+                        | TokenIndex.Virtual -> tryIndent
+
+                    withContextAt OffsideContext.MatchClauses indent first.PositionedToken Rules.parse reader
+
+            let pTryMatchRules tryIndent =
+                pTryClauses tryIndent
                 |> recoverWith
                     StoppingTokens.afterRule
                     DiagnosticCode.MissingRule
@@ -921,8 +933,7 @@ module Expr =
                             parser {
                                 let! withTok = pWith
                                 // | permitted at try_col via contextPermitsToken (Try context still active)
-                                // MatchClauses at try_col so clause bodies can be at try_col
-                                let! rules = pTryMatchRules indent tryTok.PositionedToken
+                                let! rules = pTryMatchRules indent
                                 return Expr.TryWith(tryTok, tryExpr, withTok, rules)
                             }
 
