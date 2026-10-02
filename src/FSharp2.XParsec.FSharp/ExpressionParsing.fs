@@ -102,7 +102,7 @@ module ElifBranches =
         | TokenIndex.Regular iT -> ParseState.getIndent reader.State iT
         | TokenIndex.Virtual -> 0
 
-    let rec private parseBranches (acc: ResizeArray<_>) (reader: Reader<PositionedToken, ParseState, _>) =
+    let rec private parseBranches (ifColumn: int) (acc: ResizeArray<_>) (reader: Reader<PositionedToken, ParseState, _>) =
         match pElifOrElseIf reader with
         | Ok(ElIfTok.Elif elifTok) ->
             let indent = getIndent reader elifTok
@@ -110,7 +110,7 @@ module ElifBranches =
             match pConditionThen indent elifTok reader with
             | Ok(condition, thenTok, expr) ->
                 acc.Add(ElifBranch.Elif(elifTok, condition, thenTok, expr))
-                parseBranches acc reader
+                parseBranches ifColumn acc reader
             | Error e -> Error e
 
         | Ok(ElIfTok.ElseIf(elseTok, ifTok)) ->
@@ -120,17 +120,28 @@ module ElifBranches =
             match pConditionThen indent elseTok reader with
             | Ok(condition, thenTok, expr) ->
                 acc.Add(ElifBranch.ElseIf(elseTok, ifTok, condition, thenTok, expr))
-                parseBranches acc reader
+                parseBranches ifColumn acc reader
             | Error e -> Error e
 
         | Ok(ElIfTok.Else elseTok) ->
+            // FCS LexFilter limits the block after `else` to the `if` column (CtxtElse :: CtxtIf), and the
+            // Compatibility Oracle reports FS0058 at a first token left of it.
+            match peekNextSyntaxToken reader with
+            | Ok first ->
+                match first.Index with
+                | TokenIndex.Regular firstIndex when ParseState.getIndent reader.State firstIndex < ifColumn ->
+                    reader.State <- ParseState.addDiagnosticAt DiagnosticCode.UndentedBlockStart first reader.State
+                | _ -> ()
+            | Error _ -> ()
+
             match pElseExpr reader with
             | Ok expr -> Ok struct (ImmutableArray.CreateRange acc, ValueSome(ElseBranch.ElseBranch(elseTok, expr)))
             | Error e -> Error e
 
         | Error e -> Ok struct (ImmutableArray.CreateRange acc, ValueNone)
 
-    let parse: FSParser<_> = fun reader -> parseBranches (ResizeArray()) reader
+    let parse (ifColumn: int) : FSParser<_> =
+        fun reader -> parseBranches ifColumn (ResizeArray()) reader
 
 module Binding =
     let private errNoTrailingTypeAnnotation: ErrorType<PositionedToken, ParseState> =
@@ -713,6 +724,90 @@ module Expr =
                     // So, we throw here
                     failwith "Unexpected end of input while looking for 'done' or virtual 'done'"
 
+        // FCS LexFilter ends a loop with ODECLEND at the first token that is offside of the body block and of
+        // CtxtDo (at or left of the `do` column). Inside the body, only the closer of a delimiter that the body opens at its
+        // top level can be there. The loop range then ends at the token before it, so the virtual `done` goes there.
+        // A final `;` of the body is the last token before the offside token, so the loop range includes it.
+        let pLoopDone (bodyStart: int64) (reader: Reader<PositionedToken, ParseState, _>) =
+            match peekNextSyntaxToken reader with
+            | Ok t when t.Token = Token.KWDone -> consumePeeked t reader
+            | _ ->
+                let state = reader.State
+                let tokens = state.Lexed.Tokens
+                let first = int bodyStart * 1<token>
+                let finish = int reader.Index * 1<token>
+
+                let mutable doIndex = first - 1<token>
+
+                while doIndex > 0<token>
+                      && ParseState.isTriviaToken state tokens[doIndex] do
+                    doIndex <- doIndex - 1<token>
+
+                let doColumn = ParseState.getIndent state doIndex
+                let mutable bodyIndex = first
+
+                while bodyIndex < finish
+                      && ParseState.isTriviaToken state tokens[bodyIndex] do
+                    bodyIndex <- bodyIndex + 1<token>
+
+                let bodyColumn = ParseState.getIndent state bodyIndex
+                let mutable i = first
+                let mutable depth = 0
+                let mutable closer = ValueNone
+
+                while closer.IsNone && i < finish do
+                    let token = tokens[i]
+
+                    if not (ParseState.isTriviaToken state token) then
+                        match token.TokenWithoutCommentFlags with
+                        | Token.KWLParen
+                        | Token.KWLBracket
+                        | Token.KWLArrayBracket
+                        | Token.KWLBrace
+                        | Token.KWLBraceBar
+                        | Token.KWBegin -> depth <- depth + 1
+                        | Token.KWRParen
+                        | Token.KWRBracket
+                        | Token.KWRArrayBracket
+                        | Token.KWRBrace
+                        | Token.KWRBraceBar
+                        | Token.KWEnd ->
+                            depth <- depth - 1
+
+                            let column = ParseState.getIndent state i
+
+                            if depth = 0 && column <= doColumn && column < bodyColumn then
+                                closer <- ValueSome i
+                        | _ -> ()
+
+                    i <- i + 1<token>
+
+                match closer with
+                | ValueSome closerIndex ->
+                    let mutable last = closerIndex - 1<token>
+
+                    while last > first
+                          && ParseState.isTriviaToken state tokens[last] do
+                        last <- last - 1<token>
+
+                    let endIndex = tokens[last + 1<token>].StartIndex
+                    Ok(virtualToken (PositionedToken.Create(Token.VirtualDone, endIndex)))
+                | ValueNone ->
+                    let mutable last = finish - 1<token>
+
+                    while last > first
+                          && ParseState.isTriviaToken state tokens[last] do
+                        last <- last - 1<token>
+
+                    if
+                        last >= first
+                        && tokens[last].TokenWithoutCommentFlags = Token.OpSemicolon
+                    then
+                        let endIndex = tokens[last + 1<token>].StartIndex
+                        Ok(virtualToken (PositionedToken.Create(Token.VirtualDone, endIndex)))
+                    else
+                        pDoneVirt reader
+
         let pIfExpr =
             parser {
                 let! (ifTok, indent) = assertKeywordToken Token.KWIf
@@ -730,7 +825,7 @@ module Expr =
                         withContextAt OffsideContext.Then (indent + 1) ifTok.PositionedToken refTypedSeqExprBlock.Parser
                     )
 
-                let! elifs, elseBranch = ElifBranches.parse
+                let! elifs, elseBranch = ElifBranches.parse indent
 
                 return ExprAux.ForExpr(Expr.IfThenElse(ifTok, cond, thenTok, thenExpr, elifs, elseBranch))
             }
@@ -978,12 +1073,14 @@ module Expr =
                         (withContextAt OffsideContext.While (indent + 1) whileTok.PositionedToken pDo)
                 // Body at while_col
                 // Grammar: WHILE _ DO typedSeqExprBlock
+                let! bodyStart = getPosition
+
                 let! body =
                     recoverExprMissing (
                         withContextAt OffsideContext.Do indent whileTok.PositionedToken refTypedSeqExprBlock.Parser
                     )
 
-                let! doneTok = pDoneVirt
+                let! doneTok = pLoopDone bodyStart.Index
                 return ExprAux.ForExpr(Expr.While(whileTok, cond, doTok, body, doneTok))
             }
 
@@ -1046,10 +1143,12 @@ module Expr =
                 let bodyMinIndent = indent
                 let! forBuilder = withContextAt OffsideContext.For headerMinIndent forTok.PositionedToken pForHeader
                 // Grammar: FOR _ IN _ DO typedSeqExprBlock (and FOR _ = _ TO _ DO typedSeqExprBlock)
+                let! bodyStart = getPosition
+
                 let! body =
                     withContextAt OffsideContext.Do bodyMinIndent forTok.PositionedToken refTypedSeqExprBlock.Parser
 
-                let! doneTok = pDoneVirt
+                let! doneTok = pLoopDone bodyStart.Index
                 return ExprAux.ForExpr(forBuilder forTok body doneTok)
             }
 
@@ -1351,6 +1450,7 @@ module Expr =
                 let! pos = getPosition
                 let! lBracket = pHighPrecLBracket
                 let lBracket = syntaxToken lBracket pos.Index
+                do! reportUndentedBlockStart
                 // Special case: f[] with empty brackets → treat as f [] (application to empty list)
                 match! peekNextSyntaxToken with
                 | t when t.Token = Token.KWRBracket ->
@@ -1368,6 +1468,7 @@ module Expr =
                 let! pos = getPosition
                 let! lParen = pHighPrecLParen
                 let lParen = syntaxToken lParen pos.Index
+                do! reportUndentedBlockStart
 
                 // Handle f() — empty argument list
                 match! peekNextSyntaxToken with
@@ -1594,6 +1695,7 @@ module Expr =
                     // .[expr] — indexed access (e.g. xs.[0])
                     parser {
                         let! lBracket = pLBracket
+                        do! reportUndentedBlockStart
                         let! indexExpr = refExpr.Parser
                         let! rBracket = pRBracket
                         return ExprAux.DotIndex(lBracket, indexExpr, rBracket)
@@ -2190,7 +2292,15 @@ module Expr =
             parenKindConstructor
             offsideCtx
             diagCode
-            pInner
+            (parser {
+                do! reportUndentedBlockStart
+                return! pInner
+            })
+        >>= fun expr ->
+            match expr with
+            | Expr.EnclosedBlock(_, _, closeTok)
+            | Expr.EmptyBlock(_, closeTok) -> reportTokenAfterUndentedClose closeTok >>% expr
+            | _ -> preturn expr
 
     let private pExprOrTypedPat =
         let pInnerExpr = refExprSeqBlock.Parser
@@ -2285,46 +2395,6 @@ module Expr =
             DiagnosticCode.ExpectedEnd
             pTypedSeqExprBlock
 
-    // FCS applies `(f x)[`, `xs.[0][`, and `"s"[` to a list. When that list continues on a later line,
-    // the Compatibility Oracle reports FS0058 for some layouts and gives irregular ranges for others.
-    let private reportMultilineAdjacentList (expr: Expr<SyntaxToken>) (reader: Reader<PositionedToken, ParseState, _>) =
-        let brackets =
-            match expr with
-            | Expr.EnclosedBlock(ParenKind.List lBracket, _, rBracket)
-            | Expr.EmptyBlock(ParenKind.List lBracket, rBracket) -> ValueSome struct (lBracket, rBracket)
-            | _ -> ValueNone
-
-        match brackets with
-        | ValueSome struct (lBracket, rBracket) ->
-            match lBracket.Index, rBracket.Index with
-            | TokenIndex.Regular openIndex, TokenIndex.Regular closeIndex when openIndex > 0<token> ->
-                let state = reader.State
-                let previous = state.Lexed.Tokens[openIndex - 1<token>]
-
-                let adjacentToCloser =
-                    not (ParseState.isTriviaToken state previous)
-                    && (match previous.TokenWithoutCommentFlags with
-                        | Token.KWRParen
-                        | Token.KWRBracket
-                        | Token.KWRArrayBracket
-                        | Token.KWRBrace
-                        | Token.KWRBraceBar
-                        | Token.StringClose
-                        | Token.VerbatimStringClose
-                        | Token.String3Close -> true
-                        | token -> TokenInfo.isLiteral token)
-
-                if
-                    adjacentToCloser
-                    && ParseState.findLineNumber state openIndex
-                       <> ParseState.findLineNumber state closeIndex
-                then
-                    reader.State <- ParseState.addDiagnosticAt DiagnosticCode.MultilineAdjacentList lBracket state
-            | _ -> ()
-        | ValueNone -> ()
-
-        preturn expr reader
-
     let pList =
         pEnclosed
             pLBracket
@@ -2333,7 +2403,6 @@ module Expr =
             OffsideContext.Bracket
             DiagnosticCode.ExpectedRBracket
             refExprSeqBlock.Parser
-        >>= reportMultilineAdjacentList
 
     let pArray =
         pEnclosed

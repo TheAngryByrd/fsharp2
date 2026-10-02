@@ -425,35 +425,95 @@ let y = "
                     | Expr.IndexedLookup(dot = ValueNone) -> ()
                     | other -> failtest $"{source} must give an index, not {other}"
 
-            testCase "a multiline list argument next to a closing bracket gives FSC2P1001"
+            testCase "an undented block start or a token after an undented close gives FSC2P1001"
             <| fun () ->
-                // Compatibility Oracle: FS0058 at (2,1) for the first text. It accepts the second text,
-                // but the FCS 43.10.101 `while` range ends before the `]`.
-                for source in
+                // Compatibility Oracle: FS0058 at (2,1) and (3,5), then FS0010 at (3,3) and (2,16).
+                for source, code, offset in
                     [
-                        "let y = g (while c do xs[0][\n1])\n"
-                        "let y = g (while c do xs[0][\n            1])\n"
+                        "let y = g (while c do xs[0][\n1])\n", DiagnosticCode.UndentedBlockStart, 29
+                        "let f () =\n    if c then xs[0][\n    1] else z\n",
+                        DiagnosticCode.UndentedBlockStart,
+                        36
+                        "let f () =\n    g (a\n) |> h\n", DiagnosticCode.TokenAfterUndentedClose, 22
+                        "let y = [ try g (a\n        ) with _ -> z ]\n",
+                        DiagnosticCode.TokenAfterUndentedClose,
+                        29
                     ] do
-                    let _, diagnostics = parseVendored source
-
-                    match diagnostics with
-                    | [ diagnostic ] ->
-                        Expect.equal diagnostic.Code DiagnosticCode.MultilineAdjacentList source
-
-                        Expect.equal
-                            diagnostic.Token.StartIndex
-                            27
-                            "the diagnostic must point at the list bracket"
+                    match parseVendored source with
+                    | _, [ diagnostic ] ->
+                        Expect.equal diagnostic.Code code source
+                        Expect.equal diagnostic.Token.StartIndex offset source
 
                         Expect.equal
                             (DiagnosticCode.fsharp2Code diagnostic.Code)
                             (ValueSome "FSC2P1001")
                             source
-                    | other -> failtest $"{source} must give one diagnostic, not {other.Length}"
+                    | _, other -> failtest $"{source} must give one diagnostic, not {other.Length}"
 
-                let result, diagnostics = parseVendored "let y = (f x)[0]\n"
-                Expect.isOk result "a list argument on one line"
-                Expect.isEmpty diagnostics "a list argument on one line must give no diagnostic"
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "let y = g (while c do xs[0][\n            1])\n"
+                        "let f () =\n    xs[0][\n    1]\n"
+                        "let f () =\n    g (a\n)\n"
+                        "let f () =\n    (g (a\n) + 1)\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
+            testCase "a bar after an undented rule body or an undented else block gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 at (2,20), and FS0058 at (2,9).
+                for source, code, offset in
+                    [
+                        "let y = match x with A -> [ 1\n            .. 3 ] | B -> z\n",
+                        DiagnosticCode.BarAfterUndentedRule,
+                        49
+                        "let y = match x with A -> g (if c then a else\n        b) | B -> z\n",
+                        DiagnosticCode.UndentedBlockStart,
+                        54
+                    ] do
+                    match parseVendored source with
+                    | _, diagnostic :: _ ->
+                        Expect.equal diagnostic.Code code source
+                        Expect.equal diagnostic.Token.StartIndex offset source
+
+                        Expect.equal
+                            (DiagnosticCode.fsharp2Code diagnostic.Code)
+                            (ValueSome "FSC2P1001")
+                            source
+                    | _, [] -> failtest $"{source} must give a diagnostic"
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "let y = match x with A when c ->\n         0 + 1 | _ -> 1\n"
+                        "let f () =\n    match x with\n    | P p ->\n        [ 1\n          ]\n      |> g\n    | _ -> []\n"
+                        "let f () =\n    match x with\n    | A -> f {\n        a = 1 }\n    | _ -> z\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
+            testCase "a loop ends before a closing delimiter left of its body and do, as in FCS"
+            <| fun () ->
+                // FCS 43.10.101: While(...)@1:9-1:23, so the loop ends after `1`, before `]` at (2,1).
+                let source = "let y = while c do [ 1\n]\n"
+
+                match parseVendored source with
+                | Ok(FSharpAst.ImplementationFile(ImplementationFile.AnonymousModule elements)), [] ->
+                    match elements[0] with
+                    | ModuleElem.FunctionOrValue(ModuleFunctionOrValueDefn.Let(bindings = bindings)) ->
+                        match bindings[0].expr with
+                        | Expr.While(doneToken = doneTok) ->
+                            Expect.equal doneTok.Index TokenIndex.Virtual "the done must be virtual"
+                            Expect.equal doneTok.StartIndex 22 "the loop must end after `1`"
+                        | other -> failtest $"{source} must give a while loop, not {other}"
+                    | other -> failtest $"{source} must start with a let, not {other}"
+                | _, diagnostics ->
+                    failtest
+                        $"{source} must give a tree and no diagnostic, not {diagnostics.Length}"
 
             testCase "a let body that is not at the let column gives FSC2P1001"
             <| fun () ->

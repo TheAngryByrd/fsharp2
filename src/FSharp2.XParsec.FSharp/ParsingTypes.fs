@@ -300,12 +300,16 @@ type DiagnosticCode =
     | NestingLimitExceeded of limit: int
     /// A `|` on the same line ends a `then`, `else`, `do`, `finally`, or lambda body.
     | SameLineBarEndsBody
+    /// A `|` follows a match rule whose tokens went left of the clause column, which ends the clauses in FCS.
+    | BarAfterUndentedRule
     /// A module element starts at another column than the first element of its module.
     | MisalignedModuleElement
     /// The body of a `let` without `in` starts at another column than the `let`.
     | MisalignedLetBody
-    /// A list argument written next to a closing delimiter or literal continues on a later line.
-    | MultilineAdjacentList
+    /// The first token after an opening delimiter is left of the enclosing offside line.
+    | UndentedBlockStart
+    /// A token follows, on the same line, a closing delimiter that starts its line left of the enclosing block.
+    | TokenAfterUndentedClose
 
 [<RequireQualifiedAccess>]
 type Syntax =
@@ -492,9 +496,11 @@ module DiagnosticCode =
         | DiagnosticCode.MismatchedDelimiter _ -> "MismatchedDelimiter"
         | DiagnosticCode.NestingLimitExceeded _ -> "NestingLimitExceeded"
         | DiagnosticCode.SameLineBarEndsBody -> "SameLineBarEndsBody"
+        | DiagnosticCode.BarAfterUndentedRule -> "BarAfterUndentedRule"
         | DiagnosticCode.MisalignedModuleElement -> "MisalignedModuleElement"
         | DiagnosticCode.MisalignedLetBody -> "MisalignedLetBody"
-        | DiagnosticCode.MultilineAdjacentList -> "MultilineAdjacentList"
+        | DiagnosticCode.UndentedBlockStart -> "UndentedBlockStart"
+        | DiagnosticCode.TokenAfterUndentedClose -> "TokenAfterUndentedClose"
 
     /// The English it renders.
     let message (c: DiagnosticCode) : string =
@@ -521,12 +527,16 @@ module DiagnosticCode =
             "Wrong close for '" + string (spelling opened) + "': " + string (expecting expected)
         | DiagnosticCode.NestingLimitExceeded limit ->
             "The input nests deeper than the parser supports (" + string limit + " levels)"
-        | DiagnosticCode.MultilineAdjacentList ->
-            "A list argument next to a closing delimiter must close on the same line"
+        | DiagnosticCode.UndentedBlockStart ->
+            "The first token after an opening delimiter must not be left of the enclosing offside line"
+        | DiagnosticCode.TokenAfterUndentedClose ->
+            "A closing delimiter left of the enclosing block must end its line"
         | DiagnosticCode.MisalignedLetBody ->
             "The body of a 'let' without 'in' must start at the column of the 'let'"
         | DiagnosticCode.MisalignedModuleElement ->
             "A module element must start at the column of the first element of its module"
+        | DiagnosticCode.BarAfterUndentedRule ->
+            "A '|' cannot follow a rule whose tokens are left of the first rule"
         | DiagnosticCode.SameLineBarEndsBody ->
             "A '|' on the same line cannot end a 'then', 'else', 'do', 'finally', or lambda body"
 
@@ -543,9 +553,11 @@ module DiagnosticCode =
             let expectedBase = TokenInfo.withoutFlags expected
             string name + "(" + string openedBase + ", " + string expectedBase + ")"
         | DiagnosticCode.SameLineBarEndsBody
+        | DiagnosticCode.BarAfterUndentedRule
         | DiagnosticCode.MisalignedModuleElement
         | DiagnosticCode.MisalignedLetBody
-        | DiagnosticCode.MultilineAdjacentList
+        | DiagnosticCode.UndentedBlockStart
+        | DiagnosticCode.TokenAfterUndentedClose
         | DiagnosticCode.TyparInConstant
         | DiagnosticCode.MissingExpression
         | DiagnosticCode.MissingPattern
@@ -568,9 +580,11 @@ module DiagnosticCode =
         match c with
         | DiagnosticCode.NestingLimitExceeded _
         | DiagnosticCode.SameLineBarEndsBody
+        | DiagnosticCode.BarAfterUndentedRule
         | DiagnosticCode.MisalignedModuleElement
         | DiagnosticCode.MisalignedLetBody
-        | DiagnosticCode.MultilineAdjacentList -> ValueSome "FSC2P1001"
+        | DiagnosticCode.UndentedBlockStart
+        | DiagnosticCode.TokenAfterUndentedClose -> ValueSome "FSC2P1001"
         | _ -> ValueNone
 
     /// What the secondary label on the OPENING delimiter says. Both delimiter diagnostics

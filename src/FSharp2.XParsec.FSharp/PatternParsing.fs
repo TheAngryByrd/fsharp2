@@ -908,10 +908,75 @@ module Rules =
 
             preturn () reader
 
+    // FCS LexFilter ends CtxtMatchClauses at a token left of the clause column, with one column of
+    // allowance without a leading `|` (`CtxtMatchClauses (leadingBar, offsidePos)`), also inside a
+    // delimiter. The first token of a rule body starts a new block, so only a token left of that
+    // block counts. The Compatibility Oracle then reports FS0010 at the next `|`.
+    let private reportBarAfterUndentedRule
+        (firstBar: SyntaxToken voption)
+        (rules: ImmutableArray<Rule<SyntaxToken>>)
+        (bars: ImmutableArray<SyntaxToken>)
+        (reader: Reader<PositionedToken, ParseState, _>)
+        =
+        let state = reader.State
+        let tokens = state.Lexed.Tokens
+
+        match state.Context with
+        | { Context = OffsideContext.MatchClauses; Token = start } :: _ when bars.Length > 0 ->
+            let mutable startIndex = 0<token>
+
+            while startIndex < tokens.LengthM
+                  && tokens[startIndex].StartIndex < start.StartIndex do
+                startIndex <- startIndex + 1<token>
+
+            let clauseColumn = ParseState.getIndent state startIndex
+            let allowance = if firstBar.IsSome then -1 else 1
+            let mutable reported = false
+            let mutable i = 0
+
+            while not reported && i < bars.Length do
+                match rules[i], bars[i].Index with
+                | Rule.Rule(arrow = arrow), TokenIndex.Regular barIndex ->
+                    match arrow.Index with
+                    | TokenIndex.Regular arrowIndex ->
+                        let mutable j = arrowIndex + 1<token>
+                        let mutable bodyColumn = ValueNone
+                        let mutable stop = false
+
+                        while not stop && j < barIndex do
+                            let token = tokens[j]
+
+                            match token.TokenWithoutCommentFlags with
+                            | Token.IfDirective
+                            | Token.ElseDirective
+                            | Token.EndIfDirective -> stop <- true
+                            | _ when ParseState.isTriviaToken state token -> ()
+                            | _ when bodyColumn.IsNone -> bodyColumn <- ValueSome(ParseState.getIndent state j)
+                            | _ when
+                                ParseState.getIndent state j < bodyColumn.Value
+                                && ParseState.getIndent state j + allowance < clauseColumn
+                                ->
+                                reader.State <-
+                                    ParseState.addDiagnosticAt DiagnosticCode.BarAfterUndentedRule bars[i] reader.State
+
+                                reported <- true
+                                stop <- true
+                            | _ -> ()
+
+                            j <- j + 1<token>
+                    | TokenIndex.Virtual -> ()
+                | _ -> ()
+
+                i <- i + 1
+        | _ -> ()
+
+        preturn () reader
+
     let parse: FSParser<Rules<SyntaxToken>> =
         parser {
             let! firstBar = opt pBar
             let! rules, bars = sepBy1 pRule pBar
             do! reportSameLineBars rules bars
+            do! reportBarAfterUndentedRule firstBar rules bars
             return Rules(firstBar, rules, bars)
         }
