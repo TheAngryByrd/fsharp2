@@ -493,6 +493,8 @@ let y = "
                     "record copy", deepSource "{ r with A = " "1" " }" 60
                     "seq", deepSource "seq { " "1" " }" 60
                     "seq in record", deepSource "{ A = seq { " "1" " } }" 30
+                    "match in record", deepSource "{ A = match x with _ -> " "1" " }" 30
+                    "try in record", deepSource "{ A = try " "1" " with _ -> 0 }" 30
                 ]
 
                 for name, source in shapes do

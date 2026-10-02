@@ -2415,8 +2415,9 @@ module Expr =
             return struct (fields, seps, rClose)
         }
 
-    /// Succeeds when a `with` token occurs before the close of the enclosing delimiter,
-    /// outside any nested delimiter. Consumes no input.
+    /// Succeeds when a `with` token occurs before the close of the enclosing delimiter
+    /// and before an `=`, outside any nested delimiter. Consumes no input.
+    /// FCS reads only an application expression before the copy `with`, so a field `=` comes first otherwise.
     let private pWithBeforeClose (reader: Reader<PositionedToken, ParseState, _>) =
         let mutable index = reader.Index
         let mutable depth = 0
@@ -2429,6 +2430,7 @@ module Expr =
             if not (ParseState.isTriviaToken reader.State token) then
                 match token.TokenWithoutCommentFlags with
                 | Token.KWWith when depth = 0 -> found <- ValueSome true
+                | Token.OpEquality when depth = 0 -> found <- ValueSome false
                 | Token.KWLParen
                 | Token.KWLBracket
                 | Token.KWLArrayBracket
