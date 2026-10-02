@@ -2343,15 +2343,13 @@ module Expr =
             completeEnclosed
             Expr.Missing
             skipsTokens
-            pLeft
+            (pLeft
+             >>= fun l -> withContextAt offsideCtx 0 l.PositionedToken reportUndentedBlockStart >>% l)
             expectedRightTok
             parenKindConstructor
             offsideCtx
             diagCode
-            (parser {
-                do! reportUndentedBlockStart
-                return! pInner
-            })
+            pInner
         >>= fun expr ->
             match expr with
             | Expr.EnclosedBlock(_, _, closeTok)

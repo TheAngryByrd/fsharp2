@@ -473,8 +473,12 @@ let y = "
                         "let y = match x with A -> g (if c then a else\n        b) | B -> z\n",
                         DiagnosticCode.UndentedBlockStart,
                         54
-                        // Compatibility Oracle: FS0058 at (2,1).
+                        // Compatibility Oracle: FS0058 at (2,1) for both texts, and FS0010 at (2,15).
                         "let y = (if c then a\nelse b)\n", DiagnosticCode.UndentedBlockStart, 21
+                        "let y = g (if c then [\n] else z)\n", DiagnosticCode.UndentedBlockStart, 23
+                        "let y = [ fun v -> [| 1\n            |]; z ]\n",
+                        DiagnosticCode.TokenAfterUndentedClose,
+                        38
                     ] do
                     match parseVendored source with
                     | _, diagnostic :: _ ->
@@ -498,6 +502,8 @@ let y = "
                         "let y = match x with A -> [\n            xs[0][1] ] | B -> z\n"
                         "let y = try z with _ -> [ 1; 2\n        ] |> g\n"
                         "do begin\nxs[0] end\n"
+                        "let y = g (fun v -> [| 1\n            |]) z\n"
+                        "let y = [ fun v -> [| 1 .. 2 .. 9\n|]; z ]\n"
                     ] do
                     let result, diagnostics = parseVendored accepted
                     Expect.isOk result accepted

@@ -986,7 +986,8 @@ module Parsing =
         result.Value
 
     /// The Compatibility Oracle reports FS0010 at a token that follows, on the same line, closing
-    /// delimiters where the first starts its line left of the enclosing block. A block directly inside
+    /// delimiters where the first starts its line left of the enclosing block. The last closer of the run
+    /// checks the token, with the frames that remain after it. A block directly inside
     /// a delimiter has no such limit. A token that aligns with an enclosing construct, such as `else` or `with`,
     /// has the column of that construct as its limit.
     let reportTokenAfterUndentedClose (closeTok: SyntaxToken) (reader: Reader<PositionedToken, ParseState, _>) =
@@ -1012,7 +1013,7 @@ module Parsing =
                 | Token.KWRArrayBracket
                 | Token.KWRBrace
                 | Token.KWRBraceBar
-                | Token.KWEnd -> i <- i + 1<token>
+                | Token.KWEnd -> i <- tokens.LengthM
                 | _ when ParseState.isTriviaToken state token -> i <- i + 1<token>
                 | _ -> next <- ValueSome(token, i)
 
@@ -1028,9 +1029,22 @@ module Parsing =
                 | OffsideContext.Do -> true
                 | _ -> false
 
+            // A `fun` that starts the block below it keeps its body block as the limit, unless the closer is
+            // also left of that block, which FCS then ends too.
+            let startsBlockBelow (rest: Offside list) =
+                match rest with
+                | ({ Context = OffsideContext.Fun } as lambda) :: { Context = OffsideContext.SeqBlock
+                                                                    Token = start
+                                                                    Indent = startColumn } :: _ ->
+                    start.StartIndex = lambda.Token.StartIndex
+                    && column >= startColumn
+                | _ -> false
+
             let rec limitingBlock (stack: Offside list) =
                 match stack with
-                | { Context = OffsideContext.SeqBlock } :: ({ Context = ctx } :: _ as rest) when opensBlock ctx ->
+                | { Context = OffsideContext.SeqBlock } :: ({ Context = ctx } :: _ as rest) when
+                    opensBlock ctx && not (startsBlockBelow rest)
+                    ->
                     rest
                     |> List.skipWhile (fun frame ->
                         frame.Context <> OffsideContext.SeqBlock
