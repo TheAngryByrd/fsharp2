@@ -755,7 +755,7 @@ module Expr =
 
                 let bodyColumn = ParseState.getIndent state bodyIndex
                 let mutable i = first
-                let mutable depth = 0
+                let openers = System.Collections.Generic.Stack<int<token>>()
                 let mutable closer = ValueNone
 
                 while closer.IsNone && i < finish do
@@ -768,18 +768,23 @@ module Expr =
                         | Token.KWLArrayBracket
                         | Token.KWLBrace
                         | Token.KWLBraceBar
-                        | Token.KWBegin -> depth <- depth + 1
+                        | Token.KWBegin -> openers.Push i
                         | Token.KWRParen
                         | Token.KWRBracket
                         | Token.KWRArrayBracket
                         | Token.KWRBrace
                         | Token.KWRBraceBar
-                        | Token.KWEnd ->
-                            depth <- depth - 1
-
+                        | Token.KWEnd when openers.Count > 0 ->
+                            let opener = openers.Pop()
                             let column = ParseState.getIndent state i
 
-                            if depth = 0 && column <= doColumn && column < bodyColumn then
+                            if
+                                openers.Count = 0
+                                && column <= doColumn
+                                && column < bodyColumn
+                                && ParseState.findLineNumber state opener
+                                   < ParseState.findLineNumber state i
+                            then
                                 closer <- ValueSome i
                         | _ -> ()
 

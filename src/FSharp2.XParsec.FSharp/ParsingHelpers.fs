@@ -868,8 +868,8 @@ module Parsing =
     /// Allows parser to avoid re-skipping trivia tokens when it needs to look ahead at the next token to decide what to parse.
     let peekNextSyntaxToken (reader: Reader<PositionedToken, ParseState, _>) = nextSyntaxTokenImpl true reader
 
-    /// The FCS limit at a module element: the column of the element, plus one for `let` and `do`
-    /// (LexFilter CtxtLetDecl and CtxtDo). The element is the last line start at `elementColumn`.
+    /// The FCS limit at a module element: the column of the element, plus one for `let` (LexFilter
+    /// CtxtLetDecl). CtxtDo gives no limit of its own. The element is the last line start at `elementColumn`.
     let private moduleElementLimit (state: ParseState) (elementColumn: int) (index: int<token>) =
         let tokens = state.Lexed.Tokens
         let mutable i = index
@@ -888,7 +888,7 @@ module Parsing =
             i <- i - 1<token>
 
         match found with
-        | ValueSome(Token.KWLet | Token.KWDo) -> ValueSome(elementColumn + 1)
+        | ValueSome Token.KWLet -> ValueSome(elementColumn + 1)
         | ValueSome _ -> ValueSome elementColumn
         | ValueNone -> ValueNone
 
@@ -1016,7 +1016,30 @@ module Parsing =
                 | _ when ParseState.isTriviaToken state token -> i <- i + 1<token>
                 | _ -> next <- ValueSome(token, i)
 
-            match next, framesAfterClose state column state.Context with
+            // FCS LexFilter gives no limit for the block after `fun`, `function`, `->` of a rule, `then`,
+            // `else`, or `do`, and uses the frames below it.
+            let opensBlock (ctx: OffsideContext) =
+                match ctx with
+                | OffsideContext.Fun
+                | OffsideContext.Function
+                | OffsideContext.MatchClauses
+                | OffsideContext.Then
+                | OffsideContext.Else
+                | OffsideContext.Do -> true
+                | _ -> false
+
+            let rec limitingBlock (stack: Offside list) =
+                match stack with
+                | { Context = OffsideContext.SeqBlock } :: ({ Context = ctx } :: _ as rest) when opensBlock ctx ->
+                    rest
+                    |> List.skipWhile (fun frame ->
+                        frame.Context <> OffsideContext.SeqBlock
+                        && not (isParenLike frame.Context)
+                    )
+                    |> limitingBlock
+                | _ -> stack
+
+            match next, limitingBlock (framesAfterClose state column state.Context) with
             | ValueSome(token, index),
               { Context = OffsideContext.SeqBlock; Indent = blockColumn } :: enclosing ->
                 let kind = token.TokenWithoutCommentFlags

@@ -911,7 +911,7 @@ module Rules =
     // FCS LexFilter ends CtxtMatchClauses at a token left of the clause column, with one column of
     // allowance without a leading `|` (`CtxtMatchClauses (leadingBar, offsidePos)`), also inside a
     // delimiter. The first token of a rule body starts a new block, so only a token left of that
-    // block counts. The Compatibility Oracle then reports FS0010 at the next `|`.
+    // block counts. A delimiter that the body opens permits its content to undent. The Compatibility Oracle then reports FS0010 at the next `|`.
     let private reportBarAfterUndentedRule
         (firstBar: SyntaxToken voption)
         (rules: ImmutableArray<Rule<SyntaxToken>>)
@@ -941,19 +941,32 @@ module Rules =
                     | TokenIndex.Regular arrowIndex ->
                         let mutable j = arrowIndex + 1<token>
                         let mutable bodyColumn = ValueNone
+                        let mutable depth = 0
                         let mutable stop = false
 
                         while not stop && j < barIndex do
                             let token = tokens[j]
 
-                            match token.TokenWithoutCommentFlags with
+                            let kind = token.TokenWithoutCommentFlags
+
+                            match kind with
+                            | Token.KWRParen
+                            | Token.KWRBracket
+                            | Token.KWRArrayBracket
+                            | Token.KWRBrace
+                            | Token.KWRBraceBar
+                            | Token.KWEnd -> depth <- depth - 1
+                            | _ -> ()
+
+                            match kind with
                             | Token.IfDirective
                             | Token.ElseDirective
                             | Token.EndIfDirective -> stop <- true
                             | _ when ParseState.isTriviaToken state token -> ()
                             | _ when bodyColumn.IsNone -> bodyColumn <- ValueSome(ParseState.getIndent state j)
                             | _ when
-                                ParseState.getIndent state j < bodyColumn.Value
+                                depth <= 0
+                                && ParseState.getIndent state j < bodyColumn.Value
                                 && ParseState.getIndent state j + allowance < clauseColumn
                                 ->
                                 reader.State <-
@@ -961,6 +974,15 @@ module Rules =
 
                                 reported <- true
                                 stop <- true
+                            | _ -> ()
+
+                            match kind with
+                            | Token.KWLParen
+                            | Token.KWLBracket
+                            | Token.KWLArrayBracket
+                            | Token.KWLBrace
+                            | Token.KWLBraceBar
+                            | Token.KWBegin when not (ParseState.isTriviaToken state token) -> depth <- depth + 1
                             | _ -> ()
 
                             j <- j + 1<token>

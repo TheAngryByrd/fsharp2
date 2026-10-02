@@ -493,6 +493,9 @@ let y = "
                         "let f () =\n    match x with\n    | A -> f {\n        a = 1 }\n    | _ -> z\n"
                         "let y = [| if c then 1\n   else 2 |]\n"
                         "let y = [| if c then 1\n   else\n  2 |]\n"
+                        "let y = match x with A -> [\n            xs[0][1] ] | B -> z\n"
+                        "let y = try z with _ -> [ 1; 2\n        ] |> g\n"
+                        "do begin\nxs[0] end\n"
                     ] do
                     let result, diagnostics = parseVendored accepted
                     Expect.isOk result accepted
@@ -565,22 +568,35 @@ let y = "
 
             testCase "a loop ends before a closing delimiter left of its body and do, as in FCS"
             <| fun () ->
-                // FCS 43.10.101: While(...)@1:9-1:23, so the loop ends after `1`, before `]` at (2,1).
-                let source = "let y = while c do [ 1\n]\n"
+                // FCS 43.10.101: While(...)@1:9-1:23 for the first text, so the loop ends after `1`, before `]` at (2,1).
+                // The second text gives While(...)@1:9-2:18: the closer has its opener on the same line.
+                for source, doneStart in
+                    [
+                        "let y = while c do [ 1\n]\n", 22
+                        "let y = while c do fun v ->\n        xs.[0..1]\n", 46
+                    ] do
+                    match parseVendored source with
+                    | Ok(FSharpAst.ImplementationFile(ImplementationFile.AnonymousModule elements)),
+                      [] ->
+                        match elements[0] with
+                        | ModuleElem.FunctionOrValue(ModuleFunctionOrValueDefn.Let(
+                            bindings = bindings)) ->
+                            match bindings[0].expr with
+                            | Expr.While(doneToken = doneTok) ->
+                                Expect.equal
+                                    doneTok.Index
+                                    TokenIndex.Virtual
+                                    "the done must be virtual"
 
-                match parseVendored source with
-                | Ok(FSharpAst.ImplementationFile(ImplementationFile.AnonymousModule elements)), [] ->
-                    match elements[0] with
-                    | ModuleElem.FunctionOrValue(ModuleFunctionOrValueDefn.Let(bindings = bindings)) ->
-                        match bindings[0].expr with
-                        | Expr.While(doneToken = doneTok) ->
-                            Expect.equal doneTok.Index TokenIndex.Virtual "the done must be virtual"
-                            Expect.equal doneTok.StartIndex 22 "the loop must end after `1`"
-                        | other -> failtest $"{source} must give a while loop, not {other}"
-                    | other -> failtest $"{source} must start with a let, not {other}"
-                | _, diagnostics ->
-                    failtest
-                        $"{source} must give a tree and no diagnostic, not {diagnostics.Length}"
+                                Expect.equal
+                                    doneTok.StartIndex
+                                    doneStart
+                                    $"{source}: the loop must end at the FCS position"
+                            | other -> failtest $"{source} must give a while loop, not {other}"
+                        | other -> failtest $"{source} must start with a let, not {other}"
+                    | _, diagnostics ->
+                        failtest
+                            $"{source} must give a tree and no diagnostic, not {diagnostics.Length}"
 
             testCase "a let body that is not at the let column gives FSC2P1001"
             <| fun () ->
