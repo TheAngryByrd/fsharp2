@@ -88,6 +88,8 @@ module ElifBranches =
         | Ok condition ->
             match pThen reader with
             | Ok thenTok ->
+                reportThenAfterOpenConstruct condition thenTok reader |> ignore
+
                 match pThenExpr reader with
                 | Ok expr -> Ok(condition, thenTok, expr)
                 | Error e -> Error e
@@ -955,6 +957,7 @@ module Expr =
                     )
                 // then permitted undentation at if_col via contextPermitsToken
                 let! thenTok = recoverWithVirtualToken Token.KWThen "Expected 'then' after condition" pThen
+                do! reportThenAfterOpenConstruct cond thenTok
                 // Body anchored to if_col + 1, NOT then_col + 1
                 // Grammar: THEN typedSeqExprBlock
                 let! thenExpr =

@@ -988,6 +988,43 @@ let y = "
                     Expect.isOk result accepted
                     Expect.isEmpty diagnostics accepted
 
+            testCase
+                "a keyword on a later line right of a context that an open construct keeps gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 at (2,30), (2,13), (2,27), (3,15), and (3,12).
+                for source, offset in
+                    [
+                        "let y = match x with A when fun v -> v\n                             -> a | B -> b\n",
+                        68
+                        "let y = if fun v -> v\n            then d else b\n", 34
+                        "let y = if a then 0 elif fun v -> v\n                          then d else b\n",
+                        62
+                        "let f () =\n    for x in fun v -> v\n              do f x\n", 49
+                        "let f () =\n    while fun v -> v\n           do f x\n", 43
+                    ] do
+                    let _, diagnostics = parseVendored source
+
+                    match diagnostics with
+                    | diagnostic :: _ ->
+                        Expect.equal diagnostic.Code DiagnosticCode.KeywordAfterOpenConstruct source
+                        Expect.equal diagnostic.Token.StartIndex offset source
+                    | [] -> failtest $"{source} must give a diagnostic"
+
+                // The Compatibility Oracle reports no diagnostic for these texts. The keyword is at or left of the
+                // `fun` column, or left of the `do` or `else` column.
+                for accepted in
+                    [
+                        "let y = match x with A when fun v -> v\n                            -> a | B -> b\n"
+                        "let y = match x with A when for x in xs do f x\n                             -> a | B -> b\n"
+                        "let y = if fun v -> v\n           then d else b\n"
+                        "let y = if for x in xs do f x\n            then d else b\n"
+                        "let f () =\n    for x in fun v -> v\n             do f x\n"
+                        "let f () =\n    for x in if c then a else b\n              do f x\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
             testCase "a module element on the line of a let or do element gives FSC2P1001"
             <| fun () ->
                 // Compatibility Oracle: FS0010 at (1,11), (1,11), (2,7), and (2,15).

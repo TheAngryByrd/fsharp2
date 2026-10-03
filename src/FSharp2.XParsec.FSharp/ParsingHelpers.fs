@@ -1344,8 +1344,65 @@ module Parsing =
         | _, ValueSome body -> endsInTry body
         | _ -> false
 
-    /// The Compatibility Oracle reports FS0010 at a `do` or rule `->` on the line where the expression
-    /// before it ends in an open construct, because FCS gives the token to that construct.
+    /// The smallest column of the FCS contexts that the open constructs at the right end of `expr` keep: the `fun`
+    /// column, the `do` column of a loop, the `then` or `else` column of an `if`, the clause column of a `match`,
+    /// `function`, or `try`, and the `finally` column.
+    let rec private openContextColumn (state: ParseState) (expr: Expr<SyntaxToken>) : int voption =
+        let column (tok: SyntaxToken) =
+            match tok.Index with
+            | TokenIndex.Regular i -> ValueSome(ParseState.getIndent state i)
+            | TokenIndex.Virtual -> ValueNone
+
+        let clauseColumn (keyword: SyntaxToken) =
+            match keyword.Index with
+            | TokenIndex.Regular i ->
+                let tokens = state.Lexed.Tokens
+                let mutable j = i + 1<token>
+
+                while j < tokens.LengthM
+                      && isSkippedByScan state j do
+                    j <- j + 1<token>
+
+                if j < tokens.LengthM then
+                    ValueSome(ParseState.getIndent state j)
+                else
+                    ValueNone
+            | TokenIndex.Virtual -> ValueNone
+
+        let own, last =
+            match rightmostOpenConstruct expr with
+            | ValueSome(Expr.Fun(funToken = t; expr = body))
+            | ValueSome(Expr.While(doToken = t; body = body))
+            | ValueSome(Expr.ForTo(doToken = t; body = body))
+            | ValueSome(Expr.ForIn(doToken = t; body = body))
+            | ValueSome(Expr.IfThenElse(elseBranch = ValueSome(ElseBranch(t, body))))
+            | ValueSome(Expr.TryFinally(finallyToken = t; finallyExpr = body)) -> column t, ValueSome body
+            | ValueSome(Expr.IfThenElse(thenToken = t; thenExpr = body; elifBranches = elifs)) ->
+                if elifs.Length = 0 then
+                    column t, ValueSome body
+                else
+                    match elifs[elifs.Length - 1] with
+                    | ElifBranch.Elif(thenToken = t; expr = body)
+                    | ElifBranch.ElseIf(thenToken = t; expr = body) -> column t, ValueSome body
+            | ValueSome(Expr.Match(withToken = t; rules = rules))
+            | ValueSome(Expr.Function(functionToken = t; rules = rules)) -> clauseColumn t, lastRuleBody rules
+            | ValueSome(Expr.TryWith(tryToken = tryTok; withToken = t; rules = rules)) ->
+                ValueOption.map2 max (column tryTok) (clauseColumn t), lastRuleBody rules
+            | _ -> ValueNone, ValueNone
+
+        match own, last |> ValueOption.bind (openContextColumn state) with
+        | ValueSome a, ValueSome b -> ValueSome(min a b)
+        | own, _ -> own
+
+    /// A keyword on a later line that is right of a context that an open construct keeps stays in that construct.
+    let private rightOfOpenContext (state: ParseState) (header: Expr<SyntaxToken>) (keyword: SyntaxToken) =
+        match keyword.Index, openContextColumn state header with
+        | TokenIndex.Regular i, ValueSome column -> ParseState.getIndent state i > column
+        | _ -> false
+
+    /// The Compatibility Oracle reports FS0010 at a `do` or rule `->` when the expression before it ends in an
+    /// open construct, and the keyword is on the same line or right of a context that the construct keeps,
+    /// because FCS gives the token to that construct.
     let reportKeywordAfterOpenConstruct
         (header: Expr<SyntaxToken>)
         (keyword: SyntaxToken)
@@ -1353,9 +1410,26 @@ module Parsing =
         =
         if
             (rightmostOpenConstruct header).IsSome
-            && followsTokenOnSameLine reader.State keyword
+            && (followsTokenOnSameLine reader.State keyword
+                || rightOfOpenContext reader.State header keyword)
         then
             reader.State <- ParseState.addDiagnosticAt DiagnosticCode.KeywordAfterOpenConstruct keyword reader.State
+
+        preturn () reader
+
+    /// The Compatibility Oracle reports FS0010 at a `then` on a later line when the condition before it ends in an
+    /// open construct and the `then` is right of a context that the construct keeps. On the same line, the Oracle
+    /// reports the later `else` instead.
+    let reportThenAfterOpenConstruct
+        (condition: Expr<SyntaxToken>)
+        (thenTok: SyntaxToken)
+        (reader: Reader<PositionedToken, ParseState, _>)
+        =
+        if
+            not (followsTokenOnSameLine reader.State thenTok)
+            && rightOfOpenContext reader.State condition thenTok
+        then
+            reader.State <- ParseState.addDiagnosticAt DiagnosticCode.KeywordAfterOpenConstruct thenTok reader.State
 
         preturn () reader
 
