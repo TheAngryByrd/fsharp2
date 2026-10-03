@@ -1247,6 +1247,47 @@ module Parsing =
 
         preturn () reader
 
+    /// FCS ends CtxtFun at a lambda pattern or `->` that is not right of the `fun` column, and the Compatibility
+    /// Oracle reports FS0010 there. A delimiter in a pattern has its own offside line.
+    let reportUndentedLambdaHead (funTok: SyntaxToken) (arrow: SyntaxToken) (reader: Reader<PositionedToken, ParseState, _>) =
+        match funTok.Index, arrow.Index with
+        | TokenIndex.Regular funIndex, TokenIndex.Regular arrowIndex ->
+            let state = reader.State
+            let tokens = state.Lexed.Tokens
+            let limit = ParseState.getIndent state funIndex + 1
+            let mutable i = funIndex + 1<token>
+            let mutable depth = 0
+            let mutable reported = false
+
+            while not reported && i <= arrowIndex do
+                if not (isSkippedByScan state i) then
+                    match tokens[i].TokenWithoutCommentFlags with
+                    | Token.KWRParen
+                    | Token.KWRBracket
+                    | Token.KWRArrayBracket
+                    | Token.KWRBrace
+                    | Token.KWRBraceBar -> depth <- depth - 1
+                    | _ -> ()
+
+                    if depth <= 0 && ParseState.getIndent state i < limit then
+                        reader.State <-
+                            ParseState.addDiagnosticAt DiagnosticCode.UndentedLambdaHead (syntaxToken tokens[i] (int i)) state
+
+                        reported <- true
+
+                    match tokens[i].TokenWithoutCommentFlags with
+                    | Token.KWLParen
+                    | Token.KWLBracket
+                    | Token.KWLArrayBracket
+                    | Token.KWLBrace
+                    | Token.KWLBraceBar -> depth <- depth + 1
+                    | _ -> ()
+
+                i <- i + 1<token>
+        | _ -> ()
+
+        preturn () reader
+
     /// Emits a trace message. Use with `do!` inside a `parser { }` CE for debugging.
     let trace (msg: string) (reader: Reader<PositionedToken, ParseState, _>) =
         ParseState.ifTrace reader.State (fun tc -> tc.Message msg)

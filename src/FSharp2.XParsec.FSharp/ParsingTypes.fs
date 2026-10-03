@@ -312,6 +312,8 @@ type DiagnosticCode =
     | UndentedBlockStart
     /// A token follows, on the same line, a closing delimiter that starts its line left of the enclosing block.
     | TokenAfterUndentedClose
+    /// A lambda pattern or the `->` after it is not right of the `fun` column.
+    | UndentedLambdaHead
 
 [<RequireQualifiedAccess>]
 type Syntax =
@@ -507,6 +509,7 @@ module DiagnosticCode =
         | DiagnosticCode.MisalignedLetBody -> "MisalignedLetBody"
         | DiagnosticCode.UndentedBlockStart -> "UndentedBlockStart"
         | DiagnosticCode.TokenAfterUndentedClose -> "TokenAfterUndentedClose"
+        | DiagnosticCode.UndentedLambdaHead -> "UndentedLambdaHead"
 
     /// The English it renders.
     let message (c: DiagnosticCode) : string =
@@ -537,6 +540,7 @@ module DiagnosticCode =
             "The first token after an opening delimiter must not be left of the enclosing offside line"
         | DiagnosticCode.TokenAfterUndentedClose ->
             "A closing delimiter left of the enclosing block must end its line"
+        | DiagnosticCode.UndentedLambdaHead -> "A lambda pattern and its '->' must be right of the 'fun' column"
         | DiagnosticCode.MisalignedLetBody ->
             "The body of a 'let' without 'in' must start at the column of the 'let'"
         | DiagnosticCode.MisalignedModuleElement ->
@@ -567,6 +571,7 @@ module DiagnosticCode =
         | DiagnosticCode.MisalignedLetBody
         | DiagnosticCode.UndentedBlockStart
         | DiagnosticCode.TokenAfterUndentedClose
+        | DiagnosticCode.UndentedLambdaHead
         | DiagnosticCode.TyparInConstant
         | DiagnosticCode.MissingExpression
         | DiagnosticCode.MissingPattern
@@ -594,7 +599,8 @@ module DiagnosticCode =
         | DiagnosticCode.MisalignedModuleElement
         | DiagnosticCode.MisalignedLetBody
         | DiagnosticCode.UndentedBlockStart
-        | DiagnosticCode.TokenAfterUndentedClose -> ValueSome "FSC2P1001"
+        | DiagnosticCode.TokenAfterUndentedClose
+        | DiagnosticCode.UndentedLambdaHead -> ValueSome "FSC2P1001"
         | _ -> ValueNone
 
     /// What the secondary label on the OPENING delimiter says. Both delimiter diagnostics

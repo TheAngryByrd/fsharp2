@@ -957,6 +957,7 @@ module Expr =
                                     "Expected '->' after fun parameters"
                                     pArrowRight
 
+                            do! reportUndentedLambdaHead funTok arrow
                             let! expr = recoverExprMissing pBody
                             return Expr.Fun(funTok, pats, arrow, expr)
                         })

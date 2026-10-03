@@ -690,6 +690,39 @@ let y = "
                         failtest
                             $"{source} must give a tree and no diagnostic, not {diagnostics.Length}"
 
+            testCase "a lambda pattern or arrow that is not right of the fun column gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 at (2,9) for each text.
+                for source, offset in
+                    [
+                        "let y = g (fun\n        v -> v)\n", 23
+                        "let y = g (fun v\n        -> v)\n", 25
+                        "let f = fun x\n        y -> x\n", 22
+                    ] do
+                    match parseVendored source with
+                    | Ok _, [ diagnostic ] ->
+                        Expect.equal diagnostic.Code DiagnosticCode.UndentedLambdaHead source
+                        Expect.equal diagnostic.Token.StartIndex offset source
+
+                        Expect.equal
+                            (DiagnosticCode.fsharp2Code diagnostic.Code)
+                            (ValueSome "FSC2P1001")
+                            source
+                    | _, other ->
+                        failtest $"{source} must give a tree and one diagnostic, not {other.Length}"
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "let y = g (fun\n            v -> v)\n"
+                        "let y = g (fun v ->\n        v)\n"
+                        "let f = fun x\n          y -> x\n"
+                        "let f =\n    xs |> List.map (fun (a,\n                         b) -> a)\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
             testCase "a let body that is not at the let column gives FSC2P1001"
             <| fun () ->
                 // Compatibility Oracle: error FS0010: Unexpected identifier in expression. Expected 'in' or other token, at (3,5).
