@@ -2218,10 +2218,48 @@ module Expr =
 
             preturn () reader
 
+        // LexFilter inserts a block separator at a token on a later line at the column of the block, unless the token before it
+        // is infix or pushes its own block. For a keyword that starts the block and ends its line, the separator ends the keyword
+        // before its operand, and the Compatibility Oracle reports FS0010 at the end of the keyword line.
+        let reportOperandAtKeywordColumn (keyword: SyntaxToken) (reader: Reader<PositionedToken, ParseState, _>) =
+            match keyword.Index, reader.State.Context with
+            | TokenIndex.Regular keywordIndex, { Context = OffsideContext.SeqBlock; Token = blockStart } :: _ when
+                blockStart.StartIndex = keyword.StartIndex
+                ->
+                let state = reader.State
+                let tokens = state.Lexed.Tokens
+                let mutable next = keywordIndex + 1<token>
+
+                while next < tokens.LengthM
+                      && isSkippedByScan state next do
+                    next <- next + 1<token>
+
+                if
+                    next < tokens.LengthM
+                    && ParseState.findLineNumber state next > ParseState.findLineNumber state keywordIndex
+                    && ParseState.getIndent state next = ParseState.getIndent state keywordIndex
+                then
+                    reader.State <-
+                        ParseState.addDiagnosticAt
+                            DiagnosticCode.OperandAtKeywordColumn
+                            (syntaxToken tokens[next] (int next))
+                            state
+            | _ -> ()
+
+            preturn () reader
+
         let kwCastConsume body completer (token: SyntaxToken) =
             parser {
                 let! tok = consumePeeked token
                 do! reportConstructAfterPrefix false
+                do! reportOperandAtKeywordColumn tok
+                return PrefixMapped(tok, preturn tok, body, completer)
+            }
+
+        let kwOperandConsume body completer (token: SyntaxToken) =
+            parser {
+                let! tok = consumePeeked token
+                do! reportOperandAtKeywordColumn tok
                 return PrefixMapped(tok, preturn tok, body, completer)
             }
 
@@ -2286,9 +2324,9 @@ module Expr =
                 struct (Token.KWFun, kwPrefixNoConsume (KWBody.reportUnalignedAfterOpenConstruct KWBody.pFunExpr) Complete.forE)
                 struct (Token.KWDo, kwPrefixConsume KWBody.pYieldReturnDoBody Complete.keyword)
                 struct (Token.KWFor, kwPrefixNoConsume KWBody.pForExpr Complete.forE)
-                struct (Token.KWYieldBang, kwPrefixConsume KWBody.pYieldReturnDoBody Complete.keyword)
-                struct (Token.KWYield, kwPrefixConsume KWBody.pYieldReturnDoBody Complete.keyword)
-                struct (Token.KWReturn, kwPrefixConsume KWBody.pYieldReturnDoBody Complete.keyword)
+                struct (Token.KWYieldBang, kwOperandConsume KWBody.pYieldReturnDoBody Complete.keyword)
+                struct (Token.KWYield, kwOperandConsume KWBody.pYieldReturnDoBody Complete.keyword)
+                struct (Token.KWReturn, kwOperandConsume KWBody.pYieldReturnDoBody Complete.keyword)
                 struct (Token.KWTry, kwPrefixNoConsume (KWBody.reportUnalignedAfterOpenConstruct KWBody.pTryExpr) Complete.forE)
                 struct (Token.KWFunction, kwPrefixNoConsume (KWBody.reportUnalignedAfterOpenConstruct KWBody.pFunctionExpr) Complete.forE)
                 struct (Token.KWUse, kwPrefixNoConsume KWBody.pLetOrUseBody Complete.keyword)
@@ -2296,7 +2334,7 @@ module Expr =
                 struct (Token.KWDoBang, kwPrefixConsume KWBody.pYieldReturnDoBody Complete.keyword)
                 struct (Token.KWWhile, kwPrefixNoConsume KWBody.pWhileExpr Complete.forE)
                 struct (Token.KWWhileBang, kwPrefixNoConsume KWBody.pWhileExpr Complete.forE)
-                struct (Token.KWReturnBang, kwPrefixConsume KWBody.pYieldReturnDoBody Complete.keyword)
+                struct (Token.KWReturnBang, kwOperandConsume KWBody.pYieldReturnDoBody Complete.keyword)
                 struct (Token.KWMatchBang, kwPrefixNoConsume (KWBody.reportUnalignedAfterOpenConstruct KWBody.pMatchExpr) Complete.forE)
                 struct (Token.KWUseBang, kwPrefixNoConsume KWBody.pLetOrUseBody Complete.keyword)
 

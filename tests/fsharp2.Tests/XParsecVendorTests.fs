@@ -525,6 +525,45 @@ let y = "
                     Expect.isOk result accepted
                     Expect.isEmpty diagnostics accepted
 
+            testCase
+                "an operand on the next line at the column of a keyword that starts its block gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 at (2,16), (2,18), (2,21), (2,24), (3,12), (2,17), (4,16), and (4,12), one column after the end of the keyword line.
+                // The seventh text also gives (4,16) FS3567.
+                for source, offset in
+                    [
+                        "module M\nlet w = upcast\n        xs\n", 32
+                        "module M\nlet w = downcast\n        xs\n", 34
+                        "module M\nlet w = seq { yield\n              xs }\n", 43
+                        "module M\nlet w = async { return\n                xs }\n", 48
+                        "module M\nlet f () =\n    upcast\n    xs\n", 35
+                        "module M\nlet w = [ yield\n          x ]\n", 35
+                        "module M\ntype T() =\n    member _.M =\n        upcast\n        xs\n", 60
+                        "module M\nlet w = async {\n    let! a = b\n    return\n    a }\n", 55
+                    ] do
+                    let _, diagnostics = parseVendored source
+
+                    Expect.equal
+                        (diagnostics
+                         |> List.tryHead
+                         |> Option.map (fun diagnostic ->
+                             diagnostic.Code, diagnostic.Token.StartIndex
+                         ))
+                        (Some(DiagnosticCode.OperandAtKeywordColumn, offset))
+                        source
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "module M\nlet f () =\n    upcast\n     xs\n"
+                        "module M\nlet w = a + upcast\n            x\n"
+                        "module M\nlet w = seq { match q with A -> yield\n                                 x | B -> () }\n"
+                        "module M\nlet w = lazy\n        xs\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
             testCase "a loop that ends at a directive with no tokens after it gives a diagnostic"
             <| fun () ->
                 // Compatibility Oracle: FS0010 at (5,1) and (4,1), "#else has no matching #if".
