@@ -1346,7 +1346,8 @@ module Parsing =
 
     /// The smallest column of the FCS contexts that the open constructs at the right end of `expr` keep: the `fun`
     /// column, the `do` column of a loop, the `then` or `else` column of an `if`, the clause column of a `match`,
-    /// `function`, or `try`, and the `finally` column.
+    /// `function`, or `try ... with`. The Compatibility Oracle accepts the keyword right of a `finally`, so only the open
+    /// constructs in the `finally` body count.
     let rec private openContextColumn (state: ParseState) (expr: Expr<SyntaxToken>) : int voption =
         let column (tok: SyntaxToken) =
             match tok.Index with
@@ -1375,8 +1376,8 @@ module Parsing =
             | ValueSome(Expr.While(doToken = t; body = body))
             | ValueSome(Expr.ForTo(doToken = t; body = body))
             | ValueSome(Expr.ForIn(doToken = t; body = body))
-            | ValueSome(Expr.IfThenElse(elseBranch = ValueSome(ElseBranch(t, body))))
-            | ValueSome(Expr.TryFinally(finallyToken = t; finallyExpr = body)) -> column t, ValueSome body
+            | ValueSome(Expr.IfThenElse(elseBranch = ValueSome(ElseBranch(t, body)))) -> column t, ValueSome body
+            | ValueSome(Expr.TryFinally(finallyExpr = body)) -> ValueNone, ValueSome body
             | ValueSome(Expr.IfThenElse(thenToken = t; thenExpr = body; elifBranches = elifs)) ->
                 if elifs.Length = 0 then
                     column t, ValueSome body
@@ -1392,7 +1393,8 @@ module Parsing =
 
         match own, last |> ValueOption.bind (openContextColumn state) with
         | ValueSome a, ValueSome b -> ValueSome(min a b)
-        | own, _ -> own
+        | ValueNone, inner -> inner
+        | own, ValueNone -> own
 
     /// A keyword on a later line that is right of a context that an open construct keeps stays in that construct.
     let private rightOfOpenContext (state: ParseState) (header: Expr<SyntaxToken>) (keyword: SyntaxToken) =

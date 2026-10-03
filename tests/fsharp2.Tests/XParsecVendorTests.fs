@@ -1011,7 +1011,7 @@ let y = "
                     | [] -> failtest $"{source} must give a diagnostic"
 
                 // The Compatibility Oracle reports no diagnostic for these texts. The keyword is at or left of the
-                // `fun` column, or left of the `do` or `else` column.
+                // `fun` column, left of the `do` or `else` column, or right of a `finally`.
                 for accepted in
                     [
                         "let y = match x with A when fun v -> v\n                            -> a | B -> b\n"
@@ -1020,6 +1020,8 @@ let y = "
                         "let y = if for x in xs do f x\n            then d else b\n"
                         "let f () =\n    for x in fun v -> v\n             do f x\n"
                         "let f () =\n    for x in if c then a else b\n              do f x\n"
+                        "let y = if c then a elif try a finally b\n                                then d else b\n"
+                        "let y = match x with A when try a finally b\n                                   -> a | B -> b\n"
                     ] do
                     let result, diagnostics = parseVendored accepted
                     Expect.isOk result accepted
