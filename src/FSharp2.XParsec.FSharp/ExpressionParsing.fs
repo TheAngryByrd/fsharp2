@@ -2909,6 +2909,7 @@ module Expr =
                     }
 
                 reader.State <- ParseState.pushOffside entry reader.State
+                reportUndentedBlockStart reader |> ignore
 
                 match (innerParser openTok) reader with
                 | Ok result ->

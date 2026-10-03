@@ -440,6 +440,48 @@ let y = "
                     Expect.isOk result accepted
                     Expect.isEmpty diagnostics accepted
 
+            testCase
+                "the first token after a brace or in a class body left of the offside line gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0058 at (3,1), (3,1), (3,1), (4,4), (4,1), (4,5), (5,5), (4,5), and (5,9).
+                // The fifth text also gives (4,3), (4,4), and (4,3) FS0058.
+                for source, offset in
+                    [
+                        "module M\nlet y = seq {\nxs[0] }\n", 23
+                        "module M\nlet y = {\nA = 1 }\n", 19
+                        "module M\nlet y = {|\nA = 1 |}\n", 20
+                        "module M\ntype T() =\n    let v = (\n   xs[0] )\n    member _.M = v\n", 37
+                        "module M\ntype T() =\n    let v = begin\nxs[0] end\n    member _.M = v\n",
+                        38
+                        "module M\ntype T() =\n    member _.M = seq {\n    xs[0] }\n", 47
+                        "module M\ntype T() =\n    let a = 1\n    member _.M = begin\n    xs[0] end\n",
+                        61
+                        "module M\ntype T() =\n    do f (\n    xs[0] )\n", 35
+                        "module M\nmodule N =\n    type T() =\n        let v = (\n        xs[0] )\n",
+                        61
+                    ] do
+                    let _, diagnostics = parseVendored source
+
+                    Expect.equal
+                        (diagnostics
+                         |> List.tryHead
+                         |> Option.map (fun diagnostic ->
+                             diagnostic.Code, diagnostic.Token.StartIndex
+                         ))
+                        (Some(DiagnosticCode.UndentedBlockStart, offset))
+                        source
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "module M\ntype T() =\n    let v = (\n     xs[0] )\n"
+                        "module M\ntype T() =\n    member _.M = seq {\n     xs[0] }\n"
+                        "module M\nmodule N =\n    type T() =\n        let v = (\n         xs[0] )\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
             testCase "a loop that ends at a directive with no tokens after it gives a diagnostic"
             <| fun () ->
                 // Compatibility Oracle: FS0010 at (5,1) and (4,1), "#else has no matching #if".

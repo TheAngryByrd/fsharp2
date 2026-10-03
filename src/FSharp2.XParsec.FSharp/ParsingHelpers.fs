@@ -1039,7 +1039,8 @@ module Parsing =
             | OffsideContext.Do
             | OffsideContext.Try
             | OffsideContext.Match -> ValueSome ctx.Indent
-            | OffsideContext.Let -> ValueSome(ctx.Indent + 1)
+            | OffsideContext.Let
+            | OffsideContext.Type -> ValueSome(ctx.Indent + 1)
             | _ -> ValueNone
 
     let private previousSyntaxColumn (state: ParseState) (token: PositionedToken) =
