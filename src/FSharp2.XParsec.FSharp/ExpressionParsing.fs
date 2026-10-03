@@ -1025,21 +1025,6 @@ module Expr =
                 return ExprAux.ForExpr result
             }
 
-        // The Compatibility Oracle rejects `try try a with _ -> b with _ -> c` and `try try a finally b with ...`
-        // when the outer `with` or `finally` is on the line of the inner one. FCS LexFilter gives that
-        // token to the inner `try`. A parenthesized inner `try` and an inner `match` are accepted.
-        let rec endsInTry (expr: Expr<SyntaxToken>) =
-            match expr with
-            | Expr.TryWith _
-            | Expr.TryFinally _ -> true
-            | Expr.Sequential(items, _)
-            | Expr.Tuple(items, _) when items.Length > 0 -> endsInTry items[items.Length - 1]
-            | Expr.App(_, args) when args.Length > 0 -> endsInTry args[args.Length - 1]
-            | Expr.InfixApp(_, _, right)
-            | Expr.PrefixApp(_, right)
-            | Expr.LetOrUse(body = ValueSome right) -> endsInTry right
-            | _ -> false
-
         let pTryExpr =
             // FCS starts the clauses at the first token after `with`, but not left of the `try` column.
             let pTryClauses tryIndent (reader: Reader<PositionedToken, ParseState, _>) =
@@ -1168,6 +1153,8 @@ module Expr =
                         Token.KWDo
                         "Expected 'do' after while condition"
                         (withContextAt OffsideContext.While (indent + 1) whileTok.PositionedToken pDo)
+
+                do! reportKeywordAfterOpenConstruct cond doTok
                 // Body at while_col
                 // Grammar: WHILE _ DO typedSeqExprBlock
                 let! bodyStart = getPosition
@@ -1194,6 +1181,7 @@ module Expr =
                             let! toTok = pToOrDownTo
                             let! endExpr = refExprGuard.Parser
                             let! doTok = pDo <|> pArrowRight
+                            do! reportKeywordAfterOpenConstruct endExpr doTok
 
                             return
                                 fun forTok body doneTok ->
@@ -1205,6 +1193,7 @@ module Expr =
                             let! inTok = pIn
                             let! iterable = refExprGuard.Parser
                             let! doTok = pDo <|> pArrowRight
+                            do! reportKeywordAfterOpenConstruct iterable doTok
 
                             return
                                 fun forTok body doneTok ->

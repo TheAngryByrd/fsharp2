@@ -798,6 +798,51 @@ let y = "
                     Expect.isOk result accepted
                     Expect.isEmpty diagnostics accepted
 
+            testCase
+                "a do, rule arrow, with, or finally after an open construct on the same line gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 at (1,37), (1,40), (1,31), (1,41), and (1,48).
+                for source, code, offset in
+                    [
+                        "let y = for x in if c then a else b do f x\n",
+                        DiagnosticCode.KeywordAfterOpenConstruct,
+                        36
+                        "let y = match x with A when fun v -> v -> a | B -> b\n",
+                        DiagnosticCode.KeywordAfterOpenConstruct,
+                        39
+                        "let y = while try a finally b do f 0\n",
+                        DiagnosticCode.KeywordAfterOpenConstruct,
+                        30
+                        "let y = try fun () -> try a with _ -> b with _ -> c\n",
+                        DiagnosticCode.SameLineNestedTry,
+                        40
+                        "let y = try if c then a else try b with _ -> d with _ -> e\n",
+                        DiagnosticCode.SameLineNestedTry,
+                        47
+                    ] do
+                    match parseVendored source with
+                    | Ok _, [ diagnostic ] ->
+                        Expect.equal diagnostic.Code code source
+                        Expect.equal diagnostic.Token.StartIndex offset source
+
+                        Expect.equal
+                            (DiagnosticCode.fsharp2Code diagnostic.Code)
+                            (ValueSome "FSC2P1001")
+                            source
+                    | _, other ->
+                        failtest $"{source} must give a tree and one diagnostic, not {other.Length}"
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "let y = for x in (try a finally b) do f x\n"
+                        "let y = match x with A when g (fun v -> v) -> a | B -> b\n"
+                        "let y = try if c then try a finally b else z with _ -> z\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
             testCase "a let body that is not at the let column gives FSC2P1001"
             <| fun () ->
                 // Compatibility Oracle: error FS0010: Unexpected identifier in expression. Expected 'in' or other token, at (3,5).

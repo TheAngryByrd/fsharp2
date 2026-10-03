@@ -854,6 +854,10 @@ module Rule =
             let! guard = opt PatternGuard.parse
             let! arrow = pArrowRight
 
+            match guard with
+            | ValueSome(PatternGuard(expr = condition)) -> do! reportKeywordAfterOpenConstruct condition arrow
+            | ValueNone -> ()
+
             // Grammar: patternAndGuard RARROW typedSeqExprBlock
             let! expr =
                 refTypedSeqExprBlock.Parser

@@ -1288,6 +1288,77 @@ module Parsing =
 
         preturn () reader
 
+    /// The rightmost construct of `expr` whose last block continues to the right in FCS: `fun`, `function`,
+    /// `match`, `try`, `if`, `while`, or `for`. A delimiter closes such a construct.
+    let rec private rightmostOpenConstruct (expr: Expr<SyntaxToken>) =
+        match expr with
+        | Expr.Fun _
+        | Expr.Function _
+        | Expr.Match _
+        | Expr.TryWith _
+        | Expr.TryFinally _
+        | Expr.IfThenElse _
+        | Expr.While _
+        | Expr.ForTo _
+        | Expr.ForIn _ -> ValueSome expr
+        | Expr.Sequential(items, _)
+        | Expr.Tuple(items, _) when items.Length > 0 -> rightmostOpenConstruct items[items.Length - 1]
+        | Expr.App(_, args) when args.Length > 0 -> rightmostOpenConstruct args[args.Length - 1]
+        | Expr.InfixApp(_, _, right)
+        | Expr.PrefixApp(_, right)
+        | Expr.LetOrUse(body = ValueSome right) -> rightmostOpenConstruct right
+        | _ -> ValueNone
+
+    let private lastRuleBody (Rules(rules = rules)) =
+        if rules.Length > 0 then
+            match rules[rules.Length - 1] with
+            | Rule.Rule(expr = body) -> ValueSome body
+            | _ -> ValueNone
+        else
+            ValueNone
+
+    /// Whether the open constructs at the right end of `expr` hold a `try` construct last. FCS gives a later
+    /// `with` or `finally` on the same line to that inner `try`.
+    let rec endsInTry (expr: Expr<SyntaxToken>) =
+        let last =
+            match rightmostOpenConstruct expr with
+            | ValueSome(Expr.TryWith _ | Expr.TryFinally _) -> ValueNone
+            | ValueSome(Expr.IfThenElse(elseBranch = ValueSome(ElseBranch(expr = body)))) -> ValueSome body
+            | ValueSome(Expr.IfThenElse(thenExpr = body; elifBranches = elifs)) ->
+                if elifs.Length = 0 then
+                    ValueSome body
+                else
+                    match elifs[elifs.Length - 1] with
+                    | ElifBranch.Elif(expr = body)
+                    | ElifBranch.ElseIf(expr = body) -> ValueSome body
+            | ValueSome(Expr.Fun(expr = body))
+            | ValueSome(Expr.While(body = body))
+            | ValueSome(Expr.ForTo(body = body))
+            | ValueSome(Expr.ForIn(body = body)) -> ValueSome body
+            | ValueSome(Expr.Match(rules = rules))
+            | ValueSome(Expr.Function(rules = rules)) -> lastRuleBody rules
+            | _ -> ValueNone
+
+        match rightmostOpenConstruct expr, last with
+        | ValueSome(Expr.TryWith _ | Expr.TryFinally _), _ -> true
+        | _, ValueSome body -> endsInTry body
+        | _ -> false
+
+    /// The Compatibility Oracle reports FS0010 at a `do` or rule `->` on the line where the expression
+    /// before it ends in an open construct, because FCS gives the token to that construct.
+    let reportKeywordAfterOpenConstruct
+        (header: Expr<SyntaxToken>)
+        (keyword: SyntaxToken)
+        (reader: Reader<PositionedToken, ParseState, _>)
+        =
+        if
+            (rightmostOpenConstruct header).IsSome
+            && followsTokenOnSameLine reader.State keyword
+        then
+            reader.State <- ParseState.addDiagnosticAt DiagnosticCode.KeywordAfterOpenConstruct keyword reader.State
+
+        preturn () reader
+
     /// Emits a trace message. Use with `do!` inside a `parser { }` CE for debugging.
     let trace (msg: string) (reader: Reader<PositionedToken, ParseState, _>) =
         ParseState.ifTrace reader.State (fun tc -> tc.Message msg)
