@@ -157,6 +157,12 @@ let y = "
         let result = FSharpAst.parse reader
         result, List.rev reader.State.Diagnostics
 
+    type private ThrowingTrace() =
+        inherit TraceCallback()
+
+        override _.TokenConsumed(_, _, _) =
+            raise (InvalidOperationException "trace failure")
+
     [<Tests>]
     let tests =
         testSequenced
@@ -239,6 +245,88 @@ let y = "
 
                 Expect.isOk result "90 nested parentheses must give a tree"
                 Expect.isEmpty diagnostics "90 nested parentheses must give no diagnostic"
+
+            testCase "an exception in the parser gives one FSC2P1001 diagnostic and no tree"
+            <| fun () ->
+                let lexed = (Lexing.lexString "module M\nlet x = 1\n").WithDefines Set.empty
+                let reader = Reader.ofParseInputWithTracing lexed (ThrowingTrace())
+                let result = FSharpAst.parse reader
+
+                Expect.isError result "a parser exception must give no tree"
+
+                match reader.State.Diagnostics with
+                | [ diagnostic ] ->
+                    Expect.equal
+                        diagnostic.Code
+                        (DiagnosticCode.ParserFault "InvalidOperationException: trace failure")
+                        "the diagnostic must keep the exception"
+
+                    Expect.equal
+                        (DiagnosticCode.fsharp2Code diagnostic.Code)
+                        (ValueSome "FSC2P1001")
+                        "code"
+                | other ->
+                    failtest $"a parser exception must give one diagnostic, not {other.Length}"
+
+            testCase
+                "a cast keyword after an expression gives a diagnostic at the keyword, as FCS does"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 at (2,11), (2,11), (2,12), (2,13), (2,15), (2,14), (2,16),
+                // (2,11), (2,12), and (2,13). The fourth text also gives (2,9) FS0598.
+                for source, offset in
+                    [
+                        "module M\nlet y = g upcast x\n", 19
+                        "module M\nlet y = g downcast x\n", 19
+                        "module M\nlet y = (g upcast x)\n", 20
+                        "module M\nlet y = [ g upcast x ]\n", 21
+                        "module M\nlet y = a + b upcast c\n", 23
+                        "module M\nlet f () = g upcast x\n", 22
+                        "module M\nlet y = x |> g upcast\n", 24
+                        "module M\nlet y = g downcast\n", 19
+                        "module M\nlet y = (g downcast)\n", 20
+                        "module M\nlet y = f x upcast\n", 21
+                    ] do
+                    let result, diagnostics = parseVendored source
+                    Expect.isOk result source
+
+                    Expect.contains
+                        (diagnostics
+                         |> List.map (fun diagnostic ->
+                             diagnostic.Code, diagnostic.Token.StartIndex
+                         ))
+                        (DiagnosticCode.SameLineModuleElement, offset)
+                        source
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "module M\nlet y = upcast x\n"
+                        "module M\nlet y = g (upcast x)\n"
+                        "module M\nlet y = a + upcast x\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
+            testCase "a loop that ends at a directive with no tokens after it gives a diagnostic"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 at (5,1) and (4,1), "#else has no matching #if".
+                for source in
+                    [
+                        "let f () =\n    for x in 1 .. 3 do\n      a\n      b\n     #else z\n"
+                        "let f () =\n    for x in 1 .. 3 do\n      a\n     #else z\n"
+                    ] do
+                    let _, diagnostics = parseVendored source
+                    Expect.isNonEmpty diagnostics source
+
+                    Expect.all
+                        diagnostics
+                        (fun diagnostic ->
+                            match diagnostic.Code with
+                            | DiagnosticCode.ParserFault _ -> false
+                            | _ -> true
+                        )
+                        source
 
             testCase "diagnostic text and trace lines keep the diagnostic payload"
             <| fun () ->

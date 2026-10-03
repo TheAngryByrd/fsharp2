@@ -298,6 +298,8 @@ type DiagnosticCode =
     /// The input nests deeper than `limit` parser levels, or deeper than the thread stack
     /// permits. A stack overflow ends the process, so the parse stops here and gives no tree.
     | NestingLimitExceeded of limit: int
+    /// The parser raised an exception. The parse stops here and gives no tree.
+    | ParserFault of message: string
     /// A `|` on the same line ends a `then`, `else`, `do`, `finally`, or lambda body.
     | SameLineBarEndsBody
     /// A `|` follows a match rule whose tokens went left of the clause column, which ends the clauses in FCS.
@@ -508,6 +510,7 @@ module DiagnosticCode =
         | DiagnosticCode.UnclosedDelimiter _ -> "UnclosedDelimiter"
         | DiagnosticCode.MismatchedDelimiter _ -> "MismatchedDelimiter"
         | DiagnosticCode.NestingLimitExceeded _ -> "NestingLimitExceeded"
+        | DiagnosticCode.ParserFault _ -> "ParserFault"
         | DiagnosticCode.SameLineBarEndsBody -> "SameLineBarEndsBody"
         | DiagnosticCode.BarAfterUndentedRule -> "BarAfterUndentedRule"
         | DiagnosticCode.SameLineNestedTry -> "SameLineNestedTry"
@@ -545,6 +548,7 @@ module DiagnosticCode =
             "Wrong close for '" + string (spelling opened) + "': " + string (expecting expected)
         | DiagnosticCode.NestingLimitExceeded limit ->
             "The input nests deeper than the parser supports (" + string limit + " levels)"
+        | DiagnosticCode.ParserFault message -> "The parser stopped on an internal error: " + message
         | DiagnosticCode.UndentedBlockStart ->
             "The first token after an opening delimiter must not be left of the enclosing offside line"
         | DiagnosticCode.TokenAfterUndentedClose ->
@@ -573,6 +577,7 @@ module DiagnosticCode =
         match c with
         | DiagnosticCode.Other msg -> string name + "(" + string msg + ")"
         | DiagnosticCode.NestingLimitExceeded limit -> name + "(" + string limit + ")"
+        | DiagnosticCode.ParserFault message -> name + "(" + message + ")"
         | DiagnosticCode.UnclosedDelimiter(opened = opened; expected = expected)
         | DiagnosticCode.MismatchedDelimiter(opened = opened; expected = expected) ->
             let openedBase = TokenInfo.withoutFlags opened
@@ -610,6 +615,7 @@ module DiagnosticCode =
     let fsharp2Code (c: DiagnosticCode) : string voption =
         match c with
         | DiagnosticCode.NestingLimitExceeded _
+        | DiagnosticCode.ParserFault _
         | DiagnosticCode.SameLineBarEndsBody
         | DiagnosticCode.BarAfterUndentedRule
         | DiagnosticCode.SameLineNestedTry

@@ -1367,7 +1367,7 @@ module Parsing =
     /// Consumes the given token, which must have been previously returned by `peekNextSyntaxToken`, and returns it.
     let consumePeeked (token: SyntaxToken) (reader: Reader<PositionedToken, ParseState, _>) =
         match token.Index with
-        | TokenIndex.Virtual -> invalidOp "Cannot consume a virtual token"
+        | TokenIndex.Virtual -> fail (Message "Cannot consume a virtual token") reader
         | TokenIndex.Regular tokenIdx ->
             assert (reader.Index = tokenIdx * 1< / token>) // Ensure the reader is still at the expected position
             reader.Index <- (tokenIdx + 1<token>) * 1< / token>
@@ -1975,19 +1975,18 @@ module Parsing =
             e
 
     /// Like `withContextAt`, but reads the offside column off an already-parsed token rather
-    /// than being told it. A virtual token has no column of its own, so it throws.
+    /// than being told it. A virtual token has no column of its own, so it fails.
     let withContextAtToken
         (ctx: OffsideContext)
         (anchor: SyntaxToken)
         innerParser
         (reader: Reader<PositionedToken, ParseState, _>)
         =
-        let indent =
-            match anchor.Index with
-            | TokenIndex.Regular iT -> ParseState.getIndent reader.State iT
-            | TokenIndex.Virtual -> failwith ("Attempted to set indent context with a virtual token " + string anchor.PositionedToken)
-
-        withContextAt ctx indent anchor.PositionedToken innerParser reader
+        match anchor.Index with
+        | TokenIndex.Regular iT ->
+            withContextAt ctx (ParseState.getIndent reader.State iT) anchor.PositionedToken innerParser reader
+        | TokenIndex.Virtual ->
+            fail (Message("Attempted to set indent context with a virtual token " + string anchor.PositionedToken)) reader
 
     /// Record field separator: accepts a real ';' or emits a virtual separator when the next
     /// token is at the same indent as the enclosing SeqBlock context (spec §15.1.5: $sep insertion).

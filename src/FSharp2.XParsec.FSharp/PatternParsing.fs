@@ -59,13 +59,13 @@ module Pat =
 
     let private completeTyped (l: Pat<SyntaxToken>) (op: SyntaxToken) (aux: PatAux) =
         match aux with
-        | PatAux.Type t -> Pat.Typed(l, op, t)
-        | _ -> failwith "Expected Type aux for Typed pattern"
+        | PatAux.Type t -> Ok(Pat.Typed(l, op, t))
+        | _ -> Error "Expected Type aux for Typed pattern"
 
     let private completeAs (l: Pat<SyntaxToken>) (op: SyntaxToken) (aux: PatAux) =
         match aux with
-        | PatAux.AsIdent ident -> Pat.As(l, op, ident)
-        | _ -> failwith "Expected Ident aux for As pattern"
+        | PatAux.AsIdent ident -> Ok(Pat.As(l, op, ident))
+        | _ -> Error "Expected Ident aux for As pattern"
 
     let private completeParen (l: SyntaxToken) (p: Pat<SyntaxToken>) (r: SyntaxToken) =
         Pat.EnclosedBlock(ParenKind.Paren l, p, r)

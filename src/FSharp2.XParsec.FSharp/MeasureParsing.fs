@@ -48,7 +48,7 @@ module Measure =
 
         static let completePower (l: Measure<SyntaxToken>) (op: SyntaxToken) (aux: MeasureAux) =
             match aux with
-            | MeasureAux.PowerOperand(neg, exponentToken) -> Measure.Power(l, op, neg, exponentToken)
+            | MeasureAux.PowerOperand(neg, exponentToken) -> Ok(Measure.Power(l, op, neg, exponentToken))
 
         static let completeJuxtaposition (elements: ResizeArray<Measure<SyntaxToken>>) (ops: ResizeArray<SyntaxToken>) =
             Measure.Juxtaposition(ImmutableArray.CreateRange(elements), ImmutableArray.CreateRange(ops))

@@ -598,8 +598,8 @@ module Expr =
         // each wraps its fully-parsed body into ExprAux.ForExpr (historical name).
         let forE _forTok (expr: ExprAux) =
             match expr with
-            | ExprAux.ForExpr forExpr -> forExpr
-            | _ -> failwith "Unexpected Aux type for For expression completion"
+            | ExprAux.ForExpr forExpr -> Ok forExpr
+            | _ -> Error "Unexpected Aux type for For expression completion"
 
         let sequence (exprs: ResizeArray<Expr<_>>) ops =
             Expr.Sequential(ImmutableArray.CreateRange exprs, ImmutableArray.CreateRange ops)
@@ -621,14 +621,14 @@ module Expr =
 
         let sliceAll (op: SyntaxToken) (x: ExprAux) =
             match x with
-            | ExprAux.SliceAll -> Expr.SliceAll(op)
-            | _ -> failwith "Unexpected Aux type for SliceAll completion"
+            | ExprAux.SliceAll -> Ok(Expr.SliceAll(op))
+            | _ -> Error "Unexpected Aux type for SliceAll completion"
 
         let rangeOrSliceFrom (l: Expr<_>) (op: SyntaxToken) (aux: ExprAux) =
             match aux with
-            | ExprAux.SliceFrom -> Expr.SliceFrom(l, op)
-            | ExprAux.Range r -> range l op r
-            | _ -> failwith "Unexpected Aux type for RangeOrSliceFrom completion"
+            | ExprAux.SliceFrom -> Ok(Expr.SliceFrom(l, op))
+            | ExprAux.Range r -> Ok(range l op r)
+            | _ -> Error "Unexpected Aux type for RangeOrSliceFrom completion"
 
         let dot (expr: Expr<_>) (op: SyntaxToken) (aux: ExprAux) =
             match aux with
@@ -641,7 +641,7 @@ module Expr =
                             Dots = ImmutableArray.Create(op)
                         }
 
-                    Expr.LongIdentOrOp(LongIdentOrOp.LongIdent lid)
+                    Ok(Expr.LongIdentOrOp(LongIdentOrOp.LongIdent lid))
                 | Expr.LongIdentOrOp(LongIdentOrOp.LongIdent existing) ->
                     let lid =
                         {
@@ -649,51 +649,51 @@ module Expr =
                             Dots = existing.Dots.Add(op)
                         }
 
-                    Expr.LongIdentOrOp(LongIdentOrOp.LongIdent lid)
-                | _ -> Expr.DotLookup(expr, op, LongIdentOrOp.LongIdent(LongIdent.single ident))
+                    Ok(Expr.LongIdentOrOp(LongIdentOrOp.LongIdent lid))
+                | _ -> Ok(Expr.DotLookup(expr, op, LongIdentOrOp.LongIdent(LongIdent.single ident)))
             | ExprAux.DotParenOp identOrOp ->
                 match expr with
                 | Expr.Ident firstIdent ->
-                    Expr.LongIdentOrOp(LongIdentOrOp.QualifiedOp(LongIdent.single firstIdent, op, identOrOp))
+                    Ok(Expr.LongIdentOrOp(LongIdentOrOp.QualifiedOp(LongIdent.single firstIdent, op, identOrOp)))
                 | Expr.LongIdentOrOp(LongIdentOrOp.LongIdent longIdent) ->
-                    Expr.LongIdentOrOp(LongIdentOrOp.QualifiedOp(longIdent, op, identOrOp))
-                | _ -> Expr.DotLookup(expr, op, LongIdentOrOp.Op identOrOp)
+                    Ok(Expr.LongIdentOrOp(LongIdentOrOp.QualifiedOp(longIdent, op, identOrOp)))
+                | _ -> Ok(Expr.DotLookup(expr, op, LongIdentOrOp.Op identOrOp))
             | ExprAux.DotIndex(lBracket, indexExpr, rBracket) ->
-                Expr.IndexedLookup(expr, ValueSome op, lBracket, indexExpr, rBracket)
-            | _ -> failwith "Unexpected Aux type for dot completion"
+                Ok(Expr.IndexedLookup(expr, ValueSome op, lBracket, indexExpr, rBracket))
+            | _ -> Error "Unexpected Aux type for dot completion"
 
         let dynamicLookup (expr: Expr<_>) (op: SyntaxToken) (aux: ExprAux) =
             match aux with
-            | ExprAux.Ident ident -> Expr.DynamicLookup(expr, op, ident)
-            | _ -> failwith "Unexpected Aux type for dynamic lookup completion"
+            | ExprAux.Ident ident -> Ok(Expr.DynamicLookup(expr, op, ident))
+            | _ -> Error "Unexpected Aux type for dynamic lookup completion"
 
         let typeApp (expr: Expr<_>) (op: SyntaxToken) (aux: ExprAux) =
             match aux with
-            | ExprAux.TypeApp(lAngle, types, commas, rAngle) -> Expr.TypeApp(expr, lAngle, types, commas, rAngle)
-            | _ -> failwith "Unexpected Aux type for type application completion"
+            | ExprAux.TypeApp(lAngle, types, commas, rAngle) -> Ok(Expr.TypeApp(expr, lAngle, types, commas, rAngle))
+            | _ -> Error "Unexpected Aux type for type application completion"
 
         let highPrec (funcExpr: Expr<_>) (_op: SyntaxToken) (aux: ExprAux) =
             match aux with
-            | ExprAux.HighPrecApp(lParen, argExpr, rParen) -> Expr.HighPrecedenceApp(funcExpr, lParen, argExpr, rParen)
+            | ExprAux.HighPrecApp(lParen, argExpr, rParen) -> Ok(Expr.HighPrecedenceApp(funcExpr, lParen, argExpr, rParen))
             | ExprAux.HighPrecIndex(lBracket, argExpr, rBracket) ->
-                Expr.IndexedLookup(funcExpr, ValueNone, lBracket, argExpr, rBracket)
-            | _ -> failwith "Unexpected Aux type for high-precedence application/index completion"
+                Ok(Expr.IndexedLookup(funcExpr, ValueNone, lBracket, argExpr, rBracket))
+            | _ -> Error "Unexpected Aux type for high-precedence application/index completion"
 
         let typeCast (expr: Expr<_>) (op: SyntaxToken) (aux: ExprAux) =
             match aux with
             | ExprAux.TypeCast(typ) ->
                 match op.Token with
-                | Token.OpColon -> Expr.TypeAnnotation(expr, op, typ)
-                | Token.OpUpcast -> Expr.StaticUpcast(expr, op, typ)
-                | Token.OpDowncast -> Expr.DynamicDowncast(expr, op, typ)
-                | Token.OpTypeTest -> Expr.DynamicTypeTest(expr, op, typ)
-                | _ -> failwith "Unexpected operator for type cast completion"
-            | _ -> failwith "Unexpected Aux type for type cast completion"
+                | Token.OpColon -> Ok(Expr.TypeAnnotation(expr, op, typ))
+                | Token.OpUpcast -> Ok(Expr.StaticUpcast(expr, op, typ))
+                | Token.OpDowncast -> Ok(Expr.DynamicDowncast(expr, op, typ))
+                | Token.OpTypeTest -> Ok(Expr.DynamicTypeTest(expr, op, typ))
+                | _ -> Error "Unexpected operator for type cast completion"
+            | _ -> Error "Unexpected Aux type for type cast completion"
 
         let keyword (op: SyntaxToken) (aux: ExprAux) =
             match aux with
-            | ExprAux.KeywordExpr e -> e op
-            | _ -> failwith "Unexpected Aux type for keyword expression"
+            | ExprAux.KeywordExpr e -> Ok(e op)
+            | _ -> Error "Unexpected Aux type for keyword expression"
 
     /// Keyword-expression body parsers (if/match/fun/function/try/while/for/let/use/yield/return/do).
     /// Each parser consumes its own keyword via `assertKeywordToken` and uses `withContextAt` to
@@ -724,10 +724,7 @@ module Expr =
                 | ValueSome t ->
                     let doneTok = virtualToken (PositionedToken.Create(Token.VirtualDone, t.StartIndex))
                     Ok doneTok
-                | ValueNone ->
-                    // No more tokens means something else skipped past the EOF marker token
-                    // So, we throw here
-                    failwith "Unexpected end of input while looking for 'done' or virtual 'done'"
+                | ValueNone -> Error e
 
         // FCS LexFilter ends a loop with ODECLEND at the first token that is offside of the body block and of
         // CtxtDo (at or left of the `do` column). Inside the body, only the closer of a delimiter that the body opens at its
@@ -1215,7 +1212,6 @@ module Expr =
                     "Expected 'for-to' or 'for-in' loop header"
 
             let assertFor reader =
-                // We throw here as `pForExpr` should only be called if we've already peeked and confirmed we have a 'for' token.
                 match peekNextSyntaxToken reader with
                 | Ok t when t.Token = Token.KWFor ->
                     (consumePeeked t
@@ -1231,8 +1227,8 @@ module Expr =
                          struct (forTok, indent))
                         reader
 
-                | Ok t -> invalidOp ("Expected 'for' keyword. Got " + string t.Token + " at position " + string t.StartIndex)
-                | Error e -> invalidOp ("Expected 'for' keyword. Failed to peek next token: " + string e)
+                | Ok _ -> fail (Message "Expected 'for' keyword") reader
+                | Error e -> Error e
 
             parser {
                 let! (forTok, indent) = assertFor
@@ -1982,7 +1978,9 @@ module Expr =
                     | Token.KWWhileBang
                     | Token.KWTry
                     | Token.KWFun
-                    | Token.KWFunction -> fail errUnexpectedPrefixKeywordRhs
+                    | Token.KWFunction
+                    | Token.KWUpcast
+                    | Token.KWDowncast -> fail errUnexpectedPrefixKeywordRhs
                     | _ when
                         // These precedence levels are LHS-only (no RHS handler registered).
                         // When encountered in RHS position, fail so the Pratt parser stops

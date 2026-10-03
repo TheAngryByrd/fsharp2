@@ -172,7 +172,7 @@ type RHSOperator<'Op, 'Aux, 'Expr, 'T, 'State, 'Input when 'Input :> IReadable<'
         parseOp: Parser<'Op, 'T, 'State, 'Input> *
         leftPower: byte<bp> *
         parseRight: Parser<'Aux, 'T, 'State, 'Input> *  // <--- Custom Parser
-        complete: ('Expr -> 'Op -> 'Aux -> 'Expr)
+        complete: ('Expr -> 'Op -> 'Aux -> Result<'Expr, string>)
 
     | Postfix of
         op: 'Op *
@@ -227,7 +227,7 @@ type LHSOperator<'Op, 'Aux, 'Expr, 'T, 'State, 'Input when 'Input :> IReadable<'
         op: 'Op *
         parseOp: Parser<'Op, 'T, 'State, 'Input> *
         parseRight: Parser<'Aux, 'T, 'State, 'Input> *
-        complete: ('Op -> 'Aux -> 'Expr)
+        complete: ('Op -> 'Aux -> Result<'Expr, string>)
 
 
 type Operator<'Op, 'Aux, 'Expr, 'T, 'State, 'Input when 'Input :> IReadable<'T, 'Input>> =
@@ -468,7 +468,12 @@ module internal rec Pratt =
         match parseRight reader with
         | Ok rightContent ->
             ensureAdvanced pos reader
-            parseRhsInternal pExpr ops minBinding (complete lhs op rightContent) errAcc reader
+
+            match complete lhs op rightContent with
+            | Ok expr -> parseRhsInternal pExpr ops minBinding expr errAcc reader
+            | Error message ->
+                reader.Position <- pos
+                Error(mergeWithError { Position = pos; Errors = Message message } errAcc)
         | Error e -> Error(mergeWithError e errAcc)
 
     let private rhsIndexer
@@ -718,7 +723,11 @@ module internal rec Pratt =
                 | PrefixMapped(op, _parseOp, parseRight, complete) ->
                     match parseRight reader with
                     | Ok result ->
-                        parseRhsInternal pExpr ops minBinding (complete op result) (ParseError.empty pos) reader
+                        match complete op result with
+                        | Ok expr -> parseRhsInternal pExpr ops minBinding expr (ParseError.empty pos) reader
+                        | Error message ->
+                            reader.Position <- pos
+                            ParseError.create (Message message) pos
                     | Error e -> Error e
 
             | Error e1 -> Error(ParseError.createNested failure [ e1; e0 ] pos)
