@@ -338,6 +338,28 @@ let y = "
                     Expect.isOk result accepted
                     Expect.isEmpty diagnostics accepted
 
+            testCase "an exception in the lexer gives one FSC2P1001 diagnostic and no tree"
+            <| fun () ->
+                match FSharpAst.parseText Set.empty null with
+                | ParsedText.LexerFault diagnostic ->
+                    Expect.equal
+                        (DiagnosticCode.fsharp2Code diagnostic.Code)
+                        (ValueSome "FSC2P1001")
+                        "code"
+
+                    Expect.equal
+                        diagnostic.Token.Index
+                        TokenIndex.Virtual
+                        "a lexer fault has no token"
+                | ParsedText.Lexed _ -> failtest "a null text must give a lexer fault"
+
+                match FSharpAst.parseText Set.empty "module M\nlet x = 1\n" with
+                | ParsedText.Lexed(_, reader, result) ->
+                    Expect.isOk result "a valid text must give a tree"
+                    Expect.isEmpty reader.State.Diagnostics "a valid text must give no diagnostic"
+                | ParsedText.LexerFault diagnostic ->
+                    failtest $"a valid text gave {diagnostic.Code}"
+
             testCase "a loop that ends at a directive with no tokens after it gives a diagnostic"
             <| fun () ->
                 // Compatibility Oracle: FS0010 at (5,1) and (4,1), "#else has no matching #if".

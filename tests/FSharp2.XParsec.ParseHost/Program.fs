@@ -7,17 +7,16 @@ open XParsec.FSharp.Parser
 
 let private parseFile (printTree: bool) (path: string) =
     let input = File.ReadAllText(path).Replace("\r\n", "\n")
-    let lexed = Lexing.lexString input
-    let reader = Reader.ofParseInput (lexed.WithDefines Set.empty)
 
-    let result = FSharpAst.parse reader
+    let lexedAndResult, diagnostics =
+        match FSharpAst.parseText Set.empty input with
+        | ParsedText.LexerFault diagnostic -> None, [ diagnostic ]
+        | ParsedText.Lexed(lexed, reader, result) -> Some(lexed, result), reader.State.Diagnostics
 
     let outcome =
-        match result with
-        | Ok _ -> "tree"
-        | Error _ -> "no-tree"
-
-    let diagnostics = reader.State.Diagnostics
+        match lexedAndResult with
+        | Some(_, Ok _) -> "tree"
+        | _ -> "no-tree"
 
     stdout.WriteLine(
         Path.GetFileName path
@@ -42,9 +41,9 @@ let private parseFile (printTree: bool) (path: string) =
     if printTree then
         let context = Debug.PrintContext(2)
 
-        match result with
-        | Ok ast -> Debug.printFSharpAst context lexed ast
-        | Error _ -> ()
+        match lexedAndResult with
+        | Some(lexed, Ok ast) -> Debug.printFSharpAst context lexed ast
+        | _ -> ()
 
         Debug.printDiagnostics context input diagnostics
         context.Flush(stdout)

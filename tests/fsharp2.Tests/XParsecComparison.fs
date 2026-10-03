@@ -662,51 +662,55 @@ module XParsecComparison =
         | ValueNone -> "FSC2P1001"
 
     let normalForm (text: string) : Outcome =
-        let lexed = Lexing.lexString text
-        let source = Source(lexed)
-        let reader = Reader.ofParseInput (lexed.WithDefines Set.empty)
-
-        try
-            let result = FSharpAst.parse reader
-            let writer = Writer(source)
-
-            let diagnostics =
-                reader.State.Diagnostics
-                |> List.rev
-                |> List.map (fun diagnostic ->
-                    let line, column = source.Position diagnostic.Token.StartIndex
-                    $"({line},{column}) {oracleCode diagnostic.Code}"
-                )
-
-            let tree =
-                match result with
-                | Ok(FSharpAst.ImplementationFile file) ->
-                    declarations file
-                    |> writer.Declarations
-                    |> String.concat " ;; "
-                | Ok _ -> "?notImplementation"
-                | Error _ -> ""
-
-            let diagnostics =
-                match result, diagnostics with
-                | Error _, [] -> [ "(1,1) FSC2P1001" ]
-                | _ -> diagnostics
-
-            {
-                Tree = tree
-                Diagnostics = diagnostics
-                Crash = None
-            }
-        with failure -> {
+        match FSharpAst.parseText Set.empty text with
+        | ParsedText.LexerFault _ -> {
             Tree = ""
-            Diagnostics = []
-            Crash =
-                Some(
-                    failure.GetType().Name
-                    + ": "
-                    + failure.Message.Split('\n')[0]
-                )
-        }
+            Diagnostics = [ "(1,1) FSC2P1001" ]
+            Crash = None
+          }
+        | ParsedText.Lexed(lexed, reader, result) ->
+            let source = Source(lexed)
+
+            try
+                let writer = Writer(source)
+
+                let diagnostics =
+                    reader.State.Diagnostics
+                    |> List.rev
+                    |> List.map (fun diagnostic ->
+                        let line, column = source.Position diagnostic.Token.StartIndex
+                        $"({line},{column}) {oracleCode diagnostic.Code}"
+                    )
+
+                let tree =
+                    match result with
+                    | Ok(FSharpAst.ImplementationFile file) ->
+                        declarations file
+                        |> writer.Declarations
+                        |> String.concat " ;; "
+                    | Ok _ -> "?notImplementation"
+                    | Error _ -> ""
+
+                let diagnostics =
+                    match result, diagnostics with
+                    | Error _, [] -> [ "(1,1) FSC2P1001" ]
+                    | _ -> diagnostics
+
+                {
+                    Tree = tree
+                    Diagnostics = diagnostics
+                    Crash = None
+                }
+            with failure -> {
+                Tree = ""
+                Diagnostics = []
+                Crash =
+                    Some(
+                        failure.GetType().Name
+                        + ": "
+                        + failure.Message.Split('\n')[0]
+                    )
+            }
 
     let private positionKey (diagnostic: string) =
         let close = diagnostic.IndexOf(')')
