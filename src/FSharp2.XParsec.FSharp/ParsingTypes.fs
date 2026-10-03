@@ -316,7 +316,7 @@ type DiagnosticCode =
     | UndentedLambdaHead
     /// An expression on a later line ends a loop body and is not at the column of the block that holds the loop.
     | UnalignedAfterLoop
-    /// A module element starts on the line of a `let` or `do` element, without `;;`.
+    /// A module element starts on the line of a `let` or `do` element, without `;` or `;;` before it.
     | SameLineModuleElement
     /// A `do` or rule `->` follows, on the same line, an expression that ends in an open construct.
     | KeywordAfterOpenConstruct

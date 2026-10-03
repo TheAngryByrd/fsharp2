@@ -166,18 +166,22 @@ module ModuleDefn =
 module ModuleElem =
     let private refModuleElem = RefParser<ModuleElem<SyntaxToken>, _, _, _>()
 
-    // The Compatibility Oracle rejects a module element that is not aligned with the first element of its module,
-    // and an element on the line of a `let` or `do` element, whose expression body continues there.
-    // `firstColumn` is -1 until the first element. `previous` is the element before. After `let ... in`,
-    // the parser returns the body as the next element.
-    let private afterDoubleSemicolon (state: ParseState) (index: int<token>) =
+    let private afterSemicolon (state: ParseState) (index: int<token>) =
         let mutable i = index - 1<token>
 
         while i > 0<token> && isSkippedByScan state i do
             i <- i - 1<token>
 
-        state.Lexed.Tokens[i].TokenWithoutCommentFlags = Token.OpDoubleSemicolon
+        match state.Lexed.Tokens[i].TokenWithoutCommentFlags with
+        | Token.OpDoubleSemicolon
+        | Token.OpSemicolon -> true
+        | _ -> false
 
+    // The Compatibility Oracle rejects a module element that is not aligned with the first element of its module,
+    // and an element on the line of a `let` or `do` element, whose expression body continues there. After `;`, the
+    // parser splits a sequence into elements and reports another rule.
+    // `firstColumn` is -1 until the first element. `previous` is the element before. After `let ... in`,
+    // the parser returns the body as the next element.
     let private alignedElem
         (firstColumn: int ref)
         (previous: ModuleElem<SyntaxToken> voption ref)
@@ -205,7 +209,7 @@ module ModuleElem =
                         elif column <> firstColumn.Value && not afterLetIn then
                             reader.State <-
                                 ParseState.addDiagnosticAt DiagnosticCode.MisalignedModuleElement start reader.State
-                    | TokenIndex.Regular index when afterExpressionElement && not (afterDoubleSemicolon reader.State index) ->
+                    | TokenIndex.Regular index when afterExpressionElement && not (afterSemicolon reader.State index) ->
                         reader.State <-
                             ParseState.addDiagnosticAt DiagnosticCode.SameLineModuleElement start reader.State
                     | _ -> ()
