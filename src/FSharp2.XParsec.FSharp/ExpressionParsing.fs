@@ -2732,6 +2732,71 @@ module Expr =
         | ValueSome true -> preturn () reader
         | _ -> fail (Message "No record copy") reader
 
+    // FCS gives the `with` of a record copy its own context when a field follows `with` on its line. A later line that starts
+    // at or left of the `with` column, outside delimiters, leaves that context, and the Compatibility Oracle reports FS0010 there.
+    let private reportUndentedCopyField
+        (withTok: SyntaxToken)
+        (rClose: SyntaxToken)
+        (reader: Reader<PositionedToken, ParseState, _>)
+        =
+        match withTok.Index with
+        | TokenIndex.Regular withIndex ->
+            let state = reader.State
+            let tokens = state.Lexed.Tokens
+            let withLine = ParseState.findLineNumber state withIndex
+            let withColumn = ParseState.getIndent state withIndex
+            let mutable i = withIndex + 1<token>
+
+            while i < tokens.LengthM
+                  && isSkippedByScan state i do
+                i <- i + 1<token>
+
+            let stop =
+                match rClose.Index with
+                | TokenIndex.Regular closeIndex -> closeIndex
+                | TokenIndex.Virtual -> int reader.Index * 1<token>
+
+            if i < stop && ParseState.findLineNumber state i = withLine then
+                let mutable line = withLine
+                let mutable depth = 0
+                let mutable reported = false
+
+                while not reported && i < stop do
+                    if not (isSkippedByScan state i) then
+                        let tokenLine = ParseState.findLineNumber state i
+
+                        if tokenLine <> line then
+                            line <- tokenLine
+
+                            if depth = 0 && ParseState.getIndent state i <= withColumn then
+                                reader.State <-
+                                    ParseState.addDiagnosticAt
+                                        DiagnosticCode.UndentedCopyField
+                                        (syntaxToken tokens[i] (int i))
+                                        reader.State
+
+                                reported <- true
+
+                        match tokens[i].TokenWithoutCommentFlags with
+                        | Token.KWLParen
+                        | Token.KWLBracket
+                        | Token.KWLArrayBracket
+                        | Token.KWLBrace
+                        | Token.KWLBraceBar
+                        | Token.KWBegin -> depth <- depth + 1
+                        | Token.KWRParen
+                        | Token.KWRBracket
+                        | Token.KWRArrayBracket
+                        | Token.KWRBrace
+                        | Token.KWRBraceBar
+                        | Token.KWEnd -> depth <- depth - 1
+                        | _ -> ()
+
+                    i <- i + 1<token>
+        | TokenIndex.Virtual -> ()
+
+        preturn () reader
+
     /// Parses the inner content of a record or anonymous record expression,
     /// given the opening token and its ParenKind.
     let private pRecordInner
@@ -2750,6 +2815,7 @@ module Expr =
 
                     let! struct (fields, seps, rClose) = pRecordFieldsAndClose openTok expectedClose mismatchedClose
 
+                    do! reportUndentedCopyField withTok rClose
                     return Expr.RecordClone(lParen, baseExpr, withTok, fields, seps, rClose)
                 }
                 // { Field = val; ... } — record literal

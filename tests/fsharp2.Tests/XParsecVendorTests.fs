@@ -1073,6 +1073,40 @@ let y = "
                     Expect.isOk result accepted
                     Expect.isEmpty diagnostics accepted
 
+            testCase "a record copy line at or left of the with column gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 at (2,13), (3,9), and (2,14).
+                for source, offset in
+                    [
+                        "let y = { r with X = 1;\n            Y = z }\n", 36
+                        "let f () =\n    { r with X = 1;\n        Y = z }\n", 39
+                        "let y = {| r with X = 1;\n             Y = z |}\n", 38
+                    ] do
+                    match parseVendored source with
+                    | Ok _, [ diagnostic ] ->
+                        Expect.equal diagnostic.Code DiagnosticCode.UndentedCopyField source
+                        Expect.equal diagnostic.Token.StartIndex offset source
+
+                        Expect.equal
+                            (DiagnosticCode.fsharp2Code diagnostic.Code)
+                            (ValueSome "FSC2P1001")
+                            source
+                    | _, other ->
+                        failtest $"{source} must give a tree and one diagnostic, not {other.Length}"
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "let y = { r with X = 1;\n             Y = z }\n"
+                        "let f () =\n    { r with X = 1;\n         Y = z }\n"
+                        "let y = {| r with X = 1;\n              Y = z |}\n"
+                        "let y = { X = 1;\nY = z }\n"
+                        "let y =\n    { r with\n        X = 1\n        Y = z }\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
             testCase "a module element on the line of a let or do element gives FSC2P1001"
             <| fun () ->
                 // Compatibility Oracle: FS0010 at (1,11), (1,11), (2,7), and (2,15).

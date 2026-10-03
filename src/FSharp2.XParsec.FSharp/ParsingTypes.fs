@@ -323,6 +323,8 @@ type DiagnosticCode =
     | UnalignedAfterOpenConstruct
     /// A later rule body on the next line that is not right of the first rule body on the line of its `->`.
     | UndentedLaterRuleBody
+    /// A line in a record copy that starts at or left of the `with` column when a field follows `with` on its line.
+    | UndentedCopyField
     /// A module element starts on the line of a `let` or `do` element, without `;` or `;;` before it.
     | SameLineModuleElement
     /// A `do` or rule `->` follows, on the same line, an expression that ends in an open construct.
@@ -527,6 +529,7 @@ module DiagnosticCode =
         | DiagnosticCode.UnalignedAfterLoop -> "UnalignedAfterLoop"
         | DiagnosticCode.UnalignedAfterOpenConstruct -> "UnalignedAfterOpenConstruct"
         | DiagnosticCode.UndentedLaterRuleBody -> "UndentedLaterRuleBody"
+        | DiagnosticCode.UndentedCopyField -> "UndentedCopyField"
         | DiagnosticCode.SameLineModuleElement -> "SameLineModuleElement"
         | DiagnosticCode.KeywordAfterOpenConstruct -> "KeywordAfterOpenConstruct"
 
@@ -567,6 +570,8 @@ module DiagnosticCode =
             "An expression after a 'fun', 'function', 'match', 'try', or 'if' must start at the column of the block that holds it"
         | DiagnosticCode.UndentedLaterRuleBody ->
             "A rule body on the line after its '->' must be right of the first rule body on the line of the '->'"
+        | DiagnosticCode.UndentedCopyField ->
+            "A line in a record copy must start right of the 'with' column when a field follows 'with' on its line"
         | DiagnosticCode.SameLineModuleElement -> "A module element after a 'let' or 'do' element must start on a new line"
         | DiagnosticCode.KeywordAfterOpenConstruct ->
             "A 'do' or '->' cannot follow an open 'fun', 'function', 'match', 'try', 'if', 'while', or 'for' on the same line"
@@ -605,6 +610,7 @@ module DiagnosticCode =
         | DiagnosticCode.UnalignedAfterLoop
         | DiagnosticCode.UnalignedAfterOpenConstruct
         | DiagnosticCode.UndentedLaterRuleBody
+        | DiagnosticCode.UndentedCopyField
         | DiagnosticCode.SameLineModuleElement
         | DiagnosticCode.KeywordAfterOpenConstruct
         | DiagnosticCode.TyparInConstant
@@ -640,6 +646,7 @@ module DiagnosticCode =
         | DiagnosticCode.UnalignedAfterLoop
         | DiagnosticCode.UnalignedAfterOpenConstruct
         | DiagnosticCode.UndentedLaterRuleBody
+        | DiagnosticCode.UndentedCopyField
         | DiagnosticCode.SameLineModuleElement
         | DiagnosticCode.KeywordAfterOpenConstruct -> ValueSome "FSC2P1001"
         | _ -> ValueNone
