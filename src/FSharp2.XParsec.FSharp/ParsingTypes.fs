@@ -298,6 +298,8 @@ type DiagnosticCode =
     /// The input nests deeper than `limit` parser levels, or deeper than the thread stack
     /// permits. A stack overflow ends the process, so the parse stops here and gives no tree.
     | NestingLimitExceeded of limit: int
+    /// The parser raised an exception. The parse stops here and gives no tree.
+    | ParserFault of message: string
     /// A `|` on the same line ends a `then`, `else`, `do`, `finally`, or lambda body.
     | SameLineBarEndsBody
     /// A `|` follows a match rule whose tokens went left of the clause column, which ends the clauses in FCS.
@@ -316,6 +318,18 @@ type DiagnosticCode =
     | UndentedLambdaHead
     /// An expression on a later line ends a loop body and is not at the column of the block that holds the loop.
     | UnalignedAfterLoop
+    /// A token that ends the last block of a `fun`, `function`, `match`, `try`, or `if` on a later line, right of the
+    /// column of the block that holds the construct, where FCS reports FS0010.
+    | UnalignedAfterOpenConstruct
+    /// A later rule body on the next line that is not right of the first rule body on the line of its `->`.
+    | UndentedLaterRuleBody
+    /// A line in a record copy that starts at or left of the `with` column when a field follows `with` on its line.
+    | UndentedCopyField
+    /// An `elif` or `else` after a same-line `then` that FCS gives to an open construct in the condition, or after
+    /// a nested `if ... else` on its line.
+    | ElseAfterOpenConstruct
+    /// A rule `->` that starts a line left of the clause column.
+    | UndentedRuleArrow
     /// A module element starts on the line of a `let` or `do` element, without `;` or `;;` before it.
     | SameLineModuleElement
     /// A `do` or rule `->` follows, on the same line, an expression that ends in an open construct.
@@ -508,6 +522,7 @@ module DiagnosticCode =
         | DiagnosticCode.UnclosedDelimiter _ -> "UnclosedDelimiter"
         | DiagnosticCode.MismatchedDelimiter _ -> "MismatchedDelimiter"
         | DiagnosticCode.NestingLimitExceeded _ -> "NestingLimitExceeded"
+        | DiagnosticCode.ParserFault _ -> "ParserFault"
         | DiagnosticCode.SameLineBarEndsBody -> "SameLineBarEndsBody"
         | DiagnosticCode.BarAfterUndentedRule -> "BarAfterUndentedRule"
         | DiagnosticCode.SameLineNestedTry -> "SameLineNestedTry"
@@ -517,6 +532,11 @@ module DiagnosticCode =
         | DiagnosticCode.TokenAfterUndentedClose -> "TokenAfterUndentedClose"
         | DiagnosticCode.UndentedLambdaHead -> "UndentedLambdaHead"
         | DiagnosticCode.UnalignedAfterLoop -> "UnalignedAfterLoop"
+        | DiagnosticCode.UnalignedAfterOpenConstruct -> "UnalignedAfterOpenConstruct"
+        | DiagnosticCode.UndentedLaterRuleBody -> "UndentedLaterRuleBody"
+        | DiagnosticCode.UndentedCopyField -> "UndentedCopyField"
+        | DiagnosticCode.ElseAfterOpenConstruct -> "ElseAfterOpenConstruct"
+        | DiagnosticCode.UndentedRuleArrow -> "UndentedRuleArrow"
         | DiagnosticCode.SameLineModuleElement -> "SameLineModuleElement"
         | DiagnosticCode.KeywordAfterOpenConstruct -> "KeywordAfterOpenConstruct"
 
@@ -545,6 +565,7 @@ module DiagnosticCode =
             "Wrong close for '" + string (spelling opened) + "': " + string (expecting expected)
         | DiagnosticCode.NestingLimitExceeded limit ->
             "The input nests deeper than the parser supports (" + string limit + " levels)"
+        | DiagnosticCode.ParserFault message -> "The parser stopped on an internal error: " + message
         | DiagnosticCode.UndentedBlockStart ->
             "The first token after an opening delimiter must not be left of the enclosing offside line"
         | DiagnosticCode.TokenAfterUndentedClose ->
@@ -552,6 +573,16 @@ module DiagnosticCode =
         | DiagnosticCode.UndentedLambdaHead -> "A lambda pattern and its '->' must be right of the 'fun' column"
         | DiagnosticCode.UnalignedAfterLoop ->
             "An expression after a loop must start at the column of the block that holds the loop"
+        | DiagnosticCode.UnalignedAfterOpenConstruct ->
+            "An expression after a 'fun', 'function', 'match', 'try', or 'if' must start at the column of the block that holds it"
+        | DiagnosticCode.UndentedLaterRuleBody ->
+            "A rule body on the line after its '->' must be right of the first rule body on the line of the '->'"
+        | DiagnosticCode.UndentedCopyField ->
+            "A line in a record copy must start right of the 'with' column when a field follows 'with' on its line"
+        | DiagnosticCode.ElseAfterOpenConstruct ->
+            "An 'elif' or 'else' cannot follow a 'then' that an open construct takes, or a nested 'if ... else' on its line"
+        | DiagnosticCode.UndentedRuleArrow ->
+            "A rule '->' that starts a line must not be left of the clause column"
         | DiagnosticCode.SameLineModuleElement -> "A module element after a 'let' or 'do' element must start on a new line"
         | DiagnosticCode.KeywordAfterOpenConstruct ->
             "A 'do' or '->' cannot follow an open 'fun', 'function', 'match', 'try', 'if', 'while', or 'for' on the same line"
@@ -573,6 +604,7 @@ module DiagnosticCode =
         match c with
         | DiagnosticCode.Other msg -> string name + "(" + string msg + ")"
         | DiagnosticCode.NestingLimitExceeded limit -> name + "(" + string limit + ")"
+        | DiagnosticCode.ParserFault message -> name + "(" + message + ")"
         | DiagnosticCode.UnclosedDelimiter(opened = opened; expected = expected)
         | DiagnosticCode.MismatchedDelimiter(opened = opened; expected = expected) ->
             let openedBase = TokenInfo.withoutFlags opened
@@ -587,6 +619,11 @@ module DiagnosticCode =
         | DiagnosticCode.TokenAfterUndentedClose
         | DiagnosticCode.UndentedLambdaHead
         | DiagnosticCode.UnalignedAfterLoop
+        | DiagnosticCode.UnalignedAfterOpenConstruct
+        | DiagnosticCode.UndentedLaterRuleBody
+        | DiagnosticCode.UndentedCopyField
+        | DiagnosticCode.ElseAfterOpenConstruct
+        | DiagnosticCode.UndentedRuleArrow
         | DiagnosticCode.SameLineModuleElement
         | DiagnosticCode.KeywordAfterOpenConstruct
         | DiagnosticCode.TyparInConstant
@@ -610,6 +647,7 @@ module DiagnosticCode =
     let fsharp2Code (c: DiagnosticCode) : string voption =
         match c with
         | DiagnosticCode.NestingLimitExceeded _
+        | DiagnosticCode.ParserFault _
         | DiagnosticCode.SameLineBarEndsBody
         | DiagnosticCode.BarAfterUndentedRule
         | DiagnosticCode.SameLineNestedTry
@@ -619,6 +657,11 @@ module DiagnosticCode =
         | DiagnosticCode.TokenAfterUndentedClose
         | DiagnosticCode.UndentedLambdaHead
         | DiagnosticCode.UnalignedAfterLoop
+        | DiagnosticCode.UnalignedAfterOpenConstruct
+        | DiagnosticCode.UndentedLaterRuleBody
+        | DiagnosticCode.UndentedCopyField
+        | DiagnosticCode.ElseAfterOpenConstruct
+        | DiagnosticCode.UndentedRuleArrow
         | DiagnosticCode.SameLineModuleElement
         | DiagnosticCode.KeywordAfterOpenConstruct -> ValueSome "FSC2P1001"
         | _ -> ValueNone

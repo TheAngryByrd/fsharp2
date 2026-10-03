@@ -1344,8 +1344,67 @@ module Parsing =
         | _, ValueSome body -> endsInTry body
         | _ -> false
 
-    /// The Compatibility Oracle reports FS0010 at a `do` or rule `->` on the line where the expression
-    /// before it ends in an open construct, because FCS gives the token to that construct.
+    /// The smallest column of the FCS contexts that the open constructs at the right end of `expr` keep: the `fun`
+    /// column, the `do` column of a loop, the `then` or `else` column of an `if`, the clause column of a `match`,
+    /// `function`, or `try ... with`. The Compatibility Oracle accepts the keyword right of a `finally`, so only the open
+    /// constructs in the `finally` body count.
+    let rec private openContextColumn (state: ParseState) (expr: Expr<SyntaxToken>) : int voption =
+        let column (tok: SyntaxToken) =
+            match tok.Index with
+            | TokenIndex.Regular i -> ValueSome(ParseState.getIndent state i)
+            | TokenIndex.Virtual -> ValueNone
+
+        let clauseColumn (keyword: SyntaxToken) =
+            match keyword.Index with
+            | TokenIndex.Regular i ->
+                let tokens = state.Lexed.Tokens
+                let mutable j = i + 1<token>
+
+                while j < tokens.LengthM
+                      && isSkippedByScan state j do
+                    j <- j + 1<token>
+
+                if j < tokens.LengthM then
+                    ValueSome(ParseState.getIndent state j)
+                else
+                    ValueNone
+            | TokenIndex.Virtual -> ValueNone
+
+        let own, last =
+            match rightmostOpenConstruct expr with
+            | ValueSome(Expr.Fun(funToken = t; expr = body))
+            | ValueSome(Expr.While(doToken = t; body = body))
+            | ValueSome(Expr.ForTo(doToken = t; body = body))
+            | ValueSome(Expr.ForIn(doToken = t; body = body))
+            | ValueSome(Expr.IfThenElse(elseBranch = ValueSome(ElseBranch(t, body)))) -> column t, ValueSome body
+            | ValueSome(Expr.TryFinally(finallyExpr = body)) -> ValueNone, ValueSome body
+            | ValueSome(Expr.IfThenElse(thenToken = t; thenExpr = body; elifBranches = elifs)) ->
+                if elifs.Length = 0 then
+                    column t, ValueSome body
+                else
+                    match elifs[elifs.Length - 1] with
+                    | ElifBranch.Elif(thenToken = t; expr = body)
+                    | ElifBranch.ElseIf(thenToken = t; expr = body) -> column t, ValueSome body
+            | ValueSome(Expr.Match(withToken = t; rules = rules))
+            | ValueSome(Expr.Function(functionToken = t; rules = rules)) -> clauseColumn t, lastRuleBody rules
+            | ValueSome(Expr.TryWith(tryToken = tryTok; withToken = t; rules = rules)) ->
+                ValueOption.map2 max (column tryTok) (clauseColumn t), lastRuleBody rules
+            | _ -> ValueNone, ValueNone
+
+        match own, last |> ValueOption.bind (openContextColumn state) with
+        | ValueSome a, ValueSome b -> ValueSome(min a b)
+        | ValueNone, inner -> inner
+        | own, ValueNone -> own
+
+    /// A keyword on a later line that is right of a context that an open construct keeps stays in that construct.
+    let private rightOfOpenContext (state: ParseState) (header: Expr<SyntaxToken>) (keyword: SyntaxToken) =
+        match keyword.Index, openContextColumn state header with
+        | TokenIndex.Regular i, ValueSome column -> ParseState.getIndent state i > column
+        | _ -> false
+
+    /// The Compatibility Oracle reports FS0010 at a `do` or rule `->` when the expression before it ends in an
+    /// open construct, and the keyword is on the same line or right of a context that the construct keeps,
+    /// because FCS gives the token to that construct.
     let reportKeywordAfterOpenConstruct
         (header: Expr<SyntaxToken>)
         (keyword: SyntaxToken)
@@ -1353,9 +1412,92 @@ module Parsing =
         =
         if
             (rightmostOpenConstruct header).IsSome
-            && followsTokenOnSameLine reader.State keyword
+            && (followsTokenOnSameLine reader.State keyword
+                || rightOfOpenContext reader.State header keyword)
         then
             reader.State <- ParseState.addDiagnosticAt DiagnosticCode.KeywordAfterOpenConstruct keyword reader.State
+
+        preturn () reader
+
+    /// The Compatibility Oracle reports FS0010 at an `elif` or `else` of an `if` chain in two cases. A `then` on the line
+    /// of a condition that ends in an open construct goes to that construct in FCS, so the next `elif` or `else` has no
+    /// `if`. An `else` on the line of a last branch that ends in a nested `if ... else` also has no `if`.
+    let reportElseAfterOpenConstruct
+        (condition: Expr<SyntaxToken>)
+        (thenTok: SyntaxToken)
+        (thenExpr: Expr<SyntaxToken>)
+        (elifs: ImmutableArray<ElifBranch<SyntaxToken>>)
+        (elseBranch: ElseBranch<SyntaxToken> voption)
+        (reader: Reader<PositionedToken, ParseState, _>)
+        =
+        let state = reader.State
+
+        let arms =
+            [|
+                yield struct (condition, thenTok, thenExpr)
+                for branch in elifs do
+                    match branch with
+                    | ElifBranch.Elif(condition = c; thenToken = t; expr = e)
+                    | ElifBranch.ElseIf(condition = c; thenToken = t; expr = e) -> yield struct (c, t, e)
+            |]
+
+        let elseTok =
+            match elseBranch with
+            | ValueSome(ElseBranch(elseToken, _)) -> ValueSome elseToken
+            | ValueNone -> ValueNone
+
+        let nextKeyword k =
+            if k + 1 < arms.Length then
+                match elifs[k] with
+                | ElifBranch.Elif(elifToken = t)
+                | ElifBranch.ElseIf(elseToken = t) -> ValueSome t
+            else
+                elseTok
+
+        let mutable target = ValueNone
+        let mutable k = 0
+
+        while target.IsNone && k < arms.Length do
+            let struct (c, t, _) = arms[k]
+
+            if
+                (rightmostOpenConstruct c).IsSome
+                && followsTokenOnSameLine state t
+            then
+                target <- nextKeyword k |> ValueOption.orElse (ValueSome t)
+
+            k <- k + 1
+
+        if target.IsNone then
+            match elseTok with
+            | ValueSome e when followsTokenOnSameLine state e ->
+                let struct (_, _, lastBody) = arms[arms.Length - 1]
+
+                match rightmostOpenConstruct lastBody with
+                | ValueSome(Expr.IfThenElse(elseBranch = ValueSome _)) -> target <- ValueSome e
+                | _ -> ()
+            | _ -> ()
+
+        match target with
+        | ValueSome token when token.Index <> TokenIndex.Virtual ->
+            reader.State <- ParseState.addDiagnosticAt DiagnosticCode.ElseAfterOpenConstruct token state
+        | _ -> ()
+
+        preturn () reader
+
+    /// The Compatibility Oracle reports FS0010 at a `then` on a later line when the condition before it ends in an
+    /// open construct and the `then` is right of a context that the construct keeps. On the same line, the Oracle
+    /// reports the later `else` instead.
+    let reportThenAfterOpenConstruct
+        (condition: Expr<SyntaxToken>)
+        (thenTok: SyntaxToken)
+        (reader: Reader<PositionedToken, ParseState, _>)
+        =
+        if
+            not (followsTokenOnSameLine reader.State thenTok)
+            && rightOfOpenContext reader.State condition thenTok
+        then
+            reader.State <- ParseState.addDiagnosticAt DiagnosticCode.KeywordAfterOpenConstruct thenTok reader.State
 
         preturn () reader
 
@@ -1367,7 +1509,7 @@ module Parsing =
     /// Consumes the given token, which must have been previously returned by `peekNextSyntaxToken`, and returns it.
     let consumePeeked (token: SyntaxToken) (reader: Reader<PositionedToken, ParseState, _>) =
         match token.Index with
-        | TokenIndex.Virtual -> invalidOp "Cannot consume a virtual token"
+        | TokenIndex.Virtual -> fail (Message "Cannot consume a virtual token") reader
         | TokenIndex.Regular tokenIdx ->
             assert (reader.Index = tokenIdx * 1< / token>) // Ensure the reader is still at the expected position
             reader.Index <- (tokenIdx + 1<token>) * 1< / token>
@@ -1975,19 +2117,18 @@ module Parsing =
             e
 
     /// Like `withContextAt`, but reads the offside column off an already-parsed token rather
-    /// than being told it. A virtual token has no column of its own, so it throws.
+    /// than being told it. A virtual token has no column of its own, so it fails.
     let withContextAtToken
         (ctx: OffsideContext)
         (anchor: SyntaxToken)
         innerParser
         (reader: Reader<PositionedToken, ParseState, _>)
         =
-        let indent =
-            match anchor.Index with
-            | TokenIndex.Regular iT -> ParseState.getIndent reader.State iT
-            | TokenIndex.Virtual -> failwith ("Attempted to set indent context with a virtual token " + string anchor.PositionedToken)
-
-        withContextAt ctx indent anchor.PositionedToken innerParser reader
+        match anchor.Index with
+        | TokenIndex.Regular iT ->
+            withContextAt ctx (ParseState.getIndent reader.State iT) anchor.PositionedToken innerParser reader
+        | TokenIndex.Virtual ->
+            fail (Message("Attempted to set indent context with a virtual token " + string anchor.PositionedToken)) reader
 
     /// Record field separator: accepts a real ';' or emits a virtual separator when the next
     /// token is at the same indent as the enclosing SeqBlock context (spec §15.1.5: $sep insertion).

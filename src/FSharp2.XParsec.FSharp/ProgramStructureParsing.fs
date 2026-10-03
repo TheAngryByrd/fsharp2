@@ -143,7 +143,8 @@ module FSharpAst =
 
     /// Runs a top-level parser and turns `NestingLimitException` into the single
     /// `NestingLimitExceeded` diagnostic and an `Error`, so input that nests too deep gives no tree.
-    let private stopAtNestingLimit
+    /// Any other exception gives the single `ParserFault` diagnostic and no tree.
+    let private stopOnException
         (parser: Parser<FSharpAst<SyntaxToken>, PositionedToken, ParseState, _>)
         : Parser<FSharpAst<SyntaxToken>, PositionedToken, ParseState, _> =
         fun reader ->
@@ -152,7 +153,8 @@ module FSharpAst =
 
             try
                 parser reader
-            with :? NestingLimitException as e ->
+            with
+            | :? NestingLimitException as e ->
                 reader.Position <- startPos
                 reader.NestingDepth <- startDepth
                 reader.Index <- e.Index
@@ -160,6 +162,30 @@ module FSharpAst =
                 reader.Position <- startPos
                 let code = DiagnosticCode.NestingLimitExceeded reader.MaxNestingDepth
                 reader.State <- addDiagnosticAt code token reader.State
+                fail (Message(DiagnosticCode.message code)) reader
+            | e ->
+                // The trace callback can be the source of the exception, so the diagnostic bypasses it.
+                let token =
+                    match reader.Peek() with
+                    | ValueSome tok -> SyntaxToken.syntaxToken tok reader.Index
+                    | ValueNone -> SyntaxToken.nowhere
+
+                let code = DiagnosticCode.ParserFault(e.GetType().Name + ": " + e.Message)
+                reader.Position <- startPos
+                reader.NestingDepth <- startDepth
+
+                reader.State <-
+                    { reader.State with
+                        Diagnostics =
+                            {
+                                Code = code
+                                Token = token
+                                TokenEnd = None
+                                Error = None
+                            }
+                            :: reader.State.Diagnostics
+                    }
+
                 fail (Message(DiagnosticCode.message code)) reader
 
     /// Infallible top-level signature-file parser. Always returns Ok with errors captured as diagnostics.
@@ -231,8 +257,8 @@ module FSharpAst =
                     Ok(FSharpAst.SignatureFile(SignatureFile.AnonymousModule elems))
 
     /// Signature-file parser. Returns Ok with errors captured as diagnostics, except for input that
-    /// nests too deep, which returns Error with a `NestingLimitExceeded` diagnostic.
-    let parseSignature = stopAtNestingLimit parseSignatureUnguarded
+    /// nests too deep or makes the parser raise an exception, which returns Error with one diagnostic.
+    let parseSignature = stopOnException parseSignatureUnguarded
 
     /// Infallible top-level parser. Always returns Ok with errors captured as diagnostics.
     let private parseUnguarded: Parser<FSharpAst<SyntaxToken>, PositionedToken, ParseState, _> =
@@ -329,5 +355,5 @@ module FSharpAst =
                         Ok(FSharpAst.ImplementationFile(ImplementationFile.AnonymousModule elems))
 
     /// Top-level parser. Returns Ok with errors captured as diagnostics, except for input that
-    /// nests too deep, which returns Error with a `NestingLimitExceeded` diagnostic.
-    let parse = stopAtNestingLimit parseUnguarded
+    /// nests too deep or makes the parser raise an exception, which returns Error with one diagnostic.
+    let parse = stopOnException parseUnguarded

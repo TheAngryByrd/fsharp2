@@ -88,6 +88,8 @@ module ElifBranches =
         | Ok condition ->
             match pThen reader with
             | Ok thenTok ->
+                reportThenAfterOpenConstruct condition thenTok reader |> ignore
+
                 match pThenExpr reader with
                 | Ok expr -> Ok(condition, thenTok, expr)
                 | Error e -> Error e
@@ -598,8 +600,8 @@ module Expr =
         // each wraps its fully-parsed body into ExprAux.ForExpr (historical name).
         let forE _forTok (expr: ExprAux) =
             match expr with
-            | ExprAux.ForExpr forExpr -> forExpr
-            | _ -> failwith "Unexpected Aux type for For expression completion"
+            | ExprAux.ForExpr forExpr -> Ok forExpr
+            | _ -> Error "Unexpected Aux type for For expression completion"
 
         let sequence (exprs: ResizeArray<Expr<_>>) ops =
             Expr.Sequential(ImmutableArray.CreateRange exprs, ImmutableArray.CreateRange ops)
@@ -621,14 +623,14 @@ module Expr =
 
         let sliceAll (op: SyntaxToken) (x: ExprAux) =
             match x with
-            | ExprAux.SliceAll -> Expr.SliceAll(op)
-            | _ -> failwith "Unexpected Aux type for SliceAll completion"
+            | ExprAux.SliceAll -> Ok(Expr.SliceAll(op))
+            | _ -> Error "Unexpected Aux type for SliceAll completion"
 
         let rangeOrSliceFrom (l: Expr<_>) (op: SyntaxToken) (aux: ExprAux) =
             match aux with
-            | ExprAux.SliceFrom -> Expr.SliceFrom(l, op)
-            | ExprAux.Range r -> range l op r
-            | _ -> failwith "Unexpected Aux type for RangeOrSliceFrom completion"
+            | ExprAux.SliceFrom -> Ok(Expr.SliceFrom(l, op))
+            | ExprAux.Range r -> Ok(range l op r)
+            | _ -> Error "Unexpected Aux type for RangeOrSliceFrom completion"
 
         let dot (expr: Expr<_>) (op: SyntaxToken) (aux: ExprAux) =
             match aux with
@@ -641,7 +643,7 @@ module Expr =
                             Dots = ImmutableArray.Create(op)
                         }
 
-                    Expr.LongIdentOrOp(LongIdentOrOp.LongIdent lid)
+                    Ok(Expr.LongIdentOrOp(LongIdentOrOp.LongIdent lid))
                 | Expr.LongIdentOrOp(LongIdentOrOp.LongIdent existing) ->
                     let lid =
                         {
@@ -649,51 +651,51 @@ module Expr =
                             Dots = existing.Dots.Add(op)
                         }
 
-                    Expr.LongIdentOrOp(LongIdentOrOp.LongIdent lid)
-                | _ -> Expr.DotLookup(expr, op, LongIdentOrOp.LongIdent(LongIdent.single ident))
+                    Ok(Expr.LongIdentOrOp(LongIdentOrOp.LongIdent lid))
+                | _ -> Ok(Expr.DotLookup(expr, op, LongIdentOrOp.LongIdent(LongIdent.single ident)))
             | ExprAux.DotParenOp identOrOp ->
                 match expr with
                 | Expr.Ident firstIdent ->
-                    Expr.LongIdentOrOp(LongIdentOrOp.QualifiedOp(LongIdent.single firstIdent, op, identOrOp))
+                    Ok(Expr.LongIdentOrOp(LongIdentOrOp.QualifiedOp(LongIdent.single firstIdent, op, identOrOp)))
                 | Expr.LongIdentOrOp(LongIdentOrOp.LongIdent longIdent) ->
-                    Expr.LongIdentOrOp(LongIdentOrOp.QualifiedOp(longIdent, op, identOrOp))
-                | _ -> Expr.DotLookup(expr, op, LongIdentOrOp.Op identOrOp)
+                    Ok(Expr.LongIdentOrOp(LongIdentOrOp.QualifiedOp(longIdent, op, identOrOp)))
+                | _ -> Ok(Expr.DotLookup(expr, op, LongIdentOrOp.Op identOrOp))
             | ExprAux.DotIndex(lBracket, indexExpr, rBracket) ->
-                Expr.IndexedLookup(expr, ValueSome op, lBracket, indexExpr, rBracket)
-            | _ -> failwith "Unexpected Aux type for dot completion"
+                Ok(Expr.IndexedLookup(expr, ValueSome op, lBracket, indexExpr, rBracket))
+            | _ -> Error "Unexpected Aux type for dot completion"
 
         let dynamicLookup (expr: Expr<_>) (op: SyntaxToken) (aux: ExprAux) =
             match aux with
-            | ExprAux.Ident ident -> Expr.DynamicLookup(expr, op, ident)
-            | _ -> failwith "Unexpected Aux type for dynamic lookup completion"
+            | ExprAux.Ident ident -> Ok(Expr.DynamicLookup(expr, op, ident))
+            | _ -> Error "Unexpected Aux type for dynamic lookup completion"
 
         let typeApp (expr: Expr<_>) (op: SyntaxToken) (aux: ExprAux) =
             match aux with
-            | ExprAux.TypeApp(lAngle, types, commas, rAngle) -> Expr.TypeApp(expr, lAngle, types, commas, rAngle)
-            | _ -> failwith "Unexpected Aux type for type application completion"
+            | ExprAux.TypeApp(lAngle, types, commas, rAngle) -> Ok(Expr.TypeApp(expr, lAngle, types, commas, rAngle))
+            | _ -> Error "Unexpected Aux type for type application completion"
 
         let highPrec (funcExpr: Expr<_>) (_op: SyntaxToken) (aux: ExprAux) =
             match aux with
-            | ExprAux.HighPrecApp(lParen, argExpr, rParen) -> Expr.HighPrecedenceApp(funcExpr, lParen, argExpr, rParen)
+            | ExprAux.HighPrecApp(lParen, argExpr, rParen) -> Ok(Expr.HighPrecedenceApp(funcExpr, lParen, argExpr, rParen))
             | ExprAux.HighPrecIndex(lBracket, argExpr, rBracket) ->
-                Expr.IndexedLookup(funcExpr, ValueNone, lBracket, argExpr, rBracket)
-            | _ -> failwith "Unexpected Aux type for high-precedence application/index completion"
+                Ok(Expr.IndexedLookup(funcExpr, ValueNone, lBracket, argExpr, rBracket))
+            | _ -> Error "Unexpected Aux type for high-precedence application/index completion"
 
         let typeCast (expr: Expr<_>) (op: SyntaxToken) (aux: ExprAux) =
             match aux with
             | ExprAux.TypeCast(typ) ->
                 match op.Token with
-                | Token.OpColon -> Expr.TypeAnnotation(expr, op, typ)
-                | Token.OpUpcast -> Expr.StaticUpcast(expr, op, typ)
-                | Token.OpDowncast -> Expr.DynamicDowncast(expr, op, typ)
-                | Token.OpTypeTest -> Expr.DynamicTypeTest(expr, op, typ)
-                | _ -> failwith "Unexpected operator for type cast completion"
-            | _ -> failwith "Unexpected Aux type for type cast completion"
+                | Token.OpColon -> Ok(Expr.TypeAnnotation(expr, op, typ))
+                | Token.OpUpcast -> Ok(Expr.StaticUpcast(expr, op, typ))
+                | Token.OpDowncast -> Ok(Expr.DynamicDowncast(expr, op, typ))
+                | Token.OpTypeTest -> Ok(Expr.DynamicTypeTest(expr, op, typ))
+                | _ -> Error "Unexpected operator for type cast completion"
+            | _ -> Error "Unexpected Aux type for type cast completion"
 
         let keyword (op: SyntaxToken) (aux: ExprAux) =
             match aux with
-            | ExprAux.KeywordExpr e -> e op
-            | _ -> failwith "Unexpected Aux type for keyword expression"
+            | ExprAux.KeywordExpr e -> Ok(e op)
+            | _ -> Error "Unexpected Aux type for keyword expression"
 
     /// Keyword-expression body parsers (if/match/fun/function/try/while/for/let/use/yield/return/do).
     /// Each parser consumes its own keyword via `assertKeywordToken` and uses `withContextAt` to
@@ -724,10 +726,7 @@ module Expr =
                 | ValueSome t ->
                     let doneTok = virtualToken (PositionedToken.Create(Token.VirtualDone, t.StartIndex))
                     Ok doneTok
-                | ValueNone ->
-                    // No more tokens means something else skipped past the EOF marker token
-                    // So, we throw here
-                    failwith "Unexpected end of input while looking for 'done' or virtual 'done'"
+                | ValueNone -> Error e
 
         // FCS LexFilter ends a loop with ODECLEND at the first token that is offside of the body block and of
         // CtxtDo (at or left of the `do` column). Inside the body, only the closer of a delimiter that the body opens at its
@@ -818,10 +817,73 @@ module Expr =
                     else
                         pDoneVirt reader
 
-        // FCS ends a loop at a token that ends its body. The Compatibility Oracle reports FS0010 at such a token
-        // on a later line when it starts an expression and is right of the column of the block that holds the loop.
-        // The vendored parser has no frame for a record field value, so only a block that starts at the loop or on an earlier line,
+        // FCS ends a loop or an open construct at a token that ends its last block. The Compatibility Oracle reports FS0010 at
+        // such a token on a later line when it starts an expression and is right of the column of the block that holds the construct.
+        // The vendored parser has no frame for a record field value, so only a block that starts at the construct or on an earlier line,
         // or the field block of a record, counts.
+        let private reportUnalignedAfterBlock
+            (code: DiagnosticCode)
+            (constructIndex: int<token>)
+            (bodyStart: int<token>)
+            (reader: Reader<PositionedToken, ParseState, _>)
+            =
+            let state = reader.State
+            let tokens = state.Lexed.Tokens
+            let mutable bodyIndex = bodyStart
+            let mutable next = int reader.Index * 1<token>
+
+            while bodyIndex < tokens.LengthM
+                  && isSkippedByScan state bodyIndex do
+                bodyIndex <- bodyIndex + 1<token>
+
+            while next < tokens.LengthM
+                  && isSkippedByScan state next do
+                next <- next + 1<token>
+
+            let holdsConstruct (blockStart: PositionedToken) =
+                let mutable i = constructIndex
+                let mutable earlierLine = false
+
+                while not earlierLine
+                      && i > 0<token>
+                      && tokens[i].StartIndex > blockStart.StartIndex do
+                    i <- i - 1<token>
+                    earlierLine <- tokens[i].TokenWithoutCommentFlags = Token.Newline
+
+                earlierLine || blockStart.StartIndex = tokens[constructIndex].StartIndex
+
+            if bodyIndex < next && next < tokens.LengthM then
+                let kind = tokens[next].TokenWithoutCommentFlags
+                let column = ParseState.getIndent state next
+
+                // In the field block of a record, the token can also start a field, or continue a field value at the construct column.
+                let aligned blockColumn (deeper: Offside list) =
+                    match deeper with
+                    | { Context = OffsideContext.Brace | OffsideContext.BraceBar } :: _ ->
+                        column = blockColumn
+                        || column = ParseState.getIndent state constructIndex
+                    | _ -> column <= blockColumn
+
+                match state.Context with
+                | { Context = OffsideContext.SeqBlock; Indent = blockColumn; Token = blockStart } :: deeper when
+                    (holdsConstruct blockStart
+                     || (match deeper with
+                         | { Context = OffsideContext.Brace | OffsideContext.BraceBar } :: _ -> true
+                         | _ -> false))
+                    && TokenInfo.canStartExpression kind
+                    && not (TokenInfo.isOperator kind)
+                    && not (aligned blockColumn deeper)
+                    && column < ParseState.getIndent state bodyIndex
+                    && ParseState.findLineNumber state bodyIndex < ParseState.findLineNumber state next
+                    && not (followsTokenOnSameLine state (syntaxToken tokens[next] (int next)))
+                    && not (
+                        state.Diagnostics
+                        |> List.exists (fun diagnostic -> diagnostic.Token.StartIndex = tokens[next].StartIndex)
+                    )
+                    ->
+                    reader.State <- ParseState.addDiagnosticAt code (syntaxToken tokens[next] (int next)) state
+                | _ -> ()
+
         let reportUnalignedAfterLoop
             (loopTok: SyntaxToken)
             (bodyStart: int64)
@@ -830,65 +892,60 @@ module Expr =
             =
             match loopTok.Index, doneTok.Index with
             | TokenIndex.Regular loopIndex, TokenIndex.Virtual ->
-                let state = reader.State
-                let tokens = state.Lexed.Tokens
-                let mutable bodyIndex = int bodyStart * 1<token>
-                let mutable next = int reader.Index * 1<token>
-
-                while bodyIndex < tokens.LengthM
-                      && isSkippedByScan state bodyIndex do
-                    bodyIndex <- bodyIndex + 1<token>
-
-                while next < tokens.LengthM
-                      && isSkippedByScan state next do
-                    next <- next + 1<token>
-
-                let holdsLoop (blockStart: PositionedToken) =
-                    let mutable i = loopIndex
-                    let mutable earlierLine = false
-
-                    while not earlierLine
-                          && i > 0<token>
-                          && tokens[i].StartIndex > blockStart.StartIndex do
-                        i <- i - 1<token>
-                        earlierLine <- tokens[i].TokenWithoutCommentFlags = Token.Newline
-
-                    earlierLine || blockStart.StartIndex = tokens[loopIndex].StartIndex
-
-                if bodyIndex < next && next < tokens.LengthM then
-                    let kind = tokens[next].TokenWithoutCommentFlags
-                    let column = ParseState.getIndent state next
-
-                    // In the field block of a record, the token can also start a field, or continue a field value at the loop column.
-                    let aligned blockColumn (deeper: Offside list) =
-                        match deeper with
-                        | { Context = OffsideContext.Brace | OffsideContext.BraceBar } :: _ ->
-                            column = blockColumn
-                            || column = ParseState.getIndent state loopIndex
-                        | _ -> column <= blockColumn
-
-                    match state.Context with
-                    | { Context = OffsideContext.SeqBlock; Indent = blockColumn; Token = blockStart } :: deeper when
-                        (holdsLoop blockStart
-                         || (match deeper with
-                             | { Context = OffsideContext.Brace | OffsideContext.BraceBar } :: _ -> true
-                             | _ -> false))
-                        && TokenInfo.canStartExpression kind
-                        && not (TokenInfo.isOperator kind)
-                        && not (aligned blockColumn deeper)
-                        && column < ParseState.getIndent state bodyIndex
-                        && ParseState.findLineNumber state bodyIndex < ParseState.findLineNumber state next
-                        && not (followsTokenOnSameLine state (syntaxToken tokens[next] (int next)))
-                        ->
-                        reader.State <-
-                            ParseState.addDiagnosticAt
-                                DiagnosticCode.UnalignedAfterLoop
-                                (syntaxToken tokens[next] (int next))
-                                state
-                    | _ -> ()
+                reportUnalignedAfterBlock DiagnosticCode.UnalignedAfterLoop loopIndex (int bodyStart * 1<token>) reader
             | _ -> ()
 
             preturn () reader
+
+        // The last block of an open construct starts after its last `->`, `then`, `else`, or `finally` outside delimiters.
+        let reportUnalignedAfterOpenConstruct
+            (body: Parser<ExprAux, PositionedToken, ParseState, _>)
+            (reader: Reader<PositionedToken, ParseState, _>)
+            =
+            let start = int reader.Index * 1<token>
+
+            match body reader with
+            | Ok _ as result ->
+                let state = reader.State
+                let tokens = state.Lexed.Tokens
+                let mutable constructIndex = start
+
+                while constructIndex < tokens.LengthM
+                      && isSkippedByScan state constructIndex do
+                    constructIndex <- constructIndex + 1<token>
+
+                let mutable i = int reader.Index * 1<token> - 1<token>
+                let mutable depth = 0
+                let mutable bodyStart = -1<token>
+
+                while bodyStart < 0<token> && i > constructIndex do
+                    if not (isSkippedByScan state i) then
+                        match tokens[i].TokenWithoutCommentFlags with
+                        | Token.KWRParen
+                        | Token.KWRBracket
+                        | Token.KWRArrayBracket
+                        | Token.KWRBrace
+                        | Token.KWRBraceBar
+                        | Token.KWEnd -> depth <- depth + 1
+                        | Token.KWLParen
+                        | Token.KWLBracket
+                        | Token.KWLArrayBracket
+                        | Token.KWLBrace
+                        | Token.KWLBraceBar
+                        | Token.KWBegin -> depth <- depth - 1
+                        | Token.OpArrowRight
+                        | Token.KWThen
+                        | Token.KWElse
+                        | Token.KWFinally when depth = 0 -> bodyStart <- i + 1<token>
+                        | _ -> ()
+
+                    i <- i - 1<token>
+
+                if bodyStart > 0<token> then
+                    reportUnalignedAfterBlock DiagnosticCode.UnalignedAfterOpenConstruct constructIndex bodyStart reader
+
+                result
+            | error -> error
 
         let pIfExpr =
             parser {
@@ -900,6 +957,7 @@ module Expr =
                     )
                 // then permitted undentation at if_col via contextPermitsToken
                 let! thenTok = recoverWithVirtualToken Token.KWThen "Expected 'then' after condition" pThen
+                do! reportThenAfterOpenConstruct cond thenTok
                 // Body anchored to if_col + 1, NOT then_col + 1
                 // Grammar: THEN typedSeqExprBlock
                 let! thenExpr =
@@ -908,6 +966,7 @@ module Expr =
                     )
 
                 let! elifs, elseBranch = ElifBranches.parse indent
+                do! reportElseAfterOpenConstruct cond thenTok thenExpr elifs elseBranch
 
                 return ExprAux.ForExpr(Expr.IfThenElse(ifTok, cond, thenTok, thenExpr, elifs, elseBranch))
             }
@@ -1215,7 +1274,6 @@ module Expr =
                     "Expected 'for-to' or 'for-in' loop header"
 
             let assertFor reader =
-                // We throw here as `pForExpr` should only be called if we've already peeked and confirmed we have a 'for' token.
                 match peekNextSyntaxToken reader with
                 | Ok t when t.Token = Token.KWFor ->
                     (consumePeeked t
@@ -1231,8 +1289,8 @@ module Expr =
                          struct (forTok, indent))
                         reader
 
-                | Ok t -> invalidOp ("Expected 'for' keyword. Got " + string t.Token + " at position " + string t.StartIndex)
-                | Error e -> invalidOp ("Expected 'for' keyword. Failed to peek next token: " + string e)
+                | Ok _ -> fail (Message "Expected 'for' keyword") reader
+                | Error e -> Error e
 
             parser {
                 let! (forTok, indent) = assertFor
@@ -1982,7 +2040,9 @@ module Expr =
                     | Token.KWWhileBang
                     | Token.KWTry
                     | Token.KWFun
-                    | Token.KWFunction -> fail errUnexpectedPrefixKeywordRhs
+                    | Token.KWFunction
+                    | Token.KWUpcast
+                    | Token.KWDowncast -> fail errUnexpectedPrefixKeywordRhs
                     | _ when
                         // These precedence levels are LHS-only (no RHS handler registered).
                         // When encountered in RHS position, fail so the Pratt parser stops
@@ -2139,35 +2199,39 @@ module Expr =
                 return Prefix(tok, preturn tok, power, Complete.prefix)
             }
 
+        // pars.fsy `minusExpr`: a `-`, `+`, `%`, or `^` prefix takes an application as its operand and binds tighter
+        // than any infix operator, so `-a * b` is `(-a) * b` and `-f x` is `-(f x)`.
+        let minusExprPower =
+            BindingPower.fromLevel (int PrecedenceLevel.Application) - 1uy<bp>
+
         // `^expr` is the from-end index (pars.fsy `minusExpr: INFIX_AT_HAT_OP minusExpr`).
         let pOpFromEndPrefix (token: SyntaxToken) =
             parser {
                 let! tok = consumePeeked token
-                let power = BindingPower.fromLevel (int PrecedenceLevel.Power)
-                return Prefix(tok, preturn tok, power, Complete.prefix)
+                return Prefix(tok, preturn tok, minusExprPower, Complete.prefix)
             }
 
         let kwPrefixRoutes: struct (Token * (SyntaxToken -> Parser<_, _, _, _>))[] =
             [|
                 // CE / control-flow keyword prefixes — body parser consumes the keyword
                 struct (Token.KWLet, kwPrefixNoConsume KWBody.pLetOrUseBody Complete.keyword)
-                struct (Token.KWMatch, kwPrefixNoConsume KWBody.pMatchExpr Complete.forE)
-                struct (Token.KWIf, kwPrefixNoConsume KWBody.pIfExpr Complete.forE)
-                struct (Token.KWFun, kwPrefixNoConsume KWBody.pFunExpr Complete.forE)
+                struct (Token.KWMatch, kwPrefixNoConsume (KWBody.reportUnalignedAfterOpenConstruct KWBody.pMatchExpr) Complete.forE)
+                struct (Token.KWIf, kwPrefixNoConsume (KWBody.reportUnalignedAfterOpenConstruct KWBody.pIfExpr) Complete.forE)
+                struct (Token.KWFun, kwPrefixNoConsume (KWBody.reportUnalignedAfterOpenConstruct KWBody.pFunExpr) Complete.forE)
                 struct (Token.KWDo, kwPrefixConsume KWBody.pYieldReturnDoBody Complete.keyword)
                 struct (Token.KWFor, kwPrefixNoConsume KWBody.pForExpr Complete.forE)
                 struct (Token.KWYieldBang, kwPrefixConsume KWBody.pYieldReturnDoBody Complete.keyword)
                 struct (Token.KWYield, kwPrefixConsume KWBody.pYieldReturnDoBody Complete.keyword)
                 struct (Token.KWReturn, kwPrefixConsume KWBody.pYieldReturnDoBody Complete.keyword)
-                struct (Token.KWTry, kwPrefixNoConsume KWBody.pTryExpr Complete.forE)
-                struct (Token.KWFunction, kwPrefixNoConsume KWBody.pFunctionExpr Complete.forE)
+                struct (Token.KWTry, kwPrefixNoConsume (KWBody.reportUnalignedAfterOpenConstruct KWBody.pTryExpr) Complete.forE)
+                struct (Token.KWFunction, kwPrefixNoConsume (KWBody.reportUnalignedAfterOpenConstruct KWBody.pFunctionExpr) Complete.forE)
                 struct (Token.KWUse, kwPrefixNoConsume KWBody.pLetOrUseBody Complete.keyword)
                 struct (Token.KWLetBang, kwPrefixNoConsume KWBody.pLetOrUseBody Complete.keyword)
                 struct (Token.KWDoBang, kwPrefixConsume KWBody.pYieldReturnDoBody Complete.keyword)
                 struct (Token.KWWhile, kwPrefixNoConsume KWBody.pWhileExpr Complete.forE)
                 struct (Token.KWWhileBang, kwPrefixNoConsume KWBody.pWhileExpr Complete.forE)
                 struct (Token.KWReturnBang, kwPrefixConsume KWBody.pYieldReturnDoBody Complete.keyword)
-                struct (Token.KWMatchBang, kwPrefixNoConsume KWBody.pMatchExpr Complete.forE)
+                struct (Token.KWMatchBang, kwPrefixNoConsume (KWBody.reportUnalignedAfterOpenConstruct KWBody.pMatchExpr) Complete.forE)
                 struct (Token.KWUseBang, kwPrefixNoConsume KWBody.pLetOrUseBody Complete.keyword)
 
                 // Function-precedence keyword prefixes — body is a full typedSeqExprBlock
@@ -2186,17 +2250,18 @@ module Expr =
             |]
 
         // Generic prefix-operator fallback for any `CanBePrefix` operator not in the
-        // dispatch table — `-`, `+`, `!`, `~`, etc. The +1 on the precedence makes
-        // the prefix bind tighter than the same operator's infix form so `-x - 1`
-        // parses as `(-x) - 1`, while staying below Application so `-f x` is still
-        // `-(f x)`. Operators that need a different power (slice, address-of) are
-        // handled explicitly in `kwPrefixRoutes`.
+        // dispatch table — `-`, `+`, `!`, `~`, etc. A `!` or `~~~` prefix (PrecedenceLevel.Prefix)
+        // binds tighter than application, as FCS gives `(!f) x`. Operators that need a different
+        // power (slice, address-of) are handled explicitly in `kwPrefixRoutes`.
         let pOperatorPrefix (token: SyntaxToken) =
             parser {
                 match OperatorInfo.TryCreate(token.PositionedToken) with
                 | ValueSome opInfo when opInfo.CanBePrefix ->
                     let! tok = consumePeeked token
-                    let power = BindingPower.fromLevel (int opInfo.Precedence) + 1uy<bp>
+
+                    let power =
+                        max (BindingPower.fromLevel (int opInfo.Precedence) + 1uy<bp>) minusExprPower
+
                     return Prefix(tok, preturn tok, power, Complete.prefix)
                 | _ -> return! fail errNotPrefixOp
             }
@@ -2668,6 +2733,71 @@ module Expr =
         | ValueSome true -> preturn () reader
         | _ -> fail (Message "No record copy") reader
 
+    // FCS gives the `with` of a record copy its own context when a field follows `with` on its line. A later line that starts
+    // at or left of the `with` column, outside delimiters, leaves that context, and the Compatibility Oracle reports FS0010 there.
+    let private reportUndentedCopyField
+        (withTok: SyntaxToken)
+        (rClose: SyntaxToken)
+        (reader: Reader<PositionedToken, ParseState, _>)
+        =
+        match withTok.Index with
+        | TokenIndex.Regular withIndex ->
+            let state = reader.State
+            let tokens = state.Lexed.Tokens
+            let withLine = ParseState.findLineNumber state withIndex
+            let withColumn = ParseState.getIndent state withIndex
+            let mutable i = withIndex + 1<token>
+
+            while i < tokens.LengthM
+                  && isSkippedByScan state i do
+                i <- i + 1<token>
+
+            let stop =
+                match rClose.Index with
+                | TokenIndex.Regular closeIndex -> closeIndex
+                | TokenIndex.Virtual -> int reader.Index * 1<token>
+
+            if i < stop && ParseState.findLineNumber state i = withLine then
+                let mutable line = withLine
+                let mutable depth = 0
+                let mutable reported = false
+
+                while not reported && i < stop do
+                    if not (isSkippedByScan state i) then
+                        let tokenLine = ParseState.findLineNumber state i
+
+                        if tokenLine <> line then
+                            line <- tokenLine
+
+                            if depth = 0 && ParseState.getIndent state i <= withColumn then
+                                reader.State <-
+                                    ParseState.addDiagnosticAt
+                                        DiagnosticCode.UndentedCopyField
+                                        (syntaxToken tokens[i] (int i))
+                                        reader.State
+
+                                reported <- true
+
+                        match tokens[i].TokenWithoutCommentFlags with
+                        | Token.KWLParen
+                        | Token.KWLBracket
+                        | Token.KWLArrayBracket
+                        | Token.KWLBrace
+                        | Token.KWLBraceBar
+                        | Token.KWBegin -> depth <- depth + 1
+                        | Token.KWRParen
+                        | Token.KWRBracket
+                        | Token.KWRArrayBracket
+                        | Token.KWRBrace
+                        | Token.KWRBraceBar
+                        | Token.KWEnd -> depth <- depth - 1
+                        | _ -> ()
+
+                    i <- i + 1<token>
+        | TokenIndex.Virtual -> ()
+
+        preturn () reader
+
     /// Parses the inner content of a record or anonymous record expression,
     /// given the opening token and its ParenKind.
     let private pRecordInner
@@ -2686,6 +2816,7 @@ module Expr =
 
                     let! struct (fields, seps, rClose) = pRecordFieldsAndClose openTok expectedClose mismatchedClose
 
+                    do! reportUndentedCopyField withTok rClose
                     return Expr.RecordClone(lParen, baseExpr, withTok, fields, seps, rClose)
                 }
                 // { Field = val; ... } — record literal

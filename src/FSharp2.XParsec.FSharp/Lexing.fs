@@ -2197,6 +2197,7 @@ module Lexing =
                     rawLen
 
             // FCS lexes `int '.' '.'` as INT32_DOT_DOT, so `1..-1` is `1`, `..`, `-1`, and `1 ..-1` keeps `..-`.
+            // FCS lexes exactly `..^` as DOT_DOT_HAT, and LexFilter splits it into `..` and `^`. `..^-` stays one operator.
             let afterDecimalInt () =
                 let source = state.Source
                 let mutable i = startIdx - 1
@@ -2216,7 +2217,7 @@ module Lexing =
                     && fullSpan[0] = '.'
                     && fullSpan[1] = '.'
                     && fullSpan[2] <> '.'
-                    && afterDecimalInt ()
+                    && ((len = 3 && fullSpan[2] = '^') || afterDecimalInt ())
                 then
                     2
                 else
