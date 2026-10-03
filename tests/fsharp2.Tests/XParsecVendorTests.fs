@@ -482,6 +482,44 @@ let y = "
                     Expect.isOk result accepted
                     Expect.isEmpty diagnostics accepted
 
+            testCase
+                "a later line after a comma or an infix operator left of the delimited block limit gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0058 at (3,1), (3,1), (3,1), (3,1), (3,1), (4,5), and (4,5).
+                for source, offset in
+                    [
+                        "module M\nlet y = (a,\nz)\n", 21
+                        "module M\nlet y = [|a |>\nz|]\n", 24
+                        "module M\nlet y = [a ::\nz]\n", 23
+                        "module M\nlet y = { X = (a &&\nz) }\n", 29
+                        "module M\nlet y = new T(a,\nz)\n", 26
+                        "module M\nlet f () =\n    let y = (a,\n    z)\n    y\n", 40
+                        "module M\ntype T() =\n    let v = (a,\n    z)\n    member _.M = v\n", 40
+                    ] do
+                    let _, diagnostics = parseVendored source
+
+                    Expect.equal
+                        (diagnostics
+                         |> List.tryHead
+                         |> Option.map (fun diagnostic ->
+                             diagnostic.Code, diagnostic.Token.StartIndex
+                         ))
+                        (Some(DiagnosticCode.UndentedBlockStart, offset))
+                        source
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "module M\nlet y = (a,\n z)\n"
+                        "module M\nlet y = (a =\nz)\n"
+                        "module M\nlet y = (a ..\nz)\n"
+                        "module M\nlet y = [ a;\nz ]\n"
+                        "module M\ntype T() =\n    let v = (a,\n     z)\n    member _.M = v\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
             testCase "a loop that ends at a directive with no tokens after it gives a diagnostic"
             <| fun () ->
                 // Compatibility Oracle: FS0010 at (5,1) and (4,1), "#else has no matching #if".

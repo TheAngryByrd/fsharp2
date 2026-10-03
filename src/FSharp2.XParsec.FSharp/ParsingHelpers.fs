@@ -1228,8 +1228,27 @@ module Parsing =
                 reader.State <- ParseState.addDiagnosticAt DiagnosticCode.UndentedBlockStart elseTok state
         | TokenIndex.Virtual -> ()
 
+    /// A token at the end of a line after which the Compatibility Oracle applies the delimited block limit to the next line.
+    let private continuesOnNextLine (token: Token) =
+        match token with
+        | Token.OpComma
+        | Token.OpArrowLeft
+        | Token.OpUpcast
+        | Token.OpDowncast
+        | Token.OpTypeTest
+        | Token.OpColonEquals
+        | Token.OpAmp
+        | Token.OpAmpAmp
+        | Token.OpBarBar
+        | Token.OpMultiply
+        | Token.OpDivision
+        | Token.OpConcatenate
+        | Token.KWColonColon -> true
+        | t -> TokenInfo.isOperator t
+
     /// The Compatibility Oracle reports FS0058 when the first token after an opening delimiter is left
-    /// of the enclosing offside line, where LexFilter pushes CtxtSeqBlock.
+    /// of the enclosing offside line, where LexFilter pushes CtxtSeqBlock. It also reports a token that starts a later
+    /// line in the delimiter after a `,` or an infix operator, when the token is left of the same limit.
     let reportUndentedBlockStart (reader: Reader<PositionedToken, ParseState, _>) =
         let openIndex = int reader.Index * 1<token> - 1<token>
 
@@ -1240,9 +1259,60 @@ module Parsing =
                 let state = reader.State
 
                 match delimitedBlockLimit state openIndex state.Context with
-                | ValueSome limit when ParseState.getIndent state firstIndex < limit ->
-                    reader.State <- ParseState.addDiagnosticAt DiagnosticCode.UndentedBlockStart first state
-                | _ -> ()
+                | ValueSome limit ->
+                    if ParseState.getIndent state firstIndex < limit then
+                        reader.State <- ParseState.addDiagnosticAt DiagnosticCode.UndentedBlockStart first reader.State
+
+                    let tokens = state.Lexed.Tokens
+                    let mutable i = firstIndex
+                    let mutable previous = openIndex
+                    let mutable depth = 0
+
+                    while depth >= 0 && i < tokens.LengthM do
+                        if not (isSkippedByScan state i) then
+                            match tokens[i].TokenWithoutCommentFlags with
+                            | Token.KWRParen
+                            | Token.KWRBracket
+                            | Token.KWRArrayBracket
+                            | Token.KWRBrace
+                            | Token.KWRBraceBar
+                            | Token.KWEnd
+                            | Token.OpQuotationTypedRight
+                            | Token.OpQuotationUntypedRight -> depth <- depth - 1
+                            | kind ->
+                                if
+                                    depth = 0
+                                    && i > firstIndex
+                                    && continuesOnNextLine tokens[previous].TokenWithoutCommentFlags
+                                    && ParseState.getIndent state i < limit
+                                then
+                                    let token = syntaxToken tokens[i] (int i)
+
+                                    if
+                                        not (followsTokenOnSameLine state token)
+                                        && not (
+                                            reader.State.Diagnostics
+                                            |> List.exists (fun diagnostic -> diagnostic.Token.StartIndex = tokens[i].StartIndex)
+                                        )
+                                    then
+                                        reader.State <-
+                                            ParseState.addDiagnosticAt DiagnosticCode.UndentedBlockStart token reader.State
+
+                                match kind with
+                                | Token.KWLParen
+                                | Token.KWLBracket
+                                | Token.KWLArrayBracket
+                                | Token.KWLBrace
+                                | Token.KWLBraceBar
+                                | Token.KWBegin
+                                | Token.OpQuotationTypedLeft
+                                | Token.OpQuotationUntypedLeft -> depth <- depth + 1
+                                | _ -> ()
+
+                            previous <- i
+
+                        i <- i + 1<token>
+                | ValueNone -> ()
             | TokenIndex.Virtual -> ()
         | _ -> ()
 
