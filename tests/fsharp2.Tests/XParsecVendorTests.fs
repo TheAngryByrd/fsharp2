@@ -729,6 +729,47 @@ let y = "
                      |> List.exists (fun (start, _) -> start = 14))
                     "`..^-` must stay one operator"
 
+            testCase
+                "a minus-class prefix binds tighter than an infix operator and looser than application, as in FCS"
+            <| fun () ->
+                let topExpression source =
+                    match parseVendored source with
+                    | Ok(FSharpAst.ImplementationFile(ImplementationFile.AnonymousModule elements)),
+                      [] ->
+                        match elements[0] with
+                        | ModuleElem.Expression expr -> expr
+                        | other -> failtest $"{source} must give an expression, not {other}"
+                    | _, diagnostics ->
+                        failtest
+                            $"{source} must give a tree and no diagnostic, not {diagnostics.Length}"
+
+                // FCS 43.10.101: X[*](U[-](I[a]),I[b]), X[**](U[-](I[a]),I[b]), X[**](?IndexFromEnd,I[b]),
+                // X[*](U[+](I[a]),I[b]), and X[|>](U[-](I[x]),I[f]). The Compatibility Oracle accepts each text.
+                for source in
+                    [
+                        "-a * b\n"
+                        "-a ** b\n"
+                        "^a ** b\n"
+                        "+a * b\n"
+                        "-x |> f\n"
+                    ] do
+                    match topExpression source with
+                    | Expr.InfixApp(Expr.PrefixApp _, _, _) -> ()
+                    | other ->
+                        failtest
+                            $"{source} must give an infix application of a prefix application, not {other}"
+
+                // FCS 43.10.101: U[-](A(I[f],I[x])) and A(U[!](I[f]),I[x]).
+                match topExpression "-f x\n" with
+                | Expr.PrefixApp(_, Expr.App _) -> ()
+                | other ->
+                    failtest $"-f x must give a prefix application of an application, not {other}"
+
+                match topExpression "!f x\n" with
+                | Expr.App(Expr.PrefixApp _, _) -> ()
+                | other ->
+                    failtest $"!f x must give an application of a prefix application, not {other}"
+
             testCase "a loop ends before a closing delimiter left of its body and do, as in FCS"
             <| fun () ->
                 // FCS 43.10.101: While(...)@1:9-1:23 for the first text, so the loop ends after `1`, before `]` at (2,1).

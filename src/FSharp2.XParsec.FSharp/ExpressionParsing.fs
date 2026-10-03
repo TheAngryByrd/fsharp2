@@ -2137,12 +2137,16 @@ module Expr =
                 return Prefix(tok, preturn tok, power, Complete.prefix)
             }
 
+        // pars.fsy `minusExpr`: a `-`, `+`, `%`, or `^` prefix takes an application as its operand and binds tighter
+        // than any infix operator, so `-a * b` is `(-a) * b` and `-f x` is `-(f x)`.
+        let minusExprPower =
+            BindingPower.fromLevel (int PrecedenceLevel.Application) - 1uy<bp>
+
         // `^expr` is the from-end index (pars.fsy `minusExpr: INFIX_AT_HAT_OP minusExpr`).
         let pOpFromEndPrefix (token: SyntaxToken) =
             parser {
                 let! tok = consumePeeked token
-                let power = BindingPower.fromLevel (int PrecedenceLevel.Power)
-                return Prefix(tok, preturn tok, power, Complete.prefix)
+                return Prefix(tok, preturn tok, minusExprPower, Complete.prefix)
             }
 
         let kwPrefixRoutes: struct (Token * (SyntaxToken -> Parser<_, _, _, _>))[] =
@@ -2184,17 +2188,18 @@ module Expr =
             |]
 
         // Generic prefix-operator fallback for any `CanBePrefix` operator not in the
-        // dispatch table — `-`, `+`, `!`, `~`, etc. The +1 on the precedence makes
-        // the prefix bind tighter than the same operator's infix form so `-x - 1`
-        // parses as `(-x) - 1`, while staying below Application so `-f x` is still
-        // `-(f x)`. Operators that need a different power (slice, address-of) are
-        // handled explicitly in `kwPrefixRoutes`.
+        // dispatch table — `-`, `+`, `!`, `~`, etc. A `!` or `~~~` prefix (PrecedenceLevel.Prefix)
+        // binds tighter than application, as FCS gives `(!f) x`. Operators that need a different
+        // power (slice, address-of) are handled explicitly in `kwPrefixRoutes`.
         let pOperatorPrefix (token: SyntaxToken) =
             parser {
                 match OperatorInfo.TryCreate(token.PositionedToken) with
                 | ValueSome opInfo when opInfo.CanBePrefix ->
                     let! tok = consumePeeked token
-                    let power = BindingPower.fromLevel (int opInfo.Precedence) + 1uy<bp>
+
+                    let power =
+                        max (BindingPower.fromLevel (int opInfo.Precedence) + 1uy<bp>) minusExprPower
+
                     return Prefix(tok, preturn tok, power, Complete.prefix)
                 | _ -> return! fail errNotPrefixOp
             }
