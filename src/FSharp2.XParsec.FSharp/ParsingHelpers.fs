@@ -928,7 +928,7 @@ module Parsing =
     /// Allows parser to avoid re-skipping trivia tokens when it needs to look ahead at the next token to decide what to parse.
     let peekNextSyntaxToken (reader: Reader<PositionedToken, ParseState, _>) = nextSyntaxTokenImpl true reader
 
-    /// The FCS limit at a module element: the column of the element, plus one for `let` (LexFilter
+    /// The FCS limit at a module element: the column of the element, plus one for `let` and `and` (LexFilter
     /// CtxtLetDecl), and for `do` (CtxtDo) in a module body. The element is the last line start at `elementColumn`.
     let private moduleElementLimit (state: ParseState) (inModuleBody: bool) (elementColumn: int) (index: int<token>) =
         let tokens = state.Lexed.Tokens
@@ -948,7 +948,7 @@ module Parsing =
             i <- i - 1<token>
 
         match found with
-        | ValueSome Token.KWLet -> ValueSome(elementColumn + 1)
+        | ValueSome(Token.KWLet | Token.KWAnd) -> ValueSome(elementColumn + 1)
         | ValueSome Token.KWDo when inModuleBody -> ValueSome(elementColumn + 1)
         | ValueSome _ -> ValueSome elementColumn
         | ValueNone -> ValueNone

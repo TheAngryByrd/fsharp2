@@ -445,6 +445,11 @@ let y = "
                         "module N =\n    do\n      g (\n    1)\n",
                         DiagnosticCode.UndentedBlockStart,
                         32
+                        // Compatibility Oracle: FS0058 at (3,1) for both texts.
+                        "let rec y = 1\nand w = g (\n1)\n", DiagnosticCode.UndentedBlockStart, 26
+                        "let rec y = 1\nand w = begin\nxs[0] end\n",
+                        DiagnosticCode.UndentedBlockStart,
+                        28
                     ] do
                     match parseVendored source with
                     | _, [ diagnostic ] ->
@@ -468,6 +473,8 @@ let y = "
                         "module N =\n    do\n      g (\n     1)\n"
                         "module N =\n    module O =\n        let x = g (\n         1)\n"
                         "do\n  g (\n1)\n"
+                        "let rec y = 1\nand w = g (\n 1)\n"
+                        "let rec y = 1\nand w = begin\n xs[0] end\n"
                     ] do
                     let result, diagnostics = parseVendored accepted
                     Expect.isOk result accepted
