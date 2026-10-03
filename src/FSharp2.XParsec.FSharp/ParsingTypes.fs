@@ -316,6 +316,8 @@ type DiagnosticCode =
     | UndentedLambdaHead
     /// An expression on a later line ends a loop body and is not at the column of the block that holds the loop.
     | UnalignedAfterLoop
+    /// A module element starts on the line of a `let` or `do` element, without `;;`.
+    | SameLineModuleElement
 
 [<RequireQualifiedAccess>]
 type Syntax =
@@ -513,6 +515,7 @@ module DiagnosticCode =
         | DiagnosticCode.TokenAfterUndentedClose -> "TokenAfterUndentedClose"
         | DiagnosticCode.UndentedLambdaHead -> "UndentedLambdaHead"
         | DiagnosticCode.UnalignedAfterLoop -> "UnalignedAfterLoop"
+        | DiagnosticCode.SameLineModuleElement -> "SameLineModuleElement"
 
     /// The English it renders.
     let message (c: DiagnosticCode) : string =
@@ -546,6 +549,7 @@ module DiagnosticCode =
         | DiagnosticCode.UndentedLambdaHead -> "A lambda pattern and its '->' must be right of the 'fun' column"
         | DiagnosticCode.UnalignedAfterLoop ->
             "An expression after a loop must start at the column of the block that holds the loop"
+        | DiagnosticCode.SameLineModuleElement -> "A module element after a 'let' or 'do' element must start on a new line"
         | DiagnosticCode.MisalignedLetBody ->
             "The body of a 'let' without 'in' must start at the column of the 'let'"
         | DiagnosticCode.MisalignedModuleElement ->
@@ -578,6 +582,7 @@ module DiagnosticCode =
         | DiagnosticCode.TokenAfterUndentedClose
         | DiagnosticCode.UndentedLambdaHead
         | DiagnosticCode.UnalignedAfterLoop
+        | DiagnosticCode.SameLineModuleElement
         | DiagnosticCode.TyparInConstant
         | DiagnosticCode.MissingExpression
         | DiagnosticCode.MissingPattern
@@ -607,7 +612,8 @@ module DiagnosticCode =
         | DiagnosticCode.UndentedBlockStart
         | DiagnosticCode.TokenAfterUndentedClose
         | DiagnosticCode.UndentedLambdaHead
-        | DiagnosticCode.UnalignedAfterLoop -> ValueSome "FSC2P1001"
+        | DiagnosticCode.UnalignedAfterLoop
+        | DiagnosticCode.SameLineModuleElement -> ValueSome "FSC2P1001"
         | _ -> ValueNone
 
     /// What the secondary label on the OPENING delimiter says. Both delimiter diagnostics

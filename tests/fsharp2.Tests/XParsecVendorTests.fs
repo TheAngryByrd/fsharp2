@@ -757,6 +757,40 @@ let y = "
                     Expect.isOk result accepted
                     Expect.isEmpty diagnostics accepted
 
+            testCase "a module element on the line of a let or do element gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 at (1,11), (1,11), (2,7), and (2,15).
+                for source, offset in
+                    [
+                        "let y = g try a finally b\n", 10
+                        "let x = 1 let y = 2\n", 10
+                        "let f () =\n    g match x with _ -> 1\n", 17
+                        "module N =\n    let x = 1 let y = 2\n", 25
+                    ] do
+                    match parseVendored source with
+                    | Ok _, [ diagnostic ] ->
+                        Expect.equal diagnostic.Code DiagnosticCode.SameLineModuleElement source
+                        Expect.equal diagnostic.Token.StartIndex offset source
+
+                        Expect.equal
+                            (DiagnosticCode.fsharp2Code diagnostic.Code)
+                            (ValueSome "FSC2P1001")
+                            source
+                    | _, other ->
+                        failtest $"{source} must give a tree and one diagnostic, not {other.Length}"
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "let x = 1 in x\n"
+                        "open System open System.IO\n"
+                        "type A = int let x = 1\n"
+                        "module N = let x = 1\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
             testCase "a let body that is not at the let column gives FSC2P1001"
             <| fun () ->
                 // Compatibility Oracle: error FS0010: Unexpected identifier in expression. Expected 'in' or other token, at (3,5).
