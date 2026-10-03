@@ -294,7 +294,35 @@ let y = "
                          |> List.map (fun diagnostic ->
                              diagnostic.Code, diagnostic.Token.StartIndex
                          ))
-                        (DiagnosticCode.SameLineModuleElement, offset)
+                        (DiagnosticCode.CastKeywordAfterExpression, offset)
+                        source
+
+                // Compatibility Oracle: FS0010 at (3,18), (4,7), (3,18), (3,8), (3,23), (3,20), (3,30), (2,41), (2,36),
+                // (2,27), (4,18), and (3,18). The seventh text also gives (3,14) FS0550.
+                for source, offset in
+                    [
+                        "module M\ntype T() =\n  member _.M = g upcast x\n", 37
+                        "module M\ntype T() =\n  member _.M =\n    g upcast x\n", 41
+                        "module M\ntype T() =\n  member _.M = g upcast x\nlet z = 1\n", 37
+                        "module M\ntype T() =\n  do g upcast x\n", 27
+                        "module M\ntype T =\n  static member M = g upcast x\n", 40
+                        "module M\ntype T() =\n  member val P = g upcast x\n", 39
+                        "module M\ntype T() =\n  member _.M with get () = g upcast x\n", 49
+                        "module M\ntype R = { A: int } with member _.M = g upcast x\n", 49
+                        "module M\ntype U = A | B with member _.M = g upcast x\n", 44
+                        "module M\ntype T() = member _.M = g upcast x\n", 35
+                        "module M\ntype T() =\n  member _.M = x\n  member _.N = g upcast x\n", 54
+                        "module M\ntype T() =\n  member _.M = g downcast x\n  member _.N = 1\n", 37
+                    ] do
+                    let _, diagnostics = parseVendored source
+
+                    Expect.equal
+                        (diagnostics
+                         |> List.tryHead
+                         |> Option.map (fun diagnostic ->
+                             diagnostic.Code, diagnostic.Token.StartIndex
+                         ))
+                        (Some(DiagnosticCode.CastKeywordAfterExpression, offset))
                         source
 
                 // The Compatibility Oracle reports no diagnostic for these texts.
@@ -303,6 +331,234 @@ let y = "
                         "module M\nlet y = upcast x\n"
                         "module M\nlet y = g (upcast x)\n"
                         "module M\nlet y = a + upcast x\n"
+                        "module M\ntype T() =\n  member _.M = 1\nupcast x\n"
+                        "module M\nlet f () =\n  g ()\n  upcast x\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
+            testCase "an exception in the lexer gives one FSC2P1001 diagnostic and no tree"
+            <| fun () ->
+                match FSharpAst.parseText Set.empty null with
+                | ParsedText.LexerFault diagnostic ->
+                    Expect.equal
+                        (DiagnosticCode.fsharp2Code diagnostic.Code)
+                        (ValueSome "FSC2P1001")
+                        "code"
+
+                    Expect.equal
+                        diagnostic.Token.Index
+                        TokenIndex.Virtual
+                        "a lexer fault has no token"
+                | ParsedText.Lexed _ -> failtest "a null text must give a lexer fault"
+
+                match FSharpAst.parseText Set.empty "module M\nlet x = 1\n" with
+                | ParsedText.Lexed(_, reader, result) ->
+                    Expect.isOk result "a valid text must give a tree"
+                    Expect.isEmpty reader.State.Diagnostics "a valid text must give no diagnostic"
+                | ParsedText.LexerFault diagnostic ->
+                    failtest $"a valid text gave {diagnostic.Code}"
+
+            testCase "a keyword construct after a prefix operator or a cast keyword gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 at (2,16), (2,11), (2,11), (2,13), (2,12), (2,18), (2,14), (3,11), and (2,12).
+                // The seventh text also gives (2,11) FS0598.
+                for source, offset in
+                    [
+                        "module M\nlet y = upcast try a finally b\n", 24
+                        "module M\nlet y = - match x with _ -> a\n", 19
+                        "module M\nlet y = ! if c then a else b\n", 19
+                        "module M\nlet y = ~~~ fun v -> v\n", 21
+                        "module M\nlet y = %% let v = 1 in v\n", 20
+                        "module M\nlet y = downcast lazy x\n", 26
+                        "module M\nlet y = xs[^ yield x ]\n", 22
+                        "module M\nlet y = -\n          try a finally b\n", 29
+                        "module M\nlet y = f -try a finally b\n", 20
+                    ] do
+                    let _, diagnostics = parseVendored source
+
+                    Expect.equal
+                        (diagnostics
+                         |> List.tryHead
+                         |> Option.map (fun diagnostic ->
+                             diagnostic.Code, diagnostic.Token.StartIndex
+                         ))
+                        (Some(DiagnosticCode.ConstructAfterPrefixOperator, offset))
+                        source
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "module M\nlet y = - (try a finally b)\n"
+                        "module M\nlet y = upcast new T()\n"
+                        "module M\nlet y = - f x\n"
+                        "module M\nlet y = lazy try a finally b\n"
+                        "module M\nlet y = assert if c then a else b\n"
+                        "module M\nlet y =\n    acc\n    + match h with _ -> 1\n"
+                        "module M\nlet y = a - if c then 1 else 2\n"
+                        "module M\nlet y = a && match h with _ -> true\n"
+                        "module M\nlet y = a ^ try b finally c\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
+            testCase "a keyword construct after an expression on the same line gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 at (1,3), (2,13), (3,18), (2,30), (2,31), (2,26), (1,11), (1,11), (2,7), and
+                // (2,15). The fourth text also gives (2,43) FS0010, and the sixth text gives (2,15) FS0604.
+                for source, offset in
+                    [
+                        "g try a finally b\n", 2
+                        "module M\nlet y = a.M if c then a else b\n", 21
+                        "module M\ntype T() =\n  member _.M = g match x with _ -> a\n", 37
+                        "module M\nlet h = List.map (fun v -> g while c do ())\n", 38
+                        "module M\nlet m = match q with A -> g x fun v -> v | B -> 1\n", 39
+                        "module M\nlet c = async { return g return x }\n", 34
+                        "let y = g try a finally b\n", 10
+                        "let x = 1 let y = 2\n", 10
+                        "let f () =\n    g match x with _ -> 1\n", 17
+                        "module N =\n    let x = 1 let y = 2\n", 25
+                    ] do
+                    let _, diagnostics = parseVendored source
+
+                    Expect.equal
+                        (diagnostics
+                         |> List.tryHead
+                         |> Option.map (fun diagnostic ->
+                             diagnostic.Code, diagnostic.Token.StartIndex
+                         ))
+                        (Some(DiagnosticCode.ConstructAfterExpression, offset))
+                        source
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "module M\nlet y = for v in xs do g v\n"
+                        "module M\nlet y = while g c do ()\n"
+                        "module M\nlet y = let v = g x in v\n"
+                        "module M\nlet y = x |> fun v -> v\n"
+                        "module M\nlet y = g x; if c then a else b\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
+            testCase
+                "the first token after a brace or in a class body left of the offside line gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0058 at (3,1), (3,1), (3,1), (4,4), (4,1), (4,5), (5,5), (4,5), and (5,9).
+                // The fifth text also gives (4,3), (4,4), and (4,3) FS0058.
+                for source, offset in
+                    [
+                        "module M\nlet y = seq {\nxs[0] }\n", 23
+                        "module M\nlet y = {\nA = 1 }\n", 19
+                        "module M\nlet y = {|\nA = 1 |}\n", 20
+                        "module M\ntype T() =\n    let v = (\n   xs[0] )\n    member _.M = v\n", 37
+                        "module M\ntype T() =\n    let v = begin\nxs[0] end\n    member _.M = v\n",
+                        38
+                        "module M\ntype T() =\n    member _.M = seq {\n    xs[0] }\n", 47
+                        "module M\ntype T() =\n    let a = 1\n    member _.M = begin\n    xs[0] end\n",
+                        61
+                        "module M\ntype T() =\n    do f (\n    xs[0] )\n", 35
+                        "module M\nmodule N =\n    type T() =\n        let v = (\n        xs[0] )\n",
+                        61
+                    ] do
+                    let _, diagnostics = parseVendored source
+
+                    Expect.equal
+                        (diagnostics
+                         |> List.tryHead
+                         |> Option.map (fun diagnostic ->
+                             diagnostic.Code, diagnostic.Token.StartIndex
+                         ))
+                        (Some(DiagnosticCode.UndentedBlockStart, offset))
+                        source
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "module M\ntype T() =\n    let v = (\n     xs[0] )\n"
+                        "module M\ntype T() =\n    member _.M = seq {\n     xs[0] }\n"
+                        "module M\nmodule N =\n    type T() =\n        let v = (\n         xs[0] )\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
+            testCase
+                "a later line after a comma or an infix operator left of the delimited block limit gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0058 at (3,1), (3,1), (3,1), (3,1), (3,1), (4,5), and (4,5).
+                for source, offset in
+                    [
+                        "module M\nlet y = (a,\nz)\n", 21
+                        "module M\nlet y = [|a |>\nz|]\n", 24
+                        "module M\nlet y = [a ::\nz]\n", 23
+                        "module M\nlet y = { X = (a &&\nz) }\n", 29
+                        "module M\nlet y = new T(a,\nz)\n", 26
+                        "module M\nlet f () =\n    let y = (a,\n    z)\n    y\n", 40
+                        "module M\ntype T() =\n    let v = (a,\n    z)\n    member _.M = v\n", 40
+                    ] do
+                    let _, diagnostics = parseVendored source
+
+                    Expect.equal
+                        (diagnostics
+                         |> List.tryHead
+                         |> Option.map (fun diagnostic ->
+                             diagnostic.Code, diagnostic.Token.StartIndex
+                         ))
+                        (Some(DiagnosticCode.UndentedBlockStart, offset))
+                        source
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "module M\nlet y = (a,\n z)\n"
+                        "module M\nlet y = (a =\nz)\n"
+                        "module M\nlet y = (a ..\nz)\n"
+                        "module M\nlet y = [ a;\nz ]\n"
+                        "module M\ntype T() =\n    let v = (a,\n     z)\n    member _.M = v\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
+            testCase
+                "an operand on the next line at the column of a keyword that starts its block gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 at (2,16), (2,18), (2,21), (2,24), (3,12), (2,17), (4,16), and (4,12), one column after the end of the keyword line.
+                // The seventh text also gives (4,16) FS3567.
+                for source, offset in
+                    [
+                        "module M\nlet w = upcast\n        xs\n", 32
+                        "module M\nlet w = downcast\n        xs\n", 34
+                        "module M\nlet w = seq { yield\n              xs }\n", 43
+                        "module M\nlet w = async { return\n                xs }\n", 48
+                        "module M\nlet f () =\n    upcast\n    xs\n", 35
+                        "module M\nlet w = [ yield\n          x ]\n", 35
+                        "module M\ntype T() =\n    member _.M =\n        upcast\n        xs\n", 60
+                        "module M\nlet w = async {\n    let! a = b\n    return\n    a }\n", 55
+                    ] do
+                    let _, diagnostics = parseVendored source
+
+                    Expect.equal
+                        (diagnostics
+                         |> List.tryHead
+                         |> Option.map (fun diagnostic ->
+                             diagnostic.Code, diagnostic.Token.StartIndex
+                         ))
+                        (Some(DiagnosticCode.OperandAtKeywordColumn, offset))
+                        source
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "module M\nlet f () =\n    upcast\n     xs\n"
+                        "module M\nlet w = a + upcast\n            x\n"
+                        "module M\nlet w = seq { match q with A -> yield\n                                 x | B -> () }\n"
+                        "module M\nlet w = lazy\n        xs\n"
                     ] do
                     let result, diagnostics = parseVendored accepted
                     Expect.isOk result accepted
@@ -1181,13 +1437,13 @@ let y = "
 
             testCase "a module element on the line of a let or do element gives FSC2P1001"
             <| fun () ->
-                // Compatibility Oracle: FS0010 at (1,11), (1,11), (2,7), and (2,15).
+                // Compatibility Oracle: FS0010 at (1,11), (1,11), and (1,9). The second text also gives (1,1) FS3118 and
+                // (2,1) FS0010.
                 for source, offset in
                     [
-                        "let y = g try a finally b\n", 10
-                        "let x = 1 let y = 2\n", 10
-                        "let f () =\n    g match x with _ -> 1\n", 17
-                        "module N =\n    let x = 1 let y = 2\n", 25
+                        "let x = 1 open System\n", 10
+                        "let x = 1 type T = A\n", 10
+                        "do f () exception E\n", 8
                     ] do
                     match parseVendored source with
                     | Ok _, [ diagnostic ] ->

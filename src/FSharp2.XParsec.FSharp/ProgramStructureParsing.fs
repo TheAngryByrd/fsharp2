@@ -51,6 +51,14 @@ module ImplementationFile =
                 ]
                 "ImplementationFile")
 
+/// The outcome of `FSharpAst.parseText`.
+[<RequireQualifiedAccess>]
+type ParsedText =
+    /// The lexer raised an exception. The text has no tokens and no tree, and the diagnostic is one `ParserFault`.
+    | LexerFault of Diagnostic
+    /// The lexer finished. `result` comes from `FSharpAst.parse`, and `reader.State` holds its diagnostics.
+    | Lexed of lexed: Lexed * reader: FSReader * result: ParseResult<FSharpAst<SyntaxToken>, PositionedToken, ParseState>
+
 [<RequireQualifiedAccess>]
 module FSharpAst =
     /// Succeeds at end-of-file by consuming the EOF sentinel token (skipping trivia and directives).
@@ -357,3 +365,25 @@ module FSharpAst =
     /// Top-level parser. Returns Ok with errors captured as diagnostics, except for input that
     /// nests too deep or makes the parser raise an exception, which returns Error with one diagnostic.
     let parse = stopOnException parseUnguarded
+
+    /// Lexes `input` and parses it with the active symbols of `compilationDefines`. An exception in the lexer gives
+    /// `LexerFault`, and `parse` turns an exception in the parser into a diagnostic, so no input makes this raise.
+    let parseText (compilationDefines: Set<string>) (input: string) : ParsedText =
+        let lexed =
+            try
+                Ok(Lexing.lexString input)
+            with e ->
+                Error e
+
+        match lexed with
+        | Error e ->
+            ParsedText.LexerFault
+                {
+                    Code = DiagnosticCode.ParserFault(e.GetType().Name + ": " + e.Message)
+                    Token = SyntaxToken.nowhere
+                    TokenEnd = None
+                    Error = None
+                }
+        | Ok lexed ->
+            let reader = Reader.ofParseInput (lexed.WithDefines compilationDefines)
+            ParsedText.Lexed(lexed, reader, parse reader)

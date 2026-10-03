@@ -2161,6 +2161,108 @@ module Expr =
                 return PrefixMapped(tok, preturn tok, body, completer)
             }
 
+        // pars.fsy `minusExpr`: the operand of a prefix operator, `upcast`, or `downcast` is an application, which cannot start
+        // with a keyword construct. The Compatibility Oracle reports FS0010 at the keyword. An operator that can be infix, after
+        // an operand and before whitespace, is infix in FCS, and a failed application attempt can still read it as a prefix here.
+        let reportConstructAfterPrefix (canBeInfix: bool) (reader: Reader<PositionedToken, ParseState, _>) =
+            let state = reader.State
+            let tokens = state.Lexed.Tokens
+            let operatorIndex = int reader.Index * 1<token> - 1<token>
+            let mutable next = operatorIndex + 1<token>
+
+            while next < tokens.LengthM
+                  && isSkippedByScan state next do
+                next <- next + 1<token>
+
+            let infix =
+                canBeInfix
+                && endsOperandBefore state operatorIndex
+                && operatorIndex + 1<token> < tokens.LengthM
+                && isSkippedByScan state (operatorIndex + 1<token>)
+
+            if next < tokens.LengthM && not infix then
+                match tokens[next].TokenWithoutCommentFlags with
+                | Token.KWTry
+                | Token.KWMatch
+                | Token.KWMatchBang
+                | Token.KWIf
+                | Token.KWFun
+                | Token.KWFunction
+                | Token.KWLet
+                | Token.KWLetBang
+                | Token.KWUse
+                | Token.KWUseBang
+                | Token.KWWhile
+                | Token.KWWhileBang
+                | Token.KWFor
+                | Token.KWDo
+                | Token.KWDoBang
+                | Token.KWYield
+                | Token.KWYieldBang
+                | Token.KWReturn
+                | Token.KWReturnBang
+                | Token.KWFixed
+                | Token.KWLazy
+                | Token.KWAssert when
+                    not (
+                        state.Diagnostics
+                        |> List.exists (fun diagnostic -> diagnostic.Token.StartIndex = tokens[next].StartIndex)
+                    )
+                    ->
+                    reader.State <-
+                        ParseState.addDiagnosticAt
+                            DiagnosticCode.ConstructAfterPrefixOperator
+                            (syntaxToken tokens[next] (int next))
+                            state
+                | _ -> ()
+
+            preturn () reader
+
+        // LexFilter inserts a block separator at a token on a later line at the column of the block, unless the token before it
+        // is infix or pushes its own block. For a keyword that starts the block and ends its line, the separator ends the keyword
+        // before its operand, and the Compatibility Oracle reports FS0010 at the end of the keyword line.
+        let reportOperandAtKeywordColumn (keyword: SyntaxToken) (reader: Reader<PositionedToken, ParseState, _>) =
+            match keyword.Index, reader.State.Context with
+            | TokenIndex.Regular keywordIndex, { Context = OffsideContext.SeqBlock; Token = blockStart } :: _ when
+                blockStart.StartIndex = keyword.StartIndex
+                ->
+                let state = reader.State
+                let tokens = state.Lexed.Tokens
+                let mutable next = keywordIndex + 1<token>
+
+                while next < tokens.LengthM
+                      && isSkippedByScan state next do
+                    next <- next + 1<token>
+
+                if
+                    next < tokens.LengthM
+                    && ParseState.findLineNumber state next > ParseState.findLineNumber state keywordIndex
+                    && ParseState.getIndent state next = ParseState.getIndent state keywordIndex
+                then
+                    reader.State <-
+                        ParseState.addDiagnosticAt
+                            DiagnosticCode.OperandAtKeywordColumn
+                            (syntaxToken tokens[next] (int next))
+                            state
+            | _ -> ()
+
+            preturn () reader
+
+        let kwCastConsume body completer (token: SyntaxToken) =
+            parser {
+                let! tok = consumePeeked token
+                do! reportConstructAfterPrefix false
+                do! reportOperandAtKeywordColumn tok
+                return PrefixMapped(tok, preturn tok, body, completer)
+            }
+
+        let kwOperandConsume body completer (token: SyntaxToken) =
+            parser {
+                let! tok = consumePeeked token
+                do! reportOperandAtKeywordColumn tok
+                return PrefixMapped(tok, preturn tok, body, completer)
+            }
+
         // Unified body for the lazy/assert/fixed/upcast/downcast prefix-keywords.
         // All five emit Expr.PrefixApp; the keyword token is preserved on the node
         // so semantic analysis recovers the form via ExprPatterns. Hoisted so the
@@ -2195,6 +2297,7 @@ module Expr =
         let pOpAddressOfPrefix (token: SyntaxToken) =
             parser {
                 let! tok = consumePeeked token
+                do! reportConstructAfterPrefix true
                 let power = BindingPower.fromLevel (int PrecedenceLevel.Prefix)
                 return Prefix(tok, preturn tok, power, Complete.prefix)
             }
@@ -2208,6 +2311,7 @@ module Expr =
         let pOpFromEndPrefix (token: SyntaxToken) =
             parser {
                 let! tok = consumePeeked token
+                do! reportConstructAfterPrefix true
                 return Prefix(tok, preturn tok, minusExprPower, Complete.prefix)
             }
 
@@ -2220,9 +2324,9 @@ module Expr =
                 struct (Token.KWFun, kwPrefixNoConsume (KWBody.reportUnalignedAfterOpenConstruct KWBody.pFunExpr) Complete.forE)
                 struct (Token.KWDo, kwPrefixConsume KWBody.pYieldReturnDoBody Complete.keyword)
                 struct (Token.KWFor, kwPrefixNoConsume KWBody.pForExpr Complete.forE)
-                struct (Token.KWYieldBang, kwPrefixConsume KWBody.pYieldReturnDoBody Complete.keyword)
-                struct (Token.KWYield, kwPrefixConsume KWBody.pYieldReturnDoBody Complete.keyword)
-                struct (Token.KWReturn, kwPrefixConsume KWBody.pYieldReturnDoBody Complete.keyword)
+                struct (Token.KWYieldBang, kwOperandConsume KWBody.pYieldReturnDoBody Complete.keyword)
+                struct (Token.KWYield, kwOperandConsume KWBody.pYieldReturnDoBody Complete.keyword)
+                struct (Token.KWReturn, kwOperandConsume KWBody.pYieldReturnDoBody Complete.keyword)
                 struct (Token.KWTry, kwPrefixNoConsume (KWBody.reportUnalignedAfterOpenConstruct KWBody.pTryExpr) Complete.forE)
                 struct (Token.KWFunction, kwPrefixNoConsume (KWBody.reportUnalignedAfterOpenConstruct KWBody.pFunctionExpr) Complete.forE)
                 struct (Token.KWUse, kwPrefixNoConsume KWBody.pLetOrUseBody Complete.keyword)
@@ -2230,7 +2334,7 @@ module Expr =
                 struct (Token.KWDoBang, kwPrefixConsume KWBody.pYieldReturnDoBody Complete.keyword)
                 struct (Token.KWWhile, kwPrefixNoConsume KWBody.pWhileExpr Complete.forE)
                 struct (Token.KWWhileBang, kwPrefixNoConsume KWBody.pWhileExpr Complete.forE)
-                struct (Token.KWReturnBang, kwPrefixConsume KWBody.pYieldReturnDoBody Complete.keyword)
+                struct (Token.KWReturnBang, kwOperandConsume KWBody.pYieldReturnDoBody Complete.keyword)
                 struct (Token.KWMatchBang, kwPrefixNoConsume (KWBody.reportUnalignedAfterOpenConstruct KWBody.pMatchExpr) Complete.forE)
                 struct (Token.KWUseBang, kwPrefixNoConsume KWBody.pLetOrUseBody Complete.keyword)
 
@@ -2238,8 +2342,8 @@ module Expr =
                 struct (Token.KWLazy, kwPrefixConsume pKeywordPrefixBody Complete.keyword)
                 struct (Token.KWAssert, kwPrefixConsume pKeywordPrefixBody Complete.keyword)
                 struct (Token.KWFixed, kwPrefixConsume pKeywordPrefixBody Complete.keyword)
-                struct (Token.KWUpcast, kwPrefixConsume pKeywordPrefixBody Complete.keyword)
-                struct (Token.KWDowncast, kwPrefixConsume pKeywordPrefixBody Complete.keyword)
+                struct (Token.KWUpcast, kwCastConsume pKeywordPrefixBody Complete.keyword)
+                struct (Token.KWDowncast, kwCastConsume pKeywordPrefixBody Complete.keyword)
 
                 // Operator prefixes whose shape diverges from the kwPrefix* helpers
                 struct (Token.OpRange, pOpRangePrefix)
@@ -2258,6 +2362,7 @@ module Expr =
                 match OperatorInfo.TryCreate(token.PositionedToken) with
                 | ValueSome opInfo when opInfo.CanBePrefix ->
                     let! tok = consumePeeked token
+                    do! reportConstructAfterPrefix true
 
                     let power =
                         max (BindingPower.fromLevel (int opInfo.Precedence) + 1uy<bp>) minusExprPower
@@ -2850,6 +2955,7 @@ module Expr =
                     }
 
                 reader.State <- ParseState.pushOffside entry reader.State
+                reportUndentedBlockStart reader |> ignore
 
                 match (innerParser openTok) reader with
                 | Ok result ->
@@ -3146,7 +3252,66 @@ module Expr =
 
     let operators = ExprOperatorParser()
 
-    let parse = Operator.parser parseAtomic operators
+    // The Compatibility Oracle reports FS0010 at a cast keyword or a keyword construct on the line of the expression before it,
+    // because neither can start an application argument. The rhs parser refuses the keyword, so the expression ends there.
+    // A `do` can follow a loop header expression. After a failed parse, the reader can stop after a separator such as `;`,
+    // so the token before the keyword must end an operand.
+    let private reportKeywordAfterExpression (p: FSParser<Expr<SyntaxToken>>) : FSParser<Expr<SyntaxToken>> =
+        fun reader ->
+            match p reader with
+            | Error e -> Error e
+            | Ok expr ->
+                let state = reader.State
+                let tokens = state.Lexed.Tokens
+                let mutable next = int reader.Index * 1<token>
+
+                while next < tokens.LengthM
+                      && isSkippedByScan state next do
+                    next <- next + 1<token>
+
+                if next < tokens.LengthM then
+                    let code =
+                        match tokens[next].TokenWithoutCommentFlags with
+                        | Token.KWUpcast
+                        | Token.KWDowncast -> ValueSome DiagnosticCode.CastKeywordAfterExpression
+                        | Token.KWTry
+                        | Token.KWMatch
+                        | Token.KWMatchBang
+                        | Token.KWIf
+                        | Token.KWFun
+                        | Token.KWFunction
+                        | Token.KWLet
+                        | Token.KWLetBang
+                        | Token.KWUse
+                        | Token.KWUseBang
+                        | Token.KWWhile
+                        | Token.KWWhileBang
+                        | Token.KWFor
+                        | Token.KWYield
+                        | Token.KWYieldBang
+                        | Token.KWReturn
+                        | Token.KWReturnBang -> ValueSome DiagnosticCode.ConstructAfterExpression
+                        | _ -> ValueNone
+
+                    match code with
+                    | ValueSome code when endsOperandBefore state next ->
+                        let keyword = syntaxToken tokens[next] (int next)
+
+                        if
+                            followsTokenOnSameLine state keyword
+                            && not (
+                                state.Diagnostics
+                                |> List.exists (fun diagnostic -> diagnostic.Token.StartIndex = tokens[next].StartIndex)
+                            )
+                        then
+                            reader.State <- ParseState.addDiagnosticAt code keyword state
+                    | _ -> ()
+
+                Ok expr
+
+    let parse =
+        Operator.parser parseAtomic operators
+        |> reportKeywordAfterExpression
 
     let parseSeqBlock =
         withContext OffsideContext.SeqBlock parse
@@ -3166,6 +3331,7 @@ module Expr =
         // a keyword expression via newline-triggered virtual semicolons.
         refExprNoSeq.Set(
             Operator.parserAt (int PrecedenceLevel.Semicolon + 1 |> BindingPower.fromLevel) parseAtomic operators
+            |> reportKeywordAfterExpression
         )
 
         // IL intrinsic arguments: parse at just above Application so dot chains, indexers,
@@ -3173,6 +3339,7 @@ module Expr =
         // arg in `(# "op" a.b c : ty #)` is captured as a separate arg.
         refExprILArg.Set(
             Operator.parserAt (int PrecedenceLevel.Application + 1 |> BindingPower.fromLevel) parseAtomic operators
+            |> reportKeywordAfterExpression
         )
 
         // Semicolon has special handling in F# records, and object expressions
@@ -3182,6 +3349,7 @@ module Expr =
         // and set the starting precedence one level higher so it will be parsed in `pRecordOrObjectExpr`
         refExprInRecords.Set(
             Operator.parserAt (int PrecedenceLevel.Semicolon + 1 |> BindingPower.fromLevel) parseAtomic operators
+            |> reportKeywordAfterExpression
         )
 
         // Pattern guards (when <expr>) must stop before '->' (Arrow) so the arrow
@@ -3190,10 +3358,12 @@ module Expr =
         // makes minBp = base+3, which is just above Arrow's LBP, excluding it.
         refExprGuard.Set(
             Operator.parserAt (int PrecedenceLevel.RArrow + 1 |> BindingPower.fromLevel) parseAtomic operators
+            |> reportKeywordAfterExpression
         )
 
         // Range operator '..' may be a postfix operator in slice syntax (e.g. A[1..]) or an infix operator in range expressions (e.g. 1..10).
         // So, we treat it effectively an a left-infix operator that special cases to prefix with the right terminator.
         refExprRange.Set(
             Operator.parserAt (int PrecedenceLevel.Range + 1 |> BindingPower.fromLevel) parseAtomic operators
+            |> reportKeywordAfterExpression
         )
