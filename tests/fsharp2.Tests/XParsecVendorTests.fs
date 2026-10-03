@@ -1144,6 +1144,39 @@ let y = "
                     Expect.isOk result accepted
                     Expect.isEmpty diagnostics accepted
 
+            testCase "a rule arrow that starts a line left of the clause column gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 and FS0596 at (2,9), (2,8), and (4,5).
+                for source, offset in
+                    [
+                        "let y = match x with A when g x\n        -> a | B -> b\n", 40
+                        "let y = match x with A\n       -> a | B -> b\n", 30
+                        "let f () =\n    match x with\n    | A when g x\n    -> a\n    | B -> b\n",
+                        49
+                    ] do
+                    let _, diagnostics = parseVendored source
+
+                    match diagnostics with
+                    | [ diagnostic ] ->
+                        Expect.equal diagnostic.Code DiagnosticCode.UndentedRuleArrow source
+                        Expect.equal diagnostic.Token.StartIndex offset source
+
+                        Expect.equal
+                            (DiagnosticCode.fsharp2Code diagnostic.Code)
+                            (ValueSome "FSC2P1001")
+                            source
+                    | other -> failtest $"{source} must give one diagnostic, not {other.Length}"
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "let y = match x with A when g x\n                    -> a | B -> b\n"
+                        "let f () =\n    match x with\n    | A when g x\n       -> a\n    | B -> b\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
             testCase "a module element on the line of a let or do element gives FSC2P1001"
             <| fun () ->
                 // Compatibility Oracle: FS0010 at (1,11), (1,11), (2,7), and (2,15).

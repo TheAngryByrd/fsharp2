@@ -328,6 +328,8 @@ type DiagnosticCode =
     /// An `elif` or `else` after a same-line `then` that FCS gives to an open construct in the condition, or after
     /// a nested `if ... else` on its line.
     | ElseAfterOpenConstruct
+    /// A rule `->` that starts a line left of the clause column.
+    | UndentedRuleArrow
     /// A module element starts on the line of a `let` or `do` element, without `;` or `;;` before it.
     | SameLineModuleElement
     /// A `do` or rule `->` follows, on the same line, an expression that ends in an open construct.
@@ -534,6 +536,7 @@ module DiagnosticCode =
         | DiagnosticCode.UndentedLaterRuleBody -> "UndentedLaterRuleBody"
         | DiagnosticCode.UndentedCopyField -> "UndentedCopyField"
         | DiagnosticCode.ElseAfterOpenConstruct -> "ElseAfterOpenConstruct"
+        | DiagnosticCode.UndentedRuleArrow -> "UndentedRuleArrow"
         | DiagnosticCode.SameLineModuleElement -> "SameLineModuleElement"
         | DiagnosticCode.KeywordAfterOpenConstruct -> "KeywordAfterOpenConstruct"
 
@@ -578,6 +581,8 @@ module DiagnosticCode =
             "A line in a record copy must start right of the 'with' column when a field follows 'with' on its line"
         | DiagnosticCode.ElseAfterOpenConstruct ->
             "An 'elif' or 'else' cannot follow a 'then' that an open construct takes, or a nested 'if ... else' on its line"
+        | DiagnosticCode.UndentedRuleArrow ->
+            "A rule '->' that starts a line must not be left of the clause column"
         | DiagnosticCode.SameLineModuleElement -> "A module element after a 'let' or 'do' element must start on a new line"
         | DiagnosticCode.KeywordAfterOpenConstruct ->
             "A 'do' or '->' cannot follow an open 'fun', 'function', 'match', 'try', 'if', 'while', or 'for' on the same line"
@@ -618,6 +623,7 @@ module DiagnosticCode =
         | DiagnosticCode.UndentedLaterRuleBody
         | DiagnosticCode.UndentedCopyField
         | DiagnosticCode.ElseAfterOpenConstruct
+        | DiagnosticCode.UndentedRuleArrow
         | DiagnosticCode.SameLineModuleElement
         | DiagnosticCode.KeywordAfterOpenConstruct
         | DiagnosticCode.TyparInConstant
@@ -655,6 +661,7 @@ module DiagnosticCode =
         | DiagnosticCode.UndentedLaterRuleBody
         | DiagnosticCode.UndentedCopyField
         | DiagnosticCode.ElseAfterOpenConstruct
+        | DiagnosticCode.UndentedRuleArrow
         | DiagnosticCode.SameLineModuleElement
         | DiagnosticCode.KeywordAfterOpenConstruct -> ValueSome "FSC2P1001"
         | _ -> ValueNone

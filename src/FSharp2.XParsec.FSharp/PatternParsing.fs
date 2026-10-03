@@ -1050,6 +1050,51 @@ module Rules =
 
         preturn () reader
 
+    // A rule `->` that starts a line is offside of CtxtMatchClauses left of the clause column, with the allowance of
+    // `reportBarAfterUndentedRule`. The Compatibility Oracle reports FS0010 at the `->`.
+    let private reportUndentedRuleArrow
+        (firstBar: SyntaxToken voption)
+        (rules: ImmutableArray<Rule<SyntaxToken>>)
+        (reader: Reader<PositionedToken, ParseState, _>)
+        =
+        let state = reader.State
+        let tokens = state.Lexed.Tokens
+
+        match state.Context with
+        | { Context = OffsideContext.MatchClauses; Token = start } :: _ ->
+            let mutable startIndex = 0<token>
+
+            while startIndex < tokens.LengthM
+                  && tokens[startIndex].StartIndex < start.StartIndex do
+                startIndex <- startIndex + 1<token>
+
+            let clauseColumn = ParseState.getIndent state startIndex
+            let allowance = if firstBar.IsSome then -1 else 1
+            let mutable reported = false
+            let mutable i = 0
+
+            while not reported && i < rules.Length do
+                match rules[i] with
+                | Rule.Rule(arrow = arrow) ->
+                    match arrow.Index with
+                    | TokenIndex.Regular arrowIndex when
+                        not (followsTokenOnSameLine state arrow)
+                        && ParseState.getIndent state arrowIndex + allowance < clauseColumn
+                        && not (
+                            reader.State.Diagnostics
+                            |> List.exists (fun diagnostic -> diagnostic.Token.StartIndex = arrow.StartIndex)
+                        )
+                        ->
+                        reader.State <- ParseState.addDiagnosticAt DiagnosticCode.UndentedRuleArrow arrow reader.State
+                        reported <- true
+                    | _ -> ()
+                | _ -> ()
+
+                i <- i + 1
+        | _ -> ()
+
+        preturn () reader
+
     let parse: FSParser<Rules<SyntaxToken>> =
         parser {
             let! firstBar = opt pBar
@@ -1057,5 +1102,6 @@ module Rules =
             do! reportSameLineBars rules bars
             do! reportBarAfterUndentedRule firstBar rules bars
             do! reportUndentedLaterRuleBody rules
+            do! reportUndentedRuleArrow firstBar rules
             return Rules(firstBar, rules, bars)
         }
