@@ -314,6 +314,8 @@ type DiagnosticCode =
     | TokenAfterUndentedClose
     /// A lambda pattern or the `->` after it is not right of the `fun` column.
     | UndentedLambdaHead
+    /// An expression on a later line ends a loop body and is not at the column of the block that holds the loop.
+    | UnalignedAfterLoop
 
 [<RequireQualifiedAccess>]
 type Syntax =
@@ -510,6 +512,7 @@ module DiagnosticCode =
         | DiagnosticCode.UndentedBlockStart -> "UndentedBlockStart"
         | DiagnosticCode.TokenAfterUndentedClose -> "TokenAfterUndentedClose"
         | DiagnosticCode.UndentedLambdaHead -> "UndentedLambdaHead"
+        | DiagnosticCode.UnalignedAfterLoop -> "UnalignedAfterLoop"
 
     /// The English it renders.
     let message (c: DiagnosticCode) : string =
@@ -541,6 +544,8 @@ module DiagnosticCode =
         | DiagnosticCode.TokenAfterUndentedClose ->
             "A closing delimiter left of the enclosing block must end its line"
         | DiagnosticCode.UndentedLambdaHead -> "A lambda pattern and its '->' must be right of the 'fun' column"
+        | DiagnosticCode.UnalignedAfterLoop ->
+            "An expression after a loop must start at the column of the block that holds the loop"
         | DiagnosticCode.MisalignedLetBody ->
             "The body of a 'let' without 'in' must start at the column of the 'let'"
         | DiagnosticCode.MisalignedModuleElement ->
@@ -572,6 +577,7 @@ module DiagnosticCode =
         | DiagnosticCode.UndentedBlockStart
         | DiagnosticCode.TokenAfterUndentedClose
         | DiagnosticCode.UndentedLambdaHead
+        | DiagnosticCode.UnalignedAfterLoop
         | DiagnosticCode.TyparInConstant
         | DiagnosticCode.MissingExpression
         | DiagnosticCode.MissingPattern
@@ -600,7 +606,8 @@ module DiagnosticCode =
         | DiagnosticCode.MisalignedLetBody
         | DiagnosticCode.UndentedBlockStart
         | DiagnosticCode.TokenAfterUndentedClose
-        | DiagnosticCode.UndentedLambdaHead -> ValueSome "FSC2P1001"
+        | DiagnosticCode.UndentedLambdaHead
+        | DiagnosticCode.UnalignedAfterLoop -> ValueSome "FSC2P1001"
         | _ -> ValueNone
 
     /// What the secondary label on the OPENING delimiter says. Both delimiter diagnostics

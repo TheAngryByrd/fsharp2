@@ -818,6 +818,66 @@ module Expr =
                     else
                         pDoneVirt reader
 
+        // FCS ends a loop at a token that ends its body. The Compatibility Oracle reports FS0010 at such a token
+        // on a later line when it starts an expression and is right of the column of the block that holds the loop.
+        // The vendored parser has no frame for a record field value, so only a block that starts at the loop or on an earlier line counts.
+        let reportUnalignedAfterLoop
+            (loopTok: SyntaxToken)
+            (bodyStart: int64)
+            (doneTok: SyntaxToken)
+            (reader: Reader<PositionedToken, ParseState, _>)
+            =
+            match loopTok.Index, doneTok.Index with
+            | TokenIndex.Regular loopIndex, TokenIndex.Virtual ->
+                let state = reader.State
+                let tokens = state.Lexed.Tokens
+                let mutable bodyIndex = int bodyStart * 1<token>
+                let mutable next = int reader.Index * 1<token>
+
+                while bodyIndex < tokens.LengthM
+                      && isSkippedByScan state bodyIndex do
+                    bodyIndex <- bodyIndex + 1<token>
+
+                while next < tokens.LengthM
+                      && isSkippedByScan state next do
+                    next <- next + 1<token>
+
+                let holdsLoop (blockStart: PositionedToken) =
+                    let mutable i = loopIndex
+                    let mutable earlierLine = false
+
+                    while not earlierLine
+                          && i > 0<token>
+                          && tokens[i].StartIndex > blockStart.StartIndex do
+                        i <- i - 1<token>
+                        earlierLine <- tokens[i].TokenWithoutCommentFlags = Token.Newline
+
+                    earlierLine || blockStart.StartIndex = tokens[loopIndex].StartIndex
+
+                if bodyIndex < next && next < tokens.LengthM then
+                    let kind = tokens[next].TokenWithoutCommentFlags
+                    let column = ParseState.getIndent state next
+
+                    match state.Context with
+                    | { Context = OffsideContext.SeqBlock; Indent = blockColumn; Token = blockStart } :: _ when
+                        holdsLoop blockStart
+                        && TokenInfo.canStartExpression kind
+                        && not (TokenInfo.isOperator kind)
+                        && column > blockColumn
+                        && column < ParseState.getIndent state bodyIndex
+                        && ParseState.findLineNumber state bodyIndex < ParseState.findLineNumber state next
+                        && not (followsTokenOnSameLine state (syntaxToken tokens[next] (int next)))
+                        ->
+                        reader.State <-
+                            ParseState.addDiagnosticAt
+                                DiagnosticCode.UnalignedAfterLoop
+                                (syntaxToken tokens[next] (int next))
+                                state
+                    | _ -> ()
+            | _ -> ()
+
+            preturn () reader
+
         let pIfExpr =
             parser {
                 let! (ifTok, indent) = assertKeywordToken Token.KWIf
@@ -1118,6 +1178,7 @@ module Expr =
                     )
 
                 let! doneTok = pLoopDone bodyStart.Index
+                do! reportUnalignedAfterLoop whileTok bodyStart.Index doneTok
                 return ExprAux.ForExpr(Expr.While(whileTok, cond, doTok, body, doneTok))
             }
 
@@ -1186,6 +1247,7 @@ module Expr =
                     withContextAt OffsideContext.Do bodyMinIndent forTok.PositionedToken refTypedSeqExprBlock.Parser
 
                 let! doneTok = pLoopDone bodyStart.Index
+                do! reportUnalignedAfterLoop forTok bodyStart.Index doneTok
                 return ExprAux.ForExpr(forBuilder forTok body doneTok)
             }
 

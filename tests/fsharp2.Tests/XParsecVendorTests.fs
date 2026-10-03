@@ -723,6 +723,40 @@ let y = "
                     Expect.isOk result accepted
                     Expect.isEmpty diagnostics accepted
 
+            testCase
+                "an expression that ends a loop body and is not at the block column gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 at (2,13), (3,7), and (2,13).
+                for source, offset in
+                    [
+                        "let y = g (for x in xs do f x;\n            z)\n", 43
+                        "let f () =\n    while c do f x\n      z\n", 36
+                        "let y = g (for x in xs do f\n            x; z)\n", 40
+                    ] do
+                    match parseVendored source with
+                    | Ok _, [ diagnostic ] ->
+                        Expect.equal diagnostic.Code DiagnosticCode.UnalignedAfterLoop source
+                        Expect.equal diagnostic.Token.StartIndex offset source
+
+                        Expect.equal
+                            (DiagnosticCode.fsharp2Code diagnostic.Code)
+                            (ValueSome "FSC2P1001")
+                            source
+                    | _, other ->
+                        failtest $"{source} must give a tree and one diagnostic, not {other.Length}"
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "let y = g (for x in xs do f x\n           z)\n"
+                        "let f () =\n    for x in xs do f x\n    z\n"
+                        "let f () =\n    for x in xs do f x\n      |> ignore\n"
+                        "let r = { A = for x in xs do f x\n              B = 1 }\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
             testCase "a let body that is not at the let column gives FSC2P1001"
             <| fun () ->
                 // Compatibility Oracle: error FS0010: Unexpected identifier in expression. Expected 'in' or other token, at (3,5).
