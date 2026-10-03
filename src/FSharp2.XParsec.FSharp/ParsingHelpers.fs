@@ -1417,6 +1417,72 @@ module Parsing =
 
         preturn () reader
 
+    /// The Compatibility Oracle reports FS0010 at an `elif` or `else` of an `if` chain in two cases. A `then` on the line
+    /// of a condition that ends in an open construct goes to that construct in FCS, so the next `elif` or `else` has no
+    /// `if`. An `else` on the line of a last branch that ends in a nested `if ... else` also has no `if`.
+    let reportElseAfterOpenConstruct
+        (condition: Expr<SyntaxToken>)
+        (thenTok: SyntaxToken)
+        (thenExpr: Expr<SyntaxToken>)
+        (elifs: ImmutableArray<ElifBranch<SyntaxToken>>)
+        (elseBranch: ElseBranch<SyntaxToken> voption)
+        (reader: Reader<PositionedToken, ParseState, _>)
+        =
+        let state = reader.State
+
+        let arms =
+            [|
+                yield struct (condition, thenTok, thenExpr)
+                for branch in elifs do
+                    match branch with
+                    | ElifBranch.Elif(condition = c; thenToken = t; expr = e)
+                    | ElifBranch.ElseIf(condition = c; thenToken = t; expr = e) -> yield struct (c, t, e)
+            |]
+
+        let elseTok =
+            match elseBranch with
+            | ValueSome(ElseBranch(elseToken, _)) -> ValueSome elseToken
+            | ValueNone -> ValueNone
+
+        let nextKeyword k =
+            if k + 1 < arms.Length then
+                match elifs[k] with
+                | ElifBranch.Elif(elifToken = t)
+                | ElifBranch.ElseIf(elseToken = t) -> ValueSome t
+            else
+                elseTok
+
+        let mutable target = ValueNone
+        let mutable k = 0
+
+        while target.IsNone && k < arms.Length do
+            let struct (c, t, _) = arms[k]
+
+            if
+                (rightmostOpenConstruct c).IsSome
+                && followsTokenOnSameLine state t
+            then
+                target <- nextKeyword k |> ValueOption.orElse (ValueSome t)
+
+            k <- k + 1
+
+        if target.IsNone then
+            match elseTok with
+            | ValueSome e when followsTokenOnSameLine state e ->
+                let struct (_, _, lastBody) = arms[arms.Length - 1]
+
+                match rightmostOpenConstruct lastBody with
+                | ValueSome(Expr.IfThenElse(elseBranch = ValueSome _)) -> target <- ValueSome e
+                | _ -> ()
+            | _ -> ()
+
+        match target with
+        | ValueSome token when token.Index <> TokenIndex.Virtual ->
+            reader.State <- ParseState.addDiagnosticAt DiagnosticCode.ElseAfterOpenConstruct token state
+        | _ -> ()
+
+        preturn () reader
+
     /// The Compatibility Oracle reports FS0010 at a `then` on a later line when the condition before it ends in an
     /// open construct and the `then` is right of a context that the construct keeps. On the same line, the Oracle
     /// reports the later `else` instead.

@@ -1107,6 +1107,43 @@ let y = "
                     Expect.isOk result accepted
                     Expect.isEmpty diagnostics accepted
 
+            testCase
+                "an elif or else after a then that an open construct takes, or after a nested if else, gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 at (1,38), (1,41), (1,30), and (1,30).
+                for source, offset in
+                    [
+                        "let y = if c then if d then a else b else z\n", 37
+                        "let y = if c then a; if d then b else e else z\n", 40
+                        "let y = if fun v -> v then d else b\n", 29
+                        "let y = if fun v -> v then d elif e then f else g\n", 29
+                    ] do
+                    match parseVendored source with
+                    | Ok _, [ diagnostic ] ->
+                        Expect.equal diagnostic.Code DiagnosticCode.ElseAfterOpenConstruct source
+                        Expect.equal diagnostic.Token.StartIndex offset source
+
+                        Expect.equal
+                            (DiagnosticCode.fsharp2Code diagnostic.Code)
+                            (ValueSome "FSC2P1001")
+                            source
+                    | _, other ->
+                        failtest $"{source} must give a tree and one diagnostic, not {other.Length}"
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "let y =\n    if c then if d then a else b\n    else z\n"
+                        "let y = if c then (if d then a else b) else z\n"
+                        "let y = if c then match x with A -> a else z\n"
+                        "let y = if c then fun v -> v else z\n"
+                        "let y = if c then if d then a else b\n"
+                        "let y = if c then a else if d then b else e\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
             testCase "a module element on the line of a let or do element gives FSC2P1001"
             <| fun () ->
                 // Compatibility Oracle: FS0010 at (1,11), (1,11), (2,7), and (2,15).

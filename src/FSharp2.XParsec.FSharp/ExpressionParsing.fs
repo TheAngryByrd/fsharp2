@@ -966,6 +966,7 @@ module Expr =
                     )
 
                 let! elifs, elseBranch = ElifBranches.parse indent
+                do! reportElseAfterOpenConstruct cond thenTok thenExpr elifs elseBranch
 
                 return ExprAux.ForExpr(Expr.IfThenElse(ifTok, cond, thenTok, thenExpr, elifs, elseBranch))
             }
