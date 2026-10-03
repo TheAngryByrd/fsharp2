@@ -754,6 +754,31 @@ module Parsing =
     let private errOffside: ErrorType<PositionedToken, ParseState> = Message "Offside"
 
     /// True when a syntax token comes before `token` on its line.
+    /// Whether the syntax token before `index` ends an operand: an identifier, a literal, or a closing token.
+    let endsOperandBefore (state: ParseState) (index: int<token>) =
+        let tokens = state.Lexed.Tokens
+        let mutable previous = index - 1<token>
+
+        while previous >= 0<token>
+              && isSkippedByScan state previous do
+            previous <- previous - 1<token>
+
+        previous >= 0<token>
+        && (match tokens[previous].TokenWithoutCommentFlags with
+            | Token.KWRParen
+            | Token.KWRBracket
+            | Token.KWRArrayBracket
+            | Token.KWRBrace
+            | Token.KWRBraceBar
+            | Token.KWEnd
+            | Token.KWNull
+            | Token.KWTrue
+            | Token.KWFalse
+            | Token.KWBase
+            | Token.OpQuotationTypedRight
+            | Token.OpQuotationUntypedRight -> true
+            | t -> not (TokenInfo.isOperator t || TokenInfo.isKeyword t))
+
     let followsTokenOnSameLine (state: ParseState) (token: SyntaxToken) =
         match token.Index with
         | TokenIndex.Virtual -> false

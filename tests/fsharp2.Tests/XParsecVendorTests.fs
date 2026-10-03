@@ -362,7 +362,7 @@ let y = "
 
             testCase "a keyword construct after a prefix operator or a cast keyword gives FSC2P1001"
             <| fun () ->
-                // Compatibility Oracle: FS0010 at (2,16), (2,11), (2,11), (2,13), (2,12), (2,18), (2,14), and (3,11).
+                // Compatibility Oracle: FS0010 at (2,16), (2,11), (2,11), (2,13), (2,12), (2,18), (2,14), (3,11), and (2,12).
                 // The seventh text also gives (2,11) FS0598.
                 for source, offset in
                     [
@@ -374,6 +374,7 @@ let y = "
                         "module M\nlet y = downcast lazy x\n", 26
                         "module M\nlet y = xs[^ yield x ]\n", 22
                         "module M\nlet y = -\n          try a finally b\n", 29
+                        "module M\nlet y = f -try a finally b\n", 20
                     ] do
                     let _, diagnostics = parseVendored source
 
@@ -394,6 +395,10 @@ let y = "
                         "module M\nlet y = - f x\n"
                         "module M\nlet y = lazy try a finally b\n"
                         "module M\nlet y = assert if c then a else b\n"
+                        "module M\nlet y =\n    acc\n    + match h with _ -> 1\n"
+                        "module M\nlet y = a - if c then 1 else 2\n"
+                        "module M\nlet y = a && match h with _ -> true\n"
+                        "module M\nlet y = a ^ try b finally c\n"
                     ] do
                     let result, diagnostics = parseVendored accepted
                     Expect.isOk result accepted

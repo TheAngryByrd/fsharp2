@@ -2162,17 +2162,25 @@ module Expr =
             }
 
         // pars.fsy `minusExpr`: the operand of a prefix operator, `upcast`, or `downcast` is an application, which cannot start
-        // with a keyword construct. The Compatibility Oracle reports FS0010 at the keyword.
-        let reportConstructAfterPrefix (reader: Reader<PositionedToken, ParseState, _>) =
+        // with a keyword construct. The Compatibility Oracle reports FS0010 at the keyword. An operator that can be infix, after
+        // an operand and before whitespace, is infix in FCS, and a failed application attempt can still read it as a prefix here.
+        let reportConstructAfterPrefix (canBeInfix: bool) (reader: Reader<PositionedToken, ParseState, _>) =
             let state = reader.State
             let tokens = state.Lexed.Tokens
-            let mutable next = int reader.Index * 1<token>
+            let operatorIndex = int reader.Index * 1<token> - 1<token>
+            let mutable next = operatorIndex + 1<token>
 
             while next < tokens.LengthM
                   && isSkippedByScan state next do
                 next <- next + 1<token>
 
-            if next < tokens.LengthM then
+            let infix =
+                canBeInfix
+                && endsOperandBefore state operatorIndex
+                && operatorIndex + 1<token> < tokens.LengthM
+                && isSkippedByScan state (operatorIndex + 1<token>)
+
+            if next < tokens.LengthM && not infix then
                 match tokens[next].TokenWithoutCommentFlags with
                 | Token.KWTry
                 | Token.KWMatch
@@ -2213,7 +2221,7 @@ module Expr =
         let kwCastConsume body completer (token: SyntaxToken) =
             parser {
                 let! tok = consumePeeked token
-                do! reportConstructAfterPrefix
+                do! reportConstructAfterPrefix false
                 return PrefixMapped(tok, preturn tok, body, completer)
             }
 
@@ -2251,7 +2259,7 @@ module Expr =
         let pOpAddressOfPrefix (token: SyntaxToken) =
             parser {
                 let! tok = consumePeeked token
-                do! reportConstructAfterPrefix
+                do! reportConstructAfterPrefix true
                 let power = BindingPower.fromLevel (int PrecedenceLevel.Prefix)
                 return Prefix(tok, preturn tok, power, Complete.prefix)
             }
@@ -2265,7 +2273,7 @@ module Expr =
         let pOpFromEndPrefix (token: SyntaxToken) =
             parser {
                 let! tok = consumePeeked token
-                do! reportConstructAfterPrefix
+                do! reportConstructAfterPrefix true
                 return Prefix(tok, preturn tok, minusExprPower, Complete.prefix)
             }
 
@@ -2316,7 +2324,7 @@ module Expr =
                 match OperatorInfo.TryCreate(token.PositionedToken) with
                 | ValueSome opInfo when opInfo.CanBePrefix ->
                     let! tok = consumePeeked token
-                    do! reportConstructAfterPrefix
+                    do! reportConstructAfterPrefix true
 
                     let power =
                         max (BindingPower.fromLevel (int opInfo.Precedence) + 1uy<bp>) minusExprPower
@@ -3247,31 +3255,8 @@ module Expr =
                         | Token.KWReturnBang -> ValueSome DiagnosticCode.ConstructAfterExpression
                         | _ -> ValueNone
 
-                    let mutable previous = next - 1<token>
-
-                    while previous >= 0<token>
-                          && isSkippedByScan state previous do
-                        previous <- previous - 1<token>
-
-                    let afterOperand =
-                        previous >= 0<token>
-                        && (match tokens[previous].TokenWithoutCommentFlags with
-                            | Token.KWRParen
-                            | Token.KWRBracket
-                            | Token.KWRArrayBracket
-                            | Token.KWRBrace
-                            | Token.KWRBraceBar
-                            | Token.KWEnd
-                            | Token.KWNull
-                            | Token.KWTrue
-                            | Token.KWFalse
-                            | Token.KWBase
-                            | Token.OpQuotationTypedRight
-                            | Token.OpQuotationUntypedRight -> true
-                            | t -> not (TokenInfo.isOperator t || TokenInfo.isKeyword t))
-
                     match code with
-                    | ValueSome code when afterOperand ->
+                    | ValueSome code when endsOperandBefore state next ->
                         let keyword = syntaxToken tokens[next] (int next)
 
                         if
