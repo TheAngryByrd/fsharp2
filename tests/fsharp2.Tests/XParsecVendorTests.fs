@@ -399,6 +399,47 @@ let y = "
                     Expect.isOk result accepted
                     Expect.isEmpty diagnostics accepted
 
+            testCase "a keyword construct after an expression on the same line gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 at (1,3), (2,13), (3,18), (2,30), (2,31), (2,26), (1,11), (1,11), (2,7), and
+                // (2,15). The fourth text also gives (2,43) FS0010, and the sixth text gives (2,15) FS0604.
+                for source, offset in
+                    [
+                        "g try a finally b\n", 2
+                        "module M\nlet y = a.M if c then a else b\n", 21
+                        "module M\ntype T() =\n  member _.M = g match x with _ -> a\n", 37
+                        "module M\nlet h = List.map (fun v -> g while c do ())\n", 38
+                        "module M\nlet m = match q with A -> g x fun v -> v | B -> 1\n", 39
+                        "module M\nlet c = async { return g return x }\n", 34
+                        "let y = g try a finally b\n", 10
+                        "let x = 1 let y = 2\n", 10
+                        "let f () =\n    g match x with _ -> 1\n", 17
+                        "module N =\n    let x = 1 let y = 2\n", 25
+                    ] do
+                    let _, diagnostics = parseVendored source
+
+                    Expect.equal
+                        (diagnostics
+                         |> List.tryHead
+                         |> Option.map (fun diagnostic ->
+                             diagnostic.Code, diagnostic.Token.StartIndex
+                         ))
+                        (Some(DiagnosticCode.ConstructAfterExpression, offset))
+                        source
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "module M\nlet y = for v in xs do g v\n"
+                        "module M\nlet y = while g c do ()\n"
+                        "module M\nlet y = let v = g x in v\n"
+                        "module M\nlet y = x |> fun v -> v\n"
+                        "module M\nlet y = g x; if c then a else b\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
             testCase "a loop that ends at a directive with no tokens after it gives a diagnostic"
             <| fun () ->
                 // Compatibility Oracle: FS0010 at (5,1) and (4,1), "#else has no matching #if".
@@ -1272,13 +1313,13 @@ let y = "
 
             testCase "a module element on the line of a let or do element gives FSC2P1001"
             <| fun () ->
-                // Compatibility Oracle: FS0010 at (1,11), (1,11), (2,7), and (2,15).
+                // Compatibility Oracle: FS0010 at (1,11), (1,11), and (1,9). The second text also gives (1,1) FS3118 and
+                // (2,1) FS0010.
                 for source, offset in
                     [
-                        "let y = g try a finally b\n", 10
-                        "let x = 1 let y = 2\n", 10
-                        "let f () =\n    g match x with _ -> 1\n", 17
-                        "module N =\n    let x = 1 let y = 2\n", 25
+                        "let x = 1 open System\n", 10
+                        "let x = 1 type T = A\n", 10
+                        "do f () exception E\n", 8
                     ] do
                     match parseVendored source with
                     | Ok _, [ diagnostic ] ->

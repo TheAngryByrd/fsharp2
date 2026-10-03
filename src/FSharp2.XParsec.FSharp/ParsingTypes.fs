@@ -338,6 +338,8 @@ type DiagnosticCode =
     | CastKeywordAfterExpression
     /// A keyword that starts a construct follows a prefix operator, `upcast`, or `downcast`, where FCS reports FS0010.
     | ConstructAfterPrefixOperator
+    /// A keyword that starts a construct follows an expression on the same line, where FCS reports FS0010.
+    | ConstructAfterExpression
 
 [<RequireQualifiedAccess>]
 type Syntax =
@@ -545,6 +547,7 @@ module DiagnosticCode =
         | DiagnosticCode.KeywordAfterOpenConstruct -> "KeywordAfterOpenConstruct"
         | DiagnosticCode.CastKeywordAfterExpression -> "CastKeywordAfterExpression"
         | DiagnosticCode.ConstructAfterPrefixOperator -> "ConstructAfterPrefixOperator"
+        | DiagnosticCode.ConstructAfterExpression -> "ConstructAfterExpression"
 
     /// The English it renders.
     let message (c: DiagnosticCode) : string =
@@ -596,6 +599,8 @@ module DiagnosticCode =
             "An 'upcast' or 'downcast' cannot follow an expression on the same line. Put the cast in parentheses"
         | DiagnosticCode.ConstructAfterPrefixOperator ->
             "A keyword construct cannot follow a prefix operator, 'upcast', or 'downcast'. Put the construct in parentheses"
+        | DiagnosticCode.ConstructAfterExpression ->
+            "A keyword construct cannot follow an expression on the same line. Put the construct in parentheses or on a new line"
         | DiagnosticCode.MisalignedLetBody ->
             "The body of a 'let' without 'in' must start at the column of the 'let'"
         | DiagnosticCode.MisalignedModuleElement ->
@@ -638,6 +643,7 @@ module DiagnosticCode =
         | DiagnosticCode.KeywordAfterOpenConstruct
         | DiagnosticCode.CastKeywordAfterExpression
         | DiagnosticCode.ConstructAfterPrefixOperator
+        | DiagnosticCode.ConstructAfterExpression
         | DiagnosticCode.TyparInConstant
         | DiagnosticCode.MissingExpression
         | DiagnosticCode.MissingPattern
@@ -677,7 +683,8 @@ module DiagnosticCode =
         | DiagnosticCode.SameLineModuleElement
         | DiagnosticCode.KeywordAfterOpenConstruct
         | DiagnosticCode.CastKeywordAfterExpression
-        | DiagnosticCode.ConstructAfterPrefixOperator -> ValueSome "FSC2P1001"
+        | DiagnosticCode.ConstructAfterPrefixOperator
+        | DiagnosticCode.ConstructAfterExpression -> ValueSome "FSC2P1001"
         | _ -> ValueNone
 
     /// What the secondary label on the OPENING delimiter says. Both delimiter diagnostics

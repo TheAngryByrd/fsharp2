@@ -3205,9 +3205,11 @@ module Expr =
 
     let operators = ExprOperatorParser()
 
-    // The Compatibility Oracle reports FS0010 at an `upcast` or `downcast` on the line of the expression before it,
-    // because a cast keyword cannot start an application argument. The rhs parser refuses the keyword, so the expression ends there.
-    let private reportCastAfterExpression (p: FSParser<Expr<SyntaxToken>>) : FSParser<Expr<SyntaxToken>> =
+    // The Compatibility Oracle reports FS0010 at a cast keyword or a keyword construct on the line of the expression before it,
+    // because neither can start an application argument. The rhs parser refuses the keyword, so the expression ends there.
+    // A `do` can follow a loop header expression. After a failed parse, the reader can stop after a separator such as `;`,
+    // so the token before the keyword must end an operand.
+    let private reportKeywordAfterExpression (p: FSParser<Expr<SyntaxToken>>) : FSParser<Expr<SyntaxToken>> =
         fun reader ->
             match p reader with
             | Error e -> Error e
@@ -3221,9 +3223,54 @@ module Expr =
                     next <- next + 1<token>
 
                 if next < tokens.LengthM then
-                    match tokens[next].TokenWithoutCommentFlags with
-                    | Token.KWUpcast
-                    | Token.KWDowncast ->
+                    let code =
+                        match tokens[next].TokenWithoutCommentFlags with
+                        | Token.KWUpcast
+                        | Token.KWDowncast -> ValueSome DiagnosticCode.CastKeywordAfterExpression
+                        | Token.KWTry
+                        | Token.KWMatch
+                        | Token.KWMatchBang
+                        | Token.KWIf
+                        | Token.KWFun
+                        | Token.KWFunction
+                        | Token.KWLet
+                        | Token.KWLetBang
+                        | Token.KWUse
+                        | Token.KWUseBang
+                        | Token.KWWhile
+                        | Token.KWWhileBang
+                        | Token.KWFor
+                        | Token.KWYield
+                        | Token.KWYieldBang
+                        | Token.KWReturn
+                        | Token.KWReturnBang -> ValueSome DiagnosticCode.ConstructAfterExpression
+                        | _ -> ValueNone
+
+                    let mutable previous = next - 1<token>
+
+                    while previous >= 0<token>
+                          && isSkippedByScan state previous do
+                        previous <- previous - 1<token>
+
+                    let afterOperand =
+                        previous >= 0<token>
+                        && (match tokens[previous].TokenWithoutCommentFlags with
+                            | Token.KWRParen
+                            | Token.KWRBracket
+                            | Token.KWRArrayBracket
+                            | Token.KWRBrace
+                            | Token.KWRBraceBar
+                            | Token.KWEnd
+                            | Token.KWNull
+                            | Token.KWTrue
+                            | Token.KWFalse
+                            | Token.KWBase
+                            | Token.OpQuotationTypedRight
+                            | Token.OpQuotationUntypedRight -> true
+                            | t -> not (TokenInfo.isOperator t || TokenInfo.isKeyword t))
+
+                    match code with
+                    | ValueSome code when afterOperand ->
                         let keyword = syntaxToken tokens[next] (int next)
 
                         if
@@ -3233,14 +3280,14 @@ module Expr =
                                 |> List.exists (fun diagnostic -> diagnostic.Token.StartIndex = tokens[next].StartIndex)
                             )
                         then
-                            reader.State <- ParseState.addDiagnosticAt DiagnosticCode.CastKeywordAfterExpression keyword state
+                            reader.State <- ParseState.addDiagnosticAt code keyword state
                     | _ -> ()
 
                 Ok expr
 
     let parse =
         Operator.parser parseAtomic operators
-        |> reportCastAfterExpression
+        |> reportKeywordAfterExpression
 
     let parseSeqBlock =
         withContext OffsideContext.SeqBlock parse
@@ -3260,7 +3307,7 @@ module Expr =
         // a keyword expression via newline-triggered virtual semicolons.
         refExprNoSeq.Set(
             Operator.parserAt (int PrecedenceLevel.Semicolon + 1 |> BindingPower.fromLevel) parseAtomic operators
-            |> reportCastAfterExpression
+            |> reportKeywordAfterExpression
         )
 
         // IL intrinsic arguments: parse at just above Application so dot chains, indexers,
@@ -3268,7 +3315,7 @@ module Expr =
         // arg in `(# "op" a.b c : ty #)` is captured as a separate arg.
         refExprILArg.Set(
             Operator.parserAt (int PrecedenceLevel.Application + 1 |> BindingPower.fromLevel) parseAtomic operators
-            |> reportCastAfterExpression
+            |> reportKeywordAfterExpression
         )
 
         // Semicolon has special handling in F# records, and object expressions
@@ -3278,7 +3325,7 @@ module Expr =
         // and set the starting precedence one level higher so it will be parsed in `pRecordOrObjectExpr`
         refExprInRecords.Set(
             Operator.parserAt (int PrecedenceLevel.Semicolon + 1 |> BindingPower.fromLevel) parseAtomic operators
-            |> reportCastAfterExpression
+            |> reportKeywordAfterExpression
         )
 
         // Pattern guards (when <expr>) must stop before '->' (Arrow) so the arrow
@@ -3287,12 +3334,12 @@ module Expr =
         // makes minBp = base+3, which is just above Arrow's LBP, excluding it.
         refExprGuard.Set(
             Operator.parserAt (int PrecedenceLevel.RArrow + 1 |> BindingPower.fromLevel) parseAtomic operators
-            |> reportCastAfterExpression
+            |> reportKeywordAfterExpression
         )
 
         // Range operator '..' may be a postfix operator in slice syntax (e.g. A[1..]) or an infix operator in range expressions (e.g. 1..10).
         // So, we treat it effectively an a left-infix operator that special cases to prefix with the right terminator.
         refExprRange.Set(
             Operator.parserAt (int PrecedenceLevel.Range + 1 |> BindingPower.fromLevel) parseAtomic operators
-            |> reportCastAfterExpression
+            |> reportKeywordAfterExpression
         )
