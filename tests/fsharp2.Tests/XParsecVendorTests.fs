@@ -294,7 +294,35 @@ let y = "
                          |> List.map (fun diagnostic ->
                              diagnostic.Code, diagnostic.Token.StartIndex
                          ))
-                        (DiagnosticCode.SameLineModuleElement, offset)
+                        (DiagnosticCode.CastKeywordAfterExpression, offset)
+                        source
+
+                // Compatibility Oracle: FS0010 at (3,18), (4,7), (3,18), (3,8), (3,23), (3,20), (3,30), (2,41), (2,36),
+                // (2,27), (4,18), and (3,18). The seventh text also gives (3,14) FS0550.
+                for source, offset in
+                    [
+                        "module M\ntype T() =\n  member _.M = g upcast x\n", 37
+                        "module M\ntype T() =\n  member _.M =\n    g upcast x\n", 41
+                        "module M\ntype T() =\n  member _.M = g upcast x\nlet z = 1\n", 37
+                        "module M\ntype T() =\n  do g upcast x\n", 27
+                        "module M\ntype T =\n  static member M = g upcast x\n", 40
+                        "module M\ntype T() =\n  member val P = g upcast x\n", 39
+                        "module M\ntype T() =\n  member _.M with get () = g upcast x\n", 49
+                        "module M\ntype R = { A: int } with member _.M = g upcast x\n", 49
+                        "module M\ntype U = A | B with member _.M = g upcast x\n", 44
+                        "module M\ntype T() = member _.M = g upcast x\n", 35
+                        "module M\ntype T() =\n  member _.M = x\n  member _.N = g upcast x\n", 54
+                        "module M\ntype T() =\n  member _.M = g downcast x\n  member _.N = 1\n", 37
+                    ] do
+                    let _, diagnostics = parseVendored source
+
+                    Expect.equal
+                        (diagnostics
+                         |> List.tryHead
+                         |> Option.map (fun diagnostic ->
+                             diagnostic.Code, diagnostic.Token.StartIndex
+                         ))
+                        (Some(DiagnosticCode.CastKeywordAfterExpression, offset))
                         source
 
                 // The Compatibility Oracle reports no diagnostic for these texts.
@@ -303,6 +331,8 @@ let y = "
                         "module M\nlet y = upcast x\n"
                         "module M\nlet y = g (upcast x)\n"
                         "module M\nlet y = a + upcast x\n"
+                        "module M\ntype T() =\n  member _.M = 1\nupcast x\n"
+                        "module M\nlet f () =\n  g ()\n  upcast x\n"
                     ] do
                     let result, diagnostics = parseVendored accepted
                     Expect.isOk result accepted

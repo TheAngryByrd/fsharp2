@@ -3146,7 +3146,42 @@ module Expr =
 
     let operators = ExprOperatorParser()
 
-    let parse = Operator.parser parseAtomic operators
+    // The Compatibility Oracle reports FS0010 at an `upcast` or `downcast` on the line of the expression before it,
+    // because a cast keyword cannot start an application argument. The rhs parser refuses the keyword, so the expression ends there.
+    let private reportCastAfterExpression (p: FSParser<Expr<SyntaxToken>>) : FSParser<Expr<SyntaxToken>> =
+        fun reader ->
+            match p reader with
+            | Error e -> Error e
+            | Ok expr ->
+                let state = reader.State
+                let tokens = state.Lexed.Tokens
+                let mutable next = int reader.Index * 1<token>
+
+                while next < tokens.LengthM
+                      && isSkippedByScan state next do
+                    next <- next + 1<token>
+
+                if next < tokens.LengthM then
+                    match tokens[next].TokenWithoutCommentFlags with
+                    | Token.KWUpcast
+                    | Token.KWDowncast ->
+                        let keyword = syntaxToken tokens[next] (int next)
+
+                        if
+                            followsTokenOnSameLine state keyword
+                            && not (
+                                state.Diagnostics
+                                |> List.exists (fun diagnostic -> diagnostic.Token.StartIndex = tokens[next].StartIndex)
+                            )
+                        then
+                            reader.State <- ParseState.addDiagnosticAt DiagnosticCode.CastKeywordAfterExpression keyword state
+                    | _ -> ()
+
+                Ok expr
+
+    let parse =
+        Operator.parser parseAtomic operators
+        |> reportCastAfterExpression
 
     let parseSeqBlock =
         withContext OffsideContext.SeqBlock parse
@@ -3166,6 +3201,7 @@ module Expr =
         // a keyword expression via newline-triggered virtual semicolons.
         refExprNoSeq.Set(
             Operator.parserAt (int PrecedenceLevel.Semicolon + 1 |> BindingPower.fromLevel) parseAtomic operators
+            |> reportCastAfterExpression
         )
 
         // IL intrinsic arguments: parse at just above Application so dot chains, indexers,
@@ -3173,6 +3209,7 @@ module Expr =
         // arg in `(# "op" a.b c : ty #)` is captured as a separate arg.
         refExprILArg.Set(
             Operator.parserAt (int PrecedenceLevel.Application + 1 |> BindingPower.fromLevel) parseAtomic operators
+            |> reportCastAfterExpression
         )
 
         // Semicolon has special handling in F# records, and object expressions
@@ -3182,6 +3219,7 @@ module Expr =
         // and set the starting precedence one level higher so it will be parsed in `pRecordOrObjectExpr`
         refExprInRecords.Set(
             Operator.parserAt (int PrecedenceLevel.Semicolon + 1 |> BindingPower.fromLevel) parseAtomic operators
+            |> reportCastAfterExpression
         )
 
         // Pattern guards (when <expr>) must stop before '->' (Arrow) so the arrow
@@ -3190,10 +3228,12 @@ module Expr =
         // makes minBp = base+3, which is just above Arrow's LBP, excluding it.
         refExprGuard.Set(
             Operator.parserAt (int PrecedenceLevel.RArrow + 1 |> BindingPower.fromLevel) parseAtomic operators
+            |> reportCastAfterExpression
         )
 
         // Range operator '..' may be a postfix operator in slice syntax (e.g. A[1..]) or an infix operator in range expressions (e.g. 1..10).
         // So, we treat it effectively an a left-infix operator that special cases to prefix with the right terminator.
         refExprRange.Set(
             Operator.parserAt (int PrecedenceLevel.Range + 1 |> BindingPower.fromLevel) parseAtomic operators
+            |> reportCastAfterExpression
         )

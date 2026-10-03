@@ -209,7 +209,14 @@ module ModuleElem =
                         elif column <> firstColumn.Value && not afterLetIn then
                             reader.State <-
                                 ParseState.addDiagnosticAt DiagnosticCode.MisalignedModuleElement start reader.State
-                    | TokenIndex.Regular index when afterExpressionElement && not (afterSemicolon reader.State index) ->
+                    | TokenIndex.Regular index when
+                        afterExpressionElement
+                        && not (afterSemicolon reader.State index)
+                        && not (
+                            reader.State.Diagnostics
+                            |> List.exists (fun diagnostic -> diagnostic.Token.StartIndex = start.StartIndex)
+                        )
+                        ->
                         reader.State <-
                             ParseState.addDiagnosticAt DiagnosticCode.SameLineModuleElement start reader.State
                     | _ -> ()
