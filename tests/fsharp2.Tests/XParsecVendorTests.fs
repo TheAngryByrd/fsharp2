@@ -680,6 +680,55 @@ let y = "
                          |> List.exists (fun (start, _) -> start = signedStart))
                         $"{source} must start a new token at the sign"
 
+            testCase
+                "a ..^ operator splits into a range and a from-end index after any start, as FCS does"
+            <| fun () ->
+                // FCS 43.10.101 gives RG(start,?IndexFromEnd) for each text. The Compatibility Oracle accepts each text.
+                let tokensOf source =
+                    (Lexing.lexString source).Tokens
+                    |> Seq.filter (fun token ->
+                        token.TokenWithoutCommentFlags
+                        <> Token.Whitespace
+                    )
+                    |> Seq.map (fun token -> token.StartIndex, token.TokenWithoutCommentFlags)
+                    |> List.ofSeq
+
+                for source, rangeStart in
+                    [
+                        "let y = xs[i..^1]\n", 12
+                        "let y = xs[i ..^j]\n", 13
+                        "let y = xs[(i)..^1]\n", 14
+                        "let y = xs.[i..^1]\n", 13
+                        "let y = [i..^2]\n", 10
+                        "let y = xs[..^1]\n", 11
+                        "let y = a[i..^1, 0]\n", 11
+                    ] do
+                    let tokens = tokensOf source
+
+                    Expect.contains
+                        tokens
+                        (rangeStart, Token.OpRange)
+                        $"{source} must give a range token"
+
+                    Expect.contains
+                        tokens
+                        (rangeStart
+                         + 2,
+                         Token.OpConcatenate)
+                        $"{source} must give a '^' token"
+
+                    let result, diagnostics = parseVendored source
+                    Expect.isOk result source
+                    Expect.isEmpty diagnostics source
+
+                // FCS 43.10.101 gives the operator `..^-` here: X[..^-](I[i],C[1]).
+                let tokens = tokensOf "let y = xs[i..^-1]\n"
+
+                Expect.isFalse
+                    (tokens
+                     |> List.exists (fun (start, _) -> start = 14))
+                    "`..^-` must stay one operator"
+
             testCase "a loop ends before a closing delimiter left of its body and do, as in FCS"
             <| fun () ->
                 // FCS 43.10.101: While(...)@1:9-1:23 for the first text, so the loop ends after `1`, before `]` at (2,1).
