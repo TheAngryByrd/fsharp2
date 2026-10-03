@@ -136,6 +136,73 @@ module Parsing =
             skipInactiveBranch reader |> ignore
             nextSyntaxToken reader
 
+    let private computeInactiveTokens (state: ParseState) =
+        let lexed = state.Lexed
+        let tokens = lexed.Tokens
+        let inactive = Array.zeroCreate<bool> tokens.Length
+        let branches = Stack<struct (bool * bool)>()
+        let mutable active = true
+        let mutable i = 0<token>
+
+        let evaluate (ifIndex: int<token>) =
+            let nextLine = findLineNumber state ifIndex + 1<_>
+
+            let nextLineTokenIndex =
+                if nextLine < lexed.LineStarts.LengthM then
+                    lexed.LineStarts[nextLine]
+                else
+                    tokens.LengthM - 1<_>
+
+            let reader = Reader(tokens.AsReadableArray(), state, int ifIndex)
+            let slice = reader.Slice(0, int (nextLineTokenIndex - ifIndex), { AbsoluteStart = reader.Index })
+
+            match IfExpr.parseSlice slice with
+            | Ok ifExpr -> IfExpr.evaluateStateful ifExpr state
+            | Error _ -> false
+
+        let skipDirectiveLine () =
+            while i < tokens.LengthM
+                  && tokens[i].TokenWithoutCommentFlags <> Token.Newline
+                  && tokens[i].TokenWithoutCommentFlags <> Token.EOF do
+                inactive[int i] <- true
+                i <- i + 1<token>
+
+        while i < tokens.LengthM do
+            match tokens[i].Token with
+            | Token.IfDirective ->
+                let condition = active && evaluate i
+                branches.Push(struct (active, condition))
+                active <- condition
+                skipDirectiveLine ()
+            | Token.ElseDirective when branches.Count > 0 ->
+                let struct (parentActive, condition) = branches.Peek()
+                active <- parentActive && not condition
+                skipDirectiveLine ()
+            | Token.EndIfDirective when branches.Count > 0 ->
+                let struct (parentActive, _) = branches.Pop()
+                active <- parentActive
+                skipDirectiveLine ()
+            | Token.EOF -> i <- i + 1<token>
+            | _ ->
+                inactive[int i] <- not active
+                i <- i + 1<token>
+
+        inactive
+
+    /// Whether the parser skips the token at `index` at a conditional directive: the directive lines and the inactive branches.
+    let isInactiveToken (state: ParseState) (index: int<token>) =
+        let cache = state.InactiveTokens
+
+        if isNull cache.Value then
+            cache.Value <- computeInactiveTokens state
+
+        cache.Value[int index]
+
+    /// A token that a scan of the token array must skip: trivia, or a token that the parser skips at a conditional directive.
+    let isSkippedByScan (state: ParseState) (index: int<token>) =
+        ParseState.isTriviaToken state state.Lexed.Tokens[index]
+        || isInactiveToken state index
+
     let processWarnDirective
         (nextSyntaxToken: Parser<_, _, _, _>)
         (isSuppress: bool)
@@ -389,15 +456,13 @@ module Parsing =
             | _ -> tokenCol >= ctx.Indent
 
     /// Scans back from the token at `index` to the token that started `clauses`. Returns whether a
-    /// delimiter that opens after that token is still open or a conditional directive makes the
-    /// active tokens unknown, whether the previous syntax token is `->`,
+    /// delimiter that opens after that token is still open, whether the previous syntax token is `->`,
     /// and the column of the previous rule body when the `|` before this rule does not end its block.
     let private scanMatchClause (state: ParseState) (clauses: Offside) (index: int<token>) =
         let tokens = state.Lexed.Tokens
         let mutable i = index - 1<token>
         let mutable depth = 0
         let mutable insideDelimiter = false
-        let mutable unknownRegion = false
         let mutable stop = false
         let mutable previous = ValueNone
         let mutable bar = ValueNone
@@ -409,18 +474,13 @@ module Parsing =
               && tokens[i].StartIndex >= clauses.Token.StartIndex do
             let token = tokens[i]
 
-            if not (ParseState.isTriviaToken state token) then
+            if not (isSkippedByScan state i) then
                 let kind = token.TokenWithoutCommentFlags
 
                 if previous.IsNone then
                     previous <- ValueSome kind
 
                 match kind with
-                | Token.IfDirective
-                | Token.ElseDirective
-                | Token.EndIfDirective ->
-                    unknownRegion <- true
-                    stop <- true
                 | Token.KWRParen
                 | Token.KWRBracket
                 | Token.KWRArrayBracket
@@ -462,7 +522,7 @@ module Parsing =
 
             i <- i - 1<token>
 
-        struct (insideDelimiter || unknownRegion, previous = ValueSome Token.OpArrowRight, previousBodyColumn)
+        struct (insideDelimiter, previous = ValueSome Token.OpArrowRight, previousBodyColumn)
 
     let private columnOfToken (state: ParseState) (token: PositionedToken) (before: int<token>) =
         let tokens = state.Lexed.Tokens
@@ -868,9 +928,9 @@ module Parsing =
     /// Allows parser to avoid re-skipping trivia tokens when it needs to look ahead at the next token to decide what to parse.
     let peekNextSyntaxToken (reader: Reader<PositionedToken, ParseState, _>) = nextSyntaxTokenImpl true reader
 
-    /// The FCS limit at a module element: the column of the element, plus one for `let` (LexFilter
-    /// CtxtLetDecl). CtxtDo gives no limit of its own. The element is the last line start at `elementColumn`.
-    let private moduleElementLimit (state: ParseState) (elementColumn: int) (index: int<token>) =
+    /// The FCS limit at a module element: the column of the element, plus one for `let` and `and` (LexFilter
+    /// CtxtLetDecl), and for `do` (CtxtDo) in a module body. The element is the last line start at `elementColumn`.
+    let private moduleElementLimit (state: ParseState) (inModuleBody: bool) (elementColumn: int) (index: int<token>) =
         let tokens = state.Lexed.Tokens
         let mutable i = index
         let mutable found = ValueNone
@@ -879,7 +939,7 @@ module Parsing =
             let token = tokens[i]
 
             if
-                not (ParseState.isTriviaToken state token)
+                not (isSkippedByScan state i)
                 && ParseState.getIndent state i = elementColumn
                 && not (followsTokenOnSameLine state (syntaxToken token (int i)))
             then
@@ -888,9 +948,63 @@ module Parsing =
             i <- i - 1<token>
 
         match found with
-        | ValueSome Token.KWLet -> ValueSome(elementColumn + 1)
+        | ValueSome(Token.KWLet | Token.KWAnd) -> ValueSome(elementColumn + 1)
+        | ValueSome Token.KWDo when inModuleBody -> ValueSome(elementColumn + 1)
         | ValueSome _ -> ValueSome elementColumn
         | ValueNone -> ValueNone
+
+    /// Whether the file starts with a named module header: `module` with no `=` before the end of its line.
+    let private hasModuleHeader (state: ParseState) =
+        let tokens = state.Lexed.Tokens
+        let mutable i = 0<token>
+        let mutable attributeDepth = 0
+
+        while i < tokens.LengthM
+              && (isSkippedByScan state i
+                  || attributeDepth > 0
+                  || tokens[i].TokenWithoutCommentFlags = Token.KWLAttrBracket) do
+            match tokens[i].TokenWithoutCommentFlags with
+            | Token.KWLAttrBracket -> attributeDepth <- attributeDepth + 1
+            | Token.KWRAttrBracket -> attributeDepth <- attributeDepth - 1
+            | _ -> ()
+
+            i <- i + 1<token>
+
+        if i < tokens.LengthM && tokens[i].TokenWithoutCommentFlags = Token.KWModule then
+            while i < tokens.LengthM
+                  && tokens[i].TokenWithoutCommentFlags <> Token.Newline
+                  && tokens[i].TokenWithoutCommentFlags <> Token.OpEquality do
+                i <- i + 1<token>
+
+            i >= tokens.LengthM || tokens[i].TokenWithoutCommentFlags <> Token.OpEquality
+        else
+            false
+
+    /// The column of the first element of the nested module whose keyword is `moduleToken`. The vendored
+    /// parser has no frame for the element block of a nested module.
+    let private nestedModuleElementColumn (state: ParseState) (moduleToken: PositionedToken) (before: int<token>) =
+        let tokens = state.Lexed.Tokens
+        let mutable i = before
+
+        while i > 0<token>
+              && tokens[i].StartIndex > moduleToken.StartIndex do
+            i <- i - 1<token>
+
+        while i < before
+              && tokens[i].TokenWithoutCommentFlags <> Token.OpEquality do
+            i <- i + 1<token>
+
+        i <- i + 1<token>
+
+        while i < before
+              && (isSkippedByScan state i
+                  || tokens[i].TokenWithoutCommentFlags = Token.KWBegin) do
+            i <- i + 1<token>
+
+        if i <= before then
+            ValueSome(ParseState.getIndent state i)
+        else
+            ValueNone
 
     /// The FCS LexFilter `undentationLimit` for the block after an opening delimiter at `index`, from
     /// the frames below it. A frame that this function does not model gives no limit.
@@ -898,8 +1012,11 @@ module Parsing =
         match stack with
         | [] -> ValueNone
         | { Context = OffsideContext.SeqBlock; Indent = elementColumn } :: ([]
-                                                                         | { Context = OffsideContext.Module | OffsideContext.Namespace } :: _) ->
-            moduleElementLimit state elementColumn index
+                                                                         | { Context = OffsideContext.Namespace } :: _) ->
+            moduleElementLimit state (hasModuleHeader state) elementColumn index
+        | { Context = OffsideContext.SeqBlock } :: { Context = OffsideContext.Module; Token = moduleToken } :: _ ->
+            nestedModuleElementColumn state moduleToken index
+            |> ValueOption.bind (fun elementColumn -> moduleElementLimit state true elementColumn index)
         | ctx :: deeper ->
             match ctx.Context with
             | OffsideContext.SeqBlock
@@ -934,7 +1051,7 @@ module Parsing =
             i <- i - 1<token>
 
         while i > 0<token>
-              && ParseState.isTriviaToken state tokens[i] do
+              && isSkippedByScan state i do
             i <- i - 1<token>
 
         ParseState.getIndent state i
@@ -975,7 +1092,7 @@ module Parsing =
 
                 if token.TokenWithoutCommentFlags = Token.Newline then
                     result <- ValueSome(ValueSome first)
-                elif ParseState.isTriviaToken state token then
+                elif isSkippedByScan state i then
                     i <- i - 1<token>
                 elif isCloser token.TokenWithoutCommentFlags then
                     first <- i
@@ -1014,7 +1131,7 @@ module Parsing =
                 | Token.KWRBrace
                 | Token.KWRBraceBar
                 | Token.KWEnd -> i <- tokens.LengthM
-                | _ when ParseState.isTriviaToken state token -> i <- i + 1<token>
+                | _ when isSkippedByScan state i -> i <- i + 1<token>
                 | _ -> next <- ValueSome(token, i)
 
             // FCS LexFilter gives no limit for the block after `fun`, `function`, `->` of a rule, `then`,
@@ -1127,6 +1244,118 @@ module Parsing =
                 | _ -> ()
             | TokenIndex.Virtual -> ()
         | _ -> ()
+
+        preturn () reader
+
+    /// FCS ends CtxtFun at a lambda pattern or `->` that is not right of the `fun` column, and the Compatibility
+    /// Oracle reports FS0010 there. A delimiter in a pattern has its own offside line.
+    let reportUndentedLambdaHead (funTok: SyntaxToken) (arrow: SyntaxToken) (reader: Reader<PositionedToken, ParseState, _>) =
+        match funTok.Index, arrow.Index with
+        | TokenIndex.Regular funIndex, TokenIndex.Regular arrowIndex ->
+            let state = reader.State
+            let tokens = state.Lexed.Tokens
+            let limit = ParseState.getIndent state funIndex + 1
+            let mutable i = funIndex + 1<token>
+            let mutable depth = 0
+            let mutable reported = false
+
+            while not reported && i <= arrowIndex do
+                if not (isSkippedByScan state i) then
+                    match tokens[i].TokenWithoutCommentFlags with
+                    | Token.KWRParen
+                    | Token.KWRBracket
+                    | Token.KWRArrayBracket
+                    | Token.KWRBrace
+                    | Token.KWRBraceBar -> depth <- depth - 1
+                    | _ -> ()
+
+                    if depth <= 0 && ParseState.getIndent state i < limit then
+                        reader.State <-
+                            ParseState.addDiagnosticAt DiagnosticCode.UndentedLambdaHead (syntaxToken tokens[i] (int i)) state
+
+                        reported <- true
+
+                    match tokens[i].TokenWithoutCommentFlags with
+                    | Token.KWLParen
+                    | Token.KWLBracket
+                    | Token.KWLArrayBracket
+                    | Token.KWLBrace
+                    | Token.KWLBraceBar -> depth <- depth + 1
+                    | _ -> ()
+
+                i <- i + 1<token>
+        | _ -> ()
+
+        preturn () reader
+
+    /// The rightmost construct of `expr` whose last block continues to the right in FCS: `fun`, `function`,
+    /// `match`, `try`, `if`, `while`, or `for`. A delimiter closes such a construct.
+    let rec private rightmostOpenConstruct (expr: Expr<SyntaxToken>) =
+        match expr with
+        | Expr.Fun _
+        | Expr.Function _
+        | Expr.Match _
+        | Expr.TryWith _
+        | Expr.TryFinally _
+        | Expr.IfThenElse _
+        | Expr.While _
+        | Expr.ForTo _
+        | Expr.ForIn _ -> ValueSome expr
+        | Expr.Sequential(items, _)
+        | Expr.Tuple(items, _) when items.Length > 0 -> rightmostOpenConstruct items[items.Length - 1]
+        | Expr.App(_, args) when args.Length > 0 -> rightmostOpenConstruct args[args.Length - 1]
+        | Expr.InfixApp(_, _, right)
+        | Expr.PrefixApp(_, right)
+        | Expr.LetOrUse(body = ValueSome right) -> rightmostOpenConstruct right
+        | _ -> ValueNone
+
+    let private lastRuleBody (Rules(rules = rules)) =
+        if rules.Length > 0 then
+            match rules[rules.Length - 1] with
+            | Rule.Rule(expr = body) -> ValueSome body
+            | _ -> ValueNone
+        else
+            ValueNone
+
+    /// Whether the open constructs at the right end of `expr` hold a `try` construct last. FCS gives a later
+    /// `with` or `finally` on the same line to that inner `try`.
+    let rec endsInTry (expr: Expr<SyntaxToken>) =
+        let last =
+            match rightmostOpenConstruct expr with
+            | ValueSome(Expr.TryWith _ | Expr.TryFinally _) -> ValueNone
+            | ValueSome(Expr.IfThenElse(elseBranch = ValueSome(ElseBranch(expr = body)))) -> ValueSome body
+            | ValueSome(Expr.IfThenElse(thenExpr = body; elifBranches = elifs)) ->
+                if elifs.Length = 0 then
+                    ValueSome body
+                else
+                    match elifs[elifs.Length - 1] with
+                    | ElifBranch.Elif(expr = body)
+                    | ElifBranch.ElseIf(expr = body) -> ValueSome body
+            | ValueSome(Expr.Fun(expr = body))
+            | ValueSome(Expr.While(body = body))
+            | ValueSome(Expr.ForTo(body = body))
+            | ValueSome(Expr.ForIn(body = body)) -> ValueSome body
+            | ValueSome(Expr.Match(rules = rules))
+            | ValueSome(Expr.Function(rules = rules)) -> lastRuleBody rules
+            | _ -> ValueNone
+
+        match rightmostOpenConstruct expr, last with
+        | ValueSome(Expr.TryWith _ | Expr.TryFinally _), _ -> true
+        | _, ValueSome body -> endsInTry body
+        | _ -> false
+
+    /// The Compatibility Oracle reports FS0010 at a `do` or rule `->` on the line where the expression
+    /// before it ends in an open construct, because FCS gives the token to that construct.
+    let reportKeywordAfterOpenConstruct
+        (header: Expr<SyntaxToken>)
+        (keyword: SyntaxToken)
+        (reader: Reader<PositionedToken, ParseState, _>)
+        =
+        if
+            (rightmostOpenConstruct header).IsSome
+            && followsTokenOnSameLine reader.State keyword
+        then
+            reader.State <- ParseState.addDiagnosticAt DiagnosticCode.KeywordAfterOpenConstruct keyword reader.State
 
         preturn () reader
 

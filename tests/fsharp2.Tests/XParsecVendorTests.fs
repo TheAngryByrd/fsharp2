@@ -438,6 +438,18 @@ let y = "
                         "let y = [ try g (a\n        ) with _ -> z ]\n",
                         DiagnosticCode.TokenAfterUndentedClose,
                         29
+                        // Compatibility Oracle: FS0058 at (4,5) for both texts.
+                        "module N =\n    let x =\n      g (\n    1)\n",
+                        DiagnosticCode.UndentedBlockStart,
+                        37
+                        "module N =\n    do\n      g (\n    1)\n",
+                        DiagnosticCode.UndentedBlockStart,
+                        32
+                        // Compatibility Oracle: FS0058 at (3,1) for both texts.
+                        "let rec y = 1\nand w = g (\n1)\n", DiagnosticCode.UndentedBlockStart, 26
+                        "let rec y = 1\nand w = begin\nxs[0] end\n",
+                        DiagnosticCode.UndentedBlockStart,
+                        28
                     ] do
                     match parseVendored source with
                     | _, [ diagnostic ] ->
@@ -457,6 +469,12 @@ let y = "
                         "let f () =\n    xs[0][\n    1]\n"
                         "let f () =\n    g (a\n)\n"
                         "let f () =\n    (g (a\n) + 1)\n"
+                        "module N =\n    let x =\n      g (\n     1)\n"
+                        "module N =\n    do\n      g (\n     1)\n"
+                        "module N =\n    module O =\n        let x = g (\n         1)\n"
+                        "do\n  g (\n1)\n"
+                        "let rec y = 1\nand w = g (\n 1)\n"
+                        "let rec y = 1\nand w = begin\n xs[0] end\n"
                     ] do
                     let result, diagnostics = parseVendored accepted
                     Expect.isOk result accepted
@@ -606,6 +624,252 @@ let y = "
                         failtest
                             $"{source} must give a tree and no diagnostic, not {diagnostics.Length}"
 
+            testCase
+                "the loop end and the bar rule skip the tokens of an inactive conditional branch"
+            <| fun () ->
+                // FCS 43.10.101: While(...)@2:5-7:12 and ForIn(...)@2:5-7:12, so each loop ends after the active closer.
+                for source in
+                    [
+                        "let f () =\n    while c do\n        g (a\n#if NEVER\n)\n#else\n          )\n#endif\n"
+                        "let f () =\n    for v in xs do\n        g [a\n#if NEVER\n]\n#endif\n          ]\n"
+                    ] do
+                    match parseVendored source with
+                    | Ok(FSharpAst.ImplementationFile(ImplementationFile.AnonymousModule elements)),
+                      [] ->
+                        match elements[0] with
+                        | ModuleElem.FunctionOrValue(ModuleFunctionOrValueDefn.Let(
+                            bindings = bindings)) ->
+                            match bindings[0].expr with
+                            | Expr.While(doneToken = doneTok)
+                            | Expr.ForIn(doneToken = doneTok) ->
+                                Expect.isGreaterThan
+                                    doneTok.StartIndex
+                                    (source.LastIndexOfAny [|
+                                        ')'
+                                        ']'
+                                    |])
+                                    $"{source}: the loop must end after the active closer"
+                            | other -> failtest $"{source} must give a loop, not {other}"
+                        | other -> failtest $"{source} must start with a let, not {other}"
+                    | _, diagnostics ->
+                        failtest
+                            $"{source} must give a tree and no diagnostic, not {diagnostics.Length}"
+
+                // Compatibility Oracle: FS0010 at (4,20) and (5,20).
+                for source, offset in
+                    [
+                        "let y = match x with A -> [ 1\n#if NEVER\n#endif\n            .. 3 ] | B -> z\n",
+                        66
+                        "let y = match x with A -> [ 1\n#if NEVER\n; 2\n#endif\n            .. 3 ] | B -> z\n",
+                        70
+                    ] do
+                    match parseVendored source with
+                    | _, [ diagnostic ] ->
+                        Expect.equal diagnostic.Code DiagnosticCode.BarAfterUndentedRule source
+                        Expect.equal diagnostic.Token.StartIndex offset source
+                    | _, other -> failtest $"{source} must give one diagnostic, not {other.Length}"
+
+            testCase "a from-end index parses in an index or a range, as in FCS"
+            <| fun () ->
+                // The Compatibility Oracle accepts each text. FCS 43.10.101 gives SynExpr.IndexFromEnd for each `^`.
+                for source in
+                    [
+                        "let y = xs[1..^1]\n"
+                        "let y = [1..^2]\n"
+                        "let y = xs[^1]\n"
+                        "let y = xs[0, ^1]\n"
+                    ] do
+                    match parseVendored source with
+                    | Ok(FSharpAst.ImplementationFile(ImplementationFile.AnonymousModule elements)),
+                      [] ->
+                        let tree = sprintf "%A" elements[0]
+
+                        Expect.stringContains
+                            tree
+                            "PrefixApp"
+                            $"{source} must give a prefix application"
+
+                        Expect.stringContains
+                            tree
+                            "OpConcatenate"
+                            $"{source} must keep the '^' token"
+                    | _, diagnostics ->
+                        failtest
+                            $"{source} must give a tree and no diagnostic, not {diagnostics.Length}"
+
+            testCase "a lambda pattern or arrow that is not right of the fun column gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 at (2,9) for each text.
+                for source, offset in
+                    [
+                        "let y = g (fun\n        v -> v)\n", 23
+                        "let y = g (fun v\n        -> v)\n", 25
+                        "let f = fun x\n        y -> x\n", 22
+                    ] do
+                    match parseVendored source with
+                    | Ok _, [ diagnostic ] ->
+                        Expect.equal diagnostic.Code DiagnosticCode.UndentedLambdaHead source
+                        Expect.equal diagnostic.Token.StartIndex offset source
+
+                        Expect.equal
+                            (DiagnosticCode.fsharp2Code diagnostic.Code)
+                            (ValueSome "FSC2P1001")
+                            source
+                    | _, other ->
+                        failtest $"{source} must give a tree and one diagnostic, not {other.Length}"
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "let y = g (fun\n            v -> v)\n"
+                        "let y = g (fun v ->\n        v)\n"
+                        "let f = fun x\n          y -> x\n"
+                        "let f =\n    xs |> List.map (fun (a,\n                         b) -> a)\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
+            testCase
+                "an expression that ends a loop body and is not at the block column gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 at (2,13), (3,7), and (2,13).
+                for source, offset in
+                    [
+                        "let y = g (for x in xs do f x;\n            z)\n", 43
+                        "let f () =\n    while c do f x\n      z\n", 36
+                        "let y = g (for x in xs do f\n            x; z)\n", 40
+                    ] do
+                    match parseVendored source with
+                    | Ok _, [ diagnostic ] ->
+                        Expect.equal diagnostic.Code DiagnosticCode.UnalignedAfterLoop source
+                        Expect.equal diagnostic.Token.StartIndex offset source
+
+                        Expect.equal
+                            (DiagnosticCode.fsharp2Code diagnostic.Code)
+                            (ValueSome "FSC2P1001")
+                            source
+                    | _, other ->
+                        failtest $"{source} must give a tree and one diagnostic, not {other.Length}"
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "let y = g (for x in xs do f x\n           z)\n"
+                        "let f () =\n    for x in xs do f x\n    z\n"
+                        "let f () =\n    for x in xs do f x\n      |> ignore\n"
+                        "let r = { A = for x in xs do f x\n              B = 1 }\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
+            testCase "a module element on the line of a let or do element gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 at (1,11), (1,11), (2,7), and (2,15).
+                for source, offset in
+                    [
+                        "let y = g try a finally b\n", 10
+                        "let x = 1 let y = 2\n", 10
+                        "let f () =\n    g match x with _ -> 1\n", 17
+                        "module N =\n    let x = 1 let y = 2\n", 25
+                    ] do
+                    match parseVendored source with
+                    | Ok _, [ diagnostic ] ->
+                        Expect.equal diagnostic.Code DiagnosticCode.SameLineModuleElement source
+                        Expect.equal diagnostic.Token.StartIndex offset source
+
+                        Expect.equal
+                            (DiagnosticCode.fsharp2Code diagnostic.Code)
+                            (ValueSome "FSC2P1001")
+                            source
+                    | _, other ->
+                        failtest $"{source} must give a tree and one diagnostic, not {other.Length}"
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "let x = 1 in x\n"
+                        "open System open System.IO\n"
+                        "type A = int let x = 1\n"
+                        "module N = let x = 1\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
+            testCase
+                "a do, rule arrow, with, or finally after an open construct on the same line gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 at (1,37), (1,40), (1,31), (1,41), and (1,48).
+                for source, code, offset in
+                    [
+                        "let y = for x in if c then a else b do f x\n",
+                        DiagnosticCode.KeywordAfterOpenConstruct,
+                        36
+                        "let y = match x with A when fun v -> v -> a | B -> b\n",
+                        DiagnosticCode.KeywordAfterOpenConstruct,
+                        39
+                        "let y = while try a finally b do f 0\n",
+                        DiagnosticCode.KeywordAfterOpenConstruct,
+                        30
+                        "let y = try fun () -> try a with _ -> b with _ -> c\n",
+                        DiagnosticCode.SameLineNestedTry,
+                        40
+                        "let y = try if c then a else try b with _ -> d with _ -> e\n",
+                        DiagnosticCode.SameLineNestedTry,
+                        47
+                    ] do
+                    match parseVendored source with
+                    | Ok _, [ diagnostic ] ->
+                        Expect.equal diagnostic.Code code source
+                        Expect.equal diagnostic.Token.StartIndex offset source
+
+                        Expect.equal
+                            (DiagnosticCode.fsharp2Code diagnostic.Code)
+                            (ValueSome "FSC2P1001")
+                            source
+                    | _, other ->
+                        failtest $"{source} must give a tree and one diagnostic, not {other.Length}"
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "let y = for x in (try a finally b) do f x\n"
+                        "let y = match x with A when g (fun v -> v) -> a | B -> b\n"
+                        "let y = try if c then try a finally b else z with _ -> z\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
+            testCase
+                "an expression after a loop in a record or computation expression gives FSC2P1001 off the field column"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 at (2,2), (2,16), and (2,17).
+                for source, offset in
+                    [
+                        "let w = { X = for x in xs do f x;\n Y = z }\n", 35
+                        "let w = { X = for x in xs do f x\n               Y = z }\n", 48
+                        "let w = seq { for x in xs do f x\n                yield 2 }\n", 49
+                    ] do
+                    match parseVendored source with
+                    | _, diagnostic :: _ ->
+                        Expect.equal diagnostic.Code DiagnosticCode.UnalignedAfterLoop source
+                        Expect.equal diagnostic.Token.StartIndex offset source
+                    | _, [] -> failtest $"{source} must give a diagnostic"
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "let w = { X = for x in xs do f x;\n          Y = z }\n"
+                        "let w = { X = for x in xs do f x\n              Y = z }\n"
+                        "let w = seq { for x in xs do f x\n              yield 2 }\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
             testCase "a let body that is not at the let column gives FSC2P1001"
             <| fun () ->
                 // Compatibility Oracle: error FS0010: Unexpected identifier in expression. Expected 'in' or other token, at (3,5).
@@ -646,15 +910,31 @@ let y = "
             testCase "a match clause token left of the clause column gives a diagnostic"
             <| fun () ->
                 // Compatibility Oracle: FS0010 at (2,9), (2,13), (2,9), and (2,10) with (2,15).
-                for rejected in
+                // MissingRule points at the start of the failed rule. The first text has no diagnostic at the Oracle position.
+                for rejected, firstOffset, oracleOffset in
                     [
-                        "let y = g (match x with A -> a | B ->\n        b)\n"
-                        "let y = g (try a with _\n            -> b)\n"
-                        "let y = g (match x with A -> a |\n        B -> b)\n"
-                        "let y = match x with A when c\n         && d -> 0 | _ -> 1\n"
+                        "let y = g (match x with A -> a | B ->\n        b)\n", 33, ValueNone
+                        "let y = g (try a with _\n            -> b)\n", 22, ValueSome 36
+                        "let y = g (match x with A -> a |\n        B -> b)\n", 41, ValueSome 41
+                        "let y = match x with A when c\n         && d -> 0 | _ -> 1\n",
+                        21,
+                        ValueSome 44
                     ] do
-                    let _, diagnostics = parseVendored rejected
-                    Expect.isNonEmpty diagnostics rejected
+                    match parseVendored rejected with
+                    | _, first :: _ & diagnostics ->
+                        Expect.equal first.Code DiagnosticCode.MissingRule rejected
+                        Expect.equal first.Token.StartIndex firstOffset rejected
+
+                        match oracleOffset with
+                        | ValueSome offset ->
+                            Expect.isTrue
+                                (diagnostics
+                                 |> List.exists (fun diagnostic ->
+                                     diagnostic.Token.StartIndex = offset
+                                 ))
+                                $"{rejected} must give a diagnostic at offset {offset}"
+                        | ValueNone -> ()
+                    | _, [] -> failtest $"{rejected} must give a diagnostic"
 
                 // The Compatibility Oracle reports no diagnostic for these texts.
                 for accepted in

@@ -854,6 +854,10 @@ module Rule =
             let! guard = opt PatternGuard.parse
             let! arrow = pArrowRight
 
+            match guard with
+            | ValueSome(PatternGuard(expr = condition)) -> do! reportKeywordAfterOpenConstruct condition arrow
+            | ValueNone -> ()
+
             // Grammar: patternAndGuard RARROW typedSeqExprBlock
             let! expr =
                 refTypedSeqExprBlock.Parser
@@ -955,14 +959,11 @@ module Rules =
                             | Token.KWRArrayBracket
                             | Token.KWRBrace
                             | Token.KWRBraceBar
-                            | Token.KWEnd -> depth <- depth - 1
+                            | Token.KWEnd when not (isSkippedByScan state j) -> depth <- depth - 1
                             | _ -> ()
 
                             match kind with
-                            | Token.IfDirective
-                            | Token.ElseDirective
-                            | Token.EndIfDirective -> stop <- true
-                            | _ when ParseState.isTriviaToken state token -> ()
+                            | _ when isSkippedByScan state j -> ()
                             | _ when bodyColumn.IsNone -> bodyColumn <- ValueSome(ParseState.getIndent state j)
                             | _ when
                                 depth <= 0
@@ -982,7 +983,7 @@ module Rules =
                             | Token.KWLArrayBracket
                             | Token.KWLBrace
                             | Token.KWLBraceBar
-                            | Token.KWBegin when not (ParseState.isTriviaToken state token) -> depth <- depth + 1
+                            | Token.KWBegin when not (isSkippedByScan state j) -> depth <- depth + 1
                             | _ -> ()
 
                             j <- j + 1<token>

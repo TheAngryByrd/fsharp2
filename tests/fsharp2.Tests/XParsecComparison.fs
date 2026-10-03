@@ -413,6 +413,7 @@ module XParsecComparison =
                     match this.TokenText op with
                     | "&"
                     | "&&" -> $"?AddressOf@{range ()}"
+                    | "^" -> $"?IndexFromEnd@{range ()}"
                     | "+" when
                         (match operand, this.TokenSpan op, this.ExprSpan operand with
                          | Expr.Const(Constant.Literal _), ValueSome opSpan, ValueSome operandSpan ->

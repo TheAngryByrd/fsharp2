@@ -312,6 +312,14 @@ type DiagnosticCode =
     | UndentedBlockStart
     /// A token follows, on the same line, a closing delimiter that starts its line left of the enclosing block.
     | TokenAfterUndentedClose
+    /// A lambda pattern or the `->` after it is not right of the `fun` column.
+    | UndentedLambdaHead
+    /// An expression on a later line ends a loop body and is not at the column of the block that holds the loop.
+    | UnalignedAfterLoop
+    /// A module element starts on the line of a `let` or `do` element, without `;` or `;;` before it.
+    | SameLineModuleElement
+    /// A `do` or rule `->` follows, on the same line, an expression that ends in an open construct.
+    | KeywordAfterOpenConstruct
 
 [<RequireQualifiedAccess>]
 type Syntax =
@@ -424,6 +432,9 @@ and [<ReferenceEquality; NoComparison>] ParseState =
         /// tracing — each call site is a single null check via `ifTrace`. Assigned
         /// via `createWithTracing`. Shared across immutable record copies.
         Trace: TraceCallback
+        /// For each token, whether the parser skips it at a conditional directive. `null` until first use.
+        /// Shared across immutable record copies.
+        InactiveTokens: bool[] ref
     }
 
 /// The concrete Readable slice type the F# parser reads from.
@@ -504,6 +515,10 @@ module DiagnosticCode =
         | DiagnosticCode.MisalignedLetBody -> "MisalignedLetBody"
         | DiagnosticCode.UndentedBlockStart -> "UndentedBlockStart"
         | DiagnosticCode.TokenAfterUndentedClose -> "TokenAfterUndentedClose"
+        | DiagnosticCode.UndentedLambdaHead -> "UndentedLambdaHead"
+        | DiagnosticCode.UnalignedAfterLoop -> "UnalignedAfterLoop"
+        | DiagnosticCode.SameLineModuleElement -> "SameLineModuleElement"
+        | DiagnosticCode.KeywordAfterOpenConstruct -> "KeywordAfterOpenConstruct"
 
     /// The English it renders.
     let message (c: DiagnosticCode) : string =
@@ -534,6 +549,12 @@ module DiagnosticCode =
             "The first token after an opening delimiter must not be left of the enclosing offside line"
         | DiagnosticCode.TokenAfterUndentedClose ->
             "A closing delimiter left of the enclosing block must end its line"
+        | DiagnosticCode.UndentedLambdaHead -> "A lambda pattern and its '->' must be right of the 'fun' column"
+        | DiagnosticCode.UnalignedAfterLoop ->
+            "An expression after a loop must start at the column of the block that holds the loop"
+        | DiagnosticCode.SameLineModuleElement -> "A module element after a 'let' or 'do' element must start on a new line"
+        | DiagnosticCode.KeywordAfterOpenConstruct ->
+            "A 'do' or '->' cannot follow an open 'fun', 'function', 'match', 'try', 'if', 'while', or 'for' on the same line"
         | DiagnosticCode.MisalignedLetBody ->
             "The body of a 'let' without 'in' must start at the column of the 'let'"
         | DiagnosticCode.MisalignedModuleElement ->
@@ -564,6 +585,10 @@ module DiagnosticCode =
         | DiagnosticCode.MisalignedLetBody
         | DiagnosticCode.UndentedBlockStart
         | DiagnosticCode.TokenAfterUndentedClose
+        | DiagnosticCode.UndentedLambdaHead
+        | DiagnosticCode.UnalignedAfterLoop
+        | DiagnosticCode.SameLineModuleElement
+        | DiagnosticCode.KeywordAfterOpenConstruct
         | DiagnosticCode.TyparInConstant
         | DiagnosticCode.MissingExpression
         | DiagnosticCode.MissingPattern
@@ -591,7 +616,11 @@ module DiagnosticCode =
         | DiagnosticCode.MisalignedModuleElement
         | DiagnosticCode.MisalignedLetBody
         | DiagnosticCode.UndentedBlockStart
-        | DiagnosticCode.TokenAfterUndentedClose -> ValueSome "FSC2P1001"
+        | DiagnosticCode.TokenAfterUndentedClose
+        | DiagnosticCode.UndentedLambdaHead
+        | DiagnosticCode.UnalignedAfterLoop
+        | DiagnosticCode.SameLineModuleElement
+        | DiagnosticCode.KeywordAfterOpenConstruct -> ValueSome "FSC2P1001"
         | _ -> ValueNone
 
     /// What the secondary label on the OPENING delimiter says. Both delimiter diagnostics
@@ -650,6 +679,7 @@ module ParseState =
             SplitPowerMinus = false
             WarnDirectives = []
             Trace = trace
+            InactiveTokens = ref null
         }
 
     let create (input: ParseInput) =
@@ -666,6 +696,7 @@ module ParseState =
             SplitPowerMinus = false
             WarnDirectives = []
             Trace = null
+            InactiveTokens = ref null
         }
 
     let setIndentOn (state: ParseState) =
