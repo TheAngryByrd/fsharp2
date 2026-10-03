@@ -815,10 +815,73 @@ module Expr =
                     else
                         pDoneVirt reader
 
-        // FCS ends a loop at a token that ends its body. The Compatibility Oracle reports FS0010 at such a token
-        // on a later line when it starts an expression and is right of the column of the block that holds the loop.
-        // The vendored parser has no frame for a record field value, so only a block that starts at the loop or on an earlier line,
+        // FCS ends a loop or an open construct at a token that ends its last block. The Compatibility Oracle reports FS0010 at
+        // such a token on a later line when it starts an expression and is right of the column of the block that holds the construct.
+        // The vendored parser has no frame for a record field value, so only a block that starts at the construct or on an earlier line,
         // or the field block of a record, counts.
+        let private reportUnalignedAfterBlock
+            (code: DiagnosticCode)
+            (constructIndex: int<token>)
+            (bodyStart: int<token>)
+            (reader: Reader<PositionedToken, ParseState, _>)
+            =
+            let state = reader.State
+            let tokens = state.Lexed.Tokens
+            let mutable bodyIndex = bodyStart
+            let mutable next = int reader.Index * 1<token>
+
+            while bodyIndex < tokens.LengthM
+                  && isSkippedByScan state bodyIndex do
+                bodyIndex <- bodyIndex + 1<token>
+
+            while next < tokens.LengthM
+                  && isSkippedByScan state next do
+                next <- next + 1<token>
+
+            let holdsConstruct (blockStart: PositionedToken) =
+                let mutable i = constructIndex
+                let mutable earlierLine = false
+
+                while not earlierLine
+                      && i > 0<token>
+                      && tokens[i].StartIndex > blockStart.StartIndex do
+                    i <- i - 1<token>
+                    earlierLine <- tokens[i].TokenWithoutCommentFlags = Token.Newline
+
+                earlierLine || blockStart.StartIndex = tokens[constructIndex].StartIndex
+
+            if bodyIndex < next && next < tokens.LengthM then
+                let kind = tokens[next].TokenWithoutCommentFlags
+                let column = ParseState.getIndent state next
+
+                // In the field block of a record, the token can also start a field, or continue a field value at the construct column.
+                let aligned blockColumn (deeper: Offside list) =
+                    match deeper with
+                    | { Context = OffsideContext.Brace | OffsideContext.BraceBar } :: _ ->
+                        column = blockColumn
+                        || column = ParseState.getIndent state constructIndex
+                    | _ -> column <= blockColumn
+
+                match state.Context with
+                | { Context = OffsideContext.SeqBlock; Indent = blockColumn; Token = blockStart } :: deeper when
+                    (holdsConstruct blockStart
+                     || (match deeper with
+                         | { Context = OffsideContext.Brace | OffsideContext.BraceBar } :: _ -> true
+                         | _ -> false))
+                    && TokenInfo.canStartExpression kind
+                    && not (TokenInfo.isOperator kind)
+                    && not (aligned blockColumn deeper)
+                    && column < ParseState.getIndent state bodyIndex
+                    && ParseState.findLineNumber state bodyIndex < ParseState.findLineNumber state next
+                    && not (followsTokenOnSameLine state (syntaxToken tokens[next] (int next)))
+                    && not (
+                        state.Diagnostics
+                        |> List.exists (fun diagnostic -> diagnostic.Token.StartIndex = tokens[next].StartIndex)
+                    )
+                    ->
+                    reader.State <- ParseState.addDiagnosticAt code (syntaxToken tokens[next] (int next)) state
+                | _ -> ()
+
         let reportUnalignedAfterLoop
             (loopTok: SyntaxToken)
             (bodyStart: int64)
@@ -827,65 +890,60 @@ module Expr =
             =
             match loopTok.Index, doneTok.Index with
             | TokenIndex.Regular loopIndex, TokenIndex.Virtual ->
-                let state = reader.State
-                let tokens = state.Lexed.Tokens
-                let mutable bodyIndex = int bodyStart * 1<token>
-                let mutable next = int reader.Index * 1<token>
-
-                while bodyIndex < tokens.LengthM
-                      && isSkippedByScan state bodyIndex do
-                    bodyIndex <- bodyIndex + 1<token>
-
-                while next < tokens.LengthM
-                      && isSkippedByScan state next do
-                    next <- next + 1<token>
-
-                let holdsLoop (blockStart: PositionedToken) =
-                    let mutable i = loopIndex
-                    let mutable earlierLine = false
-
-                    while not earlierLine
-                          && i > 0<token>
-                          && tokens[i].StartIndex > blockStart.StartIndex do
-                        i <- i - 1<token>
-                        earlierLine <- tokens[i].TokenWithoutCommentFlags = Token.Newline
-
-                    earlierLine || blockStart.StartIndex = tokens[loopIndex].StartIndex
-
-                if bodyIndex < next && next < tokens.LengthM then
-                    let kind = tokens[next].TokenWithoutCommentFlags
-                    let column = ParseState.getIndent state next
-
-                    // In the field block of a record, the token can also start a field, or continue a field value at the loop column.
-                    let aligned blockColumn (deeper: Offside list) =
-                        match deeper with
-                        | { Context = OffsideContext.Brace | OffsideContext.BraceBar } :: _ ->
-                            column = blockColumn
-                            || column = ParseState.getIndent state loopIndex
-                        | _ -> column <= blockColumn
-
-                    match state.Context with
-                    | { Context = OffsideContext.SeqBlock; Indent = blockColumn; Token = blockStart } :: deeper when
-                        (holdsLoop blockStart
-                         || (match deeper with
-                             | { Context = OffsideContext.Brace | OffsideContext.BraceBar } :: _ -> true
-                             | _ -> false))
-                        && TokenInfo.canStartExpression kind
-                        && not (TokenInfo.isOperator kind)
-                        && not (aligned blockColumn deeper)
-                        && column < ParseState.getIndent state bodyIndex
-                        && ParseState.findLineNumber state bodyIndex < ParseState.findLineNumber state next
-                        && not (followsTokenOnSameLine state (syntaxToken tokens[next] (int next)))
-                        ->
-                        reader.State <-
-                            ParseState.addDiagnosticAt
-                                DiagnosticCode.UnalignedAfterLoop
-                                (syntaxToken tokens[next] (int next))
-                                state
-                    | _ -> ()
+                reportUnalignedAfterBlock DiagnosticCode.UnalignedAfterLoop loopIndex (int bodyStart * 1<token>) reader
             | _ -> ()
 
             preturn () reader
+
+        // The last block of an open construct starts after its last `->`, `then`, `else`, or `finally` outside delimiters.
+        let reportUnalignedAfterOpenConstruct
+            (body: Parser<ExprAux, PositionedToken, ParseState, _>)
+            (reader: Reader<PositionedToken, ParseState, _>)
+            =
+            let start = int reader.Index * 1<token>
+
+            match body reader with
+            | Ok _ as result ->
+                let state = reader.State
+                let tokens = state.Lexed.Tokens
+                let mutable constructIndex = start
+
+                while constructIndex < tokens.LengthM
+                      && isSkippedByScan state constructIndex do
+                    constructIndex <- constructIndex + 1<token>
+
+                let mutable i = int reader.Index * 1<token> - 1<token>
+                let mutable depth = 0
+                let mutable bodyStart = -1<token>
+
+                while bodyStart < 0<token> && i > constructIndex do
+                    if not (isSkippedByScan state i) then
+                        match tokens[i].TokenWithoutCommentFlags with
+                        | Token.KWRParen
+                        | Token.KWRBracket
+                        | Token.KWRArrayBracket
+                        | Token.KWRBrace
+                        | Token.KWRBraceBar
+                        | Token.KWEnd -> depth <- depth + 1
+                        | Token.KWLParen
+                        | Token.KWLBracket
+                        | Token.KWLArrayBracket
+                        | Token.KWLBrace
+                        | Token.KWLBraceBar
+                        | Token.KWBegin -> depth <- depth - 1
+                        | Token.OpArrowRight
+                        | Token.KWThen
+                        | Token.KWElse
+                        | Token.KWFinally when depth = 0 -> bodyStart <- i + 1<token>
+                        | _ -> ()
+
+                    i <- i - 1<token>
+
+                if bodyStart > 0<token> then
+                    reportUnalignedAfterBlock DiagnosticCode.UnalignedAfterOpenConstruct constructIndex bodyStart reader
+
+                result
+            | error -> error
 
         let pIfExpr =
             parser {
@@ -2153,23 +2211,23 @@ module Expr =
             [|
                 // CE / control-flow keyword prefixes — body parser consumes the keyword
                 struct (Token.KWLet, kwPrefixNoConsume KWBody.pLetOrUseBody Complete.keyword)
-                struct (Token.KWMatch, kwPrefixNoConsume KWBody.pMatchExpr Complete.forE)
-                struct (Token.KWIf, kwPrefixNoConsume KWBody.pIfExpr Complete.forE)
-                struct (Token.KWFun, kwPrefixNoConsume KWBody.pFunExpr Complete.forE)
+                struct (Token.KWMatch, kwPrefixNoConsume (KWBody.reportUnalignedAfterOpenConstruct KWBody.pMatchExpr) Complete.forE)
+                struct (Token.KWIf, kwPrefixNoConsume (KWBody.reportUnalignedAfterOpenConstruct KWBody.pIfExpr) Complete.forE)
+                struct (Token.KWFun, kwPrefixNoConsume (KWBody.reportUnalignedAfterOpenConstruct KWBody.pFunExpr) Complete.forE)
                 struct (Token.KWDo, kwPrefixConsume KWBody.pYieldReturnDoBody Complete.keyword)
                 struct (Token.KWFor, kwPrefixNoConsume KWBody.pForExpr Complete.forE)
                 struct (Token.KWYieldBang, kwPrefixConsume KWBody.pYieldReturnDoBody Complete.keyword)
                 struct (Token.KWYield, kwPrefixConsume KWBody.pYieldReturnDoBody Complete.keyword)
                 struct (Token.KWReturn, kwPrefixConsume KWBody.pYieldReturnDoBody Complete.keyword)
-                struct (Token.KWTry, kwPrefixNoConsume KWBody.pTryExpr Complete.forE)
-                struct (Token.KWFunction, kwPrefixNoConsume KWBody.pFunctionExpr Complete.forE)
+                struct (Token.KWTry, kwPrefixNoConsume (KWBody.reportUnalignedAfterOpenConstruct KWBody.pTryExpr) Complete.forE)
+                struct (Token.KWFunction, kwPrefixNoConsume (KWBody.reportUnalignedAfterOpenConstruct KWBody.pFunctionExpr) Complete.forE)
                 struct (Token.KWUse, kwPrefixNoConsume KWBody.pLetOrUseBody Complete.keyword)
                 struct (Token.KWLetBang, kwPrefixNoConsume KWBody.pLetOrUseBody Complete.keyword)
                 struct (Token.KWDoBang, kwPrefixConsume KWBody.pYieldReturnDoBody Complete.keyword)
                 struct (Token.KWWhile, kwPrefixNoConsume KWBody.pWhileExpr Complete.forE)
                 struct (Token.KWWhileBang, kwPrefixNoConsume KWBody.pWhileExpr Complete.forE)
                 struct (Token.KWReturnBang, kwPrefixConsume KWBody.pYieldReturnDoBody Complete.keyword)
-                struct (Token.KWMatchBang, kwPrefixNoConsume KWBody.pMatchExpr Complete.forE)
+                struct (Token.KWMatchBang, kwPrefixNoConsume (KWBody.reportUnalignedAfterOpenConstruct KWBody.pMatchExpr) Complete.forE)
                 struct (Token.KWUseBang, kwPrefixNoConsume KWBody.pLetOrUseBody Complete.keyword)
 
                 // Function-precedence keyword prefixes — body is a full typedSeqExprBlock
