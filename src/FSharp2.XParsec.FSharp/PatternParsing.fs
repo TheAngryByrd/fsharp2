@@ -995,11 +995,67 @@ module Rules =
 
         preturn () reader
 
+    // FCS keeps the block of the first rule body on a line open across the later rules on that line, so a later
+    // rule body that starts on the next line must be right of that block. The Compatibility Oracle reports FS0010
+    // at a body token left of the block, and at the `->` for a body token at the block column.
+    let private reportUndentedLaterRuleBody
+        (rules: ImmutableArray<Rule<SyntaxToken>>)
+        (reader: Reader<PositionedToken, ParseState, _>)
+        =
+        let state = reader.State
+        let tokens = state.Lexed.Tokens
+        let mutable firstBodyOnLine = ValueNone
+        let mutable reported = false
+        let mutable i = 0
+
+        while not reported && i < rules.Length do
+            match rules[i] with
+            | Rule.Rule(arrow = arrow) ->
+                match arrow.Index with
+                | TokenIndex.Regular arrowIndex ->
+                    let mutable body = arrowIndex + 1<token>
+
+                    while body < tokens.LengthM
+                          && isSkippedByScan state body do
+                        body <- body + 1<token>
+
+                    if body < tokens.LengthM then
+                        let arrowLine = ParseState.findLineNumber state arrowIndex
+                        let bodyLine = ParseState.findLineNumber state body
+                        let bodyColumn = ParseState.getIndent state body
+
+                        match firstBodyOnLine with
+                        | ValueSome(struct (line, column)) when line = arrowLine && bodyLine > arrowLine ->
+                            if bodyColumn < column then
+                                reader.State <-
+                                    ParseState.addDiagnosticAt
+                                        DiagnosticCode.UndentedLaterRuleBody
+                                        (syntaxToken tokens[body] (int body))
+                                        reader.State
+
+                                reported <- true
+                            elif bodyColumn = column then
+                                reader.State <-
+                                    ParseState.addDiagnosticAt DiagnosticCode.UndentedLaterRuleBody arrow reader.State
+
+                                reported <- true
+                        | ValueSome(struct (line, _)) when line = arrowLine -> ()
+                        | _ ->
+                            if bodyLine = arrowLine then
+                                firstBodyOnLine <- ValueSome(struct (arrowLine, bodyColumn))
+                | TokenIndex.Virtual -> ()
+            | _ -> ()
+
+            i <- i + 1
+
+        preturn () reader
+
     let parse: FSParser<Rules<SyntaxToken>> =
         parser {
             let! firstBar = opt pBar
             let! rules, bars = sepBy1 pRule pBar
             do! reportSameLineBars rules bars
             do! reportBarAfterUndentedRule firstBar rules bars
+            do! reportUndentedLaterRuleBody rules
             return Rules(firstBar, rules, bars)
         }

@@ -321,6 +321,8 @@ type DiagnosticCode =
     /// A token that ends the last block of a `fun`, `function`, `match`, `try`, or `if` on a later line, right of the
     /// column of the block that holds the construct, where FCS reports FS0010.
     | UnalignedAfterOpenConstruct
+    /// A later rule body on the next line that is not right of the first rule body on the line of its `->`.
+    | UndentedLaterRuleBody
     /// A module element starts on the line of a `let` or `do` element, without `;` or `;;` before it.
     | SameLineModuleElement
     /// A `do` or rule `->` follows, on the same line, an expression that ends in an open construct.
@@ -524,6 +526,7 @@ module DiagnosticCode =
         | DiagnosticCode.UndentedLambdaHead -> "UndentedLambdaHead"
         | DiagnosticCode.UnalignedAfterLoop -> "UnalignedAfterLoop"
         | DiagnosticCode.UnalignedAfterOpenConstruct -> "UnalignedAfterOpenConstruct"
+        | DiagnosticCode.UndentedLaterRuleBody -> "UndentedLaterRuleBody"
         | DiagnosticCode.SameLineModuleElement -> "SameLineModuleElement"
         | DiagnosticCode.KeywordAfterOpenConstruct -> "KeywordAfterOpenConstruct"
 
@@ -562,6 +565,8 @@ module DiagnosticCode =
             "An expression after a loop must start at the column of the block that holds the loop"
         | DiagnosticCode.UnalignedAfterOpenConstruct ->
             "An expression after a 'fun', 'function', 'match', 'try', or 'if' must start at the column of the block that holds it"
+        | DiagnosticCode.UndentedLaterRuleBody ->
+            "A rule body on the line after its '->' must be right of the first rule body on the line of the '->'"
         | DiagnosticCode.SameLineModuleElement -> "A module element after a 'let' or 'do' element must start on a new line"
         | DiagnosticCode.KeywordAfterOpenConstruct ->
             "A 'do' or '->' cannot follow an open 'fun', 'function', 'match', 'try', 'if', 'while', or 'for' on the same line"
@@ -599,6 +604,7 @@ module DiagnosticCode =
         | DiagnosticCode.UndentedLambdaHead
         | DiagnosticCode.UnalignedAfterLoop
         | DiagnosticCode.UnalignedAfterOpenConstruct
+        | DiagnosticCode.UndentedLaterRuleBody
         | DiagnosticCode.SameLineModuleElement
         | DiagnosticCode.KeywordAfterOpenConstruct
         | DiagnosticCode.TyparInConstant
@@ -633,6 +639,7 @@ module DiagnosticCode =
         | DiagnosticCode.UndentedLambdaHead
         | DiagnosticCode.UnalignedAfterLoop
         | DiagnosticCode.UnalignedAfterOpenConstruct
+        | DiagnosticCode.UndentedLaterRuleBody
         | DiagnosticCode.SameLineModuleElement
         | DiagnosticCode.KeywordAfterOpenConstruct -> ValueSome "FSC2P1001"
         | _ -> ValueNone

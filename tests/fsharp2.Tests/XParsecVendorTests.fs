@@ -1025,6 +1025,54 @@ let y = "
                     Expect.isOk result accepted
                     Expect.isEmpty diagnostics accepted
 
+            testCase
+                "a later rule body that is not right of the first rule body on its line gives FSC2P1001"
+            <| fun () ->
+                let below spaces =
+                    "\n"
+                    + String.replicate spaces " "
+                    + "z\n"
+
+                // Compatibility Oracle: FS0010 at (2,20), (2,26), and (4,9).
+                for source, offset in
+                    [
+                        "let y = function A -> a | B ->"
+                        + below 19,
+                        50
+                        "let y = match x with A -> a | B ->"
+                        + below 25,
+                        60
+                        "let y =\n    match x with\n    | A -> a | B ->\n        z\n", 53
+                    ] do
+                    match parseVendored source with
+                    | Ok _, [ diagnostic ] ->
+                        Expect.equal diagnostic.Code DiagnosticCode.UndentedLaterRuleBody source
+                        Expect.equal diagnostic.Token.StartIndex offset source
+
+                        Expect.equal
+                            (DiagnosticCode.fsharp2Code diagnostic.Code)
+                            (ValueSome "FSC2P1001")
+                            source
+                    | _, other ->
+                        failtest $"{source} must give a tree and one diagnostic, not {other.Length}"
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "let y = function A -> a | B ->"
+                        + below 23
+                        "let y = match x with A -> a | B ->"
+                        + below 27
+                        "let y =\n    match x with\n    | A -> a | B ->\n             z\n"
+                        "let y = match x with A -> a | B -> b | C ->"
+                        + below 28
+                        "let y = match x with A ->"
+                        + below 8
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
             testCase "a module element on the line of a let or do element gives FSC2P1001"
             <| fun () ->
                 // Compatibility Oracle: FS0010 at (1,11), (1,11), (2,7), and (2,15).
