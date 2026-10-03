@@ -424,6 +424,9 @@ and [<ReferenceEquality; NoComparison>] ParseState =
         /// tracing — each call site is a single null check via `ifTrace`. Assigned
         /// via `createWithTracing`. Shared across immutable record copies.
         Trace: TraceCallback
+        /// For each token, whether the parser skips it at a conditional directive. `null` until first use.
+        /// Shared across immutable record copies.
+        InactiveTokens: bool[] ref
     }
 
 /// The concrete Readable slice type the F# parser reads from.
@@ -650,6 +653,7 @@ module ParseState =
             SplitPowerMinus = false
             WarnDirectives = []
             Trace = trace
+            InactiveTokens = ref null
         }
 
     let create (input: ParseInput) =
@@ -666,6 +670,7 @@ module ParseState =
             SplitPowerMinus = false
             WarnDirectives = []
             Trace = null
+            InactiveTokens = ref null
         }
 
     let setIndentOn (state: ParseState) =

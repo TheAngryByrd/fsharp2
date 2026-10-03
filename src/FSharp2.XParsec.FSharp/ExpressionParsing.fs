@@ -745,14 +745,14 @@ module Expr =
                 let mutable doIndex = first - 1<token>
 
                 while doIndex > 0<token>
-                      && ParseState.isTriviaToken state tokens[doIndex] do
+                      && isSkippedByScan state doIndex do
                     doIndex <- doIndex - 1<token>
 
                 let doColumn = ParseState.getIndent state doIndex
                 let mutable bodyIndex = first
 
                 while bodyIndex < finish
-                      && ParseState.isTriviaToken state tokens[bodyIndex] do
+                      && isSkippedByScan state bodyIndex do
                     bodyIndex <- bodyIndex + 1<token>
 
                 let bodyColumn = ParseState.getIndent state bodyIndex
@@ -763,7 +763,7 @@ module Expr =
                 while closer.IsNone && i < finish do
                     let token = tokens[i]
 
-                    if not (ParseState.isTriviaToken state token) then
+                    if not (isSkippedByScan state i) then
                         match token.TokenWithoutCommentFlags with
                         | Token.KWLParen
                         | Token.KWLBracket
@@ -797,7 +797,7 @@ module Expr =
                     let mutable last = closerIndex - 1<token>
 
                     while last > first
-                          && ParseState.isTriviaToken state tokens[last] do
+                          && isSkippedByScan state last do
                         last <- last - 1<token>
 
                     let endIndex = tokens[last + 1<token>].StartIndex
@@ -806,7 +806,7 @@ module Expr =
                     let mutable last = finish - 1<token>
 
                     while last > first
-                          && ParseState.isTriviaToken state tokens[last] do
+                          && isSkippedByScan state last do
                         last <- last - 1<token>
 
                     if
@@ -2075,6 +2075,14 @@ module Expr =
                 return Prefix(tok, preturn tok, power, Complete.prefix)
             }
 
+        // `^expr` is the from-end index (pars.fsy `minusExpr: INFIX_AT_HAT_OP minusExpr`).
+        let pOpFromEndPrefix (token: SyntaxToken) =
+            parser {
+                let! tok = consumePeeked token
+                let power = BindingPower.fromLevel (int PrecedenceLevel.Power)
+                return Prefix(tok, preturn tok, power, Complete.prefix)
+            }
+
         let kwPrefixRoutes: struct (Token * (SyntaxToken -> Parser<_, _, _, _>))[] =
             [|
                 // CE / control-flow keyword prefixes — body parser consumes the keyword
@@ -2110,6 +2118,7 @@ module Expr =
                 struct (Token.OpMultiply, pOpMultiplyPrefix)
                 struct (Token.OpAmp, pOpAddressOfPrefix)
                 struct (Token.OpAmpAmp, pOpAddressOfPrefix)
+                struct (Token.OpConcatenate, pOpFromEndPrefix)
             |]
 
         // Generic prefix-operator fallback for any `CanBePrefix` operator not in the
@@ -2561,7 +2570,7 @@ module Expr =
               && index < reader.Length do
             let token = reader.Input[index]
 
-            if not (ParseState.isTriviaToken reader.State token) then
+            if not (isSkippedByScan reader.State (int index * 1<token>)) then
                 match token.TokenWithoutCommentFlags with
                 | Token.KWWith when depth = 0 -> found <- ValueSome true
                 | Token.OpEquality when depth = 0 -> found <- ValueSome false
