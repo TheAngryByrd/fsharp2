@@ -843,6 +843,33 @@ let y = "
                     Expect.isOk result accepted
                     Expect.isEmpty diagnostics accepted
 
+            testCase
+                "an expression after a loop in a record or computation expression gives FSC2P1001 off the field column"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 at (2,2), (2,16), and (2,17).
+                for source, offset in
+                    [
+                        "let w = { X = for x in xs do f x;\n Y = z }\n", 35
+                        "let w = { X = for x in xs do f x\n               Y = z }\n", 48
+                        "let w = seq { for x in xs do f x\n                yield 2 }\n", 49
+                    ] do
+                    match parseVendored source with
+                    | _, diagnostic :: _ ->
+                        Expect.equal diagnostic.Code DiagnosticCode.UnalignedAfterLoop source
+                        Expect.equal diagnostic.Token.StartIndex offset source
+                    | _, [] -> failtest $"{source} must give a diagnostic"
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "let w = { X = for x in xs do f x;\n          Y = z }\n"
+                        "let w = { X = for x in xs do f x\n              Y = z }\n"
+                        "let w = seq { for x in xs do f x\n              yield 2 }\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
             testCase "a let body that is not at the let column gives FSC2P1001"
             <| fun () ->
                 // Compatibility Oracle: error FS0010: Unexpected identifier in expression. Expected 'in' or other token, at (3,5).

@@ -820,7 +820,8 @@ module Expr =
 
         // FCS ends a loop at a token that ends its body. The Compatibility Oracle reports FS0010 at such a token
         // on a later line when it starts an expression and is right of the column of the block that holds the loop.
-        // The vendored parser has no frame for a record field value, so only a block that starts at the loop or on an earlier line counts.
+        // The vendored parser has no frame for a record field value, so only a block that starts at the loop or on an earlier line,
+        // or the field block of a record, counts.
         let reportUnalignedAfterLoop
             (loopTok: SyntaxToken)
             (bodyStart: int64)
@@ -858,12 +859,23 @@ module Expr =
                     let kind = tokens[next].TokenWithoutCommentFlags
                     let column = ParseState.getIndent state next
 
+                    // In the field block of a record, the token can also start a field, or continue a field value at the loop column.
+                    let aligned blockColumn (deeper: Offside list) =
+                        match deeper with
+                        | { Context = OffsideContext.Brace | OffsideContext.BraceBar } :: _ ->
+                            column = blockColumn
+                            || column = ParseState.getIndent state loopIndex
+                        | _ -> column <= blockColumn
+
                     match state.Context with
-                    | { Context = OffsideContext.SeqBlock; Indent = blockColumn; Token = blockStart } :: _ when
-                        holdsLoop blockStart
+                    | { Context = OffsideContext.SeqBlock; Indent = blockColumn; Token = blockStart } :: deeper when
+                        (holdsLoop blockStart
+                         || (match deeper with
+                             | { Context = OffsideContext.Brace | OffsideContext.BraceBar } :: _ -> true
+                             | _ -> false))
                         && TokenInfo.canStartExpression kind
                         && not (TokenInfo.isOperator kind)
-                        && column > blockColumn
+                        && not (aligned blockColumn deeper)
                         && column < ParseState.getIndent state bodyIndex
                         && ParseState.findLineNumber state bodyIndex < ParseState.findLineNumber state next
                         && not (followsTokenOnSameLine state (syntaxToken tokens[next] (int next)))
