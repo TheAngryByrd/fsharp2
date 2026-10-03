@@ -2161,6 +2161,62 @@ module Expr =
                 return PrefixMapped(tok, preturn tok, body, completer)
             }
 
+        // pars.fsy `minusExpr`: the operand of a prefix operator, `upcast`, or `downcast` is an application, which cannot start
+        // with a keyword construct. The Compatibility Oracle reports FS0010 at the keyword.
+        let reportConstructAfterPrefix (reader: Reader<PositionedToken, ParseState, _>) =
+            let state = reader.State
+            let tokens = state.Lexed.Tokens
+            let mutable next = int reader.Index * 1<token>
+
+            while next < tokens.LengthM
+                  && isSkippedByScan state next do
+                next <- next + 1<token>
+
+            if next < tokens.LengthM then
+                match tokens[next].TokenWithoutCommentFlags with
+                | Token.KWTry
+                | Token.KWMatch
+                | Token.KWMatchBang
+                | Token.KWIf
+                | Token.KWFun
+                | Token.KWFunction
+                | Token.KWLet
+                | Token.KWLetBang
+                | Token.KWUse
+                | Token.KWUseBang
+                | Token.KWWhile
+                | Token.KWWhileBang
+                | Token.KWFor
+                | Token.KWDo
+                | Token.KWDoBang
+                | Token.KWYield
+                | Token.KWYieldBang
+                | Token.KWReturn
+                | Token.KWReturnBang
+                | Token.KWFixed
+                | Token.KWLazy
+                | Token.KWAssert when
+                    not (
+                        state.Diagnostics
+                        |> List.exists (fun diagnostic -> diagnostic.Token.StartIndex = tokens[next].StartIndex)
+                    )
+                    ->
+                    reader.State <-
+                        ParseState.addDiagnosticAt
+                            DiagnosticCode.ConstructAfterPrefixOperator
+                            (syntaxToken tokens[next] (int next))
+                            state
+                | _ -> ()
+
+            preturn () reader
+
+        let kwCastConsume body completer (token: SyntaxToken) =
+            parser {
+                let! tok = consumePeeked token
+                do! reportConstructAfterPrefix
+                return PrefixMapped(tok, preturn tok, body, completer)
+            }
+
         // Unified body for the lazy/assert/fixed/upcast/downcast prefix-keywords.
         // All five emit Expr.PrefixApp; the keyword token is preserved on the node
         // so semantic analysis recovers the form via ExprPatterns. Hoisted so the
@@ -2195,6 +2251,7 @@ module Expr =
         let pOpAddressOfPrefix (token: SyntaxToken) =
             parser {
                 let! tok = consumePeeked token
+                do! reportConstructAfterPrefix
                 let power = BindingPower.fromLevel (int PrecedenceLevel.Prefix)
                 return Prefix(tok, preturn tok, power, Complete.prefix)
             }
@@ -2208,6 +2265,7 @@ module Expr =
         let pOpFromEndPrefix (token: SyntaxToken) =
             parser {
                 let! tok = consumePeeked token
+                do! reportConstructAfterPrefix
                 return Prefix(tok, preturn tok, minusExprPower, Complete.prefix)
             }
 
@@ -2238,8 +2296,8 @@ module Expr =
                 struct (Token.KWLazy, kwPrefixConsume pKeywordPrefixBody Complete.keyword)
                 struct (Token.KWAssert, kwPrefixConsume pKeywordPrefixBody Complete.keyword)
                 struct (Token.KWFixed, kwPrefixConsume pKeywordPrefixBody Complete.keyword)
-                struct (Token.KWUpcast, kwPrefixConsume pKeywordPrefixBody Complete.keyword)
-                struct (Token.KWDowncast, kwPrefixConsume pKeywordPrefixBody Complete.keyword)
+                struct (Token.KWUpcast, kwCastConsume pKeywordPrefixBody Complete.keyword)
+                struct (Token.KWDowncast, kwCastConsume pKeywordPrefixBody Complete.keyword)
 
                 // Operator prefixes whose shape diverges from the kwPrefix* helpers
                 struct (Token.OpRange, pOpRangePrefix)
@@ -2258,6 +2316,7 @@ module Expr =
                 match OperatorInfo.TryCreate(token.PositionedToken) with
                 | ValueSome opInfo when opInfo.CanBePrefix ->
                     let! tok = consumePeeked token
+                    do! reportConstructAfterPrefix
 
                     let power =
                         max (BindingPower.fromLevel (int opInfo.Precedence) + 1uy<bp>) minusExprPower

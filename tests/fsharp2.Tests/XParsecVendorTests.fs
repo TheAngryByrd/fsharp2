@@ -360,6 +360,45 @@ let y = "
                 | ParsedText.LexerFault diagnostic ->
                     failtest $"a valid text gave {diagnostic.Code}"
 
+            testCase "a keyword construct after a prefix operator or a cast keyword gives FSC2P1001"
+            <| fun () ->
+                // Compatibility Oracle: FS0010 at (2,16), (2,11), (2,11), (2,13), (2,12), (2,18), (2,14), and (3,11).
+                // The seventh text also gives (2,11) FS0598.
+                for source, offset in
+                    [
+                        "module M\nlet y = upcast try a finally b\n", 24
+                        "module M\nlet y = - match x with _ -> a\n", 19
+                        "module M\nlet y = ! if c then a else b\n", 19
+                        "module M\nlet y = ~~~ fun v -> v\n", 21
+                        "module M\nlet y = %% let v = 1 in v\n", 20
+                        "module M\nlet y = downcast lazy x\n", 26
+                        "module M\nlet y = xs[^ yield x ]\n", 22
+                        "module M\nlet y = -\n          try a finally b\n", 29
+                    ] do
+                    let _, diagnostics = parseVendored source
+
+                    Expect.equal
+                        (diagnostics
+                         |> List.tryHead
+                         |> Option.map (fun diagnostic ->
+                             diagnostic.Code, diagnostic.Token.StartIndex
+                         ))
+                        (Some(DiagnosticCode.ConstructAfterPrefixOperator, offset))
+                        source
+
+                // The Compatibility Oracle reports no diagnostic for these texts.
+                for accepted in
+                    [
+                        "module M\nlet y = - (try a finally b)\n"
+                        "module M\nlet y = upcast new T()\n"
+                        "module M\nlet y = - f x\n"
+                        "module M\nlet y = lazy try a finally b\n"
+                        "module M\nlet y = assert if c then a else b\n"
+                    ] do
+                    let result, diagnostics = parseVendored accepted
+                    Expect.isOk result accepted
+                    Expect.isEmpty diagnostics accepted
+
             testCase "a loop that ends at a directive with no tokens after it gives a diagnostic"
             <| fun () ->
                 // Compatibility Oracle: FS0010 at (5,1) and (4,1), "#else has no matching #if".
